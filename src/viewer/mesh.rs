@@ -18,6 +18,7 @@ pub struct DrawCall {
     pub double_sided: bool,
     pub texture_bind_group: Option<wgpu::BindGroup>,
     pub material_bind_group: wgpu::BindGroup,
+    pub material_index: usize,
 }
 
 /// GPU上のモデルデータ
@@ -240,6 +241,7 @@ pub fn build_gpu_model(
             double_sided: mat.is_double_sided,
             texture_bind_group: tex_bg,
             material_bind_group: mat_bg,
+            material_index: mat_idx,
         });
     }
 

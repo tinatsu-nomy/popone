@@ -13,10 +13,13 @@ VRM 0.0 / 1.0 両対応。
 - **オービットカメラ** — 左ドラッグ:回転、右ドラッグ:パン、ホイール:ズーム
 - **テクスチャ付き Lambert シェーディング** — 両面描画・アルファブレンド対応
 - **グリッド床** — PMX スケール準拠
+- **カメラ情報オーバーレイ** — 3D ビューポート左上に注視点・距離・Yaw/Pitch を表示、カメラリセットボタン付き
+- **材質表示切替** — 右パネルから材質ごとの表示 ON/OFF が可能（全表示/全非表示ボタン付き）
 - **右パネル UI**
   - モデル情報（ボーン数・頂点数・面数・材質数など）
   - VRM メタ情報（作者・ライセンスなど）
   - 表情モーフスライダ
+  - 材質表示スイッチ
   - 表示設定（ライト・環境光・背景明度）
   - PMX 変換ボタン（ビューア上から直接変換可能）
 
@@ -29,7 +32,7 @@ VRM 0.0 / 1.0 両対応。
 - **Tda 式骨順序**に適合したボーン配置
 - **VRM Expression → PMX モーフ変換**（リップシンク・まばたき・感情・視線）
 - **VRM SpringBone → PMX 剛体・ジョイント変換**（重力・回転制限・移動制限対応）
-- **MToon アウトライン → PMX エッジ反映**
+- **MToon アウトライン → PMX エッジ反映**（エッジサイズ最大 1.0）
 - **表示枠の自動分類**（Root / 表情 / 体(上) / 腕 / 指 / 足 / その他）
 - **テクスチャ PNG 出力**（`textures/` フォルダに書き出し）
 - **詳細ログ出力**（出力先と同じディレクトリに `.log` ファイル生成）
@@ -47,6 +50,8 @@ cargo build --release --features viewer
 ```
 
 ビルド成果物は `target/release/vrm2pmx.exe` に生成される。
+
+> **Windows GUI サブシステム**: `--features viewer` 付きでビルドした exe は Windows GUI サブシステム（`PE32+ executable (GUI)`）として生成される。Explorer からダブルクリックで起動した際にコンソールウィンドウが表示されない。CLI 引数付きで実行した場合は `AttachConsole` により親コンソールに自動接続される。
 
 ## 使い方
 
@@ -67,6 +72,8 @@ vrm2pmx.exe input.vrm output.pmx --log-level debug
 
 ビューア機能を使うには `--features viewer` 付きでビルドした exe が必要。
 VRM ファイルを exe にドラッグ＆ドロップして起動することはできない（出力パスの指定が必要なため）。
+
+> **注意**: GUI サブシステムの exe をコマンドプロンプトから実行すると、コマンドが即座に戻る場合がある。出力を確実に待つには `start /wait vrm2pmx.exe input.vrm output.pmx` を使用する。
 
 ### cargo run から起動
 
@@ -361,6 +368,38 @@ println!("ボーン: {}, 頂点: {}", stats.bones, stats.vertices);
 - ボーンは IK・付与（回転/移動）・変形階層をサポート
 - 剛体・ジョイントは Bullet Physics 互換（Euler 角は ZYX 規約）
 - 座標系は左手系・Y-up・+Z 前方、スケールは独自単位（本ツールでは 1m = 12.5）
+
+## 依存ライブラリのライセンス
+
+本ツールは以下のオープンソースライブラリを使用しています。
+
+### コア依存（CLI 変換）
+
+| クレート | バージョン | ライセンス | リポジトリ |
+|---------|-----------|-----------|-----------|
+| [gltf](https://github.com/gltf-rs/gltf) | 1.4 | MIT OR Apache-2.0 | gltf-rs/gltf |
+| [serde](https://github.com/serde-rs/serde) | 1 | MIT OR Apache-2.0 | serde-rs/serde |
+| [serde_json](https://github.com/serde-rs/json) | 1 | MIT OR Apache-2.0 | serde-rs/json |
+| [glam](https://github.com/bitshifter/glam-rs) | 0.28 | MIT OR Apache-2.0 | bitshifter/glam-rs |
+| [byteorder](https://github.com/BurntSushi/byteorder) | 1.5 | Unlicense OR MIT | BurntSushi/byteorder |
+| [image](https://github.com/image-rs/image) | 0.25 | MIT OR Apache-2.0 | image-rs/image |
+| [clap](https://github.com/clap-rs/clap) | 4 | MIT OR Apache-2.0 | clap-rs/clap |
+| [anyhow](https://github.com/dtolnay/anyhow) | 1 | MIT OR Apache-2.0 | dtolnay/anyhow |
+| [log](https://github.com/rust-lang/log) | 0.4 | MIT OR Apache-2.0 | rust-lang/log |
+| [fern](https://github.com/daboross/fern) | 0.7 | MIT | daboross/fern |
+| [env_logger](https://github.com/rust-cli/env_logger) | 0.11 | MIT OR Apache-2.0 | rust-cli/env_logger |
+| [chrono](https://github.com/chronotope/chrono) | 0.4 | MIT OR Apache-2.0 | chronotope/chrono |
+
+### ビューア依存（`viewer` feature）
+
+| クレート | バージョン | ライセンス | リポジトリ |
+|---------|-----------|-----------|-----------|
+| [eframe](https://github.com/emilk/egui) | 0.31 | MIT OR Apache-2.0 | emilk/egui |
+| [rfd](https://github.com/PolyMeilex/rfd) | 0.15 | MIT | PolyMeilex/rfd |
+| [bytemuck](https://github.com/Lokathor/bytemuck) | 1 | Zlib OR Apache-2.0 OR MIT | Lokathor/bytemuck |
+| [pollster](https://github.com/zesterer/pollster) | 0.4 | MIT OR Apache-2.0 | zesterer/pollster |
+
+各ライブラリの詳細なライセンス条文は、それぞれのリポジトリを参照してください。
 
 ## 注意事項
 

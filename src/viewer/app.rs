@@ -38,6 +38,8 @@ pub struct ViewerApp {
     pub output_log: bool,
     /// PMX出力パス（テキストボックス編集用）
     pub pmx_output_path: String,
+    /// 材質ごとの表示ON/OFF
+    pub material_visibility: Vec<bool>,
     /// ドラッグオーバー中フラグ
     pub drag_hovering: bool,
     /// ビューポートテクスチャID
@@ -66,6 +68,7 @@ impl ViewerApp {
             light_intensity: 0.7,
             ambient_intensity: 0.45,
             bg_brightness: 0.19,
+            material_visibility: Vec::new(),
             output_log: false,
             pmx_output_path: String::new(),
             drag_hovering: false,
@@ -138,6 +141,8 @@ impl ViewerApp {
         // モーフスライダ初期化
         self.morph_weights = vec![0.0; ir.morphs.len()];
         self.prev_morph_weights = vec![0.0; ir.morphs.len()];
+        // 材質表示フラグ初期化（DrawCall数 = 材質数ではない場合があるのでdraws数に合わせる）
+        self.material_visibility = vec![true; gpu_model.draws.len()];
         self.camera = OrbitCamera::default();
 
         // デフォルト出力パス: 入力VRMと同じ場所に .pmx
@@ -249,6 +254,7 @@ impl eframe::App for ViewerApp {
                         self.ambient_intensity,
                         self.bg_brightness,
                         &mut self.viewport_texture_id,
+                        &self.material_visibility,
                     );
 
                     // egui に表示
@@ -288,6 +294,50 @@ impl eframe::App for ViewerApp {
                         egui::FontId::proportional(20.0),
                         egui::Color32::from_gray(0xA0),
                     );
+                }
+
+                // カメラ情報 & リセットボタン（左上）
+                if self.loaded.is_some() {
+                    let rect = response.rect;
+                    let cam_info = format!(
+                        "注視点: ({:.1}, {:.1}, {:.1})\n距離: {:.1}\nYaw: {:.1}°  Pitch: {:.1}°",
+                        self.camera.target.x,
+                        self.camera.target.y,
+                        self.camera.target.z,
+                        self.camera.distance,
+                        self.camera.yaw.to_degrees(),
+                        self.camera.pitch.to_degrees(),
+                    );
+                    let margin = 8.0;
+                    let overlay_pos = egui::pos2(rect.left() + margin, rect.top() + margin);
+                    let overlay_width = rect.width() - margin * 2.0;
+                    let area = egui::Area::new(egui::Id::new("camera_info_overlay"))
+                        .fixed_pos(overlay_pos)
+                        .constrain(false)
+                        .interactable(true);
+                    area.show(ctx, |ui| {
+                        ui.set_width(overlay_width);
+                        egui::Frame::new()
+                            .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 0xC0))
+                            .corner_radius(4.0)
+                            .inner_margin(6.0)
+                            .show(ui, |ui| {
+                                ui.set_width(overlay_width - 12.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(cam_info)
+                                            .color(egui::Color32::from_gray(0xE0))
+                                            .size(11.0)
+                                            .family(egui::FontFamily::Monospace),
+                                    );
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.small_button("カメラリセット").clicked() {
+                                            self.camera = OrbitCamera::default();
+                                        }
+                                    });
+                                });
+                            });
+                    });
                 }
 
                 // 操作ヒント（左下）

@@ -76,6 +76,29 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     ui.add_space(8.0);
                 }
 
+                // 材質表示
+                if !loaded.gpu_model.draws.is_empty() {
+                    ui.collapsing("材質表示", |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.small_button("全表示").clicked() {
+                                app.material_visibility.iter_mut().for_each(|v| *v = true);
+                            }
+                            if ui.small_button("全非表示").clicked() {
+                                app.material_visibility.iter_mut().for_each(|v| *v = false);
+                            }
+                        });
+                        for (i, draw) in loaded.gpu_model.draws.iter().enumerate() {
+                            if i < app.material_visibility.len() {
+                                let name = ir.materials.get(draw.material_index)
+                                    .map(|m| m.name.as_str())
+                                    .unwrap_or("?");
+                                ui.checkbox(&mut app.material_visibility[i], name);
+                            }
+                        }
+                    });
+                    ui.add_space(8.0);
+                }
+
                 // 表示設定
                 ui.collapsing("表示設定", |ui| {
                     ui.add(

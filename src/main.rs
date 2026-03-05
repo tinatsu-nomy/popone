@@ -1,3 +1,7 @@
+// viewer feature 有効時は Windows GUI サブシステムでビルドし、
+// Explorer からの起動時にコンソールウィンドウを表示しない
+#![cfg_attr(all(feature = "viewer", target_os = "windows"), windows_subsystem = "windows")]
+
 use vrm2pmx::{vrm, pmx, convert, intermediate};
 
 use anyhow::{Context, Result};
@@ -63,7 +67,25 @@ fn setup_logging(stderr_level: log::LevelFilter, log_file: Option<&std::path::Pa
     base.apply().map_err(|e| anyhow::anyhow!("ロガー初期化失敗: {}", e))
 }
 
+/// Windows GUI サブシステムの場合、親コンソールにアタッチして
+/// stdout/stderr を使えるようにする
+#[cfg(all(feature = "viewer", target_os = "windows"))]
+fn attach_parent_console() {
+    extern "system" {
+        fn AttachConsole(dw_process_id: u32) -> i32;
+    }
+    unsafe {
+        AttachConsole(0xFFFFFFFF); // ATTACH_PARENT_PROCESS
+    }
+}
+
 fn main() -> Result<()> {
+    // GUI サブシステムでも CLI 引数がある場合はコンソール出力を有効にする
+    #[cfg(all(feature = "viewer", target_os = "windows"))]
+    if std::env::args().len() > 1 {
+        attach_parent_console();
+    }
+
     let args = Args::parse();
 
     // 引数なし → ビューア起動
@@ -187,7 +209,7 @@ fn run_viewer() -> Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 800.0])
+            .with_inner_size([768.0, 1024.0])
             .with_title("VRM Viewer")
             .with_drag_and_drop(true),
         renderer: eframe::Renderer::Wgpu,

@@ -21,7 +21,7 @@ pub fn ir_material_to_pmx(ir: &IrMaterial, texture_index: Option<i32>) -> PmxMat
         ambient: ir.ambient,
         draw_flags,
         edge_color: ir.edge_color,
-        edge_size: ir.edge_size,
+        edge_size: ir.edge_size.min(1.0),
         texture_index,
         sphere_texture_index: None,
         sphere_mode: 0,

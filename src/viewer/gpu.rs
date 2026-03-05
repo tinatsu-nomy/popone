@@ -462,6 +462,7 @@ impl GpuRenderer {
         ambient_intensity: f32,
         bg_brightness: f32,
         cached_id: &mut Option<eframe::egui::TextureId>,
+        material_visibility: &[bool],
     ) -> (eframe::egui::TextureId, ()) {
         // オフスクリーンターゲットの再作成（サイズ変更時）
         let _need_recreate = self
@@ -562,13 +563,12 @@ impl GpuRenderer {
             pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
-            for draw in &model.draws {
-                // パイプライン選択
-                if draw.double_sided {
-                    pass.set_pipeline(&self.pipeline_no_cull);
-                } else {
-                    pass.set_pipeline(&self.pipeline_cull);
+            for (draw_idx, draw) in model.draws.iter().enumerate() {
+                if !material_visibility.get(draw_idx).copied().unwrap_or(true) {
+                    continue;
                 }
+                // 常に両面描画
+                pass.set_pipeline(&self.pipeline_no_cull);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
                 // テクスチャ bind group
