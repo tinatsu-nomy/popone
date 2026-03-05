@@ -205,7 +205,9 @@ fn main() -> Result<()> {
 
 #[cfg(feature = "viewer")]
 fn run_viewer() -> Result<()> {
-    env_logger::init();
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Debug)
+        .init();
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
