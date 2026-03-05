@@ -1,0 +1,37 @@
+[package]
+name = "vrm2pmx"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "vrm2pmx"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vrm2pmx"
+path = "src/main.rs"
+
+[dependencies]
+gltf        = { version = "1.4", features = ["extensions"] }
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+byteorder   = "1.5"
+glam        = "0.28"
+image       = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+anyhow      = "1"
+log         = "0.4"
+env_logger  = "0.11"
+fern        = "0.7"
+chrono      = "0.4"
+clap        = { version = "4", features = ["derive"] }
+
+# ビューア用（feature gate で CLI ビルドには影響なし）
+eframe   = { version = "0.31", optional = true, default-features = false, features = ["wgpu", "default_fonts"] }
+rfd      = { version = "0.15", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+pollster = { version = "0.4", optional = true }
+
+[features]
+default = []
+viewer = ["eframe", "rfd", "bytemuck", "pollster"]
+
