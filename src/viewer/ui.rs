@@ -148,14 +148,28 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                         let output_path = std::path::PathBuf::from(&app.pmx_output_path);
                         let log_path = output_path.with_extension("log");
 
+                        // 変換前のビューアログファイルサイズを記録
+                        let viewer_log_path = std::env::current_exe()
+                            .ok()
+                            .and_then(|p| p.parent().map(|d| d.join("vrm2pmx.log")));
+                        let log_offset_before = viewer_log_path.as_ref()
+                            .and_then(|p| std::fs::metadata(p).ok())
+                            .map(|m| m.len())
+                            .unwrap_or(0);
+
                         let result =
                             crate::convert_vrm_to_pmx(&input_path, &output_path, false);
 
                         if app.output_log {
+                            // 変換中に出力されたデバッグログを取得
+                            let debug_logs = viewer_log_path.as_ref()
+                                .and_then(|p| read_log_from_offset(p, log_offset_before));
+
                             write_convert_log(
                                 &log_path,
                                 &loaded.ir,
                                 result.as_ref(),
+                                debug_logs.as_deref(),
                             );
                         }
 
@@ -243,11 +257,22 @@ fn show_meta_info(ui: &mut egui::Ui, comment: &str) {
     }
 }
 
+/// ビューアログファイルから指定オフセット以降を読み取る
+fn read_log_from_offset(path: &Path, offset: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    file.seek(SeekFrom::Start(offset)).ok()?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).ok()?;
+    if buf.is_empty() { None } else { Some(buf) }
+}
+
 /// 変換ログをファイルに書き出す
 fn write_convert_log(
     log_path: &Path,
     ir: &crate::intermediate::types::IrModel,
     result: Result<&crate::ConvertStats, &anyhow::Error>,
+    debug_logs: Option<&str>,
 ) {
     use std::io::Write;
 
@@ -326,5 +351,12 @@ fn write_convert_log(
         Err(e) => {
             let _ = writeln!(file, "変換失敗: {e}");
         }
+    }
+
+    // デバッグログ追記
+    if let Some(logs) = debug_logs {
+        let _ = writeln!(file);
+        let _ = writeln!(file, "=== デバッグログ ===");
+        let _ = write!(file, "{}", logs);
     }
 }

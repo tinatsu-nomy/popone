@@ -205,9 +205,12 @@ fn main() -> Result<()> {
 
 #[cfg(feature = "viewer")]
 fn run_viewer() -> Result<()> {
-    env_logger::Builder::new()
-        .filter_level(log::LevelFilter::Debug)
-        .init();
+    // exe と同じディレクトリに vrm2pmx.log を出力
+    let log_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("vrm2pmx.log")))
+        .unwrap_or_else(|| std::path::PathBuf::from("vrm2pmx.log"));
+    setup_logging(log::LevelFilter::Debug, Some(&log_path))?;
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
