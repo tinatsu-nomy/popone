@@ -401,6 +401,13 @@ println!("ボーン: {}, 頂点: {}", stats.bones, stats.vertices);
 
 各ライブラリの詳細なライセンス条文は、それぞれのリポジトリを参照してください。
 
+## ライセンス
+
+本プロジェクトは以下のいずれかのライセンスの下で利用できます（選択可能）。
+
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+
 ## 注意事項
 
 - 本ツールが出力する PMX ファイルは、後段で PmxEditor 等を用いて調整することを想定しています。
