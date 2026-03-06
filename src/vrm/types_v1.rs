@@ -115,6 +115,7 @@ pub struct HumanBoneRef {
 #[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct VrmFirstPerson {
+    #[serde(default)]
     pub mesh_annotations: Vec<MeshAnnotation>,
 }
 
@@ -214,8 +215,11 @@ pub struct TextureTransformBind {
 #[serde(rename_all = "camelCase")]
 pub struct SpringBoneV1 {
     pub spec_version: Option<String>,
+    #[serde(default)]
     pub colliders: Vec<SpringCollider>,
+    #[serde(default)]
     pub collider_groups: Vec<SpringColliderGroup>,
+    #[serde(default)]
     pub springs: Vec<Spring>,
 }
 
@@ -252,6 +256,7 @@ pub struct ColliderCapsule {
 #[serde(rename_all = "camelCase")]
 pub struct SpringColliderGroup {
     pub name: Option<String>,
+    #[serde(default)]
     pub colliders: Vec<i32>,
 }
 
@@ -259,6 +264,7 @@ pub struct SpringColliderGroup {
 #[serde(rename_all = "camelCase")]
 pub struct Spring {
     pub name: Option<String>,
+    #[serde(default)]
     pub joints: Vec<SpringJoint>,
     pub collider_groups: Option<Vec<i32>>,
     pub center: Option<i32>,

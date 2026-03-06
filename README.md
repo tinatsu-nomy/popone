@@ -8,7 +8,7 @@ VRM 0.0 / 1.0 両対応。
 
 最新リリースの exe（ビューア付き）は以下からダウンロードできます。
 
-- [vrm2pmx.exe (v0.1.2)](https://github.com/tinatsu-nomy/vrm2pmx/releases/download/v0.1.2/vrm2pmx.exe)
+- [vrm2pmx.exe (v0.1.3)](https://github.com/tinatsu-nomy/vrm2pmx/releases/download/v0.1.3/vrm2pmx.exe)
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/vrm2pmx/releases)
 
