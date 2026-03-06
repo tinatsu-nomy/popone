@@ -28,7 +28,7 @@ pub fn build_physics_v0(
         let pmx_group = (cg_idx + 1).min(14) as u8;
 
         // コライダーはスプリング(G15)とのみ衝突
-        let collider_mask = 0xFFFF_u16 & !(1u16 << SPRING_PMX_GROUP);
+        let collider_mask = !(1u16 << SPRING_PMX_GROUP);
 
         for (ci, collider) in cg.colliders.iter().enumerate() {
             let name = format!("collider_{}_{}", cg.node, ci);
@@ -114,6 +114,7 @@ fn build_spring_mask(collider_group_refs: &[i32], num_collider_groups: usize) ->
     mask
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_spring_chain_v0(
     root_node: usize,
     node_to_bone: &HashMap<usize, usize>,
@@ -245,7 +246,7 @@ pub fn build_physics_v1(
         let pmx_group = collider_pmx_group.get(ci).copied().unwrap_or(1);
 
         // コライダーはスプリング(G15)とのみ衝突
-        let collider_mask = 0xFFFF_u16 & !(1u16 << SPRING_PMX_GROUP);
+        let collider_mask = !(1u16 << SPRING_PMX_GROUP);
 
         let (shape, world_pos, rotation) = if let Some(sphere) = &collider.shape.sphere {
             let offset_v = Vec3::from(sphere.offset.unwrap_or([0.0; 3]));
@@ -447,8 +448,6 @@ pub fn build_physics_v1(
     Ok(physics)
 }
 
-/// PMX剛体のローカルY軸を from_pmx → to_pmx 方向に揃えるオイラー角を返す
-///
 /// 剛体のローカルY軸をボーン方向に揃えるオイラー角を返す
 ///
 /// 1. Y軸 = ボーン方向（Y成分が負なら反転）

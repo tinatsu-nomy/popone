@@ -122,29 +122,29 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                 // 表示設定
                 ui.collapsing("表示設定", |ui| {
                     ui.add(
-                        egui::Slider::new(&mut app.light_intensity, 0.0..=2.0)
+                        egui::Slider::new(&mut app.display.light_intensity, 0.0..=2.0)
                             .text("ライト"),
                     );
                     ui.add(
-                        egui::Slider::new(&mut app.ambient_intensity, 0.0..=1.0)
+                        egui::Slider::new(&mut app.display.ambient_intensity, 0.0..=1.0)
                             .text("環境光"),
                     );
                     ui.add(
-                        egui::Slider::new(&mut app.bg_brightness, 0.0..=1.0)
+                        egui::Slider::new(&mut app.display.bg_brightness, 0.0..=1.0)
                             .text("背景"),
                     );
-                    ui.checkbox(&mut app.show_grid, "グリッド表示 (G)");
-                    ui.checkbox(&mut app.show_bones, "ボーン表示 (B)");
-                    if app.show_bones {
+                    ui.checkbox(&mut app.display.show_grid, "グリッド表示 (G)");
+                    ui.checkbox(&mut app.display.show_bones, "ボーン表示 (B)");
+                    if app.display.show_bones {
                         ui.add(
-                            egui::Slider::new(&mut app.bone_opacity, 0.05..=1.0)
+                            egui::Slider::new(&mut app.display.bone_opacity, 0.05..=1.0)
                                 .text("ボーン濃度"),
                         );
                     }
-                    ui.checkbox(&mut app.show_spring_bones, "物理表示 (P)");
-                    if app.show_spring_bones {
+                    ui.checkbox(&mut app.display.show_spring_bones, "物理表示 (P)");
+                    if app.display.show_spring_bones {
                         ui.add(
-                            egui::Slider::new(&mut app.spring_bone_opacity, 0.05..=1.0)
+                            egui::Slider::new(&mut app.display.spring_bone_opacity, 0.05..=1.0)
                                 .text("物理濃度"),
                         );
                     }
@@ -152,16 +152,16 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     let supports_wire = app.renderer.as_ref()
                         .map(|r| r.supports_wireframe()).unwrap_or(false);
                     if supports_wire {
-                        let mut wire = app.draw_mode == DrawMode::Wireframe;
+                        let mut wire = app.display.draw_mode == DrawMode::Wireframe;
                         if ui.checkbox(&mut wire, "ワイヤーフレーム (W)").changed() {
-                            app.draw_mode = if wire { DrawMode::Wireframe } else { DrawMode::Solid };
+                            app.display.draw_mode = if wire { DrawMode::Wireframe } else { DrawMode::Solid };
                         }
                     }
                     // ライトモード
                     ui.horizontal(|ui| {
                         ui.label("ライト:");
-                        ui.selectable_value(&mut app.light_mode, LightMode::CameraFollow, "カメラ追従");
-                        ui.selectable_value(&mut app.light_mode, LightMode::Fixed, "固定 (L)");
+                        ui.selectable_value(&mut app.display.light_mode, LightMode::CameraFollow, "カメラ追従");
+                        ui.selectable_value(&mut app.display.light_mode, LightMode::Fixed, "固定 (L)");
                     });
                 });
                 ui.add_space(8.0);
@@ -198,7 +198,7 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     app.reload_current();
                 }
                 ui.checkbox(
-                    &mut app.align_rigid_rotation,
+                    &mut app.display.align_rigid_rotation,
                     "剛体回転をボーン方向に揃える",
                 );
                 ui.horizontal(|ui| {
@@ -282,7 +282,7 @@ fn execute_conversion(app: &mut ViewerApp) {
         .map(|m| m.len())
         .unwrap_or(0);
 
-    let result = crate::convert_vrm_to_pmx_full(&input_path, &output_path, false, app.align_rigid_rotation, app.normalize_pose);
+    let result = crate::convert_vrm_to_pmx_full(&input_path, &output_path, false, app.display.align_rigid_rotation, app.normalize_pose);
 
     if app.output_log {
         let debug_logs = viewer_log_path.as_ref()

@@ -7,7 +7,7 @@ use crate::intermediate::types::IrModel;
 use crate::vrm;
 
 use super::camera::OrbitCamera;
-use super::gpu::{DrawMode, GpuRenderer, LightMode};
+use super::gpu::{DrawMode, GpuRenderer, LightMode, RenderParams};
 use super::mesh::GpuModel;
 use super::ui;
 
@@ -24,6 +24,50 @@ pub enum ConvertResult {
     Failure(String),
 }
 
+/// 表示・描画関連の設定
+pub struct DisplaySettings {
+    /// ライト明るさ (0.0〜2.0)
+    pub light_intensity: f32,
+    /// 環境光 (0.0〜1.0)
+    pub ambient_intensity: f32,
+    /// 背景明るさ (0.0〜1.0)
+    pub bg_brightness: f32,
+    /// グリッド表示
+    pub show_grid: bool,
+    /// ボーン表示
+    pub show_bones: bool,
+    /// ボーン濃度
+    pub bone_opacity: f32,
+    /// SpringBone（物理）表示
+    pub show_spring_bones: bool,
+    /// SpringBone 濃度
+    pub spring_bone_opacity: f32,
+    /// 描画モード
+    pub draw_mode: DrawMode,
+    /// ライトモード
+    pub light_mode: LightMode,
+    /// 剛体回転をボーン方向に揃える（PMX出力 + 物理表示）
+    pub align_rigid_rotation: bool,
+}
+
+impl Default for DisplaySettings {
+    fn default() -> Self {
+        Self {
+            light_intensity: 0.7,
+            ambient_intensity: 0.45,
+            bg_brightness: 0.19,
+            show_grid: true,
+            show_bones: false,
+            bone_opacity: 0.85,
+            show_spring_bones: false,
+            spring_bone_opacity: 0.75,
+            draw_mode: DrawMode::Solid,
+            light_mode: LightMode::CameraFollow,
+            align_rigid_rotation: false,
+        }
+    }
+}
+
 /// ビューアのメイン状態
 pub struct ViewerApp {
     pub loaded: Option<LoadedModel>,
@@ -34,12 +78,8 @@ pub struct ViewerApp {
     pub morph_weights: Vec<f32>,
     /// 前フレームのモーフウェイト（変更検知用）
     prev_morph_weights: Vec<f32>,
-    /// ライト明るさ (0.0〜2.0)
-    pub light_intensity: f32,
-    /// 環境光 (0.0〜1.0)
-    pub ambient_intensity: f32,
-    /// 背景明るさ (0.0〜1.0)
-    pub bg_brightness: f32,
+    /// 表示・描画設定
+    pub display: DisplaySettings,
     /// PMX変換時にログファイルを出力するか
     pub output_log: bool,
     /// PMX出力パス（テキストボックス編集用）
@@ -54,24 +94,8 @@ pub struct ViewerApp {
     pub viewport_texture_id: Option<egui::TextureId>,
     /// wgpu render state（CreationContext から取得）
     render_state: egui_wgpu::RenderState,
-    /// グリッド表示
-    pub show_grid: bool,
-    /// ボーン表示
-    pub show_bones: bool,
-    /// ボーン濃度
-    pub bone_opacity: f32,
-    /// SpringBone（物理）表示
-    pub show_spring_bones: bool,
-    /// SpringBone 濃度
-    pub spring_bone_opacity: f32,
     /// PMX上書き確認ダイアログ表示中
     pub confirm_overwrite: bool,
-    /// 描画モード
-    pub draw_mode: DrawMode,
-    /// ライトモード
-    pub light_mode: LightMode,
-    /// 剛体回転をボーン方向に揃える（PMX出力 + 物理表示）
-    pub align_rigid_rotation: bool,
     /// Tポーズ→Aスタンス変換（トグル時に再読み込み）
     pub normalize_pose: bool,
 }
@@ -93,9 +117,7 @@ impl ViewerApp {
             convert_message: None,
             morph_weights: Vec::new(),
             prev_morph_weights: Vec::new(),
-            light_intensity: 0.7,
-            ambient_intensity: 0.45,
-            bg_brightness: 0.19,
+            display: DisplaySettings::default(),
             material_visibility: Vec::new(),
             material_filter: String::new(),
             output_log: false,
@@ -103,15 +125,7 @@ impl ViewerApp {
             drag_hovering: false,
             viewport_texture_id: None,
             render_state,
-            show_grid: true,
-            show_bones: false,
-            bone_opacity: 0.85,
-            show_spring_bones: false,
-            spring_bone_opacity: 0.75,
             confirm_overwrite: false,
-            draw_mode: DrawMode::Solid,
-            light_mode: LightMode::CameraFollow,
-            align_rigid_rotation: false,
             normalize_pose: false,
         }
     }
@@ -154,7 +168,7 @@ impl ViewerApp {
         }
     }
 
-    fn try_load_vrm(&mut self, path: &PathBuf) -> anyhow::Result<()> {
+    fn try_load_vrm(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         let glb = vrm::loader::load_glb(path)?;
         let version = vrm::detect::detect_version(&glb.document);
         let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
@@ -197,7 +211,7 @@ impl ViewerApp {
         self.loaded = Some(LoadedModel {
             ir,
             gpu_model,
-            file_path: path.clone(),
+            file_path: path.to_path_buf(),
         });
 
         Ok(())
@@ -277,26 +291,26 @@ impl eframe::App for ViewerApp {
                 }
                 // G: グリッド表示切り替え
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::G) {
-                    self.show_grid = !self.show_grid;
+                    self.display.show_grid = !self.display.show_grid;
                 }
                 // B: ボーン表示切り替え
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::B) {
-                    self.show_bones = !self.show_bones;
+                    self.display.show_bones = !self.display.show_bones;
                 }
                 // P: SpringBone物理表示切り替え
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::P) {
-                    self.show_spring_bones = !self.show_spring_bones;
+                    self.display.show_spring_bones = !self.display.show_spring_bones;
                 }
                 // W: ワイヤーフレーム切り替え
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::W) {
-                    self.draw_mode = match self.draw_mode {
+                    self.display.draw_mode = match self.display.draw_mode {
                         DrawMode::Solid => DrawMode::Wireframe,
                         DrawMode::Wireframe => DrawMode::Solid,
                     };
                 }
                 // L: ライトモード切り替え
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::L) {
-                    self.light_mode = match self.light_mode {
+                    self.display.light_mode = match self.display.light_mode {
                         LightMode::CameraFollow => LightMode::Fixed,
                         LightMode::Fixed => LightMode::CameraFollow,
                     };
@@ -324,7 +338,7 @@ impl eframe::App for ViewerApp {
         // 中央ビューポート
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill({
-                let b = (self.bg_brightness * 255.0).clamp(0.0, 255.0) as u8;
+                let b = (self.display.bg_brightness * 255.0).clamp(0.0, 255.0) as u8;
                 egui::Color32::from_rgb(b, b, b)
             }))
             .show(ctx, |viewport| {
@@ -354,14 +368,21 @@ impl eframe::App for ViewerApp {
                 }
 
                 // 3D描画（renderer を take して &mut で使い、戻す）
-                if self.loaded.is_some() {
+                if let Some(ref loaded) = self.loaded {
                     let width = (available.x * ctx.pixels_per_point()) as u32;
                     let height = (available.y * ctx.pixels_per_point()) as u32;
                     if width > 0 && height > 0 {
                         if let Some(mut renderer) = self.renderer.take() {
-                            let loaded = self.loaded.as_ref().unwrap();
                             let device = &self.render_state.device;
                             let queue = &self.render_state.queue;
+
+                            let render_params = RenderParams {
+                                camera: &self.camera,
+                                width,
+                                height,
+                                material_visibility: &self.material_visibility,
+                                display: &self.display,
+                            };
 
                             let (texture_id, _) = renderer.render_to_texture(
                                 device,
@@ -369,22 +390,8 @@ impl eframe::App for ViewerApp {
                                 &mut self.render_state.renderer.write(),
                                 &loaded.gpu_model,
                                 &loaded.ir,
-                                &self.camera,
-                                width,
-                                height,
-                                self.light_intensity,
-                                self.ambient_intensity,
-                                self.bg_brightness,
+                                &render_params,
                                 &mut self.viewport_texture_id,
-                                &self.material_visibility,
-                                self.show_grid,
-                                self.show_bones,
-                                self.bone_opacity,
-                                self.show_spring_bones,
-                                self.spring_bone_opacity,
-                                self.align_rigid_rotation,
-                                self.draw_mode,
-                                self.light_mode,
                             );
 
                             self.renderer = Some(renderer);

@@ -69,7 +69,7 @@ impl GpuModel {
             if w.abs() < 1e-6 {
                 continue;
             }
-            self.apply_single_morph(ir, weights, morph_idx, w, pos_fn, &mut vertices);
+            self.apply_single_morph(ir, morph_idx, w, pos_fn, &mut vertices);
         }
 
         queue.write_buffer(&self.vertex_buf, 0, bytemuck::cast_slice(&vertices));
@@ -78,7 +78,6 @@ impl GpuModel {
     fn apply_single_morph(
         &self,
         ir: &IrModel,
-        weights: &[f32],
         morph_idx: usize,
         weight: f32,
         pos_fn: fn(Vec3) -> Vec3,
@@ -105,7 +104,7 @@ impl GpuModel {
                         continue;
                     }
                     self.apply_single_morph(
-                        ir, weights, sub_idx, effective, pos_fn, vertices,
+                        ir, sub_idx, effective, pos_fn, vertices,
                     );
                 }
             }
@@ -131,9 +130,11 @@ pub fn build_gpu_model(
         gltf_normal_to_pmx
     };
 
-    let mut all_vertices: Vec<Vertex> = Vec::new();
-    let mut all_indices: Vec<u32> = Vec::new();
-    let mut draws: Vec<DrawCall> = Vec::new();
+    let total_verts: usize = ir.meshes.iter().map(|m| m.vertices.len()).sum();
+    let total_indices: usize = ir.meshes.iter().map(|m| m.indices.len()).sum();
+    let mut all_vertices: Vec<Vertex> = Vec::with_capacity(total_verts);
+    let mut all_indices: Vec<u32> = Vec::with_capacity(total_indices);
+    let mut draws: Vec<DrawCall> = Vec::with_capacity(ir.materials.len());
     let mut has_alpha = false;
 
     // グローバル頂点Index → GPU頂点Index マッピング

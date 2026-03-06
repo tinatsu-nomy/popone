@@ -6,6 +6,9 @@ use std::collections::HashMap;
 
 use crate::convert::coord::PMX_SCALE;
 use crate::intermediate::types::*;
+
+/// ボーン抽出結果: (ボーン配列, ノード→ボーンindex マップ, グローバル行列配列)
+type BoneExtractResult = (Vec<IrBone>, HashMap<usize, usize>, Vec<Mat4>);
 use crate::vrm::{
     detect::VrmVersion,
     types_v0::VrmV0,
@@ -201,7 +204,7 @@ fn extract_textures(
     document: &gltf::Document,
     images: &[gltf::image::Data],
 ) -> Result<Vec<IrTexture>> {
-    let mut textures = Vec::new();
+    let mut textures = Vec::with_capacity(images.len());
     for (i, image_data) in images.iter().enumerate() {
         let filename = format!("tex_{:03}.png", i);
         let mime_type = "image/png".to_string();
@@ -230,6 +233,7 @@ fn sanitize_filename(name: &str) -> String {
         .collect()
 }
 
+#[allow(clippy::field_reassign_with_default)]
 fn extract_materials(
     document: &gltf::Document,
     vrm_ext: &Value,
@@ -281,7 +285,7 @@ fn extract_materials(
                     if let Some(vec_props) = &v0_prop.vector_properties {
                         if let Some(outline_color) = vec_props.get("_OutlineColor") {
                             if let Some(arr) = outline_color.as_array() {
-                                let r = arr.get(0).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                let r = arr.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                 let g = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                 let b = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                 let a = arr.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
@@ -319,7 +323,7 @@ fn extract_materials(
                 if let Some(vec_props) = &v0_prop.vector_properties {
                     if let Some(shade_color) = vec_props.get("_ShadeColor") {
                         if let Some(arr) = shade_color.as_array() {
-                            let r = arr.get(0).and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+                            let r = arr.first().and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
                             let g = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
                             let b = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
                             ir_mat.shade_color = Some(Vec3::new(r, g, b));
@@ -358,7 +362,7 @@ fn extract_materials(
                             // outlineColorFactor [r,g,b] → Vec4(r,g,b,1.0)
                             if let Some(color) = mtoon.get("outlineColorFactor") {
                                 if let Some(arr) = color.as_array() {
-                                    let r = arr.get(0).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                    let r = arr.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                     let g = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                     let b = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                     ir_mat.edge_color = Vec4::new(r, g, b, 1.0);
@@ -376,7 +380,7 @@ fn extract_materials(
                         // shadeColorFactor
                         if let Some(shade) = mtoon.get("shadeColorFactor") {
                             if let Some(arr) = shade.as_array() {
-                                let r = arr.get(0).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                                let r = arr.first().and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
                                 let g = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
                                 let b = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
                                 ir_mat.shade_color = Some(Vec3::new(r, g, b));
@@ -413,9 +417,9 @@ fn extract_bones(
     document: &gltf::Document,
     vrm_ext: &Value,
     version: &VrmVersion,
-) -> Result<(Vec<IrBone>, HashMap<usize, usize>, Vec<Mat4>)> {
+) -> Result<BoneExtractResult> {
     let nodes: Vec<gltf::Node> = document.nodes().collect();
-    let mut bones: Vec<IrBone> = Vec::new();
+    let mut bones: Vec<IrBone> = Vec::with_capacity(nodes.len());
     let mut node_to_bone: HashMap<usize, usize> = HashMap::new();
 
     // VRMヒューマノイドボーンのノードIndex → ボーン名 のマップを構築

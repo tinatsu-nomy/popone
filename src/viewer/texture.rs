@@ -10,7 +10,7 @@ pub fn upload_textures(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
 ) -> Result<Vec<wgpu::TextureView>> {
-    let mut views = Vec::new();
+    let mut views = Vec::with_capacity(images.len());
 
     for (i, img) in images.iter().enumerate() {
         let (width, height) = (img.width, img.height);

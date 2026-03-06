@@ -172,6 +172,15 @@ fn fs_grid(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// 描画パラメータ（render_to_texture に渡す設定をまとめた構造体）
+pub struct RenderParams<'a> {
+    pub camera: &'a OrbitCamera,
+    pub width: u32,
+    pub height: u32,
+    pub material_visibility: &'a [bool],
+    pub display: &'a super::app::DisplaySettings,
+}
+
 /// 描画モード
 #[derive(Clone, Copy, PartialEq)]
 pub enum DrawMode {
@@ -676,6 +685,7 @@ impl GpuRenderer {
     }
 
     /// オフスクリーンにモデルを描画し、結果テクスチャの egui TextureId を返す
+    #[allow(clippy::too_many_arguments)]
     pub fn render_to_texture(
         &mut self,
         device: &wgpu::Device,
@@ -683,35 +693,21 @@ impl GpuRenderer {
         egui_renderer: &mut egui_wgpu::Renderer,
         model: &GpuModel,
         ir: &IrModel,
-        camera: &OrbitCamera,
-        width: u32,
-        height: u32,
-        light_intensity: f32,
-        ambient_intensity: f32,
-        bg_brightness: f32,
+        params: &RenderParams,
         cached_id: &mut Option<eframe::egui::TextureId>,
-        material_visibility: &[bool],
-        show_grid: bool,
-        show_bones: bool,
-        bone_opacity: f32,
-        show_spring_bones: bool,
-        spring_bone_opacity: f32,
-        align_rigid_rotation: bool,
-        draw_mode: DrawMode,
-        light_mode: LightMode,
     ) -> (eframe::egui::TextureId, ()) {
         // オフスクリーンテクスチャの確保（サイズ変更時のみ再作成）
-        self.ensure_offscreen(device, width, height);
+        self.ensure_offscreen(device, params.width, params.height);
         let offscreen = self.offscreen.as_ref().unwrap();
 
         // ボーン頂点を毎フレーム更新（ビルボード）
-        if show_bones && !ir.bones.is_empty() {
+        if params.display.show_bones && !ir.bones.is_empty() {
             let pos_fn: fn(Vec3) -> Vec3 = if ir.is_vrm0 {
                 crate::convert::coord::gltf_pos_to_pmx_v0
             } else {
                 crate::convert::coord::gltf_pos_to_pmx
             };
-            let verts = generate_bone_vertices(ir, pos_fn, camera.eye(), bone_opacity);
+            let verts = generate_bone_vertices(ir, pos_fn, params.camera.eye(), params.display.bone_opacity);
             self.bone_vertex_count = verts.len() as u32;
             let data = bytemuck::cast_slice(&verts);
             if data.len() > self.bone_buf_capacity {
@@ -729,8 +725,8 @@ impl GpuRenderer {
         }
 
         // SpringBone頂点を毎フレーム更新
-        if show_spring_bones && (!ir.physics.rigid_bodies.is_empty() || !ir.physics.joints.is_empty()) {
-            let verts = generate_spring_bone_vertices(ir, spring_bone_opacity, align_rigid_rotation);
+        if params.display.show_spring_bones && (!ir.physics.rigid_bodies.is_empty() || !ir.physics.joints.is_empty()) {
+            let verts = generate_spring_bone_vertices(ir, params.display.spring_bone_opacity, params.display.align_rigid_rotation);
             self.spring_vertex_count = verts.len() as u32;
             let data = bytemuck::cast_slice(&verts);
             if data.len() > self.spring_buf_capacity {
@@ -748,16 +744,16 @@ impl GpuRenderer {
         }
 
         // Update camera uniform
-        let aspect = width as f32 / height as f32;
-        let light_dir = match light_mode {
-            LightMode::CameraFollow => camera.camera_following_light_dir(),
+        let aspect = params.width as f32 / params.height as f32;
+        let light_dir = match params.display.light_mode {
+            LightMode::CameraFollow => params.camera.camera_following_light_dir(),
             LightMode::Fixed => OrbitCamera::fixed_light_dir(),
         };
         let cam_uniform = CameraUniform {
-            view_proj: camera.view_proj(aspect).to_cols_array_2d(),
+            view_proj: params.camera.view_proj(aspect).to_cols_array_2d(),
             light_dir: light_dir.to_array(),
-            light_intensity,
-            ambient: [ambient_intensity; 3],
+            light_intensity: params.display.light_intensity,
+            ambient: [params.display.ambient_intensity; 3],
             _pad1: 0.0,
         };
         queue.write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&cam_uniform));
@@ -775,9 +771,9 @@ impl GpuRenderer {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: bg_brightness as f64,
-                            g: bg_brightness as f64,
-                            b: bg_brightness as f64,
+                            r: params.display.bg_brightness as f64,
+                            g: params.display.bg_brightness as f64,
+                            b: params.display.bg_brightness as f64,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
@@ -795,7 +791,7 @@ impl GpuRenderer {
             });
 
             // グリッド描画
-            if show_grid {
+            if params.display.show_grid {
                 pass.set_pipeline(&self.pipeline_grid);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.grid_vbuf.slice(..));
@@ -807,12 +803,12 @@ impl GpuRenderer {
             pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
-            let use_wireframe = draw_mode == DrawMode::Wireframe
+            let use_wireframe = params.display.draw_mode == DrawMode::Wireframe
                 && self.pipeline_wireframe.is_some();
 
             // パス1: 不透明材質（デプス書き込みあり）
             for (draw_idx, draw) in model.draws.iter().enumerate() {
-                if !material_visibility.get(draw_idx).copied().unwrap_or(true) {
+                if !params.material_visibility.get(draw_idx).copied().unwrap_or(true) {
                     continue;
                 }
                 if draw.is_alpha {
@@ -844,7 +840,7 @@ impl GpuRenderer {
 
             // パス2: 半透明材質（デプス書き込みなし）
             for (draw_idx, draw) in model.draws.iter().enumerate() {
-                if !material_visibility.get(draw_idx).copied().unwrap_or(true) {
+                if !params.material_visibility.get(draw_idx).copied().unwrap_or(true) {
                     continue;
                 }
                 if !draw.is_alpha {
@@ -875,7 +871,7 @@ impl GpuRenderer {
             }
 
             // ボーン描画（メッシュの上にオーバーレイ、depth=Always）
-            if show_bones && self.bone_vertex_count > 0 {
+            if params.display.show_bones && self.bone_vertex_count > 0 {
                 if let Some(ref bone_buf) = self.bone_buf {
                     pass.set_pipeline(&self.pipeline_bone);
                     pass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -885,7 +881,7 @@ impl GpuRenderer {
             }
 
             // SpringBone物理描画（オーバーレイ）
-            if show_spring_bones && self.spring_vertex_count > 0 {
+            if params.display.show_spring_bones && self.spring_vertex_count > 0 {
                 if let Some(ref spring_buf) = self.spring_buf {
                     pass.set_pipeline(&self.pipeline_bone);
                     pass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -1221,6 +1217,7 @@ fn generate_spring_bone_vertices(
 }
 
 /// ワイヤフレーム風リング（三角形ストリップで薄い帯を描画）
+#[allow(clippy::too_many_arguments)]
 fn draw_ring(
     verts: &mut Vec<GridVertex>,
     center: Vec3,

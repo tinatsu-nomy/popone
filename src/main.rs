@@ -112,6 +112,7 @@ fn main() -> Result<()> {
         }
     }
 
+    // unwrap 安全: 上で is_none() チェック済み
     let input = args.input.unwrap();
     let output = args.output.context(
         "出力ファイルパスを指定してください。\n使い方: vrm2pmx <入力.vrm> <出力.pmx>"
