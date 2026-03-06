@@ -1,6 +1,7 @@
 use eframe::egui;
 use glam::{Mat4, Vec3};
 
+#[derive(Clone)]
 pub struct OrbitCamera {
     pub target: Vec3,
     pub distance: f32,

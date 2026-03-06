@@ -141,6 +141,13 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                                 .text("ボーン濃度"),
                         );
                     }
+                    ui.checkbox(&mut app.show_spring_bones, "物理表示 (P)");
+                    if app.show_spring_bones {
+                        ui.add(
+                            egui::Slider::new(&mut app.spring_bone_opacity, 0.05..=1.0)
+                                .text("物理濃度"),
+                        );
+                    }
                     // ワイヤーフレーム
                     let supports_wire = app.renderer.as_ref()
                         .map(|r| r.supports_wireframe()).unwrap_or(false);
@@ -184,6 +191,16 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     }
                 });
                 ui.add_space(2.0);
+                if ui.checkbox(
+                    &mut app.normalize_pose,
+                    "Aスタンス変換",
+                ).changed() {
+                    app.reload_current();
+                }
+                ui.checkbox(
+                    &mut app.align_rigid_rotation,
+                    "剛体回転をボーン方向に揃える",
+                );
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut app.output_log, "ログ出力");
                     if ui.button("PMX 変換").clicked() {
@@ -265,7 +282,7 @@ fn execute_conversion(app: &mut ViewerApp) {
         .map(|m| m.len())
         .unwrap_or(0);
 
-    let result = crate::convert_vrm_to_pmx(&input_path, &output_path, false);
+    let result = crate::convert_vrm_to_pmx_full(&input_path, &output_path, false, app.align_rigid_rotation, app.normalize_pose);
 
     if app.output_log {
         let debug_logs = viewer_log_path.as_ref()

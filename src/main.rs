@@ -25,6 +25,14 @@ struct Args {
     #[arg(long)]
     no_physics: bool,
 
+    /// 剛体の回転をボーン方向に揃える（デフォルト: off）
+    #[arg(long)]
+    align_rigid_rotation: bool,
+
+    /// Tポーズの腕をAスタンスに変換する（デフォルト: off）
+    #[arg(long)]
+    normalize_pose: bool,
+
     /// ログレベル (error, warn, info, debug)
     #[arg(long, default_value = "info")]
     log_level: String,
@@ -133,13 +141,14 @@ fn main() -> Result<()> {
     let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
 
     // 中間表現抽出
-    let mut ir = vrm::extract::extract_ir_model(
+    let mut ir = vrm::extract::extract_ir_model_with_options(
         &glb.document,
         &glb.buffers,
         &glb.images,
         &glb.vrm_extension,
         &version,
         &all_extensions,
+        args.normalize_pose,
     ).context("VRM中間表現の抽出に失敗")?;
 
     if args.no_physics {
@@ -184,7 +193,7 @@ fn main() -> Result<()> {
         .context("テクスチャ書き出し失敗")?;
 
     // PMXモデル構築
-    let pmx_model = pmx::build::build_pmx_model(&ir)
+    let pmx_model = pmx::build::build_pmx_model_with_options(&ir, args.align_rigid_rotation)
         .context("PMXモデル構築失敗")?;
 
     // PMX書き出し

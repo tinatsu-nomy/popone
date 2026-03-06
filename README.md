@@ -22,17 +22,20 @@ VRM 0.0 / 1.0 両対応。
 - **テクスチャ付き Lambert シェーディング** — 両面描画・アルファブレンド対応
 - **グリッド床** — PMX スケール準拠
 - **ボーン表示** — ジョイント（黄色円）・親子接続（緑色三角形）をビルボード描画、濃度スライダで調整可能
+- **SpringBone 物理可視化** — 剛体（マゼンタ）・コライダー（シアン）・ジョイント接続（黄色）をワイヤーフレーム表示、濃度スライダで調整可能
 - **ワイヤーフレーム表示** — 対応 GPU でメッシュをワイヤーフレーム表示（`POLYGON_MODE_LINE`）
 - **カメラ情報オーバーレイ** — 3D ビューポート左上に注視点・距離・Yaw/Pitch を表示、カメラリセットボタン付き
 - **材質表示切替** — 右パネルから材質ごとの表示 ON/OFF が可能（全表示/全非表示ボタン付き、フィルタ検索）
-- **キーボードショートカット** — Ctrl+O:開く、R:カメラリセット、F:モデルにフィット、G:グリッド、B:ボーン、W:ワイヤーフレーム、L:ライトモード切替
+- **キーボードショートカット** — Ctrl+O:開く、R:カメラリセット、F:モデルにフィット、G:グリッド、B:ボーン、P:物理、W:ワイヤーフレーム、L:ライトモード切替
 - **右パネル UI**
   - モデル情報（ボーン数・頂点数・面数・材質数など）
   - VRM メタ情報（作者・ライセンスなど）
   - 表情モーフスライダ
   - 材質表示スイッチ
-  - 表示設定（ライト・環境光・背景明度・グリッド・ボーン・ワイヤーフレーム・ライトモード）
+  - 表示設定（ライト・環境光・背景明度・グリッド・ボーン・物理・ワイヤーフレーム・ライトモード）
   - PMX 変換ボタン（ビューア上から直接変換可能、上書き確認ダイアログ付き）
+  - Aスタンス変換オプション（T ポーズの腕を 30° 下げて A スタンスに変換、切り替え時に即座に反映）
+  - 剛体回転をボーン方向に揃えるオプション
 
 ### PMX 変換
 
@@ -40,9 +43,11 @@ VRM 0.0 / 1.0 両対応。
 - **メッシュ・頂点・材質・テクスチャの変換**
 - **MMD 標準ボーン自動挿入**（全ての親・センター・グルーブ・腰・足IK・つま先IK など）
 - **準標準ボーン挿入**（腰キャンセル・足D・足先EX・腕捩り・手捩り・肩キャンセル）
-- **Tda 式骨順序**に適合したボーン配置
+- **ボーンの順序を再配置**
 - **VRM Expression → PMX モーフ変換**（リップシンク・まばたき・感情・視線）
-- **VRM SpringBone → PMX 剛体・ジョイント変換**（重力・回転制限・移動制限対応）
+- **VRM SpringBone → PMX 剛体・ジョイント変換**（重力・回転制限・移動制限対応、コライダーグループ別衝突マスク）
+- **Aスタンス変換**（T ポーズの腕を下げて A スタンスに変換、`--normalize-pose` オプション）
+- **剛体回転をボーン方向に揃える**（`--align-rigid-rotation` オプション）
 - **MToon アウトライン → PMX エッジ反映**（エッジサイズ最大 1.0）
 - **表示枠の自動分類**（Root / 表情 / 体(上) / 腕 / 指 / 足 / その他）
 - **テクスチャ PNG 出力**（`textures/` フォルダに書き出し）
@@ -78,6 +83,8 @@ vrm2pmx.exe input.vrm output.pmx
 # オプション付き
 vrm2pmx.exe input.vrm output.pmx --dump
 vrm2pmx.exe input.vrm output.pmx --no-physics
+vrm2pmx.exe input.vrm output.pmx --normalize-pose
+vrm2pmx.exe input.vrm output.pmx --align-rigid-rotation
 vrm2pmx.exe input.vrm output.pmx --log-level debug
 ```
 
@@ -100,6 +107,12 @@ cargo run --release -- input.vrm output.pmx --dump
 
 # 物理演算（剛体・ジョイント）をスキップ
 cargo run --release -- input.vrm output.pmx --no-physics
+
+# Aスタンス変換（Tポーズの腕を下げる）
+cargo run --release -- input.vrm output.pmx --normalize-pose
+
+# 剛体回転をボーン方向に揃える
+cargo run --release -- input.vrm output.pmx --align-rigid-rotation
 
 # ログレベル指定（error / warn / info / debug）
 cargo run --release -- input.vrm output.pmx --log-level debug
@@ -342,13 +355,23 @@ cargo test
 `vrm2pmx` はライブラリとしても使用可能:
 
 ```rust
-use vrm2pmx::convert_vrm_to_pmx;
+use vrm2pmx::{convert_vrm_to_pmx, convert_vrm_to_pmx_full};
 use std::path::Path;
 
+// シンプルな変換
 let stats = convert_vrm_to_pmx(
     Path::new("input.vrm"),
     Path::new("output.pmx"),
     false, // no_physics
+)?;
+
+// 全オプション指定
+let stats = convert_vrm_to_pmx_full(
+    Path::new("input.vrm"),
+    Path::new("output.pmx"),
+    false, // no_physics
+    true,  // align_rigid_rotation
+    true,  // normalize_pose (Aスタンス変換)
 )?;
 
 println!("ボーン: {}, 頂点: {}", stats.bones, stats.vertices);

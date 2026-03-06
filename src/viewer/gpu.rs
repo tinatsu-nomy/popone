@@ -221,6 +221,10 @@ pub struct GpuRenderer {
     bone_buf: Option<wgpu::Buffer>,
     bone_buf_capacity: usize,
     bone_vertex_count: u32,
+    /// SpringBone頂点バッファ
+    spring_buf: Option<wgpu::Buffer>,
+    spring_buf_capacity: usize,
+    spring_vertex_count: u32,
     /// オフスクリーンテクスチャキャッシュ
     offscreen: Option<OffscreenTarget>,
 }
@@ -592,6 +596,9 @@ impl GpuRenderer {
             bone_buf: None,
             bone_buf_capacity: 0,
             bone_vertex_count: 0,
+            spring_buf: None,
+            spring_buf_capacity: 0,
+            spring_vertex_count: 0,
             grid_vbuf,
             grid_vertex_count,
             offscreen: None,
@@ -687,6 +694,9 @@ impl GpuRenderer {
         show_grid: bool,
         show_bones: bool,
         bone_opacity: f32,
+        show_spring_bones: bool,
+        spring_bone_opacity: f32,
+        align_rigid_rotation: bool,
         draw_mode: DrawMode,
         light_mode: LightMode,
     ) -> (eframe::egui::TextureId, ()) {
@@ -714,6 +724,25 @@ impl GpuRenderer {
                 ));
                 self.bone_buf_capacity = data.len();
             } else if let Some(ref buf) = self.bone_buf {
+                queue.write_buffer(buf, 0, data);
+            }
+        }
+
+        // SpringBone頂点を毎フレーム更新
+        if show_spring_bones && (!ir.physics.rigid_bodies.is_empty() || !ir.physics.joints.is_empty()) {
+            let verts = generate_spring_bone_vertices(ir, spring_bone_opacity, align_rigid_rotation);
+            self.spring_vertex_count = verts.len() as u32;
+            let data = bytemuck::cast_slice(&verts);
+            if data.len() > self.spring_buf_capacity {
+                self.spring_buf = Some(device.create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some("spring_vbuf"),
+                        contents: data,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    },
+                ));
+                self.spring_buf_capacity = data.len();
+            } else if let Some(ref buf) = self.spring_buf {
                 queue.write_buffer(buf, 0, data);
             }
         }
@@ -852,6 +881,16 @@ impl GpuRenderer {
                     pass.set_bind_group(0, &self.camera_bind_group, &[]);
                     pass.set_vertex_buffer(0, bone_buf.slice(..));
                     pass.draw(0..self.bone_vertex_count, 0..1);
+                }
+            }
+
+            // SpringBone物理描画（オーバーレイ）
+            if show_spring_bones && self.spring_vertex_count > 0 {
+                if let Some(ref spring_buf) = self.spring_buf {
+                    pass.set_pipeline(&self.pipeline_bone);
+                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    pass.set_vertex_buffer(0, spring_buf.slice(..));
+                    pass.draw(0..self.spring_vertex_count, 0..1);
                 }
             }
         }
@@ -1080,4 +1119,183 @@ fn billboard_axes(to_camera: Vec3) -> (Vec3, Vec3) {
         let up = right.cross(to_camera).normalize();
         (right, up)
     }
+}
+
+/// SpringBone物理ビジュアル用ジオメトリを生成
+/// - 剛体: ワイヤフレーム風のリング+接続線で形状を表現
+/// - ジョイント: 接続する2剛体間の線
+fn generate_spring_bone_vertices(
+    ir: &IrModel,
+    opacity: f32,
+    align_rigid_rotation: bool,
+) -> Vec<GridVertex> {
+    use crate::intermediate::types::RigidShape;
+
+    let collider_color = [0.0, 0.85, 0.9, opacity]; // シアン（group=1: コライダー）
+    let spring_color = [0.9, 0.2, 0.85, opacity];   // マゼンタ（group=2: スプリングチェーン）
+    let joint_color = [1.0, 0.85, 0.1, opacity * 0.6]; // 黄色（ジョイント接続線）
+
+    let segments = 16u32;
+    let line_width = 0.15_f32; // 線の太さ（ワイヤフレーム風の三角ストリップ幅）
+
+    let mut verts = Vec::new();
+
+    // 剛体の形状を描画
+    for rb in &ir.physics.rigid_bodies {
+        let color = if rb.group == 1 { collider_color } else { spring_color };
+
+        // PMX Euler → 回転クォータニオン（ZXY: R = Rz * Rx * Ry）
+        let rotation = if align_rigid_rotation { rb.rotation } else { Vec3::ZERO };
+        let quat = glam::Quat::from_euler(
+            glam::EulerRot::ZXY,
+            rotation.z,
+            rotation.x,
+            rotation.y,
+        );
+
+        match &rb.shape {
+            RigidShape::Sphere { radius } => {
+                // 3つの大円リング（XY, XZ, YZ平面）
+                draw_ring(&mut verts, rb.position, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
+                draw_ring(&mut verts, rb.position, quat, *radius, Vec3::Y, Vec3::X, segments, line_width, color);
+                draw_ring(&mut verts, rb.position, quat, *radius, Vec3::Z, Vec3::Y, segments, line_width, color);
+            }
+            RigidShape::Capsule { radius, height } => {
+                // カプセル: Y軸がボーン方向
+                // 高さ = 球体中心間距離（PMX仕様: height = 全長 - 2*radius ではなく球体中心間距離）
+                let half_h = height * 0.5;
+
+                // 上端・下端のリング
+                let top_offset = quat * Vec3::new(0.0, half_h, 0.0);
+                let bot_offset = quat * Vec3::new(0.0, -half_h, 0.0);
+
+                draw_ring(&mut verts, rb.position + top_offset, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
+                draw_ring(&mut verts, rb.position + bot_offset, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
+
+                // 4本の接続線（上端→下端）
+                for i in 0..4u32 {
+                    let angle = std::f32::consts::FRAC_PI_2 * i as f32;
+                    let local_offset = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
+                    let top = rb.position + top_offset + quat * local_offset;
+                    let bot = rb.position + bot_offset + quat * local_offset;
+                    draw_line_quad(&mut verts, top, bot, line_width * 0.5, color);
+                }
+            }
+            RigidShape::Box { size } => {
+                // ボックス: 12辺をライン描画
+                let hx = size.x * 0.5;
+                let hy = size.y * 0.5;
+                let hz = size.z * 0.5;
+                let corners = [
+                    Vec3::new(-hx, -hy, -hz), Vec3::new( hx, -hy, -hz),
+                    Vec3::new( hx,  hy, -hz), Vec3::new(-hx,  hy, -hz),
+                    Vec3::new(-hx, -hy,  hz), Vec3::new( hx, -hy,  hz),
+                    Vec3::new( hx,  hy,  hz), Vec3::new(-hx,  hy,  hz),
+                ];
+                let edges = [
+                    (0,1),(1,2),(2,3),(3,0), // 手前面
+                    (4,5),(5,6),(6,7),(7,4), // 奥面
+                    (0,4),(1,5),(2,6),(3,7), // 接続
+                ];
+                for (a, b) in edges {
+                    let pa = rb.position + quat * corners[a];
+                    let pb = rb.position + quat * corners[b];
+                    draw_line_quad(&mut verts, pa, pb, line_width * 0.5, color);
+                }
+            }
+        }
+    }
+
+    // ジョイント接続線を描画
+    for joint in &ir.physics.joints {
+        if joint.rigid_a < ir.physics.rigid_bodies.len()
+            && joint.rigid_b < ir.physics.rigid_bodies.len()
+        {
+            let pos_a = ir.physics.rigid_bodies[joint.rigid_a].position;
+            let pos_b = ir.physics.rigid_bodies[joint.rigid_b].position;
+            draw_line_quad(&mut verts, pos_a, pos_b, line_width * 0.4, joint_color);
+        }
+    }
+
+    verts
+}
+
+/// ワイヤフレーム風リング（三角形ストリップで薄い帯を描画）
+fn draw_ring(
+    verts: &mut Vec<GridVertex>,
+    center: Vec3,
+    quat: glam::Quat,
+    radius: f32,
+    axis_a: Vec3, // リング平面の第1軸
+    axis_b: Vec3, // リング平面の第2軸
+    segments: u32,
+    width: f32,
+    color: [f32; 4],
+) {
+    let half_w = width * 0.5;
+    // リングの法線方向（帯の厚み方向）
+    let normal = axis_a.cross(axis_b).normalize();
+
+    for i in 0..segments {
+        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
+        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
+
+        let local0 = axis_a * a0.cos() * radius + axis_b * a0.sin() * radius;
+        let local1 = axis_a * a1.cos() * radius + axis_b * a1.sin() * radius;
+
+        let p0 = center + quat * local0;
+        let p1 = center + quat * local1;
+        let n = quat * normal * half_w;
+
+        // 薄い帯（2三角形のクアッド）
+        let p0_inner = p0 - n;
+        let p0_outer = p0 + n;
+        let p1_inner = p1 - n;
+        let p1_outer = p1 + n;
+
+        verts.push(GridVertex { position: p0_inner.to_array(), color });
+        verts.push(GridVertex { position: p0_outer.to_array(), color });
+        verts.push(GridVertex { position: p1_outer.to_array(), color });
+
+        verts.push(GridVertex { position: p0_inner.to_array(), color });
+        verts.push(GridVertex { position: p1_outer.to_array(), color });
+        verts.push(GridVertex { position: p1_inner.to_array(), color });
+    }
+}
+
+/// 2点間のライン（薄いクアッドで描画）
+fn draw_line_quad(
+    verts: &mut Vec<GridVertex>,
+    from: Vec3,
+    to: Vec3,
+    half_width: f32,
+    color: [f32; 4],
+) {
+    let dir = to - from;
+    if dir.length_squared() < 1e-6 {
+        return;
+    }
+    let dir_n = dir.normalize();
+
+    // 線に直交する方向を求める
+    let up = if dir_n.cross(Vec3::Y).length_squared() > 0.001 {
+        dir_n.cross(Vec3::Y).normalize()
+    } else {
+        dir_n.cross(Vec3::Z).normalize()
+    };
+
+    let offset = up * half_width;
+
+    let a = from - offset;
+    let b = from + offset;
+    let c = to + offset;
+    let d = to - offset;
+
+    verts.push(GridVertex { position: a.to_array(), color });
+    verts.push(GridVertex { position: b.to_array(), color });
+    verts.push(GridVertex { position: c.to_array(), color });
+
+    verts.push(GridVertex { position: a.to_array(), color });
+    verts.push(GridVertex { position: c.to_array(), color });
+    verts.push(GridVertex { position: d.to_array(), color });
 }

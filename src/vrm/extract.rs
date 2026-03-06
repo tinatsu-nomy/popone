@@ -20,6 +20,18 @@ pub fn extract_ir_model(
     version: &VrmVersion,
     all_extensions: &Value,
 ) -> Result<IrModel> {
+    extract_ir_model_with_options(document, buffers, images, vrm_ext, version, all_extensions, false)
+}
+
+pub fn extract_ir_model_with_options(
+    document: &gltf::Document,
+    buffers: &[Data],
+    images: &[gltf::image::Data],
+    vrm_ext: &Value,
+    version: &VrmVersion,
+    all_extensions: &Value,
+    normalize_pose: bool,
+) -> Result<IrModel> {
     let mut model = IrModel::default();
     model.is_vrm0 = matches!(version, VrmVersion::V0);
 
@@ -30,15 +42,20 @@ pub fn extract_ir_model(
     model.materials = extract_materials(document, vrm_ext, version, &model.textures)?;
 
     // ボーン抽出（ノード→ボーン構造）
-    let (bones, node_to_bone, global_mats) = extract_bones(document, vrm_ext, version)?;
+    let (bones, node_to_bone, mut global_mats) = extract_bones(document, vrm_ext, version)?;
     model.bones = bones;
     model.node_to_bone = node_to_bone;
+
+    // T→Aスタンス変換（オプション）
+    if normalize_pose {
+        normalize_pose_to_astance(&mut model.bones, &mut global_mats);
+    }
 
     // モデル名・コメント
     model.name = extract_model_name(vrm_ext, version);
     model.comment = extract_meta_comment(vrm_ext, version);
 
-    // メッシュ抽出
+    // メッシュ抽出（補正済み global_mats を使用）
     model.meshes = extract_meshes(document, buffers, images, &model.node_to_bone, &model.materials, &global_mats)?;
 
     // モーフ抽出
@@ -580,6 +597,98 @@ fn build_humanoid_map(
         _ => {}
     }
     Ok(())
+}
+
+/// Tポーズ→Aスタンス変換
+/// 上腕ボーンを下方向に約30°回転し、Aスタンスにする
+/// VRM 1.0 はTポーズ標準なので、MMD向けAスタンスに変換する
+fn normalize_pose_to_astance(
+    bones: &mut [IrBone],
+    global_mats: &mut [Mat4],
+) {
+    const A_STANCE_ANGLE_DEG: f32 = 30.0;
+
+    let find_bone = |vrm_name: &str| -> Option<usize> {
+        bones.iter().position(|b| b.vrm_bone_name.as_deref() == Some(vrm_name))
+    };
+
+    // 補正対象: 上腕 → 下腕の方向を取得し、下方向に回転
+    let arm_pairs = [
+        ("leftUpperArm", "leftLowerArm"),
+        ("rightUpperArm", "rightLowerArm"),
+    ];
+
+    let corrections: Vec<(usize, Vec3, glam::Quat)> = arm_pairs
+        .iter()
+        .filter_map(|(upper, lower)| {
+            let ua_idx = find_bone(upper)?;
+            let la_idx = find_bone(lower)?;
+            let ua_node = bones[ua_idx].node_index;
+            let la_node = bones[la_idx].node_index;
+
+            let ua_pos = global_mats[ua_node].transform_point3(Vec3::ZERO);
+            let la_pos = global_mats[la_node].transform_point3(Vec3::ZERO);
+            let dir = (la_pos - ua_pos).normalize_or_zero();
+
+            // 現在の腕が水平に近いか確認
+            let horizontal = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
+            if horizontal.length_squared() < 0.001 {
+                return None;
+            }
+
+            let current_angle = dir.dot(horizontal).clamp(-1.0, 1.0).acos().to_degrees();
+            // 既にAスタンス相当（下がっている）ならスキップ
+            if current_angle > A_STANCE_ANGLE_DEG - 5.0 && dir.y < 0.0 {
+                log::info!(
+                    "Aスタンス変換: {} は既にAスタンスに近い（{:.1}°）、スキップ",
+                    upper, current_angle
+                );
+                return None;
+            }
+
+            // 腕方向から回転軸を算出（Y×dir で腕を下げる方向の軸になる）
+            let axis = Vec3::Y.cross(dir).normalize_or_zero();
+            if axis.length_squared() < 0.001 {
+                return None;
+            }
+            let correction = glam::Quat::from_axis_angle(axis, A_STANCE_ANGLE_DEG.to_radians());
+
+            log::info!(
+                "Aスタンス変換: {} を {:.1}° 回転してAスタンスに変換",
+                upper, A_STANCE_ANGLE_DEG
+            );
+            Some((ua_idx, ua_pos, correction))
+        })
+        .collect();
+
+    // 各補正を適用（ピボット点を中心に子孫を回転）
+    for (bone_idx, pivot, correction) in corrections {
+        let descendants = collect_descendants_inclusive(bones, bone_idx);
+
+        let rot_mat = Mat4::from_translation(pivot)
+            * Mat4::from_quat(correction)
+            * Mat4::from_translation(-pivot);
+
+        for &desc_idx in &descendants {
+            let node = bones[desc_idx].node_index;
+            global_mats[node] = rot_mat * global_mats[node];
+            bones[desc_idx].position = global_mats[node].transform_point3(Vec3::ZERO);
+            bones[desc_idx].global_mat = global_mats[node];
+        }
+    }
+}
+
+/// 指定ボーンと全子孫のインデックスを収集
+fn collect_descendants_inclusive(bones: &[IrBone], root: usize) -> Vec<usize> {
+    let mut result = Vec::new();
+    let mut stack = vec![root];
+    while let Some(idx) = stack.pop() {
+        result.push(idx);
+        for &child in &bones[idx].children {
+            stack.push(child);
+        }
+    }
+    result
 }
 
 fn extract_meshes(

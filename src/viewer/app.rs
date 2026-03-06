@@ -60,12 +60,20 @@ pub struct ViewerApp {
     pub show_bones: bool,
     /// ボーン濃度
     pub bone_opacity: f32,
+    /// SpringBone（物理）表示
+    pub show_spring_bones: bool,
+    /// SpringBone 濃度
+    pub spring_bone_opacity: f32,
     /// PMX上書き確認ダイアログ表示中
     pub confirm_overwrite: bool,
     /// 描画モード
     pub draw_mode: DrawMode,
     /// ライトモード
     pub light_mode: LightMode,
+    /// 剛体回転をボーン方向に揃える（PMX出力 + 物理表示）
+    pub align_rigid_rotation: bool,
+    /// Tポーズ→Aスタンス変換（トグル時に再読み込み）
+    pub normalize_pose: bool,
 }
 
 impl ViewerApp {
@@ -98,9 +106,13 @@ impl ViewerApp {
             show_grid: true,
             show_bones: false,
             bone_opacity: 0.85,
+            show_spring_bones: false,
+            spring_bone_opacity: 0.75,
             confirm_overwrite: false,
             draw_mode: DrawMode::Solid,
             light_mode: LightMode::CameraFollow,
+            align_rigid_rotation: false,
+            normalize_pose: false,
         }
     }
 
@@ -147,13 +159,14 @@ impl ViewerApp {
         let version = vrm::detect::detect_version(&glb.document);
         let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
 
-        let ir = vrm::extract::extract_ir_model(
+        let ir = vrm::extract::extract_ir_model_with_options(
             &glb.document,
             &glb.buffers,
             &glb.images,
             &glb.vrm_extension,
             &version,
             &all_extensions,
+            self.normalize_pose,
         )?;
 
         let device = &self.render_state.device;
@@ -188,6 +201,32 @@ impl ViewerApp {
         });
 
         Ok(())
+    }
+
+    /// 現在読み込み中のVRMを再読み込みする（オプション変更時）
+    /// カメラ・モーフ・材質表示などの状態は保持する
+    pub fn reload_current(&mut self) {
+        let Some(ref loaded) = self.loaded else { return };
+        let path = loaded.file_path.clone();
+        let saved_camera = self.camera.clone();
+        let saved_morphs = self.morph_weights.clone();
+        let saved_visibility = self.material_visibility.clone();
+        let saved_filter = self.material_filter.clone();
+        let saved_pmx_path = self.pmx_output_path.clone();
+
+        self.load_vrm(path);
+
+        // 状態を復元（モーフ数・材質数が変わらなければそのまま使う）
+        self.camera = saved_camera;
+        if saved_morphs.len() == self.morph_weights.len() {
+            self.morph_weights = saved_morphs;
+            self.prev_morph_weights = vec![-1.0; self.morph_weights.len()]; // 強制更新
+        }
+        if saved_visibility.len() == self.material_visibility.len() {
+            self.material_visibility = saved_visibility;
+        }
+        self.material_filter = saved_filter;
+        self.pmx_output_path = saved_pmx_path;
     }
 
     fn open_file_dialog(&mut self) {
@@ -243,6 +282,10 @@ impl eframe::App for ViewerApp {
                 // B: ボーン表示切り替え
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::B) {
                     self.show_bones = !self.show_bones;
+                }
+                // P: SpringBone物理表示切り替え
+                if !i.modifiers.ctrl && i.key_pressed(egui::Key::P) {
+                    self.show_spring_bones = !self.show_spring_bones;
                 }
                 // W: ワイヤーフレーム切り替え
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::W) {
@@ -337,6 +380,9 @@ impl eframe::App for ViewerApp {
                                 self.show_grid,
                                 self.show_bones,
                                 self.bone_opacity,
+                                self.show_spring_bones,
+                                self.spring_bone_opacity,
+                                self.align_rigid_rotation,
                                 self.draw_mode,
                                 self.light_mode,
                             );
@@ -444,7 +490,7 @@ impl eframe::App for ViewerApp {
                     viewport.painter().text(
                         egui::pos2(rect.left() + 8.0, rect.bottom() - 8.0),
                         egui::Align2::LEFT_BOTTOM,
-                        "左ドラッグ:回転  右/中ドラッグ:パン  ホイール:ズーム  R:リセット  F:フィット  G:グリッド  B:ボーン  W:ワイヤー  L:ライト",
+                        "左ドラッグ:回転  右/中ドラッグ:パン  ホイール:ズーム  R:リセット  F:フィット  G:グリッド  B:ボーン  P:物理  W:ワイヤー  L:ライト",
                         egui::FontId::proportional(12.0),
                         egui::Color32::from_gray(0x80),
                     );

@@ -18,8 +18,13 @@ pub fn idx_size(n: usize) -> u8 {
     if n <= 127 { 1 } else if n <= 32767 { 2 } else { 4 }
 }
 
-pub fn build_pmx_model(
+pub fn build_pmx_model(ir: &IrModel) -> Result<PmxModel> {
+    build_pmx_model_with_options(ir, false)
+}
+
+pub fn build_pmx_model_with_options(
     ir: &IrModel,
+    align_rigid_rotation: bool,
 ) -> Result<PmxModel> {
     log::info!("=== PMXモデル構築開始 ===");
     log::info!("モデル名: {}", ir.name);
@@ -104,7 +109,7 @@ pub fn build_pmx_model(
     model.morphs = build_morphs(ir, ir.is_vrm0);
 
     // 剛体・ジョイント
-    model.rigid_bodies = build_rigid_bodies(ir);
+    model.rigid_bodies = build_rigid_bodies(ir, align_rigid_rotation);
     model.joints = build_joints(ir);
 
     // 全データ揃った後に標準ボーン挿入（頂点・剛体・既存ボーンのindex調整もここで）
@@ -1465,7 +1470,7 @@ fn build_display_frames(bones: &[PmxBone], morphs: &[PmxMorph]) -> Vec<PmxDispla
     frames
 }
 
-fn build_rigid_bodies(ir: &IrModel) -> Vec<PmxRigidBody> {
+fn build_rigid_bodies(ir: &IrModel, align_rigid_rotation: bool) -> Vec<PmxRigidBody> {
     let mode_name = |m: u8| -> &'static str {
         match m { 0 => "ボーン追従", 1 => "物理演算", 2 => "物理+Bone", _ => "?" }
     };
@@ -1504,7 +1509,7 @@ fn build_rigid_bodies(ir: &IrModel) -> Vec<PmxRigidBody> {
             shape,
             size,
             position: rb.position,
-            rotation: rb.rotation,
+            rotation: if align_rigid_rotation { rb.rotation } else { Vec3::ZERO },
             mass: rb.mass,
             linear_damping: rb.linear_damping,
             angular_damping: rb.angular_damping,
@@ -1521,7 +1526,7 @@ fn build_rigid_bodies(ir: &IrModel) -> Vec<PmxRigidBody> {
 }
 
 /// ボーン名の重複を解決（2番目以降に "_N" サフィックスを付加）
-/// PMXEditor の NameDupliBones エラーを防止する
+/// 重複ボーン名を連番サフィックスで解消する
 fn fix_duplicate_names(bones: &mut Vec<PmxBone>) {
     use std::collections::HashMap;
     // 同名ボーンの出現回数をカウント
@@ -1549,7 +1554,7 @@ fn fix_duplicate_names(bones: &mut Vec<PmxBone>) {
     }
 }
 
-/// ボーンを変形順序規則に従い並べ替え（PMXEditor IllegalOrderBones 対策）
+/// ボーンを変形順序規則に従い並べ替え（親が子より先に来るよう保証）
 ///
 /// 規則（優先順位）:
 ///   1. AfterPhysics=OFF のボーンが先、ON が後

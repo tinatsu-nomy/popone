@@ -28,17 +28,37 @@ pub fn convert_vrm_to_pmx(
     output_path: &Path,
     no_physics: bool,
 ) -> Result<ConvertStats> {
+    convert_vrm_to_pmx_with_options(input_path, output_path, no_physics, false)
+}
+
+pub fn convert_vrm_to_pmx_with_options(
+    input_path: &Path,
+    output_path: &Path,
+    no_physics: bool,
+    align_rigid_rotation: bool,
+) -> Result<ConvertStats> {
+    convert_vrm_to_pmx_full(input_path, output_path, no_physics, align_rigid_rotation, false)
+}
+
+pub fn convert_vrm_to_pmx_full(
+    input_path: &Path,
+    output_path: &Path,
+    no_physics: bool,
+    align_rigid_rotation: bool,
+    normalize_pose: bool,
+) -> Result<ConvertStats> {
     let glb = vrm::loader::load_glb(input_path)?;
     let version = vrm::detect::detect_version(&glb.document);
     let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
 
-    let mut ir = vrm::extract::extract_ir_model(
+    let mut ir = vrm::extract::extract_ir_model_with_options(
         &glb.document,
         &glb.buffers,
         &glb.images,
         &glb.vrm_extension,
         &version,
         &all_extensions,
+        normalize_pose,
     )?;
 
     if no_physics {
@@ -49,7 +69,7 @@ pub fn convert_vrm_to_pmx(
     let tex_dir = output_dir.join("textures");
     convert::texture::write_all_textures(&ir.textures, &glb.images, &tex_dir)?;
 
-    let pmx_model = pmx::build::build_pmx_model(&ir)?;
+    let pmx_model = pmx::build::build_pmx_model_with_options(&ir, align_rigid_rotation)?;
 
     let stats = ConvertStats {
         output_path: output_path.to_string_lossy().to_string(),
