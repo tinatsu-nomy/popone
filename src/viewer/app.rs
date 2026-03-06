@@ -7,7 +7,7 @@ use crate::intermediate::types::IrModel;
 use crate::vrm;
 
 use super::camera::OrbitCamera;
-use super::gpu::GpuRenderer;
+use super::gpu::{DrawMode, GpuRenderer, LightMode};
 use super::mesh::GpuModel;
 use super::ui;
 
@@ -18,12 +18,18 @@ pub struct LoadedModel {
     pub file_path: PathBuf,
 }
 
+/// 変換結果の種類
+pub enum ConvertResult {
+    Success(String),
+    Failure(String),
+}
+
 /// ビューアのメイン状態
 pub struct ViewerApp {
     pub loaded: Option<LoadedModel>,
     pub camera: OrbitCamera,
     pub renderer: Option<GpuRenderer>,
-    pub convert_message: Option<String>,
+    pub convert_message: Option<ConvertResult>,
     /// 表情モーフのスライダ値
     pub morph_weights: Vec<f32>,
     /// 前フレームのモーフウェイト（変更検知用）
@@ -40,12 +46,26 @@ pub struct ViewerApp {
     pub pmx_output_path: String,
     /// 材質ごとの表示ON/OFF
     pub material_visibility: Vec<bool>,
+    /// 材質フィルター文字列
+    pub material_filter: String,
     /// ドラッグオーバー中フラグ
     pub drag_hovering: bool,
     /// ビューポートテクスチャID
     pub viewport_texture_id: Option<egui::TextureId>,
     /// wgpu render state（CreationContext から取得）
     render_state: egui_wgpu::RenderState,
+    /// グリッド表示
+    pub show_grid: bool,
+    /// ボーン表示
+    pub show_bones: bool,
+    /// ボーン濃度
+    pub bone_opacity: f32,
+    /// PMX上書き確認ダイアログ表示中
+    pub confirm_overwrite: bool,
+    /// 描画モード
+    pub draw_mode: DrawMode,
+    /// ライトモード
+    pub light_mode: LightMode,
 }
 
 impl ViewerApp {
@@ -69,11 +89,18 @@ impl ViewerApp {
             ambient_intensity: 0.45,
             bg_brightness: 0.19,
             material_visibility: Vec::new(),
+            material_filter: String::new(),
             output_log: false,
             pmx_output_path: String::new(),
             drag_hovering: false,
             viewport_texture_id: None,
             render_state,
+            show_grid: true,
+            show_bones: false,
+            bone_opacity: 0.85,
+            confirm_overwrite: false,
+            draw_mode: DrawMode::Solid,
+            light_mode: LightMode::CameraFollow,
         }
     }
 
@@ -108,7 +135,9 @@ impl ViewerApp {
             }
             Err(e) => {
                 log::error!("VRM読み込み失敗: {e}");
-                self.convert_message = Some(format!("読み込み失敗: {e}"));
+                self.convert_message = Some(ConvertResult::Failure(format!(
+                    "読み込み失敗: {e}\n対応形式: VRM 0.0 / 1.0 (.vrm)\n別のファイルを試してください。"
+                )));
             }
         }
     }
@@ -143,7 +172,11 @@ impl ViewerApp {
         self.prev_morph_weights = vec![0.0; ir.morphs.len()];
         // 材質表示フラグ初期化（DrawCall数 = 材質数ではない場合があるのでdraws数に合わせる）
         self.material_visibility = vec![true; gpu_model.draws.len()];
+        self.material_filter.clear();
+        // カメラをモデルのバウンディングボックスにフィット
+        let (bbox_min, bbox_max) = gpu_model.compute_bbox();
         self.camera = OrbitCamera::default();
+        self.camera.fit_to_bbox(bbox_min, bbox_max);
 
         // デフォルト出力パス: 入力VRMと同じ場所に .pmx
         self.pmx_output_path = path.with_extension("pmx").to_string_lossy().to_string();
@@ -178,6 +211,55 @@ impl eframe::App for ViewerApp {
         if let Some(path) = dropped {
             self.load_vrm(path);
         }
+
+        // キーボードショートカット
+        let wants_kb = ctx.wants_keyboard_input();
+        ctx.input(|i| {
+            // Ctrl+O: ファイルを開く
+            if i.modifiers.ctrl && i.key_pressed(egui::Key::O) {
+                self.open_file_dialog();
+            }
+            // テキスト入力中はシングルキーショートカットを無効化
+            if !wants_kb {
+                // R: カメラリセット
+                if !i.modifiers.ctrl && i.key_pressed(egui::Key::R) {
+                    if let Some(ref loaded) = self.loaded {
+                        let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
+                        self.camera = OrbitCamera::default();
+                        self.camera.fit_to_bbox(bbox_min, bbox_max);
+                    }
+                }
+                // F: モデルにフィット
+                if !i.modifiers.ctrl && i.key_pressed(egui::Key::F) {
+                    if let Some(ref loaded) = self.loaded {
+                        let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
+                        self.camera.fit_to_bbox(bbox_min, bbox_max);
+                    }
+                }
+                // G: グリッド表示切り替え
+                if !i.modifiers.ctrl && i.key_pressed(egui::Key::G) {
+                    self.show_grid = !self.show_grid;
+                }
+                // B: ボーン表示切り替え
+                if !i.modifiers.ctrl && i.key_pressed(egui::Key::B) {
+                    self.show_bones = !self.show_bones;
+                }
+                // W: ワイヤーフレーム切り替え
+                if !i.modifiers.ctrl && i.key_pressed(egui::Key::W) {
+                    self.draw_mode = match self.draw_mode {
+                        DrawMode::Solid => DrawMode::Wireframe,
+                        DrawMode::Wireframe => DrawMode::Solid,
+                    };
+                }
+                // L: ライトモード切り替え
+                if !i.modifiers.ctrl && i.key_pressed(egui::Key::L) {
+                    self.light_mode = match self.light_mode {
+                        LightMode::CameraFollow => LightMode::Fixed,
+                        LightMode::Fixed => LightMode::CameraFollow,
+                    };
+                }
+            }
+        });
 
         // トップバー
         egui::TopBottomPanel::top("top_bar").show(ctx, |bar| {
@@ -228,46 +310,52 @@ impl eframe::App for ViewerApp {
                     }
                 }
 
-                // 3D描画
-                if let (Some(ref renderer), Some(ref loaded)) =
-                    (&self.renderer, &self.loaded)
-                {
+                // 3D描画（renderer を take して &mut で使い、戻す）
+                if self.loaded.is_some() {
                     let width = (available.x * ctx.pixels_per_point()) as u32;
                     let height = (available.y * ctx.pixels_per_point()) as u32;
-                    if width == 0 || height == 0 {
-                        return;
+                    if width > 0 && height > 0 {
+                        if let Some(mut renderer) = self.renderer.take() {
+                            let loaded = self.loaded.as_ref().unwrap();
+                            let device = &self.render_state.device;
+                            let queue = &self.render_state.queue;
+
+                            let (texture_id, _) = renderer.render_to_texture(
+                                device,
+                                queue,
+                                &mut self.render_state.renderer.write(),
+                                &loaded.gpu_model,
+                                &loaded.ir,
+                                &self.camera,
+                                width,
+                                height,
+                                self.light_intensity,
+                                self.ambient_intensity,
+                                self.bg_brightness,
+                                &mut self.viewport_texture_id,
+                                &self.material_visibility,
+                                self.show_grid,
+                                self.show_bones,
+                                self.bone_opacity,
+                                self.draw_mode,
+                                self.light_mode,
+                            );
+
+                            self.renderer = Some(renderer);
+
+                            // egui に表示
+                            let uv = egui::Rect::from_min_max(
+                                egui::pos2(0.0, 0.0),
+                                egui::pos2(1.0, 1.0),
+                            );
+                            viewport.painter().image(
+                                texture_id,
+                                response.rect,
+                                uv,
+                                egui::Color32::WHITE,
+                            );
+                        }
                     }
-
-                    let device = &self.render_state.device;
-                    let queue = &self.render_state.queue;
-
-                    // オフスクリーン描画
-                    let (texture_id, _) = renderer.render_to_texture(
-                        device,
-                        queue,
-                        &mut self.render_state.renderer.write(),
-                        &loaded.gpu_model,
-                        &self.camera,
-                        width,
-                        height,
-                        self.light_intensity,
-                        self.ambient_intensity,
-                        self.bg_brightness,
-                        &mut self.viewport_texture_id,
-                        &self.material_visibility,
-                    );
-
-                    // egui に表示
-                    let uv = egui::Rect::from_min_max(
-                        egui::pos2(0.0, 0.0),
-                        egui::pos2(1.0, 1.0),
-                    );
-                    viewport.painter().image(
-                        texture_id,
-                        response.rect,
-                        uv,
-                        egui::Color32::WHITE,
-                    );
                 }
 
                 // ドロップオーバーレイ
@@ -331,8 +419,18 @@ impl eframe::App for ViewerApp {
                                             .family(egui::FontFamily::Monospace),
                                     );
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if ui.small_button("カメラリセット").clicked() {
-                                            self.camera = OrbitCamera::default();
+                                        if ui.small_button("リセット(R)").on_hover_text("カメラをリセット").clicked() {
+                                            if let Some(ref loaded) = self.loaded {
+                                                let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
+                                                self.camera = OrbitCamera::default();
+                                                self.camera.fit_to_bbox(bbox_min, bbox_max);
+                                            }
+                                        }
+                                        if ui.small_button("フィット(F)").on_hover_text("モデルにフィット").clicked() {
+                                            if let Some(ref loaded) = self.loaded {
+                                                let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
+                                                self.camera.fit_to_bbox(bbox_min, bbox_max);
+                                            }
                                         }
                                     });
                                 });
@@ -346,7 +444,7 @@ impl eframe::App for ViewerApp {
                     viewport.painter().text(
                         egui::pos2(rect.left() + 8.0, rect.bottom() - 8.0),
                         egui::Align2::LEFT_BOTTOM,
-                        "左ドラッグ: 回転  右ドラッグ: パン  ホイール: ズーム",
+                        "左ドラッグ:回転  右/中ドラッグ:パン  ホイール:ズーム  R:リセット  F:フィット  G:グリッド  B:ボーン  W:ワイヤー  L:ライト",
                         egui::FontId::proportional(12.0),
                         egui::Color32::from_gray(0x80),
                     );

@@ -16,6 +16,7 @@ pub struct DrawCall {
     pub index_offset: u32,
     pub index_count: u32,
     pub double_sided: bool,
+    pub is_alpha: bool,
     pub texture_bind_group: Option<wgpu::BindGroup>,
     pub material_bind_group: wgpu::BindGroup,
     pub material_index: usize,
@@ -36,6 +37,18 @@ pub struct GpuModel {
 }
 
 impl GpuModel {
+    /// バウンディングボックスを計算 (min, max)
+    pub fn compute_bbox(&self) -> (Vec3, Vec3) {
+        let mut min = Vec3::splat(f32::MAX);
+        let mut max = Vec3::splat(f32::MIN);
+        for v in &self.base_vertices {
+            let p = Vec3::from(v.position);
+            min = min.min(p);
+            max = max.max(p);
+        }
+        (min, max)
+    }
+
     /// モーフウェイトを適用して頂点バッファを更新
     pub fn apply_morphs(
         &self,
@@ -51,7 +64,7 @@ impl GpuModel {
 
         let mut vertices = self.base_vertices.clone();
 
-        for (morph_idx, morph) in ir.morphs.iter().enumerate() {
+        for (morph_idx, _morph) in ir.morphs.iter().enumerate() {
             let w = weights.get(morph_idx).copied().unwrap_or(0.0);
             if w.abs() < 1e-6 {
                 continue;
@@ -235,10 +248,13 @@ pub fn build_gpu_model(
             has_alpha = true;
         }
 
+        let is_alpha = diffuse.w < 1.0;
+
         draws.push(DrawCall {
             index_offset,
             index_count,
             double_sided: mat.is_double_sided,
+            is_alpha,
             texture_bind_group: tex_bg,
             material_bind_group: mat_bg,
             material_index: mat_idx,
@@ -270,3 +286,4 @@ pub fn build_gpu_model(
         is_vrm0: ir.is_vrm0,
     })
 }
+

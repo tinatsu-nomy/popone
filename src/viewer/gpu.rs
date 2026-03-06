@@ -1,8 +1,10 @@
 use bytemuck::{Pod, Zeroable};
 use eframe::{egui_wgpu, wgpu};
+use glam::Vec3;
 use wgpu::util::DeviceExt;
 
 use super::camera::OrbitCamera;
+use crate::intermediate::types::IrModel;
 use super::mesh::GpuModel;
 
 /// カメラ uniform バッファ
@@ -170,18 +172,38 @@ fn fs_grid(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// 描画モード
+#[derive(Clone, Copy, PartialEq)]
+pub enum DrawMode {
+    Solid,
+    Wireframe,
+}
+
+/// ライトモード
+#[derive(Clone, Copy, PartialEq)]
+pub enum LightMode {
+    CameraFollow,
+    Fixed,
+}
+
 pub struct GpuRenderer {
     /// メッシュ描画パイプライン（カリングあり）
     pipeline_cull: wgpu::RenderPipeline,
     /// メッシュ描画パイプライン（両面描画）
     pipeline_no_cull: wgpu::RenderPipeline,
+    /// メッシュ描画パイプライン（ワイヤーフレーム・カリングなし）
+    pipeline_wireframe: Option<wgpu::RenderPipeline>,
+    /// 半透明用パイプライン（カリングあり、デプス書き込みなし）
+    pipeline_alpha_cull: wgpu::RenderPipeline,
+    /// 半透明用パイプライン（両面、デプス書き込みなし）
+    pipeline_alpha_no_cull: wgpu::RenderPipeline,
     /// グリッドパイプライン
     pipeline_grid: wgpu::RenderPipeline,
     /// カメラ uniform バッファ
     camera_buf: wgpu::Buffer,
     /// カメラ bind group
     camera_bind_group: wgpu::BindGroup,
-    /// カメラ bind group layout（将来拡張用）
+    /// カメラ bind group layout
     #[allow(dead_code)]
     camera_bgl: wgpu::BindGroupLayout,
     /// テクスチャ bind group layout
@@ -193,15 +215,20 @@ pub struct GpuRenderer {
     /// グリッド頂点バッファ
     grid_vbuf: wgpu::Buffer,
     grid_vertex_count: u32,
+    /// ボーン描画パイプライン（TriangleList, depth always）
+    pipeline_bone: wgpu::RenderPipeline,
+    /// ボーン頂点バッファ（毎フレーム更新）
+    bone_buf: Option<wgpu::Buffer>,
+    bone_buf_capacity: usize,
+    bone_vertex_count: u32,
     /// オフスクリーンテクスチャキャッシュ
     offscreen: Option<OffscreenTarget>,
 }
 
-#[allow(dead_code)]
 struct OffscreenTarget {
-    color: wgpu::Texture,
+    _color: wgpu::Texture,
     color_view: wgpu::TextureView,
-    depth: wgpu::Texture,
+    _depth: wgpu::Texture,
     depth_view: wgpu::TextureView,
     width: u32,
     height: u32,
@@ -304,13 +331,29 @@ impl GpuRenderer {
                 push_constant_ranges: &[],
             });
 
-        let color_target = wgpu::ColorTargetState {
+        let color_target_opaque = wgpu::ColorTargetState {
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
             write_mask: wgpu::ColorWrites::ALL,
         };
 
-        // Pipeline with back-face culling
+        let depth_stencil_write = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: Default::default(),
+            bias: Default::default(),
+        };
+
+        let depth_stencil_no_write = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: false,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: Default::default(),
+            bias: Default::default(),
+        };
+
+        // 不透明: カリングあり
         let pipeline_cull = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("mesh_pipeline_cull"),
             layout: Some(&pipeline_layout),
@@ -326,25 +369,19 @@ impl GpuRenderer {
                 front_face: wgpu::FrontFace::Cw,
                 ..Default::default()
             },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+            depth_stencil: Some(depth_stencil_write.clone()),
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(color_target.clone())],
+                targets: &[Some(color_target_opaque.clone())],
                 compilation_options: Default::default(),
             }),
             multiview: None,
             cache: None,
         });
 
-        // Pipeline without culling (double-sided materials)
+        // 不透明: 両面
         let pipeline_no_cull = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("mesh_pipeline_no_cull"),
             layout: Some(&pipeline_layout),
@@ -360,23 +397,108 @@ impl GpuRenderer {
                 front_face: wgpu::FrontFace::Cw,
                 ..Default::default()
             },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+            depth_stencil: Some(depth_stencil_write.clone()),
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(color_target.clone())],
+                targets: &[Some(color_target_opaque.clone())],
                 compilation_options: Default::default(),
             }),
             multiview: None,
             cache: None,
         });
+
+        // ワイヤーフレーム（デバイスが対応している場合のみ）
+        let pipeline_wireframe = if device.features().contains(wgpu::Features::POLYGON_MODE_LINE) {
+            Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("mesh_pipeline_wireframe"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Vertex::layout()],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    front_face: wgpu::FrontFace::Cw,
+                    polygon_mode: wgpu::PolygonMode::Line,
+                    ..Default::default()
+                },
+                depth_stencil: Some(depth_stencil_write.clone()),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(color_target_opaque.clone())],
+                    compilation_options: Default::default(),
+                }),
+                multiview: None,
+                cache: None,
+            }))
+        } else {
+            log::warn!("POLYGON_MODE_LINE 非対応: ワイヤーフレーム無効");
+            None
+        };
+
+        // 半透明: カリングあり、デプス書き込みなし
+        let pipeline_alpha_cull = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mesh_pipeline_alpha_cull"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[Vertex::layout()],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
+                front_face: wgpu::FrontFace::Cw,
+                ..Default::default()
+            },
+            depth_stencil: Some(depth_stencil_no_write.clone()),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(color_target_opaque.clone())],
+                compilation_options: Default::default(),
+            }),
+            multiview: None,
+            cache: None,
+        });
+
+        // 半透明: 両面、デプス書き込みなし
+        let pipeline_alpha_no_cull =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("mesh_pipeline_alpha_no_cull"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Vertex::layout()],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    front_face: wgpu::FrontFace::Cw,
+                    ..Default::default()
+                },
+                depth_stencil: Some(depth_stencil_no_write),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(color_target_opaque.clone())],
+                    compilation_options: Default::default(),
+                }),
+                multiview: None,
+                cache: None,
+            });
 
         // Grid pipeline
         let pipeline_grid = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -392,10 +514,41 @@ impl GpuRenderer {
                 topology: wgpu::PrimitiveTopology::LineList,
                 ..Default::default()
             },
+            depth_stencil: Some(depth_stencil_write),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &grid_shader,
+                entry_point: Some("fs_grid"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview: None,
+            cache: None,
+        });
+
+        // ボーン描画パイプライン（TriangleList, depth=Always で常に手前に表示）
+        let pipeline_bone = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("bone_pipeline"),
+            layout: Some(&grid_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &grid_shader,
+                entry_point: Some("vs_grid"),
+                buffers: &[GridVertex::layout()],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -405,7 +558,7 @@ impl GpuRenderer {
                 entry_point: Some("fs_grid"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    blend: None,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -425,6 +578,9 @@ impl GpuRenderer {
         Self {
             pipeline_cull,
             pipeline_no_cull,
+            pipeline_wireframe,
+            pipeline_alpha_cull,
+            pipeline_alpha_no_cull,
             pipeline_grid,
             camera_buf,
             camera_bind_group,
@@ -432,10 +588,19 @@ impl GpuRenderer {
             texture_bgl,
             material_bgl,
             default_tex_bind_group,
+            pipeline_bone,
+            bone_buf: None,
+            bone_buf_capacity: 0,
+            bone_vertex_count: 0,
             grid_vbuf,
             grid_vertex_count,
             offscreen: None,
         }
+    }
+
+    /// ワイヤーフレーム対応かどうか
+    pub fn supports_wireframe(&self) -> bool {
+        self.pipeline_wireframe.is_some()
     }
 
     /// テクスチャ bind group layout への参照
@@ -448,35 +613,19 @@ impl GpuRenderer {
         &self.material_bgl
     }
 
-    /// オフスクリーンにモデルを描画し、結果テクスチャの egui TextureId を返す
-    pub fn render_to_texture(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        egui_renderer: &mut egui_wgpu::Renderer,
-        model: &GpuModel,
-        camera: &OrbitCamera,
-        width: u32,
-        height: u32,
-        light_intensity: f32,
-        ambient_intensity: f32,
-        bg_brightness: f32,
-        cached_id: &mut Option<eframe::egui::TextureId>,
-        material_visibility: &[bool],
-    ) -> (eframe::egui::TextureId, ()) {
-        // オフスクリーンターゲットの再作成（サイズ変更時）
-        let _need_recreate = self
+    /// オフスクリーンテクスチャを確保（サイズ変更時のみ再作成）
+    fn ensure_offscreen(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        let need_recreate = self
             .offscreen
             .as_ref()
             .map(|o| o.width != width || o.height != height)
             .unwrap_or(true);
 
-        // NOTE: offscreen は &self で持っているため、内部可変性が必要
-        // ここでは unsafe を避けるため毎フレームごとに必要なら作り直す方法を取る
-        // 実際にはこの関数を &mut self で呼ぶべきだが、eframe のコールバック構造の制約上、
-        // ここでは一時的なオフスクリーンテクスチャを作成する
+        if !need_recreate {
+            return;
+        }
 
-        let color_tex = device.create_texture(&wgpu::TextureDescriptor {
+        let color = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen_color"),
             size: wgpu::Extent3d {
                 width,
@@ -491,9 +640,9 @@ impl GpuRenderer {
                 | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let color_view = color_tex.create_view(&Default::default());
+        let color_view = color.create_view(&Default::default());
 
-        let depth_tex = device.create_texture(&wgpu::TextureDescriptor {
+        let depth = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen_depth"),
             size: wgpu::Extent3d {
                 width,
@@ -507,13 +656,77 @@ impl GpuRenderer {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
-        let depth_view = depth_tex.create_view(&Default::default());
+        let depth_view = depth.create_view(&Default::default());
+
+        self.offscreen = Some(OffscreenTarget {
+            _color: color,
+            color_view,
+            _depth: depth,
+            depth_view,
+            width,
+            height,
+        });
+    }
+
+    /// オフスクリーンにモデルを描画し、結果テクスチャの egui TextureId を返す
+    pub fn render_to_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        egui_renderer: &mut egui_wgpu::Renderer,
+        model: &GpuModel,
+        ir: &IrModel,
+        camera: &OrbitCamera,
+        width: u32,
+        height: u32,
+        light_intensity: f32,
+        ambient_intensity: f32,
+        bg_brightness: f32,
+        cached_id: &mut Option<eframe::egui::TextureId>,
+        material_visibility: &[bool],
+        show_grid: bool,
+        show_bones: bool,
+        bone_opacity: f32,
+        draw_mode: DrawMode,
+        light_mode: LightMode,
+    ) -> (eframe::egui::TextureId, ()) {
+        // オフスクリーンテクスチャの確保（サイズ変更時のみ再作成）
+        self.ensure_offscreen(device, width, height);
+        let offscreen = self.offscreen.as_ref().unwrap();
+
+        // ボーン頂点を毎フレーム更新（ビルボード）
+        if show_bones && !ir.bones.is_empty() {
+            let pos_fn: fn(Vec3) -> Vec3 = if ir.is_vrm0 {
+                crate::convert::coord::gltf_pos_to_pmx_v0
+            } else {
+                crate::convert::coord::gltf_pos_to_pmx
+            };
+            let verts = generate_bone_vertices(ir, pos_fn, camera.eye(), bone_opacity);
+            self.bone_vertex_count = verts.len() as u32;
+            let data = bytemuck::cast_slice(&verts);
+            if data.len() > self.bone_buf_capacity {
+                self.bone_buf = Some(device.create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some("bone_vbuf"),
+                        contents: data,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    },
+                ));
+                self.bone_buf_capacity = data.len();
+            } else if let Some(ref buf) = self.bone_buf {
+                queue.write_buffer(buf, 0, data);
+            }
+        }
 
         // Update camera uniform
         let aspect = width as f32 / height as f32;
+        let light_dir = match light_mode {
+            LightMode::CameraFollow => camera.camera_following_light_dir(),
+            LightMode::Fixed => OrbitCamera::fixed_light_dir(),
+        };
         let cam_uniform = CameraUniform {
             view_proj: camera.view_proj(aspect).to_cols_array_2d(),
-            light_dir: camera.light_dir().to_array(),
+            light_dir: light_dir.to_array(),
             light_intensity,
             ambient: [ambient_intensity; 3],
             _pad1: 0.0,
@@ -529,7 +742,7 @@ impl GpuRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("offscreen_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &color_view,
+                    view: &offscreen.color_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -542,7 +755,7 @@ impl GpuRenderer {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_view,
+                    view: &offscreen.depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -553,32 +766,44 @@ impl GpuRenderer {
             });
 
             // グリッド描画
-            pass.set_pipeline(&self.pipeline_grid);
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.set_vertex_buffer(0, self.grid_vbuf.slice(..));
-            pass.draw(0..self.grid_vertex_count, 0..1);
+            if show_grid {
+                pass.set_pipeline(&self.pipeline_grid);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.grid_vbuf.slice(..));
+                pass.draw(0..self.grid_vertex_count, 0..1);
+            }
 
             // メッシュ描画
             pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
             pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
+            let use_wireframe = draw_mode == DrawMode::Wireframe
+                && self.pipeline_wireframe.is_some();
+
+            // パス1: 不透明材質（デプス書き込みあり）
             for (draw_idx, draw) in model.draws.iter().enumerate() {
                 if !material_visibility.get(draw_idx).copied().unwrap_or(true) {
                     continue;
                 }
-                // 常に両面描画
-                pass.set_pipeline(&self.pipeline_no_cull);
+                if draw.is_alpha {
+                    continue; // 半透明は後で
+                }
+
+                if use_wireframe {
+                    pass.set_pipeline(self.pipeline_wireframe.as_ref().unwrap());
+                } else if draw.double_sided {
+                    pass.set_pipeline(&self.pipeline_no_cull);
+                } else {
+                    pass.set_pipeline(&self.pipeline_cull);
+                }
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
-                // テクスチャ bind group
                 let tex_bg = draw
                     .texture_bind_group
                     .as_ref()
                     .unwrap_or(&self.default_tex_bind_group);
                 pass.set_bind_group(1, tex_bg, &[]);
-
-                // 材質 bind group
                 pass.set_bind_group(2, &draw.material_bind_group, &[]);
 
                 pass.draw_indexed(
@@ -586,6 +811,48 @@ impl GpuRenderer {
                     0,
                     0..1,
                 );
+            }
+
+            // パス2: 半透明材質（デプス書き込みなし）
+            for (draw_idx, draw) in model.draws.iter().enumerate() {
+                if !material_visibility.get(draw_idx).copied().unwrap_or(true) {
+                    continue;
+                }
+                if !draw.is_alpha {
+                    continue;
+                }
+
+                if use_wireframe {
+                    pass.set_pipeline(self.pipeline_wireframe.as_ref().unwrap());
+                } else if draw.double_sided {
+                    pass.set_pipeline(&self.pipeline_alpha_no_cull);
+                } else {
+                    pass.set_pipeline(&self.pipeline_alpha_cull);
+                }
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+
+                let tex_bg = draw
+                    .texture_bind_group
+                    .as_ref()
+                    .unwrap_or(&self.default_tex_bind_group);
+                pass.set_bind_group(1, tex_bg, &[]);
+                pass.set_bind_group(2, &draw.material_bind_group, &[]);
+
+                pass.draw_indexed(
+                    draw.index_offset..(draw.index_offset + draw.index_count),
+                    0,
+                    0..1,
+                );
+            }
+
+            // ボーン描画（メッシュの上にオーバーレイ、depth=Always）
+            if show_bones && self.bone_vertex_count > 0 {
+                if let Some(ref bone_buf) = self.bone_buf {
+                    pass.set_pipeline(&self.pipeline_bone);
+                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    pass.set_vertex_buffer(0, bone_buf.slice(..));
+                    pass.draw(0..self.bone_vertex_count, 0..1);
+                }
             }
         }
 
@@ -599,7 +866,7 @@ impl GpuRenderer {
         // egui にテクスチャを登録
         let tex_id = egui_renderer.register_native_texture(
             device,
-            &color_view,
+            &offscreen.color_view,
             wgpu::FilterMode::Linear,
         );
         *cached_id = Some(tex_id);
@@ -724,4 +991,93 @@ pub fn create_material_bind_group(
             resource: buf.as_entire_binding(),
         }],
     })
+}
+
+/// ボーン表示用ジオメトリを生成（毎フレーム、カメラ向きビルボード）
+/// - ジョイント: カメラ向き円（12角形）
+/// - 親→子: カメラ向き三角形（底辺＝親、頂点＝子）
+fn generate_bone_vertices(
+    ir: &IrModel,
+    pos_fn: fn(Vec3) -> Vec3,
+    camera_eye: Vec3,
+    opacity: f32,
+) -> Vec<GridVertex> {
+    let joint_color = [1.0, 0.85, 0.1, opacity];
+    let bone_color = [0.15, 0.85, 0.3, opacity];
+    let joint_radius = 0.35_f32;
+    let segments = 12u32;
+
+    let mut verts = Vec::new();
+
+    for bone in &ir.bones {
+        let pos = pos_fn(bone.position);
+
+        // --- ジョイント: カメラ向き円 ---
+        let to_cam = (camera_eye - pos).normalize_or_zero();
+        let (right, up) = billboard_axes(to_cam);
+
+        for i in 0..segments {
+            let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
+            let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
+            let p0 = pos + (right * a0.cos() + up * a0.sin()) * joint_radius;
+            let p1 = pos + (right * a1.cos() + up * a1.sin()) * joint_radius;
+            verts.push(GridVertex { position: pos.to_array(), color: joint_color });
+            verts.push(GridVertex { position: p0.to_array(), color: joint_color });
+            verts.push(GridVertex { position: p1.to_array(), color: joint_color });
+        }
+
+        // --- 親→子: 三角形 ---
+        if let Some(parent_idx) = bone.parent {
+            if parent_idx >= ir.bones.len() {
+                continue;
+            }
+            let parent_pos = pos_fn(ir.bones[parent_idx].position);
+            let dir = pos - parent_pos;
+            let len = dir.length();
+            if len < 0.001 {
+                continue;
+            }
+            let dir_n = dir / len;
+            let mid = (parent_pos + pos) * 0.5;
+            let to_cam_mid = (camera_eye - mid).normalize_or_zero();
+            let side = dir_n.cross(to_cam_mid).normalize_or_zero();
+            // side がゼロになる場合（カメラがボーン方向を向いている）
+            let side = if side.length_squared() < 0.001 {
+                let (r, _) = billboard_axes(to_cam_mid);
+                r
+            } else {
+                side
+            };
+            let base_half = (len * 0.10).clamp(0.15, joint_radius);
+
+            let base_l = parent_pos + side * base_half;
+            let base_r = parent_pos - side * base_half;
+            let tip = pos;
+
+            // 表面
+            verts.push(GridVertex { position: base_l.to_array(), color: bone_color });
+            verts.push(GridVertex { position: tip.to_array(), color: bone_color });
+            verts.push(GridVertex { position: base_r.to_array(), color: bone_color });
+            // 裏面（反対からも見えるように）
+            verts.push(GridVertex { position: base_r.to_array(), color: bone_color });
+            verts.push(GridVertex { position: tip.to_array(), color: bone_color });
+            verts.push(GridVertex { position: base_l.to_array(), color: bone_color });
+        }
+    }
+
+    verts
+}
+
+/// カメラ方向からビルボード用の right/up 軸を算出
+fn billboard_axes(to_camera: Vec3) -> (Vec3, Vec3) {
+    let right = to_camera.cross(Vec3::Y).normalize_or_zero();
+    if right.length_squared() < 0.001 {
+        // カメラが真上/真下を向いている場合
+        let right = to_camera.cross(Vec3::Z).normalize();
+        let up = right.cross(to_camera).normalize();
+        (right, up)
+    } else {
+        let up = right.cross(to_camera).normalize();
+        (right, up)
+    }
 }

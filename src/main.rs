@@ -218,6 +218,25 @@ fn run_viewer() -> Result<()> {
             .with_title("VRM Viewer")
             .with_drag_and_drop(true),
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(
+                eframe::egui_wgpu::WgpuSetupCreateNew {
+                    device_descriptor: std::sync::Arc::new(|adapter| {
+                        let mut features = eframe::wgpu::Features::default();
+                        // ワイヤーフレーム表示用（対応ハードウェアのみ）
+                        if adapter.features().contains(eframe::wgpu::Features::POLYGON_MODE_LINE) {
+                            features |= eframe::wgpu::Features::POLYGON_MODE_LINE;
+                        }
+                        eframe::wgpu::DeviceDescriptor {
+                            required_features: features,
+                            ..Default::default()
+                        }
+                    }),
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
