@@ -8,6 +8,36 @@ pub struct TextureData {
     pub height: u32,
 }
 
+/// テクスチャリストから Diffuse テクスチャを選択（共通ロジック）
+fn find_diffuse_texture<'a>(
+    textures: &[(&'a super::scene::FbxObject<'a>, Option<String>)],
+) -> Option<&'a super::scene::FbxObject<'a>> {
+    textures
+        .iter()
+        .find(|(_, prop)| {
+            prop.as_ref()
+                .map(|p| p.contains("Diffuse") || p.contains("diffuse"))
+                .unwrap_or(false)
+        })
+        .or_else(|| textures.first())
+        .map(|(obj, _)| *obj)
+}
+
+/// テクスチャノードからファイル名（ベースネーム）を取得
+fn extract_basename_from_texture(tex_obj: &super::scene::FbxObject) -> Option<String> {
+    for child_name in &["RelativeFilename", "FileName"] {
+        if let Some(node) = tex_obj.node.child(child_name) {
+            if let Some(filename) = node.properties.first().and_then(|p| p.as_string()) {
+                let normalized = filename.replace('\\', "/");
+                if let Some(basename) = Path::new(&normalized).file_name() {
+                    return Some(basename.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Extract diffuse texture data for a material via scene graph connections
 pub fn extract_texture_for_material(
     scene: &FbxScene,
@@ -15,16 +45,7 @@ pub fn extract_texture_for_material(
     fbx_path: Option<&Path>,
 ) -> Option<TextureData> {
     let textures = scene.textures_for_material(mat_id);
-
-    // Prefer diffuse texture, fall back to first available
-    let (tex_obj, _prop) = textures
-        .iter()
-        .find(|(_, prop)| {
-            prop.as_ref()
-                .map(|p| p.contains("Diffuse") || p.contains("diffuse"))
-                .unwrap_or(false)
-        })
-        .or_else(|| textures.first())?;
+    let tex_obj = find_diffuse_texture(&textures)?;
 
     let tex_name = tex_obj.name.clone();
 
@@ -78,33 +99,9 @@ pub fn extract_texture_for_material(
 /// Extract the texture reference filename for a material (without loading the file)
 pub fn extract_texture_name_for_material(scene: &FbxScene, mat_id: i64) -> Option<String> {
     let textures = scene.textures_for_material(mat_id);
-    let (tex_obj, _prop) = textures
-        .iter()
-        .find(|(_, prop)| {
-            prop.as_ref()
-                .map(|p| p.contains("Diffuse") || p.contains("diffuse"))
-                .unwrap_or(false)
-        })
-        .or_else(|| textures.first())?;
-
-    // RelativeFilename → FileName → テクスチャオブジェクト名の順で取得
-    if let Some(rel_node) = tex_obj.node.child("RelativeFilename") {
-        if let Some(filename) = rel_node.properties.first().and_then(|p| p.as_string()) {
-            let normalized = filename.replace('\\', "/");
-            if let Some(basename) = Path::new(&normalized).file_name() {
-                return Some(basename.to_string_lossy().to_string());
-            }
-        }
-    }
-    if let Some(abs_node) = tex_obj.node.child("FileName") {
-        if let Some(filename) = abs_node.properties.first().and_then(|p| p.as_string()) {
-            let normalized = filename.replace('\\', "/");
-            if let Some(basename) = Path::new(&normalized).file_name() {
-                return Some(basename.to_string_lossy().to_string());
-            }
-        }
-    }
-    Some(tex_obj.name.clone())
+    let tex_obj = find_diffuse_texture(&textures)?;
+    extract_basename_from_texture(tex_obj)
+        .or_else(|| Some(tex_obj.name.clone()))
 }
 
 fn decode_image_data(data: &[u8], name: &str) -> Option<TextureData> {

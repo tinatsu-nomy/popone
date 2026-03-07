@@ -96,41 +96,21 @@ pub fn extract_ir_model_from_fbx_with_options(
                 .and_then(|tex| texture_to_ir(&tex, &mut ir_textures));
             let source_tex_name = texture::extract_texture_name_for_material(&scene, mat_obj.id);
 
-            // PMX 材質パラメータ:
-            // テクスチャ有り → 拡散色(1,1,1)、なし → FBX拡散色
-            // 環境色 = 拡散色 × 0.5
-            // 反射色 = (0,0,0)、反射強度 = 0
-            // 非透過度 = 材質α（最大1）
+            // PMX 材質パラメータ
             let opacity = props.opacity.min(1.0);
-            let (pmx_diffuse, pmx_ambient) = if tex_idx.is_some() {
-                (
-                    Vec4::new(1.0, 1.0, 1.0, opacity),
-                    Vec3::new(0.5, 0.5, 0.5),
-                )
-            } else {
-                let d = Vec3::new(diffuse[0], diffuse[1], diffuse[2]);
-                (
-                    Vec4::new(d.x, d.y, d.z, opacity),
-                    d * 0.5,
-                )
-            };
-
-            ir_materials.push(IrMaterial {
+            let d = Vec3::new(diffuse[0], diffuse[1], diffuse[2]);
+            let mut mat = IrMaterial {
                 name: mat_obj.name.clone(),
-                diffuse: pmx_diffuse,
-                specular: Vec3::ZERO,
-                specular_power: 0.0,
-                ambient: pmx_ambient,
+                diffuse: Vec4::new(d.x, d.y, d.z, opacity),
+                ambient: d * 0.5,
                 texture_index: tex_idx,
-                is_double_sided: false,
-                is_mtoon: false,
-                edge_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
-                edge_size: 0.0,
-                shade_color: None,
-                shade_texture_index: None,
-                outline_width_texture_index: None,
                 source_texture_name: source_tex_name,
-            });
+                ..Default::default()
+            };
+            if tex_idx.is_some() {
+                mat.apply_textured_defaults();
+            }
+            ir_materials.push(mat);
         }
 
         // デフォルト材質
@@ -241,6 +221,7 @@ pub fn extract_ir_model_from_fbx_with_options(
         // IrMesh を材質ごとに生成
         // ジオメトリローカル展開インデックス → グローバル IrMesh 頂点インデックスのマッピング
         let mut geom_local_to_global: HashMap<u32, usize> = HashMap::new();
+        let mut global_vertex_offset: usize = ir_meshes.iter().map(|m| m.vertices.len()).sum();
 
         for (mat_local, triangles) in mat_triangles.iter().enumerate() {
             if triangles.is_empty() {
@@ -254,9 +235,6 @@ pub fn extract_ir_model_from_fbx_with_options(
                 .collect();
             used_verts.sort_unstable();
             used_verts.dedup();
-
-            // ローカルインデックスにリマップ
-            let global_vertex_offset = ir_meshes.iter().map(|m| m.vertices.len()).sum::<usize>();
             let mut old_to_new: HashMap<u32, u32> = HashMap::new();
             let mut ir_vertices = Vec::with_capacity(used_verts.len());
             for &old_idx in &used_verts {
@@ -283,6 +261,7 @@ pub fn extract_ir_model_from_fbx_with_options(
                 .collect();
 
             let mat_index = mat_base + mat_local;
+            global_vertex_offset += ir_vertices.len();
 
             ir_meshes.push(IrMesh {
                 name: geom_obj.name.clone(),

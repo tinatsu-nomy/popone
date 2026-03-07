@@ -11,11 +11,35 @@ use super::gpu::{DrawMode, GpuRenderer, LightMode, RenderParams};
 use super::mesh::GpuModel;
 use super::ui;
 
+/// UI 表示用にキャッシュされた材質情報（借用制約回避 + 毎フレーム clone 回避）
+pub struct CachedMaterialInfo {
+    /// (draw_index, material_index)
+    pub draw_indices: Vec<(usize, usize)>,
+    /// 材質名
+    pub names: Vec<String>,
+    /// テクスチャインデックス
+    pub tex_indices: Vec<Option<usize>>,
+    /// FBX 元テクスチャファイル名
+    pub source_tex_names: Vec<Option<String>>,
+    /// テクスチャ設定済みカウント
+    pub tex_set_count: usize,
+}
+
+/// ステータスバー用キャッシュ
+pub struct CachedStats {
+    pub total_vertices: usize,
+    pub total_faces: usize,
+}
+
 /// VRM読み込み結果
 pub struct LoadedModel {
     pub ir: IrModel,
     pub gpu_model: GpuModel,
     pub file_path: PathBuf,
+    /// 材質情報キャッシュ（テクスチャ割り当て時に更新）
+    pub mat_cache: CachedMaterialInfo,
+    /// 統計キャッシュ
+    pub stats_cache: CachedStats,
 }
 
 /// 変換結果の種類
@@ -76,8 +100,8 @@ pub struct ViewerApp {
     pub convert_message: Option<ConvertResult>,
     /// 表情モーフのスライダ値
     pub morph_weights: Vec<f32>,
-    /// 前フレームのモーフウェイト（変更検知用）
-    prev_morph_weights: Vec<f32>,
+    /// モーフウェイト変更フラグ
+    pub morph_dirty: bool,
     /// 表示・描画設定
     pub display: DisplaySettings,
     /// PMX変換時にログファイルを出力するか
@@ -118,7 +142,7 @@ impl ViewerApp {
             renderer: None,
             convert_message: None,
             morph_weights: Vec::new(),
-            prev_morph_weights: Vec::new(),
+            morph_dirty: false,
             display: DisplaySettings::default(),
             material_visibility: Vec::new(),
             material_filter: String::new(),
@@ -195,7 +219,7 @@ impl ViewerApp {
         let version = vrm::detect::detect_version(&glb.document);
         let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
 
-        let ir = vrm::extract::extract_ir_model_with_options(
+        let mut ir = vrm::extract::extract_ir_model_with_options(
             &glb.document,
             &glb.buffers,
             &glb.images,
@@ -208,6 +232,10 @@ impl ViewerApp {
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
         let gpu_model = super::mesh::build_gpu_model(&ir, &glb.images, device, queue)?;
+
+        // IrTexture を PNG エンコード済みに変換（convert_ir_to_pmx で統一的に使えるように）
+        Self::encode_ir_textures_as_png(&mut ir, &glb.images);
+
         self.finish_load_with_gpu(ir, gpu_model, path)
     }
 
@@ -230,33 +258,85 @@ impl ViewerApp {
 
         // モーフスライダ初期化
         self.morph_weights = vec![0.0; ir.morphs.len()];
-        self.prev_morph_weights = vec![0.0; ir.morphs.len()];
+        self.morph_dirty = false;
         // 材質表示フラグ初期化（DrawCall数 = 材質数ではない場合があるのでdraws数に合わせる）
         self.material_visibility = vec![true; gpu_model.draws.len()];
         self.material_filter.clear();
         // カメラをモデルのバウンディングボックスにフィット
-        let (bbox_min, bbox_max) = gpu_model.compute_bbox();
+        let (bbox_min, bbox_max) = gpu_model.bbox();
         self.camera.reset_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_height);
 
         // デフォルト出力パス: 入力VRMと同じ場所に .pmx
         self.pmx_output_path = path.with_extension("pmx").to_string_lossy().to_string();
 
+        // キャッシュ構築
+        let mat_cache = Self::build_mat_cache(&ir, &gpu_model);
+        let stats_cache = CachedStats {
+            total_vertices: ir.total_vertices(),
+            total_faces: ir.total_faces(),
+        };
+
         self.loaded = Some(LoadedModel {
             ir,
             gpu_model,
             file_path: path.to_path_buf(),
+            mat_cache,
+            stats_cache,
         });
 
         Ok(())
     }
 
+    /// 材質情報キャッシュを構築
+    fn build_mat_cache(ir: &IrModel, gpu_model: &GpuModel) -> CachedMaterialInfo {
+        let draw_indices: Vec<(usize, usize)> = gpu_model.draws.iter()
+            .enumerate()
+            .map(|(i, d)| (i, d.material_index))
+            .collect();
+        let names: Vec<String> = ir.materials.iter().map(|m| m.name.clone()).collect();
+        let tex_indices: Vec<Option<usize>> = ir.materials.iter().map(|m| m.texture_index).collect();
+        let source_tex_names: Vec<Option<String>> = ir.materials.iter()
+            .map(|m| m.source_texture_name.clone()).collect();
+        let tex_set_count = ir.materials.iter().filter(|m| m.texture_index.is_some()).count();
+        CachedMaterialInfo { draw_indices, names, tex_indices, source_tex_names, tex_set_count }
+    }
+
+    /// 材質キャッシュを更新（テクスチャ割り当て後）
+    fn update_mat_cache(&mut self) {
+        if let Some(ref loaded) = self.loaded {
+            let cache = Self::build_mat_cache(&loaded.ir, &loaded.gpu_model);
+            // loaded を再借用して書き込み
+            if let Some(ref mut loaded) = self.loaded {
+                loaded.mat_cache = cache;
+            }
+        }
+    }
+
     /// 指定材質に外部テクスチャファイルを割り当て
     pub fn assign_texture_to_material(&mut self, material_index: usize, path: &std::path::Path) {
+        // ファイルを1回だけ読み込み
+        let tex_data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(e) => {
+                log::error!("ファイル読み込み失敗: {e}");
+                self.convert_message = Some(ConvertResult::Failure(format!(
+                    "テクスチャ読み込み失敗: {e}"
+                )));
+                return;
+            }
+        };
+
+        let ext_lower = path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let is_psd = ext_lower == "psd";
+
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
 
-        // GPU テクスチャをアップロード
-        let texture_view = match super::texture::upload_texture_from_file(path, device, queue) {
+        // GPU テクスチャをアップロード（読み込み済みバイト列を使用）
+        let texture_view = match super::texture::upload_texture_from_bytes(&tex_data, is_psd, device, queue) {
             Ok(view) => view,
             Err(e) => {
                 log::error!("テクスチャ読み込み失敗: {e}");
@@ -270,25 +350,13 @@ impl ViewerApp {
         // IrModel にテクスチャを追加・材質を更新
         let Some(ref mut loaded) = self.loaded else { return };
 
-        let tex_data = match std::fs::read(path) {
-            Ok(d) => d,
-            Err(e) => {
-                log::error!("ファイル読み込み失敗: {e}");
-                return;
-            }
-        };
-
-        let ext_lower = path.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
         let basename = path.file_stem()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
 
         // PSD の場合は PNG に変換して保存
-        let (ir_data, ir_filename, ir_mime) = if ext_lower == "psd" {
+        let (ir_data, ir_filename, ir_mime) = if is_psd {
             match Self::psd_to_png(&tex_data) {
                 Ok(png_data) => (png_data, format!("{}.png", basename), "image/png".to_string()),
                 Err(e) => {
@@ -304,7 +372,12 @@ impl ViewerApp {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let mime = if ext_lower == "png" { "image/png" } else { "image/jpeg" };
+            let mime = match ext_lower.as_str() {
+                "png" => "image/png",
+                "tga" => "image/x-tga",
+                "bmp" => "image/bmp",
+                _ => "image/jpeg",
+            };
             (tex_data, filename, mime.to_string())
         };
 
@@ -316,12 +389,7 @@ impl ViewerApp {
         });
         let mat = &mut loaded.ir.materials[material_index];
         mat.texture_index = Some(tex_idx);
-        // テクスチャ有り → 拡散色(1,1,1,α)、環境色(0.5,0.5,0.5)
-        let alpha = mat.diffuse.w;
-        mat.diffuse = glam::Vec4::new(1.0, 1.0, 1.0, alpha);
-        mat.ambient = glam::Vec3::new(0.5, 0.5, 0.5);
-        mat.specular = glam::Vec3::ZERO;
-        mat.specular_power = 0.0;
+        mat.apply_textured_defaults();
 
         // GPU DrawCall 更新
         loaded.gpu_model.assign_texture_to_material(material_index, &texture_view, device);
@@ -332,15 +400,54 @@ impl ViewerApp {
             loaded.ir.materials[material_index].name,
             path.display()
         );
+
+        // 材質キャッシュ更新
+        self.update_mat_cache();
     }
 
-    /// PSD データを PNG に変換
+    /// VRM の IrTexture（raw ピクセル）を PNG エンコード済みに変換
+    fn encode_ir_textures_as_png(ir: &mut IrModel, images: &[gltf::image::Data]) {
+        use image::ImageEncoder;
+        for (i, tex) in ir.textures.iter_mut().enumerate() {
+            if let Some(img_data) = images.get(i) {
+                let (w, h) = (img_data.width, img_data.height);
+                // RGBA 画像を構築
+                let rgba_img: Option<image::RgbaImage> = if tex.data.len() == (w * h * 4) as usize {
+                    image::ImageBuffer::from_raw(w, h, tex.data.clone())
+                } else if tex.data.len() == (w * h * 3) as usize {
+                    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+                    for chunk in tex.data.chunks(3) {
+                        rgba.extend_from_slice(chunk);
+                        rgba.push(255);
+                    }
+                    image::ImageBuffer::from_raw(w, h, rgba)
+                } else {
+                    None
+                };
+                if let Some(img) = rgba_img {
+                    let mut png_data = Vec::new();
+                    if image::codecs::png::PngEncoder::new(&mut png_data)
+                        .write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgba8)
+                        .is_ok()
+                    {
+                        tex.data = png_data;
+                        if !tex.filename.ends_with(".png") {
+                            tex.filename = tex.filename.replace(".jpg", ".png")
+                                .replace(".jpeg", ".png");
+                            if !tex.filename.ends_with(".png") {
+                                tex.filename.push_str(".png");
+                            }
+                        }
+                        tex.mime_type = "image/png".to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    /// PSD データを PNG に変換（decode_psd を共有）
     fn psd_to_png(psd_data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        let psd = psd::Psd::from_bytes(psd_data)
-            .map_err(|e| anyhow::anyhow!("PSD パース失敗: {:?}", e))?;
-        let width = psd.width();
-        let height = psd.height();
-        let rgba = psd.rgba();
+        let (rgba, width, height) = super::texture::decode_psd(psd_data)?;
 
         let mut png_data = Vec::new();
         {
@@ -369,7 +476,7 @@ impl ViewerApp {
         self.camera = saved_camera;
         if saved_morphs.len() == self.morph_weights.len() {
             self.morph_weights = saved_morphs;
-            self.prev_morph_weights = vec![-1.0; self.morph_weights.len()]; // 強制更新
+            self.morph_dirty = true; // 強制更新
         }
         if saved_visibility.len() == self.material_visibility.len() {
             self.material_visibility = saved_visibility;
@@ -414,14 +521,14 @@ impl eframe::App for ViewerApp {
                 // R: カメラリセット
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::R) {
                     if let Some(ref loaded) = self.loaded {
-                        let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
+                        let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
                         self.camera.reset_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_height);
                     }
                 }
                 // F: モデルにフィット
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::F) {
                     if let Some(ref loaded) = self.loaded {
-                        let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
+                        let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
                         self.camera.fit_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_height);
                     }
                 }
@@ -488,11 +595,11 @@ impl eframe::App for ViewerApp {
 
                         ui.separator();
 
-                        // モデル統計
+                        // モデル統計（キャッシュ利用）
                         let stats = format!(
                             "頂点:{} 面:{} 材質:{} テクスチャ:{} ボーン:{} モーフ:{}",
-                            ir.total_vertices(),
-                            ir.total_faces(),
+                            loaded.stats_cache.total_vertices,
+                            loaded.stats_cache.total_faces,
                             ir.materials.len(),
                             ir.textures.len(),
                             ir.bones.len(),
@@ -500,9 +607,9 @@ impl eframe::App for ViewerApp {
                         );
                         ui.label(egui::RichText::new(stats).font(font.clone()).color(color));
 
-                        // FBXの場合、テクスチャ設定状況
+                        // FBXの場合、テクスチャ設定状況（キャッシュ利用）
                         if ir.source_format == crate::intermediate::types::SourceFormat::Fbx {
-                            let tex_set = ir.materials.iter().filter(|m| m.texture_index.is_some()).count();
+                            let tex_set = loaded.mat_cache.tex_set_count;
                             let tex_total = ir.materials.len();
                             ui.separator();
                             let tex_status = format!("Tex:{}/{}", tex_set, tex_total);
@@ -543,7 +650,7 @@ impl eframe::App for ViewerApp {
                 self.camera.handle_input(ctx, &response);
 
                 // モーフウェイト変更検知 → 頂点バッファ更新
-                if self.morph_weights != self.prev_morph_weights {
+                if self.morph_dirty {
                     if let Some(ref loaded) = self.loaded {
                         let queue = &self.render_state.queue;
                         loaded.gpu_model.apply_morphs(
@@ -551,7 +658,7 @@ impl eframe::App for ViewerApp {
                             &self.morph_weights,
                             queue,
                         );
-                        self.prev_morph_weights = self.morph_weights.clone();
+                        self.morph_dirty = false;
                     }
                 }
 
@@ -660,13 +767,13 @@ impl eframe::App for ViewerApp {
                         ui.horizontal(|ui| {
                             if ui.small_button("フィット(F)").on_hover_text("モデルにフィット").clicked() {
                                 if let Some(ref loaded) = self.loaded {
-                                    let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
+                                    let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
                                     self.camera.fit_to_bbox_with_margin(bbox_min, bbox_max, rect.height());
                                 }
                             }
                             if ui.small_button("リセット(R)").on_hover_text("カメラをリセット").clicked() {
                                 if let Some(ref loaded) = self.loaded {
-                                    let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
+                                    let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
                                     self.camera.reset_to_bbox_with_margin(bbox_min, bbox_max, rect.height());
                                 }
                             }

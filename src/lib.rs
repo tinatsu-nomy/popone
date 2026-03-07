@@ -71,25 +71,7 @@ pub fn convert_vrm_to_pmx_full(
     convert::texture::write_all_textures(&ir.textures, &glb.images, &tex_dir)?;
 
     let pmx_model = pmx::build::build_pmx_model_with_options(&ir, align_rigid_rotation)?;
-
-    let stats = ConvertStats {
-        output_path: output_path.to_string_lossy().to_string(),
-        tex_dir: tex_dir.to_string_lossy().to_string(),
-        bones: pmx_model.bones.len(),
-        vertices: pmx_model.vertices.len(),
-        faces: pmx_model.faces.len(),
-        materials: pmx_model.materials.len(),
-        textures: pmx_model.textures.len(),
-        morphs: pmx_model.morphs.len(),
-    };
-
-    let file = std::fs::File::create(output_path)?;
-    let writer = std::io::BufWriter::new(file);
-    let header = pmx_model.header.clone();
-    let mut pmx_writer = pmx::writer::PmxWriter::new(writer, header);
-    pmx_writer.write_model(&pmx_model)?;
-
-    Ok(stats)
+    write_pmx_and_stats(&pmx_model, output_path, &tex_dir)
 }
 
 /// FBX → PMX 変換
@@ -99,31 +81,7 @@ pub fn convert_fbx_to_pmx(
 ) -> Result<ConvertStats> {
     let data = std::fs::read(input_path)?;
     let ir = fbx::extract::extract_ir_model_from_fbx(&data, Some(input_path))?;
-
-    let output_dir = output_path.parent().unwrap_or(Path::new("."));
-    let tex_dir = output_dir.join("textures");
-    convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)?;
-
-    let pmx_model = pmx::build::build_pmx_model(&ir)?;
-
-    let stats = ConvertStats {
-        output_path: output_path.to_string_lossy().to_string(),
-        tex_dir: tex_dir.to_string_lossy().to_string(),
-        bones: pmx_model.bones.len(),
-        vertices: pmx_model.vertices.len(),
-        faces: pmx_model.faces.len(),
-        materials: pmx_model.materials.len(),
-        textures: pmx_model.textures.len(),
-        morphs: pmx_model.morphs.len(),
-    };
-
-    let file = std::fs::File::create(output_path)?;
-    let writer = std::io::BufWriter::new(file);
-    let header = pmx_model.header.clone();
-    let mut pmx_writer = pmx::writer::PmxWriter::new(writer, header);
-    pmx_writer.write_model(&pmx_model)?;
-
-    Ok(stats)
+    convert_ir_to_pmx(&ir, output_path, false)
 }
 
 /// IrModel から直接 PMX 変換（ビューアで編集済みの IrModel を使用）
@@ -137,7 +95,15 @@ pub fn convert_ir_to_pmx(
     convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)?;
 
     let pmx_model = pmx::build::build_pmx_model_with_options(ir, align_rigid_rotation)?;
+    write_pmx_and_stats(&pmx_model, output_path, &tex_dir)
+}
 
+/// PMX モデルをファイルに書き出して ConvertStats を返す（共通処理）
+fn write_pmx_and_stats(
+    pmx_model: &pmx::types::PmxModel,
+    output_path: &Path,
+    tex_dir: &Path,
+) -> Result<ConvertStats> {
     let stats = ConvertStats {
         output_path: output_path.to_string_lossy().to_string(),
         tex_dir: tex_dir.to_string_lossy().to_string(),
@@ -153,7 +119,7 @@ pub fn convert_ir_to_pmx(
     let writer = std::io::BufWriter::new(file);
     let header = pmx_model.header.clone();
     let mut pmx_writer = pmx::writer::PmxWriter::new(writer, header);
-    pmx_writer.write_model(&pmx_model)?;
+    pmx_writer.write_model(pmx_model)?;
 
     Ok(stats)
 }

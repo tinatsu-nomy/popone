@@ -87,14 +87,17 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                             for w in app.morph_weights.iter_mut() {
                                 *w = 0.0;
                             }
+                            app.morph_dirty = true;
                         }
                         ui.separator();
                         for (i, morph) in ir.morphs.iter().enumerate() {
                             if i < app.morph_weights.len() {
-                                ui.add(
+                                if ui.add(
                                     egui::Slider::new(&mut app.morph_weights[i], 0.0..=1.0)
                                         .text(&morph.name),
-                                );
+                                ).changed() {
+                                    app.morph_dirty = true;
+                                }
                             }
                         }
                     });
@@ -104,20 +107,11 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                 // 材質表示
                 let is_fbx = ir.source_format == crate::intermediate::types::SourceFormat::Fbx;
                 if !loaded.gpu_model.draws.is_empty() {
-                    // draws 情報を事前コピー（借用制約回避）
-                    let draw_info: Vec<(usize, usize)> = loaded.gpu_model.draws.iter()
-                        .enumerate()
-                        .map(|(i, d)| (i, d.material_index))
-                        .collect();
-                    let mat_tex_info: Vec<Option<usize>> = ir.materials.iter()
-                        .map(|m| m.texture_index)
-                        .collect();
-                    let mat_names: Vec<String> = ir.materials.iter()
-                        .map(|m| m.name.clone())
-                        .collect();
-                    let mat_src_tex: Vec<Option<String>> = ir.materials.iter()
-                        .map(|m| m.source_texture_name.clone())
-                        .collect();
+                    // キャッシュ済みの材質情報を参照（毎フレーム clone 回避）
+                    let draw_info = &loaded.mat_cache.draw_indices;
+                    let mat_tex_info = &loaded.mat_cache.tex_indices;
+                    let mat_names = &loaded.mat_cache.names;
+                    let mat_src_tex = &loaded.mat_cache.source_tex_names;
                     let num_draws = draw_info.len();
 
                     ui.collapsing("材質表示", |ui| {
@@ -141,10 +135,10 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                             });
                         }
                         let filter_lower = app.material_filter.to_lowercase();
-                        for &(i, mat_idx) in &draw_info {
+                        for &(i, mat_idx) in draw_info.iter() {
                             if i < app.material_visibility.len() {
                                 let name = mat_names.get(mat_idx)
-                                    .map(|s| s.as_str())
+                                    .map(|s: &String| s.as_str())
                                     .unwrap_or("?");
                                 // フィルターに一致しない場合はスキップ
                                 if !filter_lower.is_empty()
@@ -168,7 +162,7 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                                                 .size(16.0)
                                         };
                                         let src_name = mat_src_tex.get(mat_idx)
-                                            .and_then(|s| s.as_deref());
+                                            .and_then(|s: &Option<String>| s.as_deref());
                                         let tooltip = match (has_tex, src_name) {
                                             (true, Some(s)) => format!("テクスチャ設定済 ({})\nクリックで変更", s),
                                             (true, None) => "テクスチャ設定済\nクリックで変更".to_string(),
@@ -368,7 +362,6 @@ fn show_overwrite_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
 /// PMX変換を実行
 fn execute_conversion(app: &mut ViewerApp) {
     let Some(ref loaded) = app.loaded else { return };
-    let input_path = loaded.file_path.clone();
     let output_path = std::path::PathBuf::from(&app.pmx_output_path);
     let log_path = output_path.with_extension("log");
 
@@ -381,17 +374,8 @@ fn execute_conversion(app: &mut ViewerApp) {
         .map(|m| m.len())
         .unwrap_or(0);
 
-    let is_fbx = input_path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("fbx"))
-        .unwrap_or(false);
-
-    let result = if is_fbx {
-        // ビューアの IrModel を直接使用（テクスチャ割り当て等の編集を反映）
-        crate::convert_ir_to_pmx(&loaded.ir, &output_path, app.display.align_rigid_rotation)
-    } else {
-        crate::convert_vrm_to_pmx_full(&input_path, &output_path, false, app.display.align_rigid_rotation, app.normalize_pose)
-    };
+    // VRM/FBX 共通: ビューアの IrModel を直接使用（編集状態を反映）
+    let result = crate::convert_ir_to_pmx(&loaded.ir, &output_path, app.display.align_rigid_rotation);
 
     if app.output_log {
         let debug_logs = viewer_log_path.as_ref()

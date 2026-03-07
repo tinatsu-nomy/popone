@@ -134,6 +134,17 @@ pub struct IrMaterial {
     pub source_texture_name: Option<String>,
 }
 
+impl IrMaterial {
+    /// テクスチャ有り時の PMX 材質パラメータを設定
+    pub fn apply_textured_defaults(&mut self) {
+        let alpha = self.diffuse.w;
+        self.diffuse = Vec4::new(1.0, 1.0, 1.0, alpha);
+        self.ambient = Vec3::new(0.5, 0.5, 0.5);
+        self.specular = Vec3::ZERO;
+        self.specular_power = 0.0;
+    }
+}
+
 impl Default for IrMaterial {
     fn default() -> Self {
         Self {

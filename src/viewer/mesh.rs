@@ -34,6 +34,8 @@ pub struct GpuModel {
     global_to_gpu: Vec<u32>,
     /// VRM 0.0 座標変換を使うか
     use_vrm0_coords: bool,
+    /// キャッシュ済みバウンディングボックス (min, max)
+    cached_bbox: (Vec3, Vec3),
 }
 
 impl GpuModel {
@@ -44,27 +46,7 @@ impl GpuModel {
         texture_view: &wgpu::TextureView,
         device: &wgpu::Device,
     ) {
-        let texture_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("texture_bgl_assign"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+        let texture_bgl = gpu::create_texture_bind_group_layout(device);
 
         for draw in &mut self.draws {
             if draw.material_index == material_index {
@@ -75,16 +57,9 @@ impl GpuModel {
         }
     }
 
-    /// バウンディングボックスを計算 (min, max)
-    pub fn compute_bbox(&self) -> (Vec3, Vec3) {
-        let mut min = Vec3::splat(f32::MAX);
-        let mut max = Vec3::splat(f32::MIN);
-        for v in &self.base_vertices {
-            let p = Vec3::from(v.position);
-            min = min.min(p);
-            max = max.max(p);
-        }
-        (min, max)
+    /// バウンディングボックスを取得（キャッシュ済み）
+    pub fn bbox(&self) -> (Vec3, Vec3) {
+        self.cached_bbox
     }
 
     /// モーフウェイトを適用して頂点バッファを更新
@@ -198,27 +173,7 @@ fn build_gpu_model_inner(
     let total_global_verts: usize = ir.meshes.iter().map(|m| m.vertices.len()).sum();
     let mut global_to_gpu = vec![0u32; total_global_verts];
 
-    let texture_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("texture_bgl_mesh"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
-    });
+    let texture_bgl = gpu::create_texture_bind_group_layout(device);
 
     let material_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("material_bgl_mesh"),
@@ -315,8 +270,18 @@ fn build_gpu_model_inner(
         });
     }
 
-    // ベース頂点を保存
+    // ベース頂点を保存 + bbox 計算
     let base_vertices = all_vertices.clone();
+    let cached_bbox = {
+        let mut min = Vec3::splat(f32::MAX);
+        let mut max = Vec3::splat(f32::MIN);
+        for v in &base_vertices {
+            let p = Vec3::from(v.position);
+            min = min.min(p);
+            max = max.max(p);
+        }
+        (min, max)
+    };
 
     let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("model_vbuf"),
@@ -338,6 +303,7 @@ fn build_gpu_model_inner(
         base_vertices,
         global_to_gpu,
         use_vrm0_coords: ir.source_format.is_vrm0(),
+        cached_bbox,
     })
 }
 
