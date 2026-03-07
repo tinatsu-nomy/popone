@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use eframe::egui;
 use eframe::egui_wgpu;
@@ -145,6 +146,9 @@ pub struct ViewerApp {
     pub pending_load: Option<(PathBuf, bool)>,
     /// PMX変換遅延実行 (overlay表示済みフラグ)
     pub pending_convert: Option<bool>,
+    /// FPS計測用
+    last_frame_time: Instant,
+    fps_smoothed: f32,
 }
 
 impl ViewerApp {
@@ -178,6 +182,8 @@ impl ViewerApp {
             pending_tex_preview: None,
             pending_load: None,
             pending_convert: None,
+            last_frame_time: Instant::now(),
+            fps_smoothed: 0.0,
         }
     }
 
@@ -666,6 +672,19 @@ impl ViewerApp {
 
 impl eframe::App for ViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // FPS計測（指数移動平均）
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_frame_time).as_secs_f32();
+        self.last_frame_time = now;
+        if dt > 0.0 {
+            let fps = 1.0 / dt;
+            self.fps_smoothed = if self.fps_smoothed == 0.0 {
+                fps
+            } else {
+                self.fps_smoothed * 0.9 + fps * 0.1
+            };
+        }
+
         // 遅延処理: オーバーレイ表示済みなら実行
         if let Some((_, true)) = self.pending_load {
             let (path, _) = self.pending_load.take().unwrap();
@@ -855,6 +874,16 @@ impl eframe::App for ViewerApp {
                                 .color(egui::Color32::from_gray(0x60))
                         );
                     }
+
+                    // FPS表示（右端に配置）
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let fps_text = format!("{:.0} fps", self.fps_smoothed);
+                        ui.label(
+                            egui::RichText::new(fps_text)
+                                .font(egui::FontId::proportional(11.0))
+                                .color(egui::Color32::from_gray(0x60))
+                        );
+                    });
                 });
             });
 
