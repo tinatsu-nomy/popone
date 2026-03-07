@@ -357,9 +357,18 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            ui.label(format!("画像: {}", file_name));
-            ui.add_space(4.0);
-            ui.label("チェックでプレビュー、適用で確定:");
+            // サムネイル + ファイル名を横並び表示
+            ui.horizontal(|ui| {
+                if let Some(tex_id) = preview.preview_tex_id {
+                    let thumb_size = 64.0;
+                    ui.image(egui::load::SizedTexture::new(tex_id, [thumb_size, thumb_size]));
+                }
+                ui.vertical(|ui| {
+                    ui.label(format!("画像: {}", file_name));
+                    ui.add_space(2.0);
+                    ui.label("チェックでプレビュー、適用で確定");
+                });
+            });
             ui.separator();
             ui.horizontal(|ui| {
                 if ui.small_button("全選択").clicked() {
@@ -398,9 +407,20 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                         egui::RichText::new("\u{25A1}")
                             .color(egui::Color32::from_rgb(0xA0, 0x60, 0x60))
                     };
+                    // FBX 元テクスチャファイル名
+                    let src_name = loaded.mat_cache.source_tex_names.get(mat_idx)
+                        .and_then(|s| s.as_deref())
+                        .unwrap_or("");
                     ui.horizontal(|ui| {
                         ui.label(indicator);
                         ui.checkbox(&mut preview.selection[mat_idx], name);
+                        if !src_name.is_empty() {
+                            ui.label(
+                                egui::RichText::new(src_name)
+                                    .small()
+                                    .color(egui::Color32::from_gray(0x90)),
+                            );
+                        }
                     });
                 }
             });

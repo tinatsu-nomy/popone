@@ -106,6 +106,8 @@ pub struct PendingTexPreview {
     texture_view: wgpu::TextureView,
     /// draw_index → 退避した元の bind group
     saved_binds: HashMap<usize, Option<wgpu::BindGroup>>,
+    /// サムネイル表示用 egui TextureId
+    pub preview_tex_id: Option<egui::TextureId>,
 }
 
 /// ビューアのメイン状態
@@ -640,6 +642,12 @@ impl ViewerApp {
             );
         }
 
+        // サムネイル用 egui テクスチャを解放
+        if let Some(tex_id) = preview.preview_tex_id {
+            let mut renderer = self.render_state.renderer.write();
+            renderer.free_texture(&tex_id);
+        }
+
         // GPU は既にプレビュー状態 → saved_binds を捨てて確定
         // saved_binds 内の未プレビュー分は復元
         for (draw_idx, orig) in preview.saved_binds.into_iter() {
@@ -660,6 +668,11 @@ impl ViewerApp {
     }
 
     fn cancel_tex_preview_inner(&mut self, preview: PendingTexPreview) {
+        // サムネイル用 egui テクスチャを解放
+        if let Some(tex_id) = preview.preview_tex_id {
+            let mut renderer = self.render_state.renderer.write();
+            renderer.free_texture(&tex_id);
+        }
         let Some(ref mut loaded) = self.loaded else { return };
         // 退避した全 bind group を復元
         for (draw_idx, orig) in preview.saved_binds.into_iter() {
@@ -729,12 +742,22 @@ impl eframe::App for ViewerApp {
                     Ok(texture_view) => {
                         let num_mats = self.loaded.as_ref()
                             .map_or(0, |l| l.ir.materials.len());
+                        // サムネイル用に egui テクスチャとして登録
+                        let preview_tex_id = {
+                            let mut renderer = self.render_state.renderer.write();
+                            Some(renderer.register_native_texture(
+                                &self.render_state.device,
+                                &texture_view,
+                                wgpu::FilterMode::Linear,
+                            ))
+                        };
                         self.pending_tex_preview = Some(PendingTexPreview {
                             path,
                             selection: vec![false; num_mats],
                             previewed: vec![false; num_mats],
                             texture_view,
                             saved_binds: HashMap::new(),
+                            preview_tex_id,
                         });
                     }
                     Err(e) => {
