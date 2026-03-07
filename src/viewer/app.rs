@@ -98,6 +98,8 @@ pub struct ViewerApp {
     pub confirm_overwrite: bool,
     /// Tポーズ→Aスタンス変換（トグル時に再読み込み）
     pub normalize_pose: bool,
+    /// ビューポートの高さ（フィット計算用）
+    pub last_viewport_height: f32,
 }
 
 impl ViewerApp {
@@ -127,6 +129,7 @@ impl ViewerApp {
             render_state,
             confirm_overwrite: false,
             normalize_pose: false,
+            last_viewport_height: 720.0,
         }
     }
 
@@ -153,19 +156,38 @@ impl ViewerApp {
         ctx.set_fonts(fonts);
     }
 
-    fn load_vrm(&mut self, path: PathBuf) {
-        match self.try_load_vrm(&path) {
+    fn load_file(&mut self, path: PathBuf) {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        let result = match ext.as_str() {
+            "fbx" => self.try_load_fbx(&path),
+            _ => self.try_load_vrm(&path),
+        };
+
+        match result {
             Ok(()) => {
-                log::info!("VRM読み込み成功: {}", path.display());
+                log::info!("読み込み成功: {}", path.display());
                 self.convert_message = None;
             }
             Err(e) => {
-                log::error!("VRM読み込み失敗: {e}");
+                log::error!("読み込み失敗: {e}");
                 self.convert_message = Some(ConvertResult::Failure(format!(
-                    "読み込み失敗: {e}\n対応形式: VRM 0.0 / 1.0 (.vrm)\n別のファイルを試してください。"
+                    "読み込み失敗: {e}\n対応形式: VRM 0.0 / 1.0 (.vrm), FBX (.fbx)\n別のファイルを試してください。"
                 )));
             }
         }
+    }
+
+    fn try_load_fbx(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
+        let data = std::fs::read(path)?;
+        let ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+            &data, Some(path), self.normalize_pose,
+        )?;
+        self.finish_load(ir, path)
     }
 
     fn try_load_vrm(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
@@ -185,12 +207,24 @@ impl ViewerApp {
 
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
-
-        // GPU リソース構築
         let gpu_model = super::mesh::build_gpu_model(&ir, &glb.images, device, queue)?;
+        self.finish_load_with_gpu(ir, gpu_model, path)
+    }
 
+    fn finish_load(&mut self, ir: IrModel, path: &std::path::Path) -> anyhow::Result<()> {
+        let device = &self.render_state.device;
+        let queue = &self.render_state.queue;
+
+        // GPU リソース構築（IrTexture から直接アップロード）
+        let gpu_model = super::mesh::build_gpu_model_from_ir(&ir, device, queue)?;
+        self.finish_load_with_gpu(ir, gpu_model, path)
+    }
+
+    fn finish_load_with_gpu(&mut self, ir: IrModel, gpu_model: super::mesh::GpuModel, path: &std::path::Path) -> anyhow::Result<()> {
         // レンダラー初期化（まだなければ）
         if self.renderer.is_none() {
+            let device = &self.render_state.device;
+            let queue = &self.render_state.queue;
             self.renderer = Some(GpuRenderer::new(device, queue, gpu_model.has_alpha));
         }
 
@@ -202,8 +236,7 @@ impl ViewerApp {
         self.material_filter.clear();
         // カメラをモデルのバウンディングボックスにフィット
         let (bbox_min, bbox_max) = gpu_model.compute_bbox();
-        self.camera = OrbitCamera::default();
-        self.camera.fit_to_bbox(bbox_min, bbox_max);
+        self.camera.reset_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_height);
 
         // デフォルト出力パス: 入力VRMと同じ場所に .pmx
         self.pmx_output_path = path.with_extension("pmx").to_string_lossy().to_string();
@@ -228,7 +261,7 @@ impl ViewerApp {
         let saved_filter = self.material_filter.clone();
         let saved_pmx_path = self.pmx_output_path.clone();
 
-        self.load_vrm(path);
+        self.load_file(path);
 
         // 状態を復元（モーフ数・材質数が変わらなければそのまま使う）
         self.camera = saved_camera;
@@ -245,10 +278,12 @@ impl ViewerApp {
 
     fn open_file_dialog(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
+            .add_filter("3D Models", &["vrm", "fbx"])
             .add_filter("VRM", &["vrm"])
+            .add_filter("FBX", &["fbx"])
             .pick_file()
         {
-            self.load_vrm(path);
+            self.load_file(path);
         }
     }
 }
@@ -262,7 +297,7 @@ impl eframe::App for ViewerApp {
         });
 
         if let Some(path) = dropped {
-            self.load_vrm(path);
+            self.load_file(path);
         }
 
         // キーボードショートカット
@@ -278,15 +313,14 @@ impl eframe::App for ViewerApp {
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::R) {
                     if let Some(ref loaded) = self.loaded {
                         let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
-                        self.camera = OrbitCamera::default();
-                        self.camera.fit_to_bbox(bbox_min, bbox_max);
+                        self.camera.reset_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_height);
                     }
                 }
                 // F: モデルにフィット
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::F) {
                     if let Some(ref loaded) = self.loaded {
                         let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
-                        self.camera.fit_to_bbox(bbox_min, bbox_max);
+                        self.camera.fit_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_height);
                     }
                 }
                 // G: グリッド表示切り替え
@@ -437,11 +471,14 @@ impl eframe::App for ViewerApp {
                     );
                 }
 
-                // カメラ情報 & リセットボタン（左上）
+                // ビューポートの高さを記録（フィット計算用）
+                self.last_viewport_height = response.rect.height();
+
+                // カメラ情報（左上、テキスト直接描画）
                 if self.loaded.is_some() {
                     let rect = response.rect;
                     let cam_info = format!(
-                        "注視点: ({:.1}, {:.1}, {:.1})\n距離: {:.1}\nYaw: {:.1}°  Pitch: {:.1}°",
+                        "({:.1},{:.1},{:.1}) D:{:.1} Y:{:.0}° P:{:.0}°",
                         self.camera.target.x,
                         self.camera.target.y,
                         self.camera.target.z,
@@ -449,45 +486,37 @@ impl eframe::App for ViewerApp {
                         self.camera.yaw.to_degrees(),
                         self.camera.pitch.to_degrees(),
                     );
+                    viewport.painter().text(
+                        egui::pos2(rect.left() + 10.0, rect.top() + 10.0),
+                        egui::Align2::LEFT_TOP,
+                        &cam_info,
+                        egui::FontId::monospace(11.0),
+                        egui::Color32::from_gray(0xC0),
+                    );
+
+                    // フィット・リセットボタン（右上）
                     let margin = 8.0;
-                    let overlay_pos = egui::pos2(rect.left() + margin, rect.top() + margin);
-                    let overlay_width = rect.width() - margin * 2.0;
-                    let area = egui::Area::new(egui::Id::new("camera_info_overlay"))
-                        .fixed_pos(overlay_pos)
+                    let btn_pos = egui::pos2(rect.right() - margin, rect.top() + margin);
+                    let btn_area = egui::Area::new(egui::Id::new("camera_btn_overlay"))
+                        .fixed_pos(btn_pos)
                         .constrain(false)
-                        .interactable(true);
-                    area.show(ctx, |ui| {
-                        ui.set_width(overlay_width);
-                        egui::Frame::new()
-                            .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 0xC0))
-                            .corner_radius(4.0)
-                            .inner_margin(6.0)
-                            .show(ui, |ui| {
-                                ui.set_width(overlay_width - 12.0);
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(cam_info)
-                                            .color(egui::Color32::from_gray(0xE0))
-                                            .size(11.0)
-                                            .family(egui::FontFamily::Monospace),
-                                    );
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if ui.small_button("リセット(R)").on_hover_text("カメラをリセット").clicked() {
-                                            if let Some(ref loaded) = self.loaded {
-                                                let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
-                                                self.camera = OrbitCamera::default();
-                                                self.camera.fit_to_bbox(bbox_min, bbox_max);
-                                            }
-                                        }
-                                        if ui.small_button("フィット(F)").on_hover_text("モデルにフィット").clicked() {
-                                            if let Some(ref loaded) = self.loaded {
-                                                let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
-                                                self.camera.fit_to_bbox(bbox_min, bbox_max);
-                                            }
-                                        }
-                                    });
-                                });
-                            });
+                        .interactable(true)
+                        .anchor(egui::Align2::RIGHT_TOP, egui::Vec2::ZERO);
+                    btn_area.show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.small_button("フィット(F)").on_hover_text("モデルにフィット").clicked() {
+                                if let Some(ref loaded) = self.loaded {
+                                    let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
+                                    self.camera.fit_to_bbox_with_margin(bbox_min, bbox_max, rect.height());
+                                }
+                            }
+                            if ui.small_button("リセット(R)").on_hover_text("カメラをリセット").clicked() {
+                                if let Some(ref loaded) = self.loaded {
+                                    let (bbox_min, bbox_max) = loaded.gpu_model.compute_bbox();
+                                    self.camera.reset_to_bbox_with_margin(bbox_min, bbox_max, rect.height());
+                                }
+                            }
+                        });
                     });
                 }
 

@@ -36,7 +36,11 @@ pub fn extract_ir_model_with_options(
     normalize_pose: bool,
 ) -> Result<IrModel> {
     let mut model = IrModel::default();
-    model.is_vrm0 = matches!(version, VrmVersion::V0);
+    model.source_format = if matches!(version, VrmVersion::V0) {
+        SourceFormat::Vrm0
+    } else {
+        SourceFormat::Vrm1
+    };
 
     // テクスチャ抽出
     model.textures = extract_textures(document, images)?;
@@ -51,7 +55,7 @@ pub fn extract_ir_model_with_options(
 
     // T→Aスタンス変換（オプション）
     if normalize_pose {
-        normalize_pose_to_astance(&mut model.bones, &mut global_mats);
+        crate::intermediate::pose::normalize_pose_to_astance(&mut model.bones, &mut global_mats);
     }
 
     // モデル名・コメント
@@ -78,6 +82,11 @@ pub fn extract_ir_model_with_options(
             }
         }
     }
+
+    // VRMは常にヒューマノイド
+    model.humanoid_bone_count = model.bones.iter()
+        .filter(|b| b.vrm_bone_name.is_some())
+        .count();
 
     Ok(model)
 }
@@ -603,97 +612,6 @@ fn build_humanoid_map(
     Ok(())
 }
 
-/// Tポーズ→Aスタンス変換
-/// 上腕ボーンを下方向に約30°回転し、Aスタンスにする
-/// VRM 1.0 はTポーズ標準なので、MMD向けAスタンスに変換する
-fn normalize_pose_to_astance(
-    bones: &mut [IrBone],
-    global_mats: &mut [Mat4],
-) {
-    const A_STANCE_ANGLE_DEG: f32 = 30.0;
-
-    let find_bone = |vrm_name: &str| -> Option<usize> {
-        bones.iter().position(|b| b.vrm_bone_name.as_deref() == Some(vrm_name))
-    };
-
-    // 補正対象: 上腕 → 下腕の方向を取得し、下方向に回転
-    let arm_pairs = [
-        ("leftUpperArm", "leftLowerArm"),
-        ("rightUpperArm", "rightLowerArm"),
-    ];
-
-    let corrections: Vec<(usize, Vec3, glam::Quat)> = arm_pairs
-        .iter()
-        .filter_map(|(upper, lower)| {
-            let ua_idx = find_bone(upper)?;
-            let la_idx = find_bone(lower)?;
-            let ua_node = bones[ua_idx].node_index;
-            let la_node = bones[la_idx].node_index;
-
-            let ua_pos = global_mats[ua_node].transform_point3(Vec3::ZERO);
-            let la_pos = global_mats[la_node].transform_point3(Vec3::ZERO);
-            let dir = (la_pos - ua_pos).normalize_or_zero();
-
-            // 現在の腕が水平に近いか確認
-            let horizontal = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
-            if horizontal.length_squared() < 0.001 {
-                return None;
-            }
-
-            let current_angle = dir.dot(horizontal).clamp(-1.0, 1.0).acos().to_degrees();
-            // 既にAスタンス相当（下がっている）ならスキップ
-            if current_angle > A_STANCE_ANGLE_DEG - 5.0 && dir.y < 0.0 {
-                log::info!(
-                    "Aスタンス変換: {} は既にAスタンスに近い（{:.1}°）、スキップ",
-                    upper, current_angle
-                );
-                return None;
-            }
-
-            // 腕方向から回転軸を算出（Y×dir で腕を下げる方向の軸になる）
-            let axis = Vec3::Y.cross(dir).normalize_or_zero();
-            if axis.length_squared() < 0.001 {
-                return None;
-            }
-            let correction = glam::Quat::from_axis_angle(axis, A_STANCE_ANGLE_DEG.to_radians());
-
-            log::info!(
-                "Aスタンス変換: {} を {:.1}° 回転してAスタンスに変換",
-                upper, A_STANCE_ANGLE_DEG
-            );
-            Some((ua_idx, ua_pos, correction))
-        })
-        .collect();
-
-    // 各補正を適用（ピボット点を中心に子孫を回転）
-    for (bone_idx, pivot, correction) in corrections {
-        let descendants = collect_descendants_inclusive(bones, bone_idx);
-
-        let rot_mat = Mat4::from_translation(pivot)
-            * Mat4::from_quat(correction)
-            * Mat4::from_translation(-pivot);
-
-        for &desc_idx in &descendants {
-            let node = bones[desc_idx].node_index;
-            global_mats[node] = rot_mat * global_mats[node];
-            bones[desc_idx].position = global_mats[node].transform_point3(Vec3::ZERO);
-            bones[desc_idx].global_mat = global_mats[node];
-        }
-    }
-}
-
-/// 指定ボーンと全子孫のインデックスを収集
-fn collect_descendants_inclusive(bones: &[IrBone], root: usize) -> Vec<usize> {
-    let mut result = Vec::new();
-    let mut stack = vec![root];
-    while let Some(idx) = stack.pop() {
-        result.push(idx);
-        for &child in &bones[idx].children {
-            stack.push(child);
-        }
-    }
-    result
-}
 
 fn extract_meshes(
     document: &gltf::Document,

@@ -29,7 +29,7 @@ pub fn build_pmx_model_with_options(
 ) -> Result<PmxModel> {
     log::info!("=== PMXモデル構築開始 ===");
     log::info!("モデル名: {}", ir.name);
-    log::info!("VRMバージョン: {}", if ir.is_vrm0 { "0.0" } else { "1.0" });
+    log::info!("ソース形式: {}", ir.source_format.label());
 
     // 入力VRM統計
     log::info!("入力VRM: ボーン={}, メッシュ={}, 頂点={}, 面={}, 材質={}, テクスチャ={}, モーフ={}, 剛体={}, ジョイント={}",
@@ -90,7 +90,7 @@ pub fn build_pmx_model_with_options(
     model.bones = build_bones(ir);
 
     // 頂点・面 統合
-    let (vertices, faces, mat_face_counts) = build_vertices_and_faces(ir, ir.is_vrm0);
+    let (vertices, faces, mat_face_counts) = build_vertices_and_faces(ir, ir.source_format.is_vrm0());
     model.vertices = vertices;
     model.faces = faces;
 
@@ -107,7 +107,7 @@ pub fn build_pmx_model_with_options(
     }
 
     // モーフ変換
-    model.morphs = build_morphs(ir, ir.is_vrm0);
+    model.morphs = build_morphs(ir, ir.source_format.is_vrm0());
 
     // 剛体・ジョイント
     model.rigid_bodies = build_rigid_bodies(ir, align_rigid_rotation);
@@ -1102,7 +1102,7 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) {
 
 fn build_bones(ir: &IrModel) -> Vec<PmxBone> {
     let mut pmx_bones = Vec::with_capacity(ir.bones.len());
-    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if ir.is_vrm0 { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
+    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if ir.source_format.is_vrm0() { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
 
     for bone in ir.bones.iter() {
         let pmx_pos = pos_fn(bone.position);
@@ -1153,13 +1153,13 @@ fn build_bones(ir: &IrModel) -> Vec<PmxBone> {
     pmx_bones
 }
 
-fn build_vertices_and_faces(ir: &IrModel, is_vrm0: bool) -> (Vec<PmxVertex>, Vec<[u32; 3]>, Vec<u32>) {
+fn build_vertices_and_faces(ir: &IrModel, use_vrm0_coords: bool) -> (Vec<PmxVertex>, Vec<[u32; 3]>, Vec<u32>) {
     let total_verts: usize = ir.meshes.iter().map(|m| m.vertices.len()).sum();
     let total_faces: usize = ir.meshes.iter().map(|m| m.indices.len() / 3).sum();
     let mut all_vertices: Vec<PmxVertex> = Vec::with_capacity(total_verts);
     let mut all_faces: Vec<[u32; 3]> = Vec::with_capacity(total_faces);
-    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if is_vrm0 { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
-    let nrm_fn: fn(glam::Vec3) -> glam::Vec3 = if is_vrm0 { gltf_normal_to_pmx_v0 } else { gltf_normal_to_pmx };
+    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if use_vrm0_coords { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
+    let nrm_fn: fn(glam::Vec3) -> glam::Vec3 = if use_vrm0_coords { gltf_normal_to_pmx_v0 } else { gltf_normal_to_pmx };
 
     let mat_count = ir.materials.len().max(1);
     let mut mat_face_counts = vec![0u32; mat_count];
@@ -1257,8 +1257,8 @@ fn build_weight(weights: &[(usize, f32)]) -> PmxWeightType {
     }
 }
 
-fn build_morphs(ir: &IrModel, is_vrm0: bool) -> Vec<PmxMorph> {
-    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if is_vrm0 { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
+fn build_morphs(ir: &IrModel, use_vrm0_coords: bool) -> Vec<PmxMorph> {
+    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if use_vrm0_coords { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
 
     let panel_name = |p: u8| -> &'static str {
         match p { 1 => "眉", 2 => "目", 3 => "口", 4 => "その他", _ => "?" }

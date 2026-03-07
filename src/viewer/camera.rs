@@ -96,14 +96,58 @@ impl OrbitCamera {
     }
 
     /// バウンディングボックスにフィットさせる
+    /// 高さ基準でFOVから必要な距離を算出（人型モデル向け）
     pub fn fit_to_bbox(&mut self, bbox_min: Vec3, bbox_max: Vec3) {
         let center = (bbox_min + bbox_max) * 0.5;
-        let extent = (bbox_max - bbox_min).length();
+        let height = bbox_max.y - bbox_min.y;
+        let fov_half = (45.0_f32 / 2.0).to_radians();
+        let required = (height * 0.5) / fov_half.tan();
         self.target = center;
-        self.distance = (extent * 0.8).max(2.0);
-        self.model_radius = extent * 0.5;
+        self.distance = (required * 1.15).max(2.0);
+        self.model_radius = (bbox_max - bbox_min).length() * 0.5;
         self.yaw = 0.0;
         self.pitch = 0.0;
+    }
+
+    /// フィット: 現在のyaw/pitchを保持し、距離とターゲットだけ調整
+    pub fn fit_to_bbox_with_margin(&mut self, bbox_min: Vec3, bbox_max: Vec3, viewport_height: f32) {
+        let (target, distance, model_radius) = Self::compute_fit(bbox_min, bbox_max, viewport_height);
+        self.target = target;
+        self.distance = distance;
+        self.model_radius = model_radius;
+    }
+
+    /// リセット: yaw/pitchを正面に戻してフィット
+    pub fn reset_to_bbox_with_margin(&mut self, bbox_min: Vec3, bbox_max: Vec3, viewport_height: f32) {
+        let (target, distance, model_radius) = Self::compute_fit(bbox_min, bbox_max, viewport_height);
+        self.target = target;
+        self.distance = distance;
+        self.model_radius = model_radius;
+        self.yaw = 0.0;
+        self.pitch = 0.0;
+    }
+
+    /// フィット計算の共通処理
+    fn compute_fit(bbox_min: Vec3, bbox_max: Vec3, viewport_height: f32) -> (Vec3, f32, f32) {
+        let center = (bbox_min + bbox_max) * 0.5;
+        let height = bbox_max.y - bbox_min.y;
+        let fov_half = (45.0_f32 / 2.0).to_radians();
+
+        // 上部オーバーレイ + 下部ヒントで約60px分の余白が必要
+        let margin_px = 60.0;
+        let effective_height = (viewport_height - margin_px).max(100.0);
+        let effective_fov_half = (effective_height / viewport_height.max(1.0)) * fov_half;
+        let required = (height * 0.5) / effective_fov_half.tan();
+
+        let distance = (required * 1.15).max(2.0);
+        let model_radius = (bbox_max - bbox_min).length() * 0.5;
+
+        // ターゲットを少し下げてオーバーレイ下にモデル中心を配置
+        let world_per_px = 2.0 * distance * fov_half.tan() / viewport_height.max(1.0);
+        let mut target = center;
+        target.y -= world_per_px * margin_px * 0.25;
+
+        (target, distance, model_radius)
     }
 
     /// ライト方向 — カメラ追従モード

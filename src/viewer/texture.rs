@@ -101,3 +101,64 @@ pub fn upload_textures(
 
     Ok(views)
 }
+
+/// IrTexture（PNG/JPEG データ）から GPU テクスチャをアップロード
+pub fn upload_textures_from_ir(
+    ir: &IrModel,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Result<Vec<wgpu::TextureView>> {
+    let mut views = Vec::with_capacity(ir.textures.len());
+
+    for (i, tex) in ir.textures.iter().enumerate() {
+        let img = match image::load_from_memory(&tex.data) {
+            Ok(img) => img.to_rgba8(),
+            Err(e) => {
+                log::warn!("テクスチャ '{}' のデコード失敗: {} (index {})", tex.filename, e, i);
+                image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 255, 255]))
+            }
+        };
+
+        let (width, height) = (img.width(), img.height());
+        let rgba_data = img.into_raw();
+
+        let gpu_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(&format!("texture_{i}")),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &gpu_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        views.push(gpu_tex.create_view(&Default::default()));
+    }
+
+    Ok(views)
+}

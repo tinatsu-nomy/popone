@@ -57,3 +57,22 @@ pub fn write_all_textures(
 
     Ok(filenames)
 }
+
+/// IrTexture のデータ（PNG/JPEG バイナリ）をそのまま書き出す（FBX 用）
+pub fn write_all_textures_from_ir(
+    textures: &[IrTexture],
+    output_dir: &Path,
+) -> Result<Vec<String>> {
+    if textures.is_empty() {
+        return Ok(Vec::new());
+    }
+    std::fs::create_dir_all(output_dir)?;
+    let mut filenames = Vec::new();
+    for tex in textures {
+        let out_path = output_dir.join(&tex.filename);
+        std::fs::write(&out_path, &tex.data)?;
+        log::info!("テクスチャ書き出し: {}", out_path.display());
+        filenames.push(tex.filename.clone());
+    }
+    Ok(filenames)
+}

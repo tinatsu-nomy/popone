@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 #[derive(Parser, Debug)]
 #[command(name = "vrm2pmx", about = "VRMファイルをPMX形式に変換します\n引数なしで起動するとビューアが開きます")]
 struct Args {
-    /// 入力VRMファイルパス
+    /// 入力ファイルパス（VRM/FBX）
     input: Option<PathBuf>,
 
     /// 出力PMXファイルパス
@@ -130,27 +130,35 @@ fn main() -> Result<()> {
 
     log::info!("入力ファイル: {}", input.display());
 
-    // GLB読み込み
-    let glb = vrm::loader::load_glb(&input)
-        .with_context(|| format!("GLB読み込み失敗: {}", input.display()))?;
+    let ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let is_fbx = ext == "fbx";
 
-    // バージョン判定
-    let version = vrm::detect::detect_version(&glb.document);
-    log::info!("VRMバージョン: {:?}", version);
-
-    // 全拡張取得
-    let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
-
-    // 中間表現抽出
-    let mut ir = vrm::extract::extract_ir_model_with_options(
-        &glb.document,
-        &glb.buffers,
-        &glb.images,
-        &glb.vrm_extension,
-        &version,
-        &all_extensions,
-        args.normalize_pose,
-    ).context("VRM中間表現の抽出に失敗")?;
+    // 中間表現抽出（VRM / FBX 分岐）
+    let mut ir = if is_fbx {
+        let data = std::fs::read(&input)
+            .with_context(|| format!("FBXファイル読み込み失敗: {}", input.display()))?;
+        vrm2pmx::fbx::extract::extract_ir_model_from_fbx(&data, Some(&input))
+            .context("FBX中間表現の抽出に失敗")?
+    } else {
+        let glb = vrm::loader::load_glb(&input)
+            .with_context(|| format!("GLB読み込み失敗: {}", input.display()))?;
+        let version = vrm::detect::detect_version(&glb.document);
+        log::info!("VRMバージョン: {:?}", version);
+        let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
+        vrm::extract::extract_ir_model_with_options(
+            &glb.document,
+            &glb.buffers,
+            &glb.images,
+            &glb.vrm_extension,
+            &version,
+            &all_extensions,
+            args.normalize_pose,
+        ).context("VRM中間表現の抽出に失敗")?
+    };
 
     if args.no_physics {
         ir.physics = intermediate::types::IrPhysics::default();
@@ -158,7 +166,7 @@ fn main() -> Result<()> {
     }
 
     if args.dump {
-        println!("=== VRM dump ===");
+        println!("=== {} dump ===", ir.source_format.label());
         println!("モデル名: {}", ir.name);
         println!("ボーン数: {}", ir.bones.len());
         println!("メッシュ数: {}", ir.meshes.len());
@@ -169,6 +177,9 @@ fn main() -> Result<()> {
         println!("モーフ数: {}", ir.morphs.len());
         println!("剛体数: {}", ir.physics.rigid_bodies.len());
         println!("ジョイント数: {}", ir.physics.joints.len());
+        if let Some(ref rig) = ir.rig_type {
+            println!("リグ種別: {} (Humanoid: {}本)", rig, ir.humanoid_bone_count);
+        }
 
         println!("\n--- ボーン一覧 ---");
         for (i, bone) in ir.bones.iter().enumerate() {
@@ -190,8 +201,14 @@ fn main() -> Result<()> {
 
     // テクスチャ書き出し
     let tex_dir = output_dir.join("textures");
-    convert::texture::write_all_textures(&ir.textures, &glb.images, &tex_dir)
-        .context("テクスチャ書き出し失敗")?;
+    if is_fbx {
+        convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)
+            .context("テクスチャ書き出し失敗")?;
+    } else {
+        let glb = vrm::loader::load_glb(&input)?;
+        convert::texture::write_all_textures(&ir.textures, &glb.images, &tex_dir)
+            .context("テクスチャ書き出し失敗")?;
+    }
 
     // PMXモデル構築
     let pmx_model = pmx::build::build_pmx_model_with_options(&ir, args.align_rigid_rotation)
@@ -224,7 +241,7 @@ fn run_viewer() -> Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([768.0, 1024.0])
+            .with_inner_size([1280.0, 720.0])
             .with_title("VRM Viewer")
             .with_drag_and_drop(true),
         renderer: eframe::Renderer::Wgpu,

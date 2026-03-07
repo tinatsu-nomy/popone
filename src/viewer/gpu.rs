@@ -702,7 +702,7 @@ impl GpuRenderer {
 
         // ボーン頂点を毎フレーム更新（ビルボード）
         if params.display.show_bones && !ir.bones.is_empty() {
-            let pos_fn: fn(Vec3) -> Vec3 = if ir.is_vrm0 {
+            let pos_fn: fn(Vec3) -> Vec3 = if ir.source_format.is_vrm0() {
                 crate::convert::coord::gltf_pos_to_pmx_v0
             } else {
                 crate::convert::coord::gltf_pos_to_pmx
@@ -725,6 +725,9 @@ impl GpuRenderer {
         }
 
         // SpringBone頂点を毎フレーム更新
+        if !params.display.show_spring_bones || (ir.physics.rigid_bodies.is_empty() && ir.physics.joints.is_empty()) {
+            self.spring_vertex_count = 0;
+        }
         if params.display.show_spring_bones && (!ir.physics.rigid_bodies.is_empty() || !ir.physics.joints.is_empty()) {
             let verts = generate_spring_bone_vertices(ir, params.display.spring_bone_opacity, params.display.align_rigid_rotation);
             self.spring_vertex_count = verts.len() as u32;

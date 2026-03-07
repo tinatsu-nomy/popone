@@ -50,9 +50,23 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     ui.label(ir.morphs.len().to_string());
                     ui.end_row();
 
-                    ui.label("VRM");
-                    ui.label(if ir.is_vrm0 { "0.0" } else { "1.0" });
+                    ui.label("形式");
+                    ui.label(ir.source_format.label());
                     ui.end_row();
+
+                    if let Some(ref rig) = ir.rig_type {
+                        ui.label("リグ");
+                        ui.label(rig);
+                        ui.end_row();
+
+                        ui.label("Humanoid");
+                        if ir.humanoid_bone_count > 0 {
+                            ui.label(format!("{}本マッピング済", ir.humanoid_bone_count));
+                        } else {
+                            ui.colored_label(egui::Color32::GRAY, "非対応");
+                        }
+                        ui.end_row();
+                    }
                 });
 
                 ui.add_space(12.0);
@@ -66,6 +80,12 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                 // 表情モーフスライダ
                 if !ir.morphs.is_empty() {
                     ui.collapsing("表情モーフ", |ui| {
+                        if ui.small_button("全リセット").clicked() {
+                            for w in app.morph_weights.iter_mut() {
+                                *w = 0.0;
+                            }
+                        }
+                        ui.separator();
                         for (i, morph) in ir.morphs.iter().enumerate() {
                             if i < app.morph_weights.len() {
                                 ui.add(
@@ -120,6 +140,10 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                 }
 
                 // 表示設定
+                let has_bones = app.loaded.as_ref()
+                    .map_or(false, |l| !l.ir.bones.is_empty());
+                let has_spring = app.loaded.as_ref()
+                    .map_or(false, |l| !l.ir.physics.rigid_bodies.is_empty());
                 ui.collapsing("表示設定", |ui| {
                     ui.add(
                         egui::Slider::new(&mut app.display.light_intensity, 0.0..=2.0)
@@ -134,20 +158,24 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                             .text("背景"),
                     );
                     ui.checkbox(&mut app.display.show_grid, "グリッド表示 (G)");
-                    ui.checkbox(&mut app.display.show_bones, "ボーン表示 (B)");
-                    if app.display.show_bones {
-                        ui.add(
-                            egui::Slider::new(&mut app.display.bone_opacity, 0.05..=1.0)
-                                .text("ボーン濃度"),
-                        );
-                    }
-                    ui.checkbox(&mut app.display.show_spring_bones, "物理表示 (P)");
-                    if app.display.show_spring_bones {
-                        ui.add(
-                            egui::Slider::new(&mut app.display.spring_bone_opacity, 0.05..=1.0)
-                                .text("物理濃度"),
-                        );
-                    }
+                    ui.add_enabled_ui(has_bones, |ui| {
+                        ui.checkbox(&mut app.display.show_bones, "ボーン表示 (B)");
+                        if app.display.show_bones {
+                            ui.add(
+                                egui::Slider::new(&mut app.display.bone_opacity, 0.05..=1.0)
+                                    .text("ボーン濃度"),
+                            );
+                        }
+                    });
+                    ui.add_enabled_ui(has_spring, |ui| {
+                        ui.checkbox(&mut app.display.show_spring_bones, "物理表示 (P)");
+                        if app.display.show_spring_bones {
+                            ui.add(
+                                egui::Slider::new(&mut app.display.spring_bone_opacity, 0.05..=1.0)
+                                    .text("物理濃度"),
+                            );
+                        }
+                    });
                     // ワイヤーフレーム
                     let supports_wire = app.renderer.as_ref()
                         .map(|r| r.supports_wireframe()).unwrap_or(false);
@@ -191,27 +219,37 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     }
                 });
                 ui.add_space(2.0);
-                if ui.checkbox(
-                    &mut app.normalize_pose,
-                    "Aスタンス変換",
-                ).changed() {
-                    app.reload_current();
-                }
-                ui.checkbox(
-                    &mut app.display.align_rigid_rotation,
-                    "剛体回転をボーン方向に揃える",
-                );
+                let has_humanoid = app.loaded.as_ref()
+                    .map_or(false, |l| l.ir.humanoid_bone_count > 0);
+                let has_physics = app.loaded.as_ref()
+                    .map_or(false, |l| !l.ir.physics.rigid_bodies.is_empty());
+                let has_model = app.loaded.is_some();
+                ui.add_enabled_ui(has_humanoid, |ui| {
+                    if ui.checkbox(
+                        &mut app.normalize_pose,
+                        "Aスタンス変換",
+                    ).changed() {
+                        app.reload_current();
+                    }
+                });
+                ui.add_enabled_ui(has_physics, |ui| {
+                    ui.checkbox(
+                        &mut app.display.align_rigid_rotation,
+                        "剛体回転をボーン方向に揃える",
+                    );
+                });
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut app.output_log, "ログ出力");
-                    if ui.button("PMX 変換").clicked() {
-                        let output_path = std::path::PathBuf::from(&app.pmx_output_path);
-                        // 上書き確認
-                        if output_path.exists() {
-                            app.confirm_overwrite = true;
-                        } else {
-                            execute_conversion(app);
+                    ui.add_enabled_ui(has_model, |ui| {
+                        if ui.button("PMX 変換").clicked() {
+                            let output_path = std::path::PathBuf::from(&app.pmx_output_path);
+                            if output_path.exists() {
+                                app.confirm_overwrite = true;
+                            } else {
+                                execute_conversion(app);
+                            }
                         }
-                    }
+                    });
                 });
 
                 // 変換結果メッセージ（色分け）
@@ -282,7 +320,16 @@ fn execute_conversion(app: &mut ViewerApp) {
         .map(|m| m.len())
         .unwrap_or(0);
 
-    let result = crate::convert_vrm_to_pmx_full(&input_path, &output_path, false, app.display.align_rigid_rotation, app.normalize_pose);
+    let is_fbx = input_path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("fbx"))
+        .unwrap_or(false);
+
+    let result = if is_fbx {
+        crate::convert_fbx_to_pmx(&input_path, &output_path)
+    } else {
+        crate::convert_vrm_to_pmx_full(&input_path, &output_path, false, app.display.align_rigid_rotation, app.normalize_pose)
+    };
 
     if app.output_log {
         let debug_logs = viewer_log_path.as_ref()
@@ -402,7 +449,7 @@ fn write_convert_log(
 
     let _ = writeln!(file, "[vrm-viewer] PMX変換ログ");
     let _ = writeln!(file, "日時: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
-    let _ = writeln!(file, "VRMバージョン: {}", if ir.is_vrm0 { "0.0" } else { "1.0" });
+    let _ = writeln!(file, "ソース形式: {}", ir.source_format.label());
     let _ = writeln!(file);
 
     // 入力モデル情報

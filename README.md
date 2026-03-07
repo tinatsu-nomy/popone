@@ -1,14 +1,14 @@
 # vrm2pmx
 
-VRM（`.vrm`）ファイルの 3D ビューアと PMX（MikuMikuDance）形式への変換ツール。
+VRM（`.vrm`）/ FBX（`.fbx`）ファイルの 3D ビューアと PMX（MikuMikuDance）形式への変換ツール。
 Rust 製の単一バイナリで、引数なしで起動するとビューア、引数ありで CLI 変換として動作する。
-VRM 0.0 / 1.0 両対応。
+VRM 0.0 / 1.0 および FBX バイナリ形式に対応。
 
 ## ダウンロード
 
 最新リリースの exe（ビューア付き）は以下からダウンロードできます。
 
-- [vrm2pmx_v0.1.4.exe](https://github.com/tinatsu-nomy/vrm2pmx/releases/download/v0.1.4/vrm2pmx_v0.1.4.exe)
+- [vrm2pmx_v0.1.5.exe](https://github.com/tinatsu-nomy/vrm2pmx/releases/download/v0.1.5/vrm2pmx_v0.1.5.exe)
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/vrm2pmx/releases)
 
@@ -16,30 +16,49 @@ VRM 0.0 / 1.0 両対応。
 
 ### ビューア（`--features viewer`）
 
-- **VRM 3D 表示** — egui + wgpu によるネイティブ 3D レンダリング
-- **ファイル読み込み** — 「開く」ボタンまたはドラッグ＆ドロップ
+- **VRM / FBX 3D 表示** — egui + wgpu によるネイティブ 3D レンダリング、VRM・FBX 両対応
+- **ファイル読み込み** — 「開く」ボタンまたはドラッグ＆ドロップ（`.vrm` / `.fbx`）
 - **オービットカメラ** — 左ドラッグ:回転、右ドラッグ:パン、ホイール:ズーム
+- **フィット / リセット** — フィット(F): 現在の視点角度を保持したままモデル全体が収まるよう距離・ターゲットを調整。リセット(R): 正面に戻してフィット。オーバーレイと重ならないようビューポート実効高さを考慮
 - **テクスチャ付き Lambert シェーディング** — 両面描画・アルファブレンド対応
 - **グリッド床** — PMX スケール準拠
 - **ボーン表示** — ジョイント（黄色円）・親子接続（緑色三角形）をビルボード描画、濃度スライダで調整可能
 - **SpringBone 物理可視化** — 剛体（マゼンタ）・コライダー（シアン）・ジョイント接続（黄色）をワイヤーフレーム表示、濃度スライダで調整可能
 - **ワイヤーフレーム表示** — 対応 GPU でメッシュをワイヤーフレーム表示（`POLYGON_MODE_LINE`）
-- **カメラ情報オーバーレイ** — 3D ビューポート左上に注視点・距離・Yaw/Pitch を表示、カメラリセットボタン付き
+- **カメラ情報オーバーレイ** — 3D ビューポート左上に注視点・距離・Yaw/Pitch をテキスト表示
+- **フィット・リセットボタン** — 3D ビューポート右上に配置
 - **材質表示切替** — 右パネルから材質ごとの表示 ON/OFF が可能（全表示/全非表示ボタン付き、フィルタ検索）
 - **キーボードショートカット** — Ctrl+O:開く、R:カメラリセット、F:モデルにフィット、G:グリッド、B:ボーン、P:物理、W:ワイヤーフレーム、L:ライトモード切替
+- **UI 状態の自動制御** — データのないチェックボックスは自動的に選択不可（ヒューマノイドボーンなし→Aスタンス無効、剛体なし→物理関連無効、ボーンなし→ボーン表示無効、モデル未読込→PMX変換無効）
 - **右パネル UI**
   - モデル情報（ボーン数・頂点数・面数・材質数など）
+  - ヒューマノイドリグ情報（リグ種別・マッピング済みボーン数、FBX の場合は Mixamo / Blender 等を自動検出）
   - VRM メタ情報（作者・ライセンスなど）
-  - 表情モーフスライダ
+  - 表情モーフスライダ（全リセットボタン付き）
   - 材質表示スイッチ
   - 表示設定（ライト・環境光・背景明度・グリッド・ボーン・物理・ワイヤーフレーム・ライトモード）
-  - PMX 変換ボタン（ビューア上から直接変換可能、上書き確認ダイアログ付き）
-  - Aスタンス変換オプション（T ポーズの腕を 30° 下げて A スタンスに変換、切り替え時に即座に反映）
+  - PMX 変換ボタン（ビューア上から直接変換可能、VRM・FBX 両対応、上書き確認ダイアログ付き）
+  - Aスタンス変換オプション（T ポーズの腕を 30° 下げて A スタンスに変換、VRM・FBX 両対応、FBX ではスキンウェイトによるメッシュ頂点変形も実施）
   - 剛体回転をボーン方向に揃えるオプション
+
+### FBX 対応
+
+- **FBX バイナリ形式の読み込み** — 自前パーサーによるバイナリ FBX 解析
+- **シーングラフ解析** — Objects / Connections からノード間の親子関係を構築
+- **座標系自動変換** — GlobalSettings（UpAxis / FrontAxis / CoordAxis）に基づき glTF Y-Up 右手系に正規化
+- **PreRotation 対応** — Blender FBX エクスポート等の PreRotation をモデル変換に反映
+- **UnitScaleFactor 対応** — cm / m 等のスケール差を自動補正
+- **材質プロパティ** — DiffuseColor / SpecularColor / AmbientColor / Shininess / Opacity / TransparencyFactor / ReflectionColor / ReflectionFactor を抽出
+- **テクスチャ** — Video ノードの埋め込みテクスチャ、または RelativeFilename による外部ファイル参照
+- **UV マッピング** — LayerElementUV（ByPolygonVertex / ByControlPoint、Direct / IndexToDirect）
+- **ボーン階層** — Model(LimbNode) からボーン構築、Lcl Translation / Rotation / Scaling + PreRotation
+- **スキンウェイト** — Deformer(Skin) → SubDeformer(Cluster) チェーンから頂点ウェイト抽出（最大 4 ボーン正規化）
+- **ブレンドシェイプ** — Deformer(BlendShape) → SubDeformer(BlendShapeChannel) → Shape からモーフターゲット抽出
+- **ヒューマノイドリグ自動検出** — Mixamo / 3ds Max Biped / Maya HumanIK / VRoid / Blender 等のリグを自動判定し Unity HumanBodyBones にマッピング
 
 ### PMX 変換
 
-- **VRM 0.0 / 1.0 自動判定**（`VRMC_vrm` / `VRM` 拡張を検出）
+- **VRM 0.0 / 1.0 / FBX 自動判定**（拡張子・ヘッダで分岐）
 - **メッシュ・頂点・材質・テクスチャの変換**
 - **MMD 標準ボーン自動挿入**（全ての親・センター・グルーブ・腰・足IK・つま先IK など）
 - **準標準ボーン挿入**（腰キャンセル・足D・足先EX・腕捩り・手捩り・肩キャンセル）
@@ -77,8 +96,11 @@ cargo build --release --features viewer
 # ビューア起動（引数なしで実行）
 vrm2pmx.exe
 
-# PMX 変換
+# PMX 変換（VRM）
 vrm2pmx.exe input.vrm output.pmx
+
+# PMX 変換（FBX）
+vrm2pmx.exe input.fbx output.pmx
 
 # オプション付き
 vrm2pmx.exe input.vrm output.pmx --dump
@@ -120,8 +142,8 @@ cargo run --release -- input.vrm output.pmx --log-level debug
 
 ### ビューア
 
-ビューア上で VRM ファイルをドラッグ＆ドロップするか「開く」ボタンで読み込む。
-右パネルの「PMX 変換」ボタンでビューア上から直接 PMX に変換できる。
+ビューア上で VRM / FBX ファイルをドラッグ＆ドロップするか「開く」ボタンで読み込む。
+右パネルの「PMX 変換」ボタンでビューア上から直接 PMX に変換できる（VRM・FBX 両対応）。
 
 ### 出力
 
@@ -145,29 +167,29 @@ Seed-san.vrm（VRM 1.0）での変換結果:
 ## アーキテクチャ
 
 ```
-VRM (.vrm/.glb)
-  │
+VRM (.vrm/.glb)    FBX (.fbx)
+  │                  │
   ├─── [引数あり] CLI 変換 ──────────────────────────────────┐
-  │                                                          │
-  ▼                                                          ▼
-┌──────────┐    ┌──────────────┐    ┌───────────┐
-│ vrm/     │ ─→ │ intermediate │ ─→ │ pmx/      │ ─→ PMX (.pmx)
-│ loader   │    │ IrModel      │    │ build     │
-│ extract  │    │              │    │ writer    │
-│ detect   │    │              │    │           │
-└──────────┘    └──────────────┘    └───────────┘
-      │                ↑                  ↑
-      │         ┌──────────────┐          │
-      │         │ convert/     │          │
-      │         │ coord        │ 座標変換  │
-      │         │ bone_map     │ ボーン名  │
-      │         │ material     │ 材質変換  │
-      │         │ morph        │ モーフ名  │
-      │         │ physics      │ 物理変換  │
-      │         │ texture      │ テクスチャ │
-      │         └──────────────┘          │
-      │                                   │
-      ├─── [引数なし] ビューア ────────────┘
+  │                  │                                       │
+  ▼                  ▼                                       ▼
+┌──────────┐  ┌──────────┐  ┌──────────────┐  ┌───────────┐
+│ vrm/     │  │ fbx/     │  │ intermediate │  │ pmx/      │ ─→ PMX (.pmx)
+│ loader   │─→│ parser   │─→│ IrModel      │─→│ build     │
+│ extract  │  │ scene    │  │ pose         │  │ writer    │
+│ detect   │  │ extract  │  │              │  │           │
+└──────────┘  │ bone     │  └──────────────┘  └───────────┘
+              │ mesh     │         ↑                  ↑
+              │ skin     │  ┌──────────────┐          │
+              │ texture  │  │ convert/     │          │
+              │ humanoid │  │ coord        │ 座標変換  │
+              │ blend-   │  │ bone_map     │ ボーン名  │
+              │  shape   │  │ material     │ 材質変換  │
+              └──────────┘  │ morph        │ モーフ名  │
+                            │ physics      │ 物理変換  │
+      ┌─────────────────────│ texture      │ テクスチャ │
+      │                     └──────────────┘          │
+      │                                               │
+      ├─── [引数なし] ビューア ────────────────────────┘
       │                                (PMX 変換ボタン)
       ▼
 ┌──────────────────┐
@@ -187,7 +209,7 @@ VRM (.vrm/.glb)
 ```
 src/
 ├── main.rs              エントリポイント（引数なし→ビューア / 引数あり→CLI変換）
-├── lib.rs               ライブラリ API（convert_vrm_to_pmx）
+├── lib.rs               ライブラリ API（convert_vrm_to_pmx / convert_fbx_to_pmx）
 ├── error.rs             エラー型定義
 ├── vrm/
 │   ├── loader.rs        GLB 読み込み・拡張データ抽出
@@ -195,8 +217,19 @@ src/
 │   ├── extract.rs       VRM → 中間表現（IrModel）抽出
 │   ├── types_v0.rs      VRM 0.0 serde 型定義
 │   └── types_v1.rs      VRM 1.0 serde 型定義
+├── fbx/
+│   ├── parser.rs        FBX バイナリパーサー
+│   ├── scene.rs         シーングラフ構築（Objects / Connections 解析）
+│   ├── extract.rs       FBX → 中間表現（IrModel）抽出
+│   ├── bone.rs          ボーン階層構築（PreRotation 対応）
+│   ├── mesh.rs          メッシュ・UV・材質プロパティ抽出
+│   ├── skin.rs          スキンウェイト抽出
+│   ├── texture.rs       テクスチャ抽出（埋め込み / 外部ファイル）
+│   ├── blendshape.rs    ブレンドシェイプ抽出
+│   └── humanoid.rs      ヒューマノイドリグ自動検出・マッピング
 ├── intermediate/
-│   └── types.rs         中間表現（IrModel / IrBone / IrMesh 等）
+│   ├── types.rs         中間表現（IrModel / IrBone / IrMesh 等）
+│   └── pose.rs          Aスタンス変換（VRM / FBX 共通）
 ├── pmx/
 │   ├── types.rs         PMX データ型定義
 │   ├── build.rs         中間表現 → PMX モデル構築・標準ボーン挿入
@@ -222,12 +255,14 @@ src/
 
 glTF 右手系から PMX 左手系への変換。スケール係数: `PMX_SCALE = 12.5`（1m = 12.5 PMX 単位）。
 
-| | VRM 0.0 | VRM 1.0 |
-|--|---------|---------|
-| glTF 向き | +Z（ルートに Y=180° 回転あり） | -Z |
-| 位置変換 | `(-x, y, z) × scale` | `(x, y, -z) × scale` |
-| 法線変換 | `(-x, y, z)` | `(x, y, -z)` |
-| 面巻き順 | b↔c swap（行列式 -1） | b↔c swap（行列式 -1） |
+| | VRM 0.0 | VRM 1.0 | FBX |
+|--|---------|---------|-----|
+| 入力座標系 | glTF（+Z 向き、ルート Y=180° 回転） | glTF（-Z 向き） | GlobalSettings に依存（Y-Up / Z-Up） |
+| 位置変換 | `(-x, y, z) × scale` | `(x, y, -z) × scale` | coord_fn（GlobalSettings 基準）→ glTF 空間 |
+| 法線変換 | `(-x, y, z)` | `(x, y, -z)` | 同上（逆転置行列） |
+| 面巻き順 | b↔c swap（行列式 -1） | b↔c swap（行列式 -1） | b↔c swap（行列式 -1） |
+| スケール | glTF メートル単位 | glTF メートル単位 | UnitScaleFactor / 100（cm → m 変換） |
+| PreRotation | なし | なし | Model ノードの PreRotation を世界変換に反映 |
 
 ## MMD 標準ボーン挿入
 
@@ -355,23 +390,29 @@ cargo test
 `vrm2pmx` はライブラリとしても使用可能:
 
 ```rust
-use vrm2pmx::{convert_vrm_to_pmx, convert_vrm_to_pmx_full};
+use vrm2pmx::{convert_vrm_to_pmx, convert_vrm_to_pmx_full, convert_fbx_to_pmx};
 use std::path::Path;
 
-// シンプルな変換
+// VRM → PMX（シンプル）
 let stats = convert_vrm_to_pmx(
     Path::new("input.vrm"),
     Path::new("output.pmx"),
     false, // no_physics
 )?;
 
-// 全オプション指定
+// VRM → PMX（全オプション指定）
 let stats = convert_vrm_to_pmx_full(
     Path::new("input.vrm"),
     Path::new("output.pmx"),
     false, // no_physics
     true,  // align_rigid_rotation
     true,  // normalize_pose (Aスタンス変換)
+)?;
+
+// FBX → PMX
+let stats = convert_fbx_to_pmx(
+    Path::new("input.fbx"),
+    Path::new("output.pmx"),
 )?;
 
 println!("ボーン: {}, 頂点: {}", stats.bones, stats.vertices);

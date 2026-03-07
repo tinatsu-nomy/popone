@@ -32,8 +32,8 @@ pub struct GpuModel {
     base_vertices: Vec<Vertex>,
     /// IrModel グローバル頂点Index → GPU 頂点Index
     global_to_gpu: Vec<u32>,
-    /// 座標変換関数の選択（VRM 0.0 / 1.0）
-    is_vrm0: bool,
+    /// VRM 0.0 座標変換を使うか
+    use_vrm0_coords: bool,
 }
 
 impl GpuModel {
@@ -56,7 +56,7 @@ impl GpuModel {
         weights: &[f32],
         queue: &wgpu::Queue,
     ) {
-        let pos_fn: fn(Vec3) -> Vec3 = if self.is_vrm0 {
+        let pos_fn: fn(Vec3) -> Vec3 = if self.use_vrm0_coords {
             gltf_pos_to_pmx_v0
         } else {
             gltf_pos_to_pmx
@@ -119,12 +119,31 @@ pub fn build_gpu_model(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
 ) -> Result<GpuModel> {
-    let pos_fn = if ir.is_vrm0 {
+    let gpu_textures = super::texture::upload_textures(ir, images, device, queue)?;
+    build_gpu_model_inner(ir, gpu_textures, device)
+}
+
+/// IrModel のみから GPU バッファを構築（FBX 用）
+pub fn build_gpu_model_from_ir(
+    ir: &IrModel,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Result<GpuModel> {
+    let gpu_textures = super::texture::upload_textures_from_ir(ir, device, queue)?;
+    build_gpu_model_inner(ir, gpu_textures, device)
+}
+
+fn build_gpu_model_inner(
+    ir: &IrModel,
+    gpu_textures: Vec<wgpu::TextureView>,
+    device: &wgpu::Device,
+) -> Result<GpuModel> {
+    let pos_fn = if ir.source_format.is_vrm0() {
         gltf_pos_to_pmx_v0
     } else {
         gltf_pos_to_pmx
     };
-    let normal_fn = if ir.is_vrm0 {
+    let normal_fn = if ir.source_format.is_vrm0() {
         gltf_normal_to_pmx_v0
     } else {
         gltf_normal_to_pmx
@@ -138,12 +157,8 @@ pub fn build_gpu_model(
     let mut has_alpha = false;
 
     // グローバル頂点Index → GPU頂点Index マッピング
-    // グローバルIndex = メッシュ順に連結した頂点の通し番号
     let total_global_verts: usize = ir.meshes.iter().map(|m| m.vertices.len()).sum();
     let mut global_to_gpu = vec![0u32; total_global_verts];
-
-    // テクスチャアップロード
-    let gpu_textures = super::texture::upload_textures(ir, images, device, queue)?;
 
     let texture_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("texture_bgl_mesh"),
@@ -284,7 +299,7 @@ pub fn build_gpu_model(
         has_alpha,
         base_vertices,
         global_to_gpu,
-        is_vrm0: ir.is_vrm0,
+        use_vrm0_coords: ir.source_format.is_vrm0(),
     })
 }
 

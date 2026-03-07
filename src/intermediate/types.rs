@@ -1,5 +1,29 @@
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
+/// ソースファイル形式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SourceFormat {
+    #[default]
+    Vrm1,
+    Vrm0,
+    Fbx,
+}
+
+impl SourceFormat {
+    pub fn label(&self) -> &str {
+        match self {
+            SourceFormat::Vrm1 => "VRM 1.0",
+            SourceFormat::Vrm0 => "VRM 0.0",
+            SourceFormat::Fbx => "FBX",
+        }
+    }
+
+    /// VRM 0.0 の座標変換を使うか
+    pub fn is_vrm0(&self) -> bool {
+        matches!(self, SourceFormat::Vrm0)
+    }
+}
+
 /// 中間表現モデル
 #[derive(Debug, Default)]
 pub struct IrModel {
@@ -13,8 +37,12 @@ pub struct IrModel {
     pub physics: IrPhysics,
     /// ノードIndex → ボーンIndex のマッピング
     pub node_to_bone: std::collections::HashMap<usize, usize>,
-    /// VRM 0.0 フラグ（座標変換の向きが VRM 1.0 と逆）
-    pub is_vrm0: bool,
+    /// ソースファイル形式（座標変換の分岐に使用）
+    pub source_format: SourceFormat,
+    /// ヒューマノイドリグ種別（FBX 用、None = 未検出/VRM）
+    pub rig_type: Option<String>,
+    /// マッピングされたヒューマノイドボーン数
+    pub humanoid_bone_count: usize,
 }
 
 impl IrModel {
