@@ -1,13 +1,15 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use eframe::egui;
 use eframe::egui_wgpu;
+use eframe::wgpu;
 
 use crate::intermediate::types::IrModel;
 use crate::vrm;
 
 use super::camera::OrbitCamera;
-use super::gpu::{DrawMode, GpuRenderer, LightMode, RenderParams};
+use super::gpu::{self, DrawMode, GpuRenderer, LightMode, RenderParams};
 use super::mesh::GpuModel;
 use super::ui;
 
@@ -92,6 +94,19 @@ impl Default for DisplaySettings {
     }
 }
 
+/// テクスチャD&Dプレビュー状態
+pub struct PendingTexPreview {
+    pub path: PathBuf,
+    /// 材質ごとの選択状態（チェックボックス）
+    pub selection: Vec<bool>,
+    /// 現在プレビュー適用中の材質
+    previewed: Vec<bool>,
+    /// プレビュー用テクスチャビュー（GPU）
+    texture_view: wgpu::TextureView,
+    /// draw_index → 退避した元の bind group
+    saved_binds: HashMap<usize, Option<wgpu::BindGroup>>,
+}
+
 /// ビューアのメイン状態
 pub struct ViewerApp {
     pub loaded: Option<LoadedModel>,
@@ -124,6 +139,12 @@ pub struct ViewerApp {
     pub normalize_pose: bool,
     /// ビューポートの高さ（フィット計算用）
     pub last_viewport_height: f32,
+    /// テクスチャD&Dプレビュー
+    pub pending_tex_preview: Option<PendingTexPreview>,
+    /// ファイル読み込み遅延実行 (path, overlay表示済みフラグ)
+    pub pending_load: Option<(PathBuf, bool)>,
+    /// PMX変換遅延実行 (overlay表示済みフラグ)
+    pub pending_convert: Option<bool>,
 }
 
 impl ViewerApp {
@@ -154,6 +175,9 @@ impl ViewerApp {
             confirm_overwrite: false,
             normalize_pose: false,
             last_viewport_height: 720.0,
+            pending_tex_preview: None,
+            pending_load: None,
+            pending_convert: None,
         }
     }
 
@@ -492,21 +516,218 @@ impl ViewerApp {
             .add_filter("FBX", &["fbx"])
             .pick_file()
         {
-            self.load_file(path);
+            self.pending_load = Some((path, false));
+        }
+    }
+
+    /// テクスチャプレビューの同期（selection と previewed の差分を GPU に反映）
+    pub fn sync_tex_preview(&mut self) {
+        let Some(ref mut preview) = self.pending_tex_preview else { return };
+        let Some(ref mut loaded) = self.loaded else { return };
+        let device = &self.render_state.device;
+        let texture_bgl = gpu::create_texture_bind_group_layout(device);
+
+        for mat_idx in 0..preview.selection.len() {
+            if preview.selection[mat_idx] && !preview.previewed[mat_idx] {
+                // プレビュー適用: 元の bind group を退避し、プレビュー用に差し替え
+                for (draw_idx, draw) in loaded.gpu_model.draws.iter_mut().enumerate() {
+                    if draw.material_index == mat_idx {
+                        if !preview.saved_binds.contains_key(&draw_idx) {
+                            preview.saved_binds.insert(draw_idx, draw.texture_bind_group.take());
+                        }
+                        draw.texture_bind_group = Some(
+                            gpu::create_texture_bind_group(device, &texture_bgl, &preview.texture_view),
+                        );
+                    }
+                }
+                preview.previewed[mat_idx] = true;
+            } else if !preview.selection[mat_idx] && preview.previewed[mat_idx] {
+                // プレビュー解除: 退避した元の bind group を復元
+                for (draw_idx, draw) in loaded.gpu_model.draws.iter_mut().enumerate() {
+                    if draw.material_index == mat_idx {
+                        if let Some(orig) = preview.saved_binds.remove(&draw_idx) {
+                            draw.texture_bind_group = orig;
+                        }
+                    }
+                }
+                preview.previewed[mat_idx] = false;
+            }
+        }
+    }
+
+    /// テクスチャプレビューを確定適用
+    pub fn apply_tex_preview(&mut self) {
+        let Some(preview) = self.pending_tex_preview.take() else { return };
+        let path = &preview.path;
+
+        // 選択された材質のインデックスを収集
+        let selected: Vec<usize> = preview.selection.iter()
+            .enumerate()
+            .filter_map(|(i, &v)| if v { Some(i) } else { None })
+            .collect();
+
+        if selected.is_empty() {
+            // 何も選択されていなければ元に戻す
+            self.cancel_tex_preview_inner(preview);
+            return;
+        }
+
+        // IrModel にテクスチャを追加（1回だけ）
+        let Some(ref mut loaded) = self.loaded else { return };
+
+        let ext_lower = path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let is_psd = ext_lower == "psd";
+
+        let tex_data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(e) => {
+                log::error!("ファイル読み込み失敗: {e}");
+                return;
+            }
+        };
+
+        let basename = path.file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        let (ir_data, ir_filename, ir_mime) = if is_psd {
+            match Self::psd_to_png(&tex_data) {
+                Ok(png_data) => (png_data, format!("{}.png", basename), "image/png".to_string()),
+                Err(e) => {
+                    log::error!("PSD→PNG変換失敗: {e}");
+                    return;
+                }
+            }
+        } else {
+            let filename = path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let mime = match ext_lower.as_str() {
+                "png" => "image/png",
+                "tga" => "image/x-tga",
+                "bmp" => "image/bmp",
+                _ => "image/jpeg",
+            };
+            (tex_data, filename, mime.to_string())
+        };
+
+        let tex_idx = loaded.ir.textures.len();
+        loaded.ir.textures.push(crate::intermediate::types::IrTexture {
+            filename: ir_filename,
+            data: ir_data,
+            mime_type: ir_mime,
+        });
+
+        // 選択した材質の texture_index を更新
+        for &mat_idx in &selected {
+            let mat = &mut loaded.ir.materials[mat_idx];
+            mat.texture_index = Some(tex_idx);
+            mat.apply_textured_defaults();
+            log::info!(
+                "テクスチャ割り当て: 材質[{}] '{}' ← {}",
+                mat_idx, mat.name, path.display()
+            );
+        }
+
+        // GPU は既にプレビュー状態 → saved_binds を捨てて確定
+        // saved_binds 内の未プレビュー分は復元
+        for (draw_idx, orig) in preview.saved_binds.into_iter() {
+            let draw = &mut loaded.gpu_model.draws[draw_idx];
+            if !selected.contains(&draw.material_index) {
+                draw.texture_bind_group = orig;
+            }
+        }
+
+        // 材質キャッシュ更新
+        self.update_mat_cache();
+    }
+
+    /// テクスチャプレビューをキャンセル（元に戻す）
+    pub fn cancel_tex_preview(&mut self) {
+        let Some(preview) = self.pending_tex_preview.take() else { return };
+        self.cancel_tex_preview_inner(preview);
+    }
+
+    fn cancel_tex_preview_inner(&mut self, preview: PendingTexPreview) {
+        let Some(ref mut loaded) = self.loaded else { return };
+        // 退避した全 bind group を復元
+        for (draw_idx, orig) in preview.saved_binds.into_iter() {
+            if draw_idx < loaded.gpu_model.draws.len() {
+                loaded.gpu_model.draws[draw_idx].texture_bind_group = orig;
+            }
         }
     }
 }
 
 impl eframe::App for ViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 遅延処理: オーバーレイ表示済みなら実行
+        if let Some((_, true)) = self.pending_load {
+            let (path, _) = self.pending_load.take().unwrap();
+            self.load_file(path);
+        }
+        if self.pending_convert == Some(true) {
+            self.pending_convert = None;
+            ui::execute_conversion(self);
+        }
+
         // ドラッグ＆ドロップ処理
-        let dropped = ctx.input(|i| {
+        let (dropped, hover_ext) = ctx.input(|i| {
+            let hover_ext = i.raw.hovered_files.first()
+                .and_then(|f| f.path.as_ref())
+                .and_then(|p| p.extension())
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .unwrap_or_default();
             self.drag_hovering = !i.raw.hovered_files.is_empty();
-            i.raw.dropped_files.first().and_then(|f| f.path.clone())
+            (i.raw.dropped_files.first().and_then(|f| f.path.clone()), hover_ext)
         });
+        let is_hover_image = matches!(hover_ext.as_str(), "png" | "jpg" | "jpeg" | "tga" | "bmp" | "psd");
 
         if let Some(path) = dropped {
-            self.load_file(path);
+            let ext = path.extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let is_image = matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "tga" | "bmp" | "psd");
+            let is_fbx_loaded = self.loaded.as_ref()
+                .map_or(false, |l| l.ir.source_format == crate::intermediate::types::SourceFormat::Fbx);
+
+            if is_image && is_fbx_loaded {
+                // 画像ファイル → テクスチャプレビューダイアログ
+                let is_psd = ext == "psd";
+                match std::fs::read(&path).and_then(|data|
+                    super::texture::upload_texture_from_bytes(
+                        &data, is_psd,
+                        &self.render_state.device, &self.render_state.queue,
+                    ).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+                ) {
+                    Ok(texture_view) => {
+                        let num_mats = self.loaded.as_ref()
+                            .map_or(0, |l| l.ir.materials.len());
+                        self.pending_tex_preview = Some(PendingTexPreview {
+                            path,
+                            selection: vec![false; num_mats],
+                            previewed: vec![false; num_mats],
+                            texture_view,
+                            saved_binds: HashMap::new(),
+                        });
+                    }
+                    Err(e) => {
+                        self.convert_message = Some(ConvertResult::Failure(
+                            format!("テクスチャ読み込み失敗: {e}")
+                        ));
+                    }
+                }
+            } else {
+                // モデルファイル → 読み込み（1フレーム遅延でオーバーレイ表示）
+                self.pending_load = Some((path, false));
+            }
         }
 
         // キーボードショートカット
@@ -570,13 +791,20 @@ impl eframe::App for ViewerApp {
 
                 if let Some(ref loaded) = self.loaded {
                     bar.separator();
-                    bar.label(&loaded.ir.name);
+                    bar.label(
+                        egui::RichText::new(&loaded.ir.name)
+                            .color(egui::Color32::from_gray(0x20)),
+                    );
                 }
             });
         });
 
         // 右側パネル
         ui::show_side_panel(ctx, self);
+
+        // テクスチャD&Dダイアログ + プレビュー同期
+        ui::show_texture_drop_dialog(ctx, self);
+        self.sync_tex_preview();
 
         // ステータスバー
         egui::TopBottomPanel::bottom("status_bar")
@@ -586,7 +814,7 @@ impl eframe::App for ViewerApp {
                     if let Some(ref loaded) = self.loaded {
                         let ir = &loaded.ir;
                         let font = egui::FontId::proportional(11.0);
-                        let color = egui::Color32::from_gray(0xB0);
+                        let color = egui::Color32::from_gray(0x30);
 
                         // ファイルパス
                         ui.label(egui::RichText::new(
@@ -624,7 +852,7 @@ impl eframe::App for ViewerApp {
                         ui.label(
                             egui::RichText::new("VRM/FBX ファイルを読み込んでください")
                                 .font(egui::FontId::proportional(11.0))
-                                .color(egui::Color32::from_gray(0x80))
+                                .color(egui::Color32::from_gray(0x60))
                         );
                     }
                 });
@@ -709,15 +937,28 @@ impl eframe::App for ViewerApp {
                 // ドロップオーバーレイ
                 if self.drag_hovering {
                     let rect = response.rect;
+                    let is_fbx_loaded = self.loaded.as_ref()
+                        .map_or(false, |l| l.ir.source_format == crate::intermediate::types::SourceFormat::Fbx);
+                    let (overlay_color, overlay_text) = if is_hover_image && is_fbx_loaded {
+                        (
+                            egui::Color32::from_rgba_unmultiplied(0x40, 0xC0, 0x40, 0x60),
+                            "テクスチャを割り当て",
+                        )
+                    } else {
+                        (
+                            egui::Color32::from_rgba_unmultiplied(0x40, 0x80, 0xFF, 0x60),
+                            "VRM ファイルをドロップ",
+                        )
+                    };
                     viewport.painter().rect_filled(
                         rect,
                         0.0,
-                        egui::Color32::from_rgba_unmultiplied(0x40, 0x80, 0xFF, 0x60),
+                        overlay_color,
                     );
                     viewport.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        "VRM ファイルをドロップ",
+                        overlay_text,
                         egui::FontId::proportional(28.0),
                         egui::Color32::WHITE,
                     );
@@ -781,16 +1022,85 @@ impl eframe::App for ViewerApp {
                     });
                 }
 
-                // 操作ヒント（左下）
-                if self.loaded.is_some() {
+                // 操作ヒント（左下、常時表示）
+                {
                     let rect = response.rect;
+                    let hint = if self.loaded.is_some() {
+                        "左ドラッグ:回転  右/中ドラッグ:パン  ホイール:ズーム  Ctrl+O:開く  R:リセット  F:フィット  G:グリッド  B:ボーン  P:物理  W:ワイヤー  L:ライト"
+                    } else {
+                        "Ctrl+O:開く  ドラッグ&ドロップ:VRM/FBXファイル読込"
+                    };
                     viewport.painter().text(
                         egui::pos2(rect.left() + 8.0, rect.bottom() - 8.0),
                         egui::Align2::LEFT_BOTTOM,
-                        "左ドラッグ:回転  右/中ドラッグ:パン  ホイール:ズーム  R:リセット  F:フィット  G:グリッド  B:ボーン  P:物理  W:ワイヤー  L:ライト",
+                        hint,
                         egui::FontId::proportional(12.0),
-                        egui::Color32::from_gray(0x80),
+                        egui::Color32::from_gray(0xC0),
                     );
+                }
+
+                // プログレスオーバーレイ（読み込み中 / 変換中）
+                let processing_msg = if self.pending_load.is_some() {
+                    Some("読み込み中...")
+                } else if self.pending_convert.is_some() {
+                    Some("PMX変換中...")
+                } else {
+                    None
+                };
+                if let Some(msg) = processing_msg {
+                    let rect = response.rect;
+                    // 半透明背景
+                    viewport.painter().rect_filled(
+                        rect,
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(0, 0, 0, 0xA0),
+                    );
+                    // テキスト
+                    let center = rect.center();
+                    viewport.painter().text(
+                        egui::pos2(center.x, center.y - 20.0),
+                        egui::Align2::CENTER_CENTER,
+                        msg,
+                        egui::FontId::proportional(24.0),
+                        egui::Color32::WHITE,
+                    );
+                    // プログレスバー（不定型アニメーション）
+                    let bar_width = 300.0_f32.min(rect.width() - 40.0);
+                    let bar_rect = egui::Rect::from_center_size(
+                        egui::pos2(center.x, center.y + 16.0),
+                        egui::vec2(bar_width, 6.0),
+                    );
+                    let t = ctx.input(|i| i.time) as f32;
+                    let phase = (t * 1.5).sin() * 0.5 + 0.5; // 0..1 oscillation
+                    let indicator_w = bar_width * 0.3;
+                    let indicator_x = bar_rect.left() + phase * (bar_width - indicator_w);
+                    // バー背景
+                    viewport.painter().rect_filled(
+                        bar_rect,
+                        3.0,
+                        egui::Color32::from_gray(0x40),
+                    );
+                    // インジケータ
+                    viewport.painter().rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(indicator_x, bar_rect.top()),
+                            egui::vec2(indicator_w, 6.0),
+                        ),
+                        3.0,
+                        egui::Color32::from_rgb(0x50, 0xA0, 0xFF),
+                    );
+
+                    // フラグ更新: 次フレームで処理実行
+                    if let Some((_, ref mut shown)) = self.pending_load {
+                        if !*shown {
+                            *shown = true;
+                            ctx.request_repaint();
+                        }
+                    }
+                    if self.pending_convert == Some(false) {
+                        self.pending_convert = Some(true);
+                        ctx.request_repaint();
+                    }
                 }
             });
     }

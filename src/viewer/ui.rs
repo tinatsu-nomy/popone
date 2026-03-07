@@ -22,7 +22,10 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                 let ir = &loaded.ir;
 
                 // モデル情報
-                ui.heading("モデル情報");
+                ui.heading(
+                    egui::RichText::new("モデル情報")
+                        .color(egui::Color32::from_gray(0x20)),
+                );
                 ui.separator();
                 egui::Grid::new("model_info").show(ui, |ui| {
                     ui.label("名前");
@@ -153,11 +156,11 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                                             .and_then(|t| *t)
                                             .is_some();
                                         let indicator = if has_tex {
-                                            egui::RichText::new("\u{25C9}")  // ◉ (テクスチャ有)
+                                            egui::RichText::new("\u{25A3}")  // ▣ (テクスチャ有)
                                                 .color(egui::Color32::from_rgb(0x40, 0xC0, 0x40))
                                                 .size(16.0)
                                         } else {
-                                            egui::RichText::new("\u{25CB}")  // ○ (テクスチャ無)
+                                            egui::RichText::new("\u{25A1}")  // □ (テクスチャ無)
                                                 .color(egui::Color32::from_rgb(0xA0, 0x60, 0x60))
                                                 .size(16.0)
                                         };
@@ -283,15 +286,16 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                         "剛体回転をボーン方向に揃える",
                     );
                 });
+                let is_processing = app.pending_load.is_some() || app.pending_convert.is_some();
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut app.output_log, "ログ出力");
-                    ui.add_enabled_ui(has_model, |ui| {
+                    ui.add_enabled_ui(has_model && !is_processing, |ui| {
                         if ui.button("PMX 変換").clicked() {
                             let output_path = std::path::PathBuf::from(&app.pmx_output_path);
                             if output_path.exists() {
                                 app.confirm_overwrite = true;
                             } else {
-                                execute_conversion(app);
+                                app.pending_convert = Some(false);
                             }
                         }
                     });
@@ -332,6 +336,96 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
     }
 }
 
+/// テクスチャD&D時の材質選択ダイアログ（複数選択＋リアルタイムプレビュー）
+pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
+    let Some(ref mut preview) = app.pending_tex_preview else { return };
+    let Some(ref loaded) = app.loaded else {
+        app.pending_tex_preview = None;
+        return;
+    };
+
+    let file_name = preview.path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let mut apply = false;
+    let mut cancelled = false;
+
+    egui::Window::new("テクスチャ割り当て")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.label(format!("画像: {}", file_name));
+            ui.add_space(4.0);
+            ui.label("チェックでプレビュー、適用で確定:");
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.small_button("全選択").clicked() {
+                    preview.selection.iter_mut().for_each(|v| *v = true);
+                }
+                if ui.small_button("全解除").clicked() {
+                    preview.selection.iter_mut().for_each(|v| *v = false);
+                }
+                if ui.small_button("未設定のみ").clicked() {
+                    for &(_draw_idx, mat_idx) in loaded.mat_cache.draw_indices.iter() {
+                        if mat_idx < preview.selection.len() {
+                            let has_tex = loaded.mat_cache.tex_indices.get(mat_idx)
+                                .and_then(|t| *t)
+                                .is_some();
+                            preview.selection[mat_idx] = !has_tex;
+                        }
+                    }
+                }
+            });
+            ui.separator();
+            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                for &(_draw_idx, mat_idx) in loaded.mat_cache.draw_indices.iter() {
+                    if mat_idx >= preview.selection.len() {
+                        continue;
+                    }
+                    let name = loaded.mat_cache.names.get(mat_idx)
+                        .map(|s| s.as_str())
+                        .unwrap_or("?");
+                    let has_tex = loaded.mat_cache.tex_indices.get(mat_idx)
+                        .and_then(|t| *t)
+                        .is_some();
+                    let indicator = if has_tex {
+                        egui::RichText::new("\u{25A3}")
+                            .color(egui::Color32::from_rgb(0x40, 0xC0, 0x40))
+                    } else {
+                        egui::RichText::new("\u{25A1}")
+                            .color(egui::Color32::from_rgb(0xA0, 0x60, 0x60))
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(indicator);
+                        ui.checkbox(&mut preview.selection[mat_idx], name);
+                    });
+                }
+            });
+            ui.add_space(8.0);
+            let selected_count = preview.selection.iter().filter(|&&v| v).count();
+            ui.horizontal(|ui| {
+                if ui.add_enabled(
+                    selected_count > 0,
+                    egui::Button::new("適用"),
+                ).clicked() {
+                    apply = true;
+                }
+                if ui.button("キャンセル").clicked() {
+                    cancelled = true;
+                }
+            });
+        });
+
+    if apply {
+        app.apply_tex_preview();
+    } else if cancelled {
+        app.cancel_tex_preview();
+    }
+}
+
 /// 上書き確認ダイアログ
 fn show_overwrite_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     if !app.confirm_overwrite {
@@ -350,7 +444,7 @@ fn show_overwrite_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             ui.horizontal(|ui| {
                 if ui.button("上書き").clicked() {
                     app.confirm_overwrite = false;
-                    execute_conversion(app);
+                    app.pending_convert = Some(false);
                 }
                 if ui.button("キャンセル").clicked() {
                     app.confirm_overwrite = false;
@@ -360,7 +454,7 @@ fn show_overwrite_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
 }
 
 /// PMX変換を実行
-fn execute_conversion(app: &mut ViewerApp) {
+pub fn execute_conversion(app: &mut ViewerApp) {
     let Some(ref loaded) = app.loaded else { return };
     let output_path = std::path::PathBuf::from(&app.pmx_output_path);
     let log_path = output_path.with_extension("log");
