@@ -130,6 +130,8 @@ pub struct IrMaterial {
     /// VRM 1.0: outlineWidthMultiplyTexture (Gチャネル)
     /// VRM 0.0: _OutlineWidthTexture
     pub outline_width_texture_index: Option<usize>,
+    /// FBX元テクスチャファイル名（一括割り当て用）
+    pub source_texture_name: Option<String>,
 }
 
 impl Default for IrMaterial {
@@ -148,6 +150,7 @@ impl Default for IrMaterial {
             shade_color: None,
             shade_texture_index: None,
             outline_width_texture_index: None,
+            source_texture_name: None,
         }
     }
 }

@@ -75,6 +75,38 @@ pub fn extract_texture_for_material(
     None
 }
 
+/// Extract the texture reference filename for a material (without loading the file)
+pub fn extract_texture_name_for_material(scene: &FbxScene, mat_id: i64) -> Option<String> {
+    let textures = scene.textures_for_material(mat_id);
+    let (tex_obj, _prop) = textures
+        .iter()
+        .find(|(_, prop)| {
+            prop.as_ref()
+                .map(|p| p.contains("Diffuse") || p.contains("diffuse"))
+                .unwrap_or(false)
+        })
+        .or_else(|| textures.first())?;
+
+    // RelativeFilename → FileName → テクスチャオブジェクト名の順で取得
+    if let Some(rel_node) = tex_obj.node.child("RelativeFilename") {
+        if let Some(filename) = rel_node.properties.first().and_then(|p| p.as_string()) {
+            let normalized = filename.replace('\\', "/");
+            if let Some(basename) = Path::new(&normalized).file_name() {
+                return Some(basename.to_string_lossy().to_string());
+            }
+        }
+    }
+    if let Some(abs_node) = tex_obj.node.child("FileName") {
+        if let Some(filename) = abs_node.properties.first().and_then(|p| p.as_string()) {
+            let normalized = filename.replace('\\', "/");
+            if let Some(basename) = Path::new(&normalized).file_name() {
+                return Some(basename.to_string_lossy().to_string());
+            }
+        }
+    }
+    Some(tex_obj.name.clone())
+}
+
 fn decode_image_data(data: &[u8], name: &str) -> Option<TextureData> {
     match image::load_from_memory(data) {
         Ok(img) => {

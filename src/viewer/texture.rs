@@ -102,6 +102,67 @@ pub fn upload_textures(
     Ok(views)
 }
 
+/// 画像ファイルパスから GPU テクスチャをアップロード（単一テクスチャ）
+pub fn upload_texture_from_file(
+    path: &std::path::Path,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Result<wgpu::TextureView> {
+    let data = std::fs::read(path)?;
+
+    let is_psd = path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("psd"))
+        .unwrap_or(false);
+
+    let (rgba_data, width, height) = if is_psd {
+        decode_psd(&data)?
+    } else {
+        let img = image::load_from_memory(&data)
+            .map_err(|e| anyhow::anyhow!("画像デコード失敗: {}", e))?
+            .to_rgba8();
+        let (w, h) = (img.width(), img.height());
+        (img.into_raw(), w, h)
+    };
+
+    let gpu_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("assigned_texture"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &gpu_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &rgba_data,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * width),
+            rows_per_image: None,
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+
+    Ok(gpu_tex.create_view(&Default::default()))
+}
+
 /// IrTexture（PNG/JPEG データ）から GPU テクスチャをアップロード
 pub fn upload_textures_from_ir(
     ir: &IrModel,
@@ -161,4 +222,14 @@ pub fn upload_textures_from_ir(
     }
 
     Ok(views)
+}
+
+/// PSD ファイルを RGBA にデコード（結合済み画像を取得）
+fn decode_psd(data: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
+    let psd = psd::Psd::from_bytes(data)
+        .map_err(|e| anyhow::anyhow!("PSD デコード失敗: {:?}", e))?;
+    let width = psd.width();
+    let height = psd.height();
+    let rgba = psd.rgba();
+    Ok((rgba, width, height))
 }

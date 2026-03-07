@@ -6,6 +6,9 @@ use super::app::{ConvertResult, ViewerApp};
 use super::gpu::{DrawMode, LightMode};
 
 pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
+    // テクスチャ割り当てリクエスト（借用制約回避のためパネル外で処理）
+    let mut tex_assign_request: Option<usize> = None;
+
     egui::SidePanel::right("info_panel")
         .default_width(300.0)
         .width_range(200.0..=500.0)
@@ -99,7 +102,24 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                 }
 
                 // 材質表示
+                let is_fbx = ir.source_format == crate::intermediate::types::SourceFormat::Fbx;
                 if !loaded.gpu_model.draws.is_empty() {
+                    // draws 情報を事前コピー（借用制約回避）
+                    let draw_info: Vec<(usize, usize)> = loaded.gpu_model.draws.iter()
+                        .enumerate()
+                        .map(|(i, d)| (i, d.material_index))
+                        .collect();
+                    let mat_tex_info: Vec<Option<usize>> = ir.materials.iter()
+                        .map(|m| m.texture_index)
+                        .collect();
+                    let mat_names: Vec<String> = ir.materials.iter()
+                        .map(|m| m.name.clone())
+                        .collect();
+                    let mat_src_tex: Vec<Option<String>> = ir.materials.iter()
+                        .map(|m| m.source_texture_name.clone())
+                        .collect();
+                    let num_draws = draw_info.len();
+
                     ui.collapsing("材質表示", |ui| {
                         ui.horizontal(|ui| {
                             if ui.small_button("全表示").clicked() {
@@ -110,7 +130,7 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                             }
                         });
                         // フィルター（材質数が多い場合に便利）
-                        if loaded.gpu_model.draws.len() > 10 {
+                        if num_draws > 10 {
                             ui.horizontal(|ui| {
                                 ui.label("検索:");
                                 ui.add(
@@ -121,10 +141,10 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                             });
                         }
                         let filter_lower = app.material_filter.to_lowercase();
-                        for (i, draw) in loaded.gpu_model.draws.iter().enumerate() {
+                        for &(i, mat_idx) in &draw_info {
                             if i < app.material_visibility.len() {
-                                let name = ir.materials.get(draw.material_index)
-                                    .map(|m| m.name.as_str())
+                                let name = mat_names.get(mat_idx)
+                                    .map(|s| s.as_str())
                                     .unwrap_or("?");
                                 // フィルターに一致しない場合はスキップ
                                 if !filter_lower.is_empty()
@@ -132,7 +152,38 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                                 {
                                     continue;
                                 }
-                                ui.checkbox(&mut app.material_visibility[i], name);
+                                ui.horizontal(|ui| {
+                                    // FBX の場合、テクスチャ状態インジケータを先に表示
+                                    if is_fbx {
+                                        let has_tex = mat_tex_info.get(mat_idx)
+                                            .and_then(|t| *t)
+                                            .is_some();
+                                        let indicator = if has_tex {
+                                            egui::RichText::new("\u{25C9}")  // ◉ (テクスチャ有)
+                                                .color(egui::Color32::from_rgb(0x40, 0xC0, 0x40))
+                                                .size(16.0)
+                                        } else {
+                                            egui::RichText::new("\u{25CB}")  // ○ (テクスチャ無)
+                                                .color(egui::Color32::from_rgb(0xA0, 0x60, 0x60))
+                                                .size(16.0)
+                                        };
+                                        let src_name = mat_src_tex.get(mat_idx)
+                                            .and_then(|s| s.as_deref());
+                                        let tooltip = match (has_tex, src_name) {
+                                            (true, Some(s)) => format!("テクスチャ設定済 ({})\nクリックで変更", s),
+                                            (true, None) => "テクスチャ設定済\nクリックで変更".to_string(),
+                                            (false, Some(s)) => format!("テクスチャ未設定 ({})\nクリックで割り当て", s),
+                                            (false, None) => "テクスチャ未設定\nクリックで割り当て".to_string(),
+                                        };
+                                        if ui.add(egui::Label::new(indicator).sense(egui::Sense::click()))
+                                            .on_hover_text(&tooltip)
+                                            .clicked()
+                                        {
+                                            tex_assign_request = Some(mat_idx);
+                                        }
+                                    }
+                                    ui.checkbox(&mut app.material_visibility[i], name);
+                                });
                             }
                         }
                     });
@@ -275,6 +326,16 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
 
     // 上書き確認ダイアログ
     show_overwrite_dialog(ctx, app);
+
+    // テクスチャ割り当て（借用解放後に処理）
+    if let Some(mat_idx) = tex_assign_request {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Image", &["png", "jpg", "jpeg", "tga", "bmp", "psd"])
+            .pick_file()
+        {
+            app.assign_texture_to_material(mat_idx, &path);
+        }
+    }
 }
 
 /// 上書き確認ダイアログ
@@ -326,7 +387,8 @@ fn execute_conversion(app: &mut ViewerApp) {
         .unwrap_or(false);
 
     let result = if is_fbx {
-        crate::convert_fbx_to_pmx(&input_path, &output_path)
+        // ビューアの IrModel を直接使用（テクスチャ割り当て等の編集を反映）
+        crate::convert_ir_to_pmx(&loaded.ir, &output_path, app.display.align_rigid_rotation)
     } else {
         crate::convert_vrm_to_pmx_full(&input_path, &output_path, false, app.display.align_rigid_rotation, app.normalize_pose)
     };

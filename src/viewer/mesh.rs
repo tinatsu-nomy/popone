@@ -37,6 +37,44 @@ pub struct GpuModel {
 }
 
 impl GpuModel {
+    /// 指定材質にテクスチャを割り当て（DrawCall の bind group を更新）
+    pub fn assign_texture_to_material(
+        &mut self,
+        material_index: usize,
+        texture_view: &wgpu::TextureView,
+        device: &wgpu::Device,
+    ) {
+        let texture_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("texture_bgl_assign"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        for draw in &mut self.draws {
+            if draw.material_index == material_index {
+                draw.texture_bind_group = Some(
+                    gpu::create_texture_bind_group(device, &texture_bgl, texture_view),
+                );
+            }
+        }
+    }
+
     /// バウンディングボックスを計算 (min, max)
     pub fn compute_bbox(&self) -> (Vec3, Vec3) {
         let mut min = Vec3::splat(f32::MAX);

@@ -126,6 +126,38 @@ pub fn convert_fbx_to_pmx(
     Ok(stats)
 }
 
+/// IrModel から直接 PMX 変換（ビューアで編集済みの IrModel を使用）
+pub fn convert_ir_to_pmx(
+    ir: &intermediate::types::IrModel,
+    output_path: &Path,
+    align_rigid_rotation: bool,
+) -> Result<ConvertStats> {
+    let output_dir = output_path.parent().unwrap_or(Path::new("."));
+    let tex_dir = output_dir.join("textures");
+    convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)?;
+
+    let pmx_model = pmx::build::build_pmx_model_with_options(ir, align_rigid_rotation)?;
+
+    let stats = ConvertStats {
+        output_path: output_path.to_string_lossy().to_string(),
+        tex_dir: tex_dir.to_string_lossy().to_string(),
+        bones: pmx_model.bones.len(),
+        vertices: pmx_model.vertices.len(),
+        faces: pmx_model.faces.len(),
+        materials: pmx_model.materials.len(),
+        textures: pmx_model.textures.len(),
+        morphs: pmx_model.morphs.len(),
+    };
+
+    let file = std::fs::File::create(output_path)?;
+    let writer = std::io::BufWriter::new(file);
+    let header = pmx_model.header.clone();
+    let mut pmx_writer = pmx::writer::PmxWriter::new(writer, header);
+    pmx_writer.write_model(&pmx_model)?;
+
+    Ok(stats)
+}
+
 /// 拡張子で VRM/FBX を自動判定して PMX 変換
 pub fn convert_to_pmx(
     input_path: &Path,

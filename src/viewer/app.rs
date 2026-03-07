@@ -250,6 +250,108 @@ impl ViewerApp {
         Ok(())
     }
 
+    /// 指定材質に外部テクスチャファイルを割り当て
+    pub fn assign_texture_to_material(&mut self, material_index: usize, path: &std::path::Path) {
+        let device = &self.render_state.device;
+        let queue = &self.render_state.queue;
+
+        // GPU テクスチャをアップロード
+        let texture_view = match super::texture::upload_texture_from_file(path, device, queue) {
+            Ok(view) => view,
+            Err(e) => {
+                log::error!("テクスチャ読み込み失敗: {e}");
+                self.convert_message = Some(ConvertResult::Failure(format!(
+                    "テクスチャ読み込み失敗: {e}"
+                )));
+                return;
+            }
+        };
+
+        // IrModel にテクスチャを追加・材質を更新
+        let Some(ref mut loaded) = self.loaded else { return };
+
+        let tex_data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(e) => {
+                log::error!("ファイル読み込み失敗: {e}");
+                return;
+            }
+        };
+
+        let ext_lower = path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let basename = path.file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        // PSD の場合は PNG に変換して保存
+        let (ir_data, ir_filename, ir_mime) = if ext_lower == "psd" {
+            match Self::psd_to_png(&tex_data) {
+                Ok(png_data) => (png_data, format!("{}.png", basename), "image/png".to_string()),
+                Err(e) => {
+                    log::error!("PSD→PNG変換失敗: {e}");
+                    self.convert_message = Some(ConvertResult::Failure(format!(
+                        "PSD→PNG変換失敗: {e}"
+                    )));
+                    return;
+                }
+            }
+        } else {
+            let filename = path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let mime = if ext_lower == "png" { "image/png" } else { "image/jpeg" };
+            (tex_data, filename, mime.to_string())
+        };
+
+        let tex_idx = loaded.ir.textures.len();
+        loaded.ir.textures.push(crate::intermediate::types::IrTexture {
+            filename: ir_filename,
+            data: ir_data,
+            mime_type: ir_mime,
+        });
+        let mat = &mut loaded.ir.materials[material_index];
+        mat.texture_index = Some(tex_idx);
+        // テクスチャ有り → 拡散色(1,1,1,α)、環境色(0.5,0.5,0.5)
+        let alpha = mat.diffuse.w;
+        mat.diffuse = glam::Vec4::new(1.0, 1.0, 1.0, alpha);
+        mat.ambient = glam::Vec3::new(0.5, 0.5, 0.5);
+        mat.specular = glam::Vec3::ZERO;
+        mat.specular_power = 0.0;
+
+        // GPU DrawCall 更新
+        loaded.gpu_model.assign_texture_to_material(material_index, &texture_view, device);
+
+        log::info!(
+            "テクスチャ割り当て: 材質[{}] '{}' ← {}",
+            material_index,
+            loaded.ir.materials[material_index].name,
+            path.display()
+        );
+    }
+
+    /// PSD データを PNG に変換
+    fn psd_to_png(psd_data: &[u8]) -> anyhow::Result<Vec<u8>> {
+        let psd = psd::Psd::from_bytes(psd_data)
+            .map_err(|e| anyhow::anyhow!("PSD パース失敗: {:?}", e))?;
+        let width = psd.width();
+        let height = psd.height();
+        let rgba = psd.rgba();
+
+        let mut png_data = Vec::new();
+        {
+            let encoder = image::codecs::png::PngEncoder::new(&mut png_data);
+            use image::ImageEncoder;
+            encoder.write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
+                .map_err(|e| anyhow::anyhow!("PNG エンコード失敗: {}", e))?;
+        }
+        Ok(png_data)
+    }
+
     /// 現在読み込み中のVRMを再読み込みする（オプション変更時）
     /// カメラ・モーフ・材質表示などの状態は保持する
     pub fn reload_current(&mut self) {
@@ -368,6 +470,58 @@ impl eframe::App for ViewerApp {
 
         // 右側パネル
         ui::show_side_panel(ctx, self);
+
+        // ステータスバー
+        egui::TopBottomPanel::bottom("status_bar")
+            .exact_height(22.0)
+            .show(ctx, |ui| {
+                ui.horizontal_centered(|ui| {
+                    if let Some(ref loaded) = self.loaded {
+                        let ir = &loaded.ir;
+                        let font = egui::FontId::proportional(11.0);
+                        let color = egui::Color32::from_gray(0xB0);
+
+                        // ファイルパス
+                        ui.label(egui::RichText::new(
+                            loaded.file_path.to_string_lossy().as_ref()
+                        ).font(font.clone()).color(color));
+
+                        ui.separator();
+
+                        // モデル統計
+                        let stats = format!(
+                            "頂点:{} 面:{} 材質:{} テクスチャ:{} ボーン:{} モーフ:{}",
+                            ir.total_vertices(),
+                            ir.total_faces(),
+                            ir.materials.len(),
+                            ir.textures.len(),
+                            ir.bones.len(),
+                            ir.morphs.len(),
+                        );
+                        ui.label(egui::RichText::new(stats).font(font.clone()).color(color));
+
+                        // FBXの場合、テクスチャ設定状況
+                        if ir.source_format == crate::intermediate::types::SourceFormat::Fbx {
+                            let tex_set = ir.materials.iter().filter(|m| m.texture_index.is_some()).count();
+                            let tex_total = ir.materials.len();
+                            ui.separator();
+                            let tex_status = format!("Tex:{}/{}", tex_set, tex_total);
+                            let tex_color = if tex_set == tex_total {
+                                egui::Color32::from_rgb(0x40, 0xC0, 0x40)
+                            } else {
+                                egui::Color32::from_rgb(0xD0, 0xA0, 0x40)
+                            };
+                            ui.label(egui::RichText::new(tex_status).font(font).color(tex_color));
+                        }
+                    } else {
+                        ui.label(
+                            egui::RichText::new("VRM/FBX ファイルを読み込んでください")
+                                .font(egui::FontId::proportional(11.0))
+                                .color(egui::Color32::from_gray(0x80))
+                        );
+                    }
+                });
+            });
 
         // 中央ビューポート
         egui::CentralPanel::default()
