@@ -8,7 +8,7 @@ VRM 0.0 / 1.0 および FBX バイナリ形式に対応。
 
 最新リリースの exe（ビューア付き）は以下からダウンロードできます。
 
-- [vrm2pmx_v0.1.5.exe](https://github.com/tinatsu-nomy/vrm2pmx/releases/download/v0.1.5/vrm2pmx_v0.1.5.exe)
+- [vrm2pmx_v0.1.6.exe](https://github.com/tinatsu-nomy/vrm2pmx/releases/download/v0.1.6/vrm2pmx_v0.1.6.exe)
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/vrm2pmx/releases)
 
@@ -26,6 +26,7 @@ VRM 0.0 / 1.0 および FBX バイナリ形式に対応。
 - **SpringBone 物理可視化** — 剛体（マゼンタ）・コライダー（シアン）・ジョイント接続（黄色）をワイヤーフレーム表示、濃度スライダで調整可能
 - **ワイヤーフレーム表示** — 対応 GPU でメッシュをワイヤーフレーム表示（`POLYGON_MODE_LINE`）
 - **カメラ情報オーバーレイ** — 3D ビューポート左上に注視点・距離・Yaw/Pitch をテキスト表示
+- **ステータスバー** — ビューポート下部にモデル名・頂点数・面数を表示
 - **フィット・リセットボタン** — 3D ビューポート右上に配置
 - **材質表示切替** — 右パネルから材質ごとの表示 ON/OFF が可能（全表示/全非表示ボタン付き、フィルタ検索）
 - **キーボードショートカット** — Ctrl+O:開く、R:カメラリセット、F:モデルにフィット、G:グリッド、B:ボーン、P:物理、W:ワイヤーフレーム、L:ライトモード切替
@@ -35,7 +36,8 @@ VRM 0.0 / 1.0 および FBX バイナリ形式に対応。
   - ヒューマノイドリグ情報（リグ種別・マッピング済みボーン数、FBX の場合は Mixamo / Blender 等を自動検出）
   - VRM メタ情報（作者・ライセンスなど）
   - 表情モーフスライダ（全リセットボタン付き）
-  - 材質表示スイッチ
+  - 材質表示スイッチ（テクスチャ設定状態インジケータ: ◉=設定済み / ○=未設定）
+  - 材質ごとの外部テクスチャ割り当て（PNG / JPG / TGA / BMP / PSD 対応）
   - 表示設定（ライト・環境光・背景明度・グリッド・ボーン・物理・ワイヤーフレーム・ライトモード）
   - PMX 変換ボタン（ビューア上から直接変換可能、VRM・FBX 両対応、上書き確認ダイアログ付き）
   - Aスタンス変換オプション（T ポーズの腕を 30° 下げて A スタンスに変換、VRM・FBX 両対応、FBX ではスキンウェイトによるメッシュ頂点変形も実施）
@@ -49,7 +51,7 @@ VRM 0.0 / 1.0 および FBX バイナリ形式に対応。
 - **PreRotation 対応** — Blender FBX エクスポート等の PreRotation をモデル変換に反映
 - **UnitScaleFactor 対応** — cm / m 等のスケール差を自動補正
 - **材質プロパティ** — DiffuseColor / SpecularColor / AmbientColor / Shininess / Opacity / TransparencyFactor / ReflectionColor / ReflectionFactor を抽出
-- **テクスチャ** — Video ノードの埋め込みテクスチャ、または RelativeFilename による外部ファイル参照
+- **テクスチャ** — Video ノードの埋め込みテクスチャ、または RelativeFilename による外部ファイル参照。ビューア上で材質ごとに外部テクスチャファイル（PNG / JPG / TGA / BMP / PSD）を割り当て可能
 - **UV マッピング** — LayerElementUV（ByPolygonVertex / ByControlPoint、Direct / IndexToDirect）
 - **ボーン階層** — Model(LimbNode) からボーン構築、Lcl Translation / Rotation / Scaling + PreRotation
 - **スキンウェイト** — Deformer(Skin) → SubDeformer(Cluster) チェーンから頂点ウェイト抽出（最大 4 ボーン正規化）
@@ -372,6 +374,8 @@ cargo test
 | glam | 3D 数学（Vec3, Quat, Mat4） |
 | byteorder | PMX バイナリ書き出し（リトルエンディアン） |
 | image | テクスチャの PNG エンコード |
+| psd | PSD（Photoshop）テクスチャ読み込み |
+| flate2 | zlib 圧縮・展開 |
 | clap | CLI 引数パーサー |
 | anyhow | エラーハンドリング |
 | log / fern / chrono | ログ出力 |
@@ -455,9 +459,11 @@ println!("ボーン: {}, 頂点: {}", stats.bones, stats.vertices);
 | [gltf](https://github.com/gltf-rs/gltf) | 1.4 | MIT OR Apache-2.0 | gltf-rs/gltf |
 | [serde](https://github.com/serde-rs/serde) | 1 | MIT OR Apache-2.0 | serde-rs/serde |
 | [serde_json](https://github.com/serde-rs/json) | 1 | MIT OR Apache-2.0 | serde-rs/json |
-| [glam](https://github.com/bitshifter/glam-rs) | 0.28 | MIT OR Apache-2.0 | bitshifter/glam-rs |
+| [glam](https://github.com/bitshifter/glam-rs) | 0.29 | MIT OR Apache-2.0 | bitshifter/glam-rs |
 | [byteorder](https://github.com/BurntSushi/byteorder) | 1.5 | Unlicense OR MIT | BurntSushi/byteorder |
 | [image](https://github.com/image-rs/image) | 0.25 | MIT OR Apache-2.0 | image-rs/image |
+| [psd](https://github.com/chinedufn/psd) | 0.3 | MIT OR Apache-2.0 | chinedufn/psd |
+| [flate2](https://github.com/rust-lang/flate2-rs) | 1 | MIT OR Apache-2.0 | rust-lang/flate2-rs |
 | [clap](https://github.com/clap-rs/clap) | 4 | MIT OR Apache-2.0 | clap-rs/clap |
 | [anyhow](https://github.com/dtolnay/anyhow) | 1 | MIT OR Apache-2.0 | dtolnay/anyhow |
 | [log](https://github.com/rust-lang/log) | 0.4 | MIT OR Apache-2.0 | rust-lang/log |
