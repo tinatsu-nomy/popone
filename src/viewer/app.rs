@@ -75,6 +75,10 @@ pub struct DisplaySettings {
     pub light_mode: LightMode,
     /// 剛体回転をボーン方向に揃える（PMX出力 + 物理表示）
     pub align_rigid_rotation: bool,
+    /// MSAA アンチエイリアス
+    pub msaa: bool,
+    /// 法線平滑化（頂点統合 + 法線平均化）
+    pub smooth_normals: bool,
 }
 
 impl Default for DisplaySettings {
@@ -91,6 +95,8 @@ impl Default for DisplaySettings {
             draw_mode: DrawMode::Solid,
             light_mode: LightMode::CameraFollow,
             align_rigid_rotation: false,
+            msaa: true,
+            smooth_normals: true,
         }
     }
 }
@@ -263,7 +269,7 @@ impl ViewerApp {
 
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
-        let gpu_model = super::mesh::build_gpu_model(&ir, &glb.images, device, queue)?;
+        let gpu_model = super::mesh::build_gpu_model(&ir, &glb.images, device, queue, self.display.smooth_normals)?;
 
         // IrTexture を PNG エンコード済みに変換（convert_ir_to_pmx で統一的に使えるように）
         Self::encode_ir_textures_as_png(&mut ir, &glb.images);
@@ -276,7 +282,7 @@ impl ViewerApp {
         let queue = &self.render_state.queue;
 
         // GPU リソース構築（IrTexture から直接アップロード）
-        let gpu_model = super::mesh::build_gpu_model_from_ir(&ir, device, queue)?;
+        let gpu_model = super::mesh::build_gpu_model_from_ir(&ir, device, queue, self.display.smooth_normals)?;
         self.finish_load_with_gpu(ir, gpu_model, path)
     }
 
@@ -317,6 +323,27 @@ impl ViewerApp {
         });
 
         Ok(())
+    }
+
+    /// smooth_normals 切り替え時に GPU モデルを再構築
+    pub fn rebuild_gpu_model(&mut self) {
+        let Some(loaded) = &self.loaded else { return };
+        let device = &self.render_state.device;
+        let queue = &self.render_state.queue;
+        let smooth = self.display.smooth_normals;
+
+        match super::mesh::build_gpu_model_from_ir(&loaded.ir, device, queue, smooth) {
+            Ok(new_model) => {
+                let mat_cache = Self::build_mat_cache(&loaded.ir, &new_model);
+                self.material_visibility = vec![true; new_model.draws.len()];
+                if let Some(loaded) = &mut self.loaded {
+                    loaded.gpu_model = new_model;
+                    loaded.mat_cache = mat_cache;
+                }
+                log::info!("GPU モデル再構築完了 (smooth_normals={})", smooth);
+            }
+            Err(e) => log::error!("GPU モデル再構築失敗: {}", e),
+        }
     }
 
     /// 材質情報キャッシュを構築

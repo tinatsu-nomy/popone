@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use eframe::wgpu;
 use glam::Vec3;
@@ -131,9 +133,10 @@ pub fn build_gpu_model(
     images: &[gltf::image::Data],
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    smooth_normals: bool,
 ) -> Result<GpuModel> {
     let gpu_textures = super::texture::upload_textures(ir, images, device, queue)?;
-    build_gpu_model_inner(ir, gpu_textures, device)
+    build_gpu_model_inner(ir, gpu_textures, device, smooth_normals)
 }
 
 /// IrModel のみから GPU バッファを構築（FBX 用）
@@ -141,15 +144,17 @@ pub fn build_gpu_model_from_ir(
     ir: &IrModel,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    smooth_normals: bool,
 ) -> Result<GpuModel> {
     let gpu_textures = super::texture::upload_textures_from_ir(ir, device, queue)?;
-    build_gpu_model_inner(ir, gpu_textures, device)
+    build_gpu_model_inner(ir, gpu_textures, device, smooth_normals)
 }
 
 fn build_gpu_model_inner(
     ir: &IrModel,
     gpu_textures: Vec<wgpu::TextureView>,
     device: &wgpu::Device,
+    smooth_normals: bool,
 ) -> Result<GpuModel> {
     let pos_fn = if ir.source_format.is_vrm0() {
         gltf_pos_to_pmx_v0
@@ -172,6 +177,11 @@ fn build_gpu_model_inner(
     // グローバル頂点Index → GPU頂点Index マッピング
     let total_global_verts: usize = ir.meshes.iter().map(|m| m.vertices.len()).sum();
     let mut global_to_gpu = vec![0u32; total_global_verts];
+
+    // 頂点統合（vertex welding）用マップ: 位置+UV キー → GPU頂点Index
+    let mut vertex_dedup: HashMap<PosUvKey, u32> = HashMap::with_capacity(total_verts);
+    // 法線累積カウント（平均化用）
+    let mut normal_accum: Vec<([f32; 3], u32)> = Vec::with_capacity(total_verts);
 
     let texture_bgl = gpu::create_texture_bind_group_layout(device);
 
@@ -214,27 +224,58 @@ fn build_gpu_model_inner(
         let mat = &ir.materials[mat_idx];
         let index_offset = all_indices.len() as u32;
 
+        // 材質ごとに vertex_dedup をリセット（異なる材質間で頂点を共有しない）
+        vertex_dedup.clear();
+
         for &mi in mesh_indices {
             let mesh = &ir.meshes[mi];
-            let base_vertex = all_vertices.len() as u32;
             let global_offset = mesh_global_offsets[mi];
 
             // 頂点変換 + マッピング構築
             for (local_vi, v) in mesh.vertices.iter().enumerate() {
-                let gpu_vi = all_vertices.len() as u32;
-                global_to_gpu[global_offset + local_vi] = gpu_vi;
-
                 let pos = pos_fn(v.position);
                 let normal = normal_fn(v.normal);
-                all_vertices.push(Vertex {
-                    position: pos.to_array(),
-                    normal: normal.to_array(),
-                    uv: v.uv.to_array(),
-                });
+
+                let gpu_vi = if smooth_normals {
+                    // 位置+UVで統合、法線は累積して後で平均化
+                    let key = PosUvKey::new(pos.to_array(), v.uv.to_array());
+                    *vertex_dedup.entry(key).or_insert_with(|| {
+                        let idx = all_vertices.len() as u32;
+                        all_vertices.push(Vertex {
+                            position: pos.to_array(),
+                            normal: [0.0; 3],
+                            uv: v.uv.to_array(),
+                        });
+                        normal_accum.push(([0.0; 3], 0));
+                        idx
+                    })
+                } else {
+                    let idx = all_vertices.len() as u32;
+                    all_vertices.push(Vertex {
+                        position: pos.to_array(),
+                        normal: normal.to_array(),
+                        uv: v.uv.to_array(),
+                    });
+                    idx
+                };
+
+                if smooth_normals {
+                    let acc = &mut normal_accum[gpu_vi as usize];
+                    acc.0[0] += normal.x;
+                    acc.0[1] += normal.y;
+                    acc.0[2] += normal.z;
+                    acc.1 += 1;
+                }
+                global_to_gpu[global_offset + local_vi] = gpu_vi;
             }
 
             // インデックス
-            let mut indices: Vec<u32> = mesh.indices.iter().map(|&i| i + base_vertex).collect();
+            let mut indices: Vec<u32> = if smooth_normals {
+                mesh.indices.iter().map(|&i| global_to_gpu[global_offset + i as usize]).collect()
+            } else {
+                let base = global_to_gpu[global_offset];
+                mesh.indices.iter().map(|&i| i + base).collect()
+            };
             flip_face_winding(&mut indices);
             all_indices.extend_from_slice(&indices);
         }
@@ -268,6 +309,18 @@ fn build_gpu_model_inner(
             material_bind_group: mat_bg,
             material_index: mat_idx,
         });
+    }
+
+    // 累積法線を平均化・正規化（smooth_normals 有効時のみ）
+    if smooth_normals {
+        for (vi, v) in all_vertices.iter_mut().enumerate() {
+            if let Some(&(sum, count)) = normal_accum.get(vi) {
+                if count > 0 {
+                    let n = Vec3::new(sum[0], sum[1], sum[2]).normalize_or_zero();
+                    v.normal = n.to_array();
+                }
+            }
+        }
     }
 
     // ベース頂点を保存 + bbox 計算
@@ -305,5 +358,21 @@ fn build_gpu_model_inner(
         use_vrm0_coords: ir.source_format.is_vrm0(),
         cached_bbox,
     })
+}
+
+/// 頂点統合用キー（位置+UVのビット表現で比較、法線は平均化するため含めない）
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct PosUvKey {
+    pos: [u32; 3],
+    uv: [u32; 2],
+}
+
+impl PosUvKey {
+    fn new(pos: [f32; 3], uv: [f32; 2]) -> Self {
+        Self {
+            pos: [pos[0].to_bits(), pos[1].to_bits(), pos[2].to_bits()],
+            uv: [uv[0].to_bits(), uv[1].to_bits()],
+        }
+    }
 }
 

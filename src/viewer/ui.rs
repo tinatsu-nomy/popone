@@ -8,6 +8,7 @@ use super::gpu::{DrawMode, LightMode};
 pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
     // テクスチャ割り当てリクエスト（借用制約回避のためパネル外で処理）
     let mut tex_assign_request: Option<usize> = None;
+    let mut needs_rebuild = false;
 
     egui::SidePanel::right("info_panel")
         .default_width(300.0)
@@ -239,6 +240,13 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                         ui.selectable_value(&mut app.display.light_mode, LightMode::CameraFollow, "カメラ追従");
                         ui.selectable_value(&mut app.display.light_mode, LightMode::Fixed, "固定 (L)");
                     });
+                    ui.separator();
+                    ui.checkbox(&mut app.display.msaa, "MSAA (アンチエイリアス)");
+                    let old_smooth = app.display.smooth_normals;
+                    ui.checkbox(&mut app.display.smooth_normals, "法線平滑化");
+                    if app.display.smooth_normals != old_smooth && app.loaded.is_some() {
+                        needs_rebuild = true;
+                    }
                 });
                 ui.add_space(8.0);
 
@@ -333,6 +341,10 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
         {
             app.assign_texture_to_material(mat_idx, &path);
         }
+    }
+
+    if needs_rebuild {
+        app.rebuild_gpu_model();
     }
 }
 

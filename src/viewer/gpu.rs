@@ -220,19 +220,22 @@ pub enum LightMode {
     Fixed,
 }
 
-pub struct GpuRenderer {
-    /// メッシュ描画パイプライン（カリングあり）
+/// サンプル数ごとのパイプラインセット
+struct PipelineSet {
     pipeline_cull: wgpu::RenderPipeline,
-    /// メッシュ描画パイプライン（両面描画）
     pipeline_no_cull: wgpu::RenderPipeline,
-    /// メッシュ描画パイプライン（ワイヤーフレーム・カリングなし）
     pipeline_wireframe: Option<wgpu::RenderPipeline>,
-    /// 半透明用パイプライン（カリングあり、デプス書き込みなし）
     pipeline_alpha_cull: wgpu::RenderPipeline,
-    /// 半透明用パイプライン（両面、デプス書き込みなし）
     pipeline_alpha_no_cull: wgpu::RenderPipeline,
-    /// グリッドパイプライン
     pipeline_grid: wgpu::RenderPipeline,
+    pipeline_bone: wgpu::RenderPipeline,
+}
+
+pub struct GpuRenderer {
+    /// MSAA パイプラインセット (sample_count=4)
+    pipelines_msaa: PipelineSet,
+    /// 非MSAA パイプラインセット (sample_count=1)
+    pipelines_no_msaa: PipelineSet,
     /// カメラ uniform バッファ
     camera_buf: wgpu::Buffer,
     /// カメラ bind group
@@ -249,8 +252,6 @@ pub struct GpuRenderer {
     /// グリッド頂点バッファ
     grid_vbuf: wgpu::Buffer,
     grid_vertex_count: u32,
-    /// ボーン描画パイプライン（TriangleList, depth always）
-    pipeline_bone: wgpu::RenderPipeline,
     /// ボーン頂点バッファ（毎フレーム更新）
     bone_buf: Option<wgpu::Buffer>,
     bone_buf_capacity: usize,
@@ -261,15 +262,23 @@ pub struct GpuRenderer {
     spring_vertex_count: u32,
     /// オフスクリーンテクスチャキャッシュ
     offscreen: Option<OffscreenTarget>,
+    /// 現在の MSAA 有効状態
+    current_msaa: bool,
 }
+
+/// MSAA サンプル数
+const MSAA_SAMPLE_COUNT: u32 = 4;
 
 struct OffscreenTarget {
     _color: wgpu::Texture,
     color_view: wgpu::TextureView,
+    _msaa_color: Option<wgpu::Texture>,
+    msaa_color_view: Option<wgpu::TextureView>,
     _depth: wgpu::Texture,
     depth_view: wgpu::TextureView,
     width: u32,
     height: u32,
+    msaa: bool,
 }
 
 impl GpuRenderer {
@@ -349,241 +358,19 @@ impl GpuRenderer {
                 push_constant_ranges: &[],
             });
 
-        let color_target_opaque = wgpu::ColorTargetState {
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-            write_mask: wgpu::ColorWrites::ALL,
-        };
-
-        let depth_stencil_write = wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
-            stencil: Default::default(),
-            bias: Default::default(),
-        };
-
-        let depth_stencil_no_write = wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: false,
-            depth_compare: wgpu::CompareFunction::Less,
-            stencil: Default::default(),
-            bias: Default::default(),
-        };
-
-        // 不透明: カリングあり
-        let pipeline_cull = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mesh_pipeline_cull"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Vertex::layout()],
-                compilation_options: Default::default(),
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: Some(wgpu::Face::Back),
-                front_face: wgpu::FrontFace::Cw,
-                ..Default::default()
-            },
-            depth_stencil: Some(depth_stencil_write.clone()),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(color_target_opaque.clone())],
-                compilation_options: Default::default(),
-            }),
-            multiview: None,
-            cache: None,
-        });
-
-        // 不透明: 両面
-        let pipeline_no_cull = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mesh_pipeline_no_cull"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Vertex::layout()],
-                compilation_options: Default::default(),
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                front_face: wgpu::FrontFace::Cw,
-                ..Default::default()
-            },
-            depth_stencil: Some(depth_stencil_write.clone()),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(color_target_opaque.clone())],
-                compilation_options: Default::default(),
-            }),
-            multiview: None,
-            cache: None,
-        });
-
-        // ワイヤーフレーム（デバイスが対応している場合のみ）
-        let pipeline_wireframe = if device.features().contains(wgpu::Features::POLYGON_MODE_LINE) {
-            Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("mesh_pipeline_wireframe"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Vertex::layout()],
-                    compilation_options: Default::default(),
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: None,
-                    front_face: wgpu::FrontFace::Cw,
-                    polygon_mode: wgpu::PolygonMode::Line,
-                    ..Default::default()
-                },
-                depth_stencil: Some(depth_stencil_write.clone()),
-                multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(color_target_opaque.clone())],
-                    compilation_options: Default::default(),
-                }),
-                multiview: None,
-                cache: None,
-            }))
-        } else {
+        let supports_wireframe = device.features().contains(wgpu::Features::POLYGON_MODE_LINE);
+        if !supports_wireframe {
             log::warn!("POLYGON_MODE_LINE 非対応: ワイヤーフレーム無効");
-            None
-        };
+        }
 
-        // 半透明: カリングあり、デプス書き込みなし
-        let pipeline_alpha_cull = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mesh_pipeline_alpha_cull"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Vertex::layout()],
-                compilation_options: Default::default(),
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: Some(wgpu::Face::Back),
-                front_face: wgpu::FrontFace::Cw,
-                ..Default::default()
-            },
-            depth_stencil: Some(depth_stencil_no_write.clone()),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(color_target_opaque.clone())],
-                compilation_options: Default::default(),
-            }),
-            multiview: None,
-            cache: None,
-        });
-
-        // 半透明: 両面、デプス書き込みなし
-        let pipeline_alpha_no_cull =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("mesh_pipeline_alpha_no_cull"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Vertex::layout()],
-                    compilation_options: Default::default(),
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    cull_mode: None,
-                    front_face: wgpu::FrontFace::Cw,
-                    ..Default::default()
-                },
-                depth_stencil: Some(depth_stencil_no_write),
-                multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(color_target_opaque.clone())],
-                    compilation_options: Default::default(),
-                }),
-                multiview: None,
-                cache: None,
-            });
-
-        // Grid pipeline
-        let pipeline_grid = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("grid_pipeline"),
-            layout: Some(&grid_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &grid_shader,
-                entry_point: Some("vs_grid"),
-                buffers: &[GridVertex::layout()],
-                compilation_options: Default::default(),
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                ..Default::default()
-            },
-            depth_stencil: Some(depth_stencil_write),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &grid_shader,
-                entry_point: Some("fs_grid"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            multiview: None,
-            cache: None,
-        });
-
-        // ボーン描画パイプライン（TriangleList, depth=Always で常に手前に表示）
-        let pipeline_bone = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("bone_pipeline"),
-            layout: Some(&grid_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &grid_shader,
-                entry_point: Some("vs_grid"),
-                buffers: &[GridVertex::layout()],
-                compilation_options: Default::default(),
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &grid_shader,
-                entry_point: Some("fs_grid"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            multiview: None,
-            cache: None,
-        });
+        let pipelines_msaa = Self::create_pipeline_set(
+            device, &shader, &grid_shader, &pipeline_layout, &grid_pipeline_layout,
+            MSAA_SAMPLE_COUNT, supports_wireframe,
+        );
+        let pipelines_no_msaa = Self::create_pipeline_set(
+            device, &shader, &grid_shader, &pipeline_layout, &grid_pipeline_layout,
+            1, supports_wireframe,
+        );
 
         // Grid vertices
         let (grid_verts, grid_vertex_count) = super::grid::build_grid_vertices();
@@ -594,19 +381,14 @@ impl GpuRenderer {
         });
 
         Self {
-            pipeline_cull,
-            pipeline_no_cull,
-            pipeline_wireframe,
-            pipeline_alpha_cull,
-            pipeline_alpha_no_cull,
-            pipeline_grid,
+            pipelines_msaa,
+            pipelines_no_msaa,
             camera_buf,
             camera_bind_group,
             camera_bgl,
             texture_bgl,
             material_bgl,
             default_tex_bind_group,
-            pipeline_bone,
             bone_buf: None,
             bone_buf_capacity: 0,
             bone_vertex_count: 0,
@@ -616,12 +398,129 @@ impl GpuRenderer {
             grid_vbuf,
             grid_vertex_count,
             offscreen: None,
+            current_msaa: true,
         }
+    }
+
+    fn create_pipeline_set(
+        device: &wgpu::Device,
+        shader: &wgpu::ShaderModule,
+        grid_shader: &wgpu::ShaderModule,
+        pipeline_layout: &wgpu::PipelineLayout,
+        grid_pipeline_layout: &wgpu::PipelineLayout,
+        sample_count: u32,
+        supports_wireframe: bool,
+    ) -> PipelineSet {
+        let ms = wgpu::MultisampleState { count: sample_count, ..Default::default() };
+
+        let color_target = wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        };
+        let depth_write = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: Default::default(),
+            bias: Default::default(),
+        };
+        let depth_no_write = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: false,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: Default::default(),
+            bias: Default::default(),
+        };
+
+        let suffix = if sample_count > 1 { "_msaa" } else { "" };
+
+        let pipeline_cull = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&format!("mesh_cull{suffix}")),
+            layout: Some(pipeline_layout),
+            vertex: wgpu::VertexState { module: shader, entry_point: Some("vs_main"), buffers: &[Vertex::layout()], compilation_options: Default::default() },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: Some(wgpu::Face::Back), front_face: wgpu::FrontFace::Cw, ..Default::default() },
+            depth_stencil: Some(depth_write.clone()), multisample: ms,
+            fragment: Some(wgpu::FragmentState { module: shader, entry_point: Some("fs_main"), targets: &[Some(color_target.clone())], compilation_options: Default::default() }),
+            multiview: None, cache: None,
+        });
+
+        let pipeline_no_cull = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&format!("mesh_no_cull{suffix}")),
+            layout: Some(pipeline_layout),
+            vertex: wgpu::VertexState { module: shader, entry_point: Some("vs_main"), buffers: &[Vertex::layout()], compilation_options: Default::default() },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, front_face: wgpu::FrontFace::Cw, ..Default::default() },
+            depth_stencil: Some(depth_write.clone()), multisample: ms,
+            fragment: Some(wgpu::FragmentState { module: shader, entry_point: Some("fs_main"), targets: &[Some(color_target.clone())], compilation_options: Default::default() }),
+            multiview: None, cache: None,
+        });
+
+        let pipeline_wireframe = if supports_wireframe {
+            Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!("mesh_wire{suffix}")),
+                layout: Some(pipeline_layout),
+                vertex: wgpu::VertexState { module: shader, entry_point: Some("vs_main"), buffers: &[Vertex::layout()], compilation_options: Default::default() },
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, front_face: wgpu::FrontFace::Cw, polygon_mode: wgpu::PolygonMode::Line, ..Default::default() },
+                depth_stencil: Some(depth_write.clone()), multisample: ms,
+                fragment: Some(wgpu::FragmentState { module: shader, entry_point: Some("fs_main"), targets: &[Some(color_target.clone())], compilation_options: Default::default() }),
+                multiview: None, cache: None,
+            }))
+        } else {
+            None
+        };
+
+        let pipeline_alpha_cull = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&format!("mesh_alpha_cull{suffix}")),
+            layout: Some(pipeline_layout),
+            vertex: wgpu::VertexState { module: shader, entry_point: Some("vs_main"), buffers: &[Vertex::layout()], compilation_options: Default::default() },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: Some(wgpu::Face::Back), front_face: wgpu::FrontFace::Cw, ..Default::default() },
+            depth_stencil: Some(depth_no_write.clone()), multisample: ms,
+            fragment: Some(wgpu::FragmentState { module: shader, entry_point: Some("fs_main"), targets: &[Some(color_target.clone())], compilation_options: Default::default() }),
+            multiview: None, cache: None,
+        });
+
+        let pipeline_alpha_no_cull = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&format!("mesh_alpha_no_cull{suffix}")),
+            layout: Some(pipeline_layout),
+            vertex: wgpu::VertexState { module: shader, entry_point: Some("vs_main"), buffers: &[Vertex::layout()], compilation_options: Default::default() },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, front_face: wgpu::FrontFace::Cw, ..Default::default() },
+            depth_stencil: Some(depth_no_write), multisample: ms,
+            fragment: Some(wgpu::FragmentState { module: shader, entry_point: Some("fs_main"), targets: &[Some(color_target.clone())], compilation_options: Default::default() }),
+            multiview: None, cache: None,
+        });
+
+        let pipeline_grid = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&format!("grid{suffix}")),
+            layout: Some(grid_pipeline_layout),
+            vertex: wgpu::VertexState { module: grid_shader, entry_point: Some("vs_grid"), buffers: &[GridVertex::layout()], compilation_options: Default::default() },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::LineList, ..Default::default() },
+            depth_stencil: Some(depth_write), multisample: ms,
+            fragment: Some(wgpu::FragmentState { module: grid_shader, entry_point: Some("fs_grid"), targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba8UnormSrgb, blend: None, write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
+            multiview: None, cache: None,
+        });
+
+        let pipeline_bone = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&format!("bone{suffix}")),
+            layout: Some(grid_pipeline_layout),
+            vertex: wgpu::VertexState { module: grid_shader, entry_point: Some("vs_grid"), buffers: &[GridVertex::layout()], compilation_options: Default::default() },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: Default::default(), bias: Default::default() }),
+            multisample: ms,
+            fragment: Some(wgpu::FragmentState { module: grid_shader, entry_point: Some("fs_grid"), targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba8UnormSrgb, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
+            multiview: None, cache: None,
+        });
+
+        PipelineSet { pipeline_cull, pipeline_no_cull, pipeline_wireframe, pipeline_alpha_cull, pipeline_alpha_no_cull, pipeline_grid, pipeline_bone }
     }
 
     /// ワイヤーフレーム対応かどうか
     pub fn supports_wireframe(&self) -> bool {
-        self.pipeline_wireframe.is_some()
+        self.pipelines_msaa.pipeline_wireframe.is_some()
+    }
+
+    /// 現在の MSAA 設定に応じたパイプラインセットを取得
+    fn pipelines(&self) -> &PipelineSet {
+        if self.current_msaa { &self.pipelines_msaa } else { &self.pipelines_no_msaa }
     }
 
     /// テクスチャ bind group layout への参照
@@ -634,25 +533,47 @@ impl GpuRenderer {
         &self.material_bgl
     }
 
-    /// オフスクリーンテクスチャを確保（サイズ変更時のみ再作成）
-    fn ensure_offscreen(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    /// オフスクリーンテクスチャを確保（サイズ変更または MSAA 切り替え時に再作成）
+    fn ensure_offscreen(&mut self, device: &wgpu::Device, width: u32, height: u32, msaa: bool) {
+        self.current_msaa = msaa;
         let need_recreate = self
             .offscreen
             .as_ref()
-            .map(|o| o.width != width || o.height != height)
+            .map(|o| o.width != width || o.height != height || o.msaa != msaa)
             .unwrap_or(true);
 
         if !need_recreate {
             return;
         }
 
+        let tex_size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+
+        // MSAA カラーテクスチャ（マルチサンプル、描画先）— MSAA 有効時のみ
+        let (msaa_tex, msaa_view) = if msaa {
+            let t = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("offscreen_msaa_color"),
+                size: tex_size,
+                mip_level_count: 1,
+                sample_count: MSAA_SAMPLE_COUNT,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let v = t.create_view(&Default::default());
+            (Some(t), Some(v))
+        } else {
+            (None, None)
+        };
+
+        // リゾルブ先カラーテクスチャ（sample_count=1、egui表示用）
         let color = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen_color"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
+            size: tex_size,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -663,15 +584,12 @@ impl GpuRenderer {
         });
         let color_view = color.create_view(&Default::default());
 
+        // デプステクスチャ（MSAA 時はマルチサンプル）
         let depth = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen_depth"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
+            size: tex_size,
             mip_level_count: 1,
-            sample_count: 1,
+            sample_count: if msaa { MSAA_SAMPLE_COUNT } else { 1 },
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth32Float,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -682,10 +600,13 @@ impl GpuRenderer {
         self.offscreen = Some(OffscreenTarget {
             _color: color,
             color_view,
+            _msaa_color: msaa_tex,
+            msaa_color_view: msaa_view,
             _depth: depth,
             depth_view,
             width,
             height,
+            msaa,
         });
     }
 
@@ -701,8 +622,8 @@ impl GpuRenderer {
         params: &RenderParams,
         cached_id: &mut Option<eframe::egui::TextureId>,
     ) -> (eframe::egui::TextureId, ()) {
-        // オフスクリーンテクスチャの確保（サイズ変更時のみ再作成）
-        self.ensure_offscreen(device, params.width, params.height);
+        // オフスクリーンテクスチャの確保（サイズ変更または MSAA 切り替え時に再作成）
+        self.ensure_offscreen(device, params.width, params.height, params.display.msaa);
         let offscreen = self.offscreen.as_ref().unwrap();
 
         // ボーン頂点を毎フレーム更新（ビルボード）
@@ -772,11 +693,16 @@ impl GpuRenderer {
         });
 
         {
+            let (color_view, resolve_target) = if let Some(ref msaa_view) = offscreen.msaa_color_view {
+                (msaa_view, Some(&offscreen.color_view))
+            } else {
+                (&offscreen.color_view, None)
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("offscreen_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &offscreen.color_view,
-                    resolve_target: None,
+                    view: color_view,
+                    resolve_target,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: params.display.bg_brightness as f64,
@@ -798,9 +724,11 @@ impl GpuRenderer {
                 ..Default::default()
             });
 
+            let ps = self.pipelines();
+
             // グリッド描画
             if params.display.show_grid {
-                pass.set_pipeline(&self.pipeline_grid);
+                pass.set_pipeline(&ps.pipeline_grid);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.grid_vbuf.slice(..));
                 pass.draw(0..self.grid_vertex_count, 0..1);
@@ -812,7 +740,7 @@ impl GpuRenderer {
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
             let use_wireframe = params.display.draw_mode == DrawMode::Wireframe
-                && self.pipeline_wireframe.is_some();
+                && ps.pipeline_wireframe.is_some();
 
             // パス1: 不透明材質（デプス書き込みあり）
             for (draw_idx, draw) in model.draws.iter().enumerate() {
@@ -820,15 +748,15 @@ impl GpuRenderer {
                     continue;
                 }
                 if draw.is_alpha {
-                    continue; // 半透明は後で
+                    continue;
                 }
 
                 if use_wireframe {
-                    pass.set_pipeline(self.pipeline_wireframe.as_ref().unwrap());
+                    pass.set_pipeline(ps.pipeline_wireframe.as_ref().unwrap());
                 } else if draw.double_sided {
-                    pass.set_pipeline(&self.pipeline_no_cull);
+                    pass.set_pipeline(&ps.pipeline_no_cull);
                 } else {
-                    pass.set_pipeline(&self.pipeline_cull);
+                    pass.set_pipeline(&ps.pipeline_cull);
                 }
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
@@ -856,11 +784,11 @@ impl GpuRenderer {
                 }
 
                 if use_wireframe {
-                    pass.set_pipeline(self.pipeline_wireframe.as_ref().unwrap());
+                    pass.set_pipeline(ps.pipeline_wireframe.as_ref().unwrap());
                 } else if draw.double_sided {
-                    pass.set_pipeline(&self.pipeline_alpha_no_cull);
+                    pass.set_pipeline(&ps.pipeline_alpha_no_cull);
                 } else {
-                    pass.set_pipeline(&self.pipeline_alpha_cull);
+                    pass.set_pipeline(&ps.pipeline_alpha_cull);
                 }
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
@@ -881,7 +809,7 @@ impl GpuRenderer {
             // ボーン描画（メッシュの上にオーバーレイ、depth=Always）
             if params.display.show_bones && self.bone_vertex_count > 0 {
                 if let Some(ref bone_buf) = self.bone_buf {
-                    pass.set_pipeline(&self.pipeline_bone);
+                    pass.set_pipeline(&ps.pipeline_bone);
                     pass.set_bind_group(0, &self.camera_bind_group, &[]);
                     pass.set_vertex_buffer(0, bone_buf.slice(..));
                     pass.draw(0..self.bone_vertex_count, 0..1);
@@ -891,7 +819,7 @@ impl GpuRenderer {
             // SpringBone物理描画（オーバーレイ）
             if params.display.show_spring_bones && self.spring_vertex_count > 0 {
                 if let Some(ref spring_buf) = self.spring_buf {
-                    pass.set_pipeline(&self.pipeline_bone);
+                    pass.set_pipeline(&ps.pipeline_bone);
                     pass.set_bind_group(0, &self.camera_bind_group, &[]);
                     pass.set_vertex_buffer(0, spring_buf.slice(..));
                     pass.draw(0..self.spring_vertex_count, 0..1);
