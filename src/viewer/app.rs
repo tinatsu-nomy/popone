@@ -96,7 +96,7 @@ impl Default for DisplaySettings {
             light_mode: LightMode::CameraFollow,
             align_rigid_rotation: false,
             msaa: true,
-            smooth_normals: true,
+            smooth_normals: false,
         }
     }
 }
