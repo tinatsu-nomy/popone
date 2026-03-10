@@ -40,6 +40,8 @@ pub struct GpuModel {
     use_vrm0_coords: bool,
     /// キャッシュ済みバウンディングボックス (min, max)
     cached_bbox: (Vec3, Vec3),
+    /// モーフ適用用作業バッファ（毎フレーム clone を回避）
+    morph_work: Vec<Vertex>,
 }
 
 impl GpuModel {
@@ -49,13 +51,13 @@ impl GpuModel {
         material_index: usize,
         texture_view: &wgpu::TextureView,
         device: &wgpu::Device,
+        texture_bgl: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
     ) {
-        let texture_bgl = gpu::create_texture_bind_group_layout(device);
-
         for draw in &mut self.draws {
             if draw.material_index == material_index {
                 draw.texture_bind_group = Some(
-                    gpu::create_texture_bind_group(device, &texture_bgl, texture_view),
+                    gpu::create_texture_bind_group(device, texture_bgl, texture_view, sampler),
                 );
             }
         }
@@ -108,7 +110,7 @@ impl GpuModel {
 
     /// モーフウェイトを適用して頂点バッファを更新
     pub fn apply_morphs(
-        &self,
+        &mut self,
         ir: &IrModel,
         weights: &[f32],
         queue: &wgpu::Queue,
@@ -119,21 +121,23 @@ impl GpuModel {
             gltf_pos_to_pmx
         };
 
-        let mut vertices = self.base_vertices.clone();
+        // 作業バッファにベース頂点をコピー（Vec の再割り当てを回避）
+        self.morph_work.clear();
+        self.morph_work.extend_from_slice(&self.base_vertices);
 
         for (morph_idx, _morph) in ir.morphs.iter().enumerate() {
             let w = weights.get(morph_idx).copied().unwrap_or(0.0);
             if w.abs() < 1e-6 {
                 continue;
             }
-            self.apply_single_morph(ir, morph_idx, w, pos_fn, &mut vertices);
+            Self::apply_single_morph_to(&self.global_to_gpu, ir, morph_idx, w, pos_fn, &mut self.morph_work);
         }
 
-        queue.write_buffer(&self.vertex_buf, 0, bytemuck::cast_slice(&vertices));
+        queue.write_buffer(&self.vertex_buf, 0, bytemuck::cast_slice(&self.morph_work));
     }
 
-    fn apply_single_morph(
-        &self,
+    fn apply_single_morph_to(
+        global_to_gpu: &[u32],
         ir: &IrModel,
         morph_idx: usize,
         weight: f32,
@@ -143,7 +147,7 @@ impl GpuModel {
         match &ir.morphs[morph_idx].kind {
             IrMorphKind::Vertex(voffs) => {
                 for &(global_vi, offset) in voffs {
-                    if let Some(&gpu_vi) = self.global_to_gpu.get(global_vi) {
+                    if let Some(&gpu_vi) = global_to_gpu.get(global_vi) {
                         let gpu_vi = gpu_vi as usize;
                         if gpu_vi < vertices.len() {
                             let transformed = pos_fn(offset);
@@ -160,8 +164,8 @@ impl GpuModel {
                     if effective.abs() < 1e-6 || sub_idx >= ir.morphs.len() {
                         continue;
                     }
-                    self.apply_single_morph(
-                        ir, sub_idx, effective, pos_fn, vertices,
+                    Self::apply_single_morph_to(
+                        global_to_gpu, ir, sub_idx, effective, pos_fn, vertices,
                     );
                 }
             }
@@ -229,6 +233,15 @@ fn build_gpu_model_inner(
     let mut normal_accum: Vec<([f32; 3], u32)> = Vec::with_capacity(total_verts);
 
     let texture_bgl = gpu::create_texture_bind_group_layout(device);
+    let tex_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("build_sampler"),
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::FilterMode::Linear,
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        ..Default::default()
+    });
 
     let material_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("material_bgl_mesh"),
@@ -330,7 +343,7 @@ fn build_gpu_model_inner(
         // テクスチャ bind group
         let tex_bg = mat.texture_index.and_then(|ti| {
             gpu_textures.get(ti).map(|view| {
-                gpu::create_texture_bind_group(device, &texture_bgl, view)
+                gpu::create_texture_bind_group(device, &texture_bgl, view, &tex_sampler)
             })
         });
 
@@ -398,6 +411,7 @@ fn build_gpu_model_inner(
         usage: wgpu::BufferUsages::INDEX,
     });
 
+    let morph_work = Vec::with_capacity(base_vertices.len());
     Ok(GpuModel {
         vertex_buf,
         index_buf,
@@ -408,6 +422,7 @@ fn build_gpu_model_inner(
         global_to_gpu,
         use_vrm0_coords: ir.source_format.is_vrm0(),
         cached_bbox,
+        morph_work,
     })
 }
 

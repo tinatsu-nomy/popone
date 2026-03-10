@@ -8,7 +8,7 @@ VRM 0.0 / 1.0 および FBX バイナリ形式に対応。
 
 最新リリースの exe（ビューア付き）は以下からダウンロードできます。
 
-- [vrm2pmx_v0.1.10.exe](https://github.com/tinatsu-nomy/vrm2pmx/releases/download/v0.1.10/vrm2pmx_v0.1.10.exe)
+- [vrm2pmx_v0.1.11.exe](https://github.com/tinatsu-nomy/vrm2pmx/releases/download/v0.1.11/vrm2pmx_v0.1.11.exe)
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/vrm2pmx/releases)
 

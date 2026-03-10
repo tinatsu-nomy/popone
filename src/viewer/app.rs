@@ -309,6 +309,10 @@ impl ViewerApp {
             self.renderer = Some(GpuRenderer::new(device, queue, gpu_model.has_alpha));
         }
 
+        // テクスチャ割り当て履歴クリア（別モデル読み込み時）
+        self.tex_assignments.clear();
+        self.pending_tex_preview = None;
+
         // モーフスライダ初期化
         self.morph_weights = vec![0.0; ir.morphs.len()];
         self.morph_dirty = false;
@@ -474,7 +478,11 @@ impl ViewerApp {
         mat.apply_textured_defaults();
 
         // GPU DrawCall 更新
-        loaded.gpu_model.assign_texture_to_material(material_index, &texture_view, device);
+        let (texture_bgl, sampler) = match self.renderer {
+            Some(ref r) => (r.texture_bgl(), r.sampler()),
+            None => return,
+        };
+        loaded.gpu_model.assign_texture_to_material(material_index, &texture_view, device, texture_bgl, sampler);
 
         log::info!(
             "テクスチャ割り当て: 材質[{}] '{}' ← {}",
@@ -688,8 +696,10 @@ impl ViewerApp {
     pub fn sync_tex_preview(&mut self) {
         let Some(ref mut preview) = self.pending_tex_preview else { return };
         let Some(ref mut loaded) = self.loaded else { return };
+        let Some(ref renderer) = self.renderer else { return };
         let device = &self.render_state.device;
-        let texture_bgl = gpu::create_texture_bind_group_layout(device);
+        let texture_bgl = renderer.texture_bgl();
+        let sampler = renderer.sampler();
 
         for mat_idx in 0..preview.selection.len() {
             if preview.selection[mat_idx] && !preview.previewed[mat_idx] {
@@ -700,7 +710,7 @@ impl ViewerApp {
                             preview.saved_binds.insert(draw_idx, draw.texture_bind_group.take());
                         }
                         draw.texture_bind_group = Some(
-                            gpu::create_texture_bind_group(device, &texture_bgl, &preview.texture_view),
+                            gpu::create_texture_bind_group(device, texture_bgl, &preview.texture_view, sampler),
                         );
                     }
                 }
@@ -1084,7 +1094,7 @@ impl eframe::App for ViewerApp {
 
                 // モーフウェイト変更検知 → 頂点バッファ更新
                 if self.morph_dirty {
-                    if let Some(ref loaded) = self.loaded {
+                    if let Some(ref mut loaded) = self.loaded {
                         let queue = &self.render_state.queue;
                         loaded.gpu_model.apply_morphs(
                             &loaded.ir,

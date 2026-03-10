@@ -239,6 +239,21 @@ fn run_viewer() -> Result<()> {
         .unwrap_or_else(|| std::path::PathBuf::from("vrm2pmx.log"));
     setup_logging(log::LevelFilter::Debug, Some(&log_path))?;
 
+    // パニック時にログファイルへバックトレースを書き出す
+    {
+        let panic_log = log_path.clone();
+        std::panic::set_hook(Box::new(move |info| {
+            let bt = std::backtrace::Backtrace::force_capture();
+            let msg = format!("[PANIC] {info}\n{bt}");
+            log::error!("{msg}");
+            // log が flush されない場合に備えて直接書き込み
+            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&panic_log) {
+                use std::io::Write;
+                let _ = writeln!(f, "\n{msg}");
+            }
+        }));
+    }
+
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])

@@ -1,6 +1,6 @@
 [package]
 name = "vrm2pmx"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2021"
 license = "0BSD"
 

@@ -250,6 +250,8 @@ pub struct GpuRenderer {
     material_bgl: wgpu::BindGroupLayout,
     /// デフォルト白テクスチャ bind group
     default_tex_bind_group: wgpu::BindGroup,
+    /// 共通テクスチャサンプラー（毎回生成を回避）
+    default_sampler: wgpu::Sampler,
     /// グリッド頂点バッファ
     grid_vbuf: wgpu::Buffer,
     grid_vertex_count: u32,
@@ -275,6 +277,10 @@ pub struct GpuRenderer {
     offscreen: Option<OffscreenTarget>,
     /// 現在の MSAA 有効状態
     current_msaa: bool,
+    /// ボーン頂点生成用作業バッファ（毎フレーム Vec 再割り当て回避）
+    bone_work: Vec<GridVertex>,
+    /// SpringBone頂点生成用作業バッファ
+    spring_work: Vec<GridVertex>,
 }
 
 /// MSAA サンプル数
@@ -383,6 +389,17 @@ impl GpuRenderer {
             1, supports_wireframe,
         );
 
+        // 共通サンプラー（テクスチャ bind group 作成時に使い回す）
+        let default_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("default_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            ..Default::default()
+        });
+
         // Grid vertices
         let (grid_verts, grid_vertex_count) = super::grid::build_grid_vertices();
         let grid_vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -400,6 +417,7 @@ impl GpuRenderer {
             texture_bgl,
             material_bgl,
             default_tex_bind_group,
+            default_sampler,
             bone_buf: None,
             bone_buf_capacity: 0,
             bone_vertex_count: 0,
@@ -416,6 +434,8 @@ impl GpuRenderer {
             grid_vertex_count,
             offscreen: None,
             current_msaa: true,
+            bone_work: Vec::new(),
+            spring_work: Vec::new(),
         }
     }
 
@@ -561,6 +581,11 @@ impl GpuRenderer {
         &self.material_bgl
     }
 
+    /// 共通サンプラーへの参照
+    pub fn sampler(&self) -> &wgpu::Sampler {
+        &self.default_sampler
+    }
+
     /// 法線キャッシュを無効化（モデル変更・法線再計算時に呼ぶ）
     pub fn invalidate_normal_cache(&mut self) {
         self.normal_dirty = true;
@@ -666,9 +691,9 @@ impl GpuRenderer {
             } else {
                 crate::convert::coord::gltf_pos_to_pmx
             };
-            let verts = generate_bone_vertices(ir, pos_fn, params.camera.eye(), params.display.bone_opacity);
-            self.bone_vertex_count = verts.len() as u32;
-            let data = bytemuck::cast_slice(&verts);
+            generate_bone_vertices(&mut self.bone_work, ir, pos_fn, params.camera.eye(), params.display.bone_opacity);
+            self.bone_vertex_count = self.bone_work.len() as u32;
+            let data = bytemuck::cast_slice(&self.bone_work);
             if data.len() > self.bone_buf_capacity {
                 self.bone_buf = Some(device.create_buffer_init(
                     &wgpu::util::BufferInitDescriptor {
@@ -716,9 +741,9 @@ impl GpuRenderer {
             self.spring_vertex_count = 0;
         }
         if params.display.show_spring_bones && (!ir.physics.rigid_bodies.is_empty() || !ir.physics.joints.is_empty()) {
-            let verts = generate_spring_bone_vertices(ir, params.display.spring_bone_opacity, params.display.align_rigid_rotation);
-            self.spring_vertex_count = verts.len() as u32;
-            let data = bytemuck::cast_slice(&verts);
+            generate_spring_bone_vertices(&mut self.spring_work, ir, params.display.spring_bone_opacity, params.display.align_rigid_rotation);
+            self.spring_vertex_count = self.spring_work.len() as u32;
+            let data = bytemuck::cast_slice(&self.spring_work);
             if data.len() > self.spring_buf_capacity {
                 self.spring_buf = Some(device.create_buffer_init(
                     &wgpu::util::BufferInitDescriptor {
@@ -985,17 +1010,8 @@ pub fn create_texture_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
-    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("tex_sampler"),
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::FilterMode::Linear,
-        address_mode_u: wgpu::AddressMode::Repeat,
-        address_mode_v: wgpu::AddressMode::Repeat,
-        ..Default::default()
-    });
-
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("tex_bg"),
         layout,
@@ -1006,7 +1022,7 @@ pub fn create_texture_bind_group(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: wgpu::BindingResource::Sampler(&sampler),
+                resource: wgpu::BindingResource::Sampler(sampler),
             },
         ],
     })
@@ -1039,17 +1055,17 @@ pub fn create_material_bind_group(
 /// - ジョイント: カメラ向き円（12角形）
 /// - 親→子: カメラ向き三角形（底辺＝親、頂点＝子）
 fn generate_bone_vertices(
+    out: &mut Vec<GridVertex>,
     ir: &IrModel,
     pos_fn: fn(Vec3) -> Vec3,
     camera_eye: Vec3,
     opacity: f32,
-) -> Vec<GridVertex> {
+) {
+    out.clear();
     let joint_color = [1.0, 0.85, 0.1, opacity];
     let bone_color = [0.15, 0.85, 0.3, opacity];
     let joint_radius = 0.35_f32;
     let segments = 12u32;
-
-    let mut verts = Vec::new();
 
     for bone in &ir.bones {
         let pos = pos_fn(bone.position);
@@ -1063,9 +1079,9 @@ fn generate_bone_vertices(
             let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
             let p0 = pos + (right * a0.cos() + up * a0.sin()) * joint_radius;
             let p1 = pos + (right * a1.cos() + up * a1.sin()) * joint_radius;
-            verts.push(GridVertex { position: pos.to_array(), color: joint_color });
-            verts.push(GridVertex { position: p0.to_array(), color: joint_color });
-            verts.push(GridVertex { position: p1.to_array(), color: joint_color });
+            out.push(GridVertex { position: pos.to_array(), color: joint_color });
+            out.push(GridVertex { position: p0.to_array(), color: joint_color });
+            out.push(GridVertex { position: p1.to_array(), color: joint_color });
         }
 
         // --- 親→子: 三角形 ---
@@ -1097,17 +1113,15 @@ fn generate_bone_vertices(
             let tip = pos;
 
             // 表面
-            verts.push(GridVertex { position: base_l.to_array(), color: bone_color });
-            verts.push(GridVertex { position: tip.to_array(), color: bone_color });
-            verts.push(GridVertex { position: base_r.to_array(), color: bone_color });
+            out.push(GridVertex { position: base_l.to_array(), color: bone_color });
+            out.push(GridVertex { position: tip.to_array(), color: bone_color });
+            out.push(GridVertex { position: base_r.to_array(), color: bone_color });
             // 裏面（反対からも見えるように）
-            verts.push(GridVertex { position: base_r.to_array(), color: bone_color });
-            verts.push(GridVertex { position: tip.to_array(), color: bone_color });
-            verts.push(GridVertex { position: base_l.to_array(), color: bone_color });
+            out.push(GridVertex { position: base_r.to_array(), color: bone_color });
+            out.push(GridVertex { position: tip.to_array(), color: bone_color });
+            out.push(GridVertex { position: base_l.to_array(), color: bone_color });
         }
     }
-
-    verts
 }
 
 /// カメラ方向からビルボード用の right/up 軸を算出
@@ -1128,20 +1142,20 @@ fn billboard_axes(to_camera: Vec3) -> (Vec3, Vec3) {
 /// - 剛体: ワイヤフレーム風のリング+接続線で形状を表現
 /// - ジョイント: 接続する2剛体間の線
 fn generate_spring_bone_vertices(
+    out: &mut Vec<GridVertex>,
     ir: &IrModel,
     opacity: f32,
     align_rigid_rotation: bool,
-) -> Vec<GridVertex> {
+) {
     use crate::intermediate::types::RigidShape;
 
+    out.clear();
     let collider_color = [0.0, 0.85, 0.9, opacity]; // シアン（group=1: コライダー）
     let spring_color = [0.9, 0.2, 0.85, opacity];   // マゼンタ（group=2: スプリングチェーン）
     let joint_color = [1.0, 0.85, 0.1, opacity * 0.6]; // 黄色（ジョイント接続線）
 
     let segments = 16u32;
     let line_width = 0.15_f32; // 線の太さ（ワイヤフレーム風の三角ストリップ幅）
-
-    let mut verts = Vec::new();
 
     // 剛体の形状を描画
     for rb in &ir.physics.rigid_bodies {
@@ -1159,9 +1173,9 @@ fn generate_spring_bone_vertices(
         match &rb.shape {
             RigidShape::Sphere { radius } => {
                 // 3つの大円リング（XY, XZ, YZ平面）
-                draw_ring(&mut verts, rb.position, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
-                draw_ring(&mut verts, rb.position, quat, *radius, Vec3::Y, Vec3::X, segments, line_width, color);
-                draw_ring(&mut verts, rb.position, quat, *radius, Vec3::Z, Vec3::Y, segments, line_width, color);
+                draw_ring(out, rb.position, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
+                draw_ring(out, rb.position, quat, *radius, Vec3::Y, Vec3::X, segments, line_width, color);
+                draw_ring(out, rb.position, quat, *radius, Vec3::Z, Vec3::Y, segments, line_width, color);
             }
             RigidShape::Capsule { radius, height } => {
                 // カプセル: Y軸がボーン方向
@@ -1172,8 +1186,8 @@ fn generate_spring_bone_vertices(
                 let top_offset = quat * Vec3::new(0.0, half_h, 0.0);
                 let bot_offset = quat * Vec3::new(0.0, -half_h, 0.0);
 
-                draw_ring(&mut verts, rb.position + top_offset, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
-                draw_ring(&mut verts, rb.position + bot_offset, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
+                draw_ring(out, rb.position + top_offset, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
+                draw_ring(out, rb.position + bot_offset, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
 
                 // 4本の接続線（上端→下端）
                 for i in 0..4u32 {
@@ -1181,7 +1195,7 @@ fn generate_spring_bone_vertices(
                     let local_offset = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
                     let top = rb.position + top_offset + quat * local_offset;
                     let bot = rb.position + bot_offset + quat * local_offset;
-                    draw_line_quad(&mut verts, top, bot, line_width * 0.5, color);
+                    draw_line_quad(out, top, bot, line_width * 0.5, color);
                 }
             }
             RigidShape::Box { size } => {
@@ -1203,7 +1217,7 @@ fn generate_spring_bone_vertices(
                 for (a, b) in edges {
                     let pa = rb.position + quat * corners[a];
                     let pb = rb.position + quat * corners[b];
-                    draw_line_quad(&mut verts, pa, pb, line_width * 0.5, color);
+                    draw_line_quad(out, pa, pb, line_width * 0.5, color);
                 }
             }
         }
@@ -1216,11 +1230,9 @@ fn generate_spring_bone_vertices(
         {
             let pos_a = ir.physics.rigid_bodies[joint.rigid_a].position;
             let pos_b = ir.physics.rigid_bodies[joint.rigid_b].position;
-            draw_line_quad(&mut verts, pos_a, pos_b, line_width * 0.4, joint_color);
+            draw_line_quad(out, pos_a, pos_b, line_width * 0.4, joint_color);
         }
     }
-
-    verts
 }
 
 /// ワイヤフレーム風リング（三角形ストリップで薄い帯を描画）
