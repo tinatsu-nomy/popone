@@ -8,7 +8,7 @@ VRM 0.0 / 1.0 および FBX バイナリ形式に対応。
 
 最新リリースの exe（ビューア付き）は以下からダウンロードできます。
 
-- [vrm2pmx_v0.1.9.exe](https://github.com/tinatsu-nomy/vrm2pmx/releases/download/v0.1.9/vrm2pmx_v0.1.9.exe)
+- [vrm2pmx_v0.1.10.exe](https://github.com/tinatsu-nomy/vrm2pmx/releases/download/v0.1.10/vrm2pmx_v0.1.10.exe)
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/vrm2pmx/releases)
 
@@ -489,10 +489,7 @@ println!("ボーン: {}, 頂点: {}", stats.bones, stats.vertices);
 
 ## ライセンス
 
-本プロジェクトは以下のいずれかのライセンスの下で利用できます（選択可能）。
-
-- MIT License ([LICENSE-MIT](LICENSE-MIT))
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+本プロジェクトは [0BSD License](LICENSE) の下で公開されています。帰属表示なしで自由に利用・改変・再配布できます。
 
 ## 注意事項
 
