@@ -199,15 +199,23 @@ pub(crate) fn get_normal(
     normals.get3(idx).unwrap_or([0.0; 3])
 }
 
-pub(crate) fn compute_flat_normals(
+/// ゼロ法線の頂点をフラット法線で補完する
+/// 全頂点がゼロの場合は全て計算し、一部がゼロの場合はその面の法線のみ補完
+pub(crate) fn fill_missing_normals(
     positions: &[[f32; 3]],
     normals: &mut [[f32; 3]],
     indices: &[u32],
 ) {
     use glam::Vec3;
+    let zero = [0.0f32; 3];
     for tri in indices.chunks_exact(3) {
         let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
         if i0 >= positions.len() || i1 >= positions.len() || i2 >= positions.len() {
+            continue;
+        }
+        // この三角形の頂点にゼロ法線があるか
+        let has_zero = normals[i0] == zero || normals[i1] == zero || normals[i2] == zero;
+        if !has_zero {
             continue;
         }
         let v0 = Vec3::from(positions[i0]);
@@ -215,9 +223,9 @@ pub(crate) fn compute_flat_normals(
         let v2 = Vec3::from(positions[i2]);
         let normal = (v1 - v0).cross(v2 - v0).normalize_or_zero();
         let n = normal.to_array();
-        normals[i0] = n;
-        normals[i1] = n;
-        normals[i2] = n;
+        if normals[i0] == zero { normals[i0] = n; }
+        if normals[i1] == zero { normals[i1] = n; }
+        if normals[i2] == zero { normals[i2] = n; }
     }
 }
 

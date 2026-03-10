@@ -197,15 +197,14 @@ pub fn extract_ir_model_from_fbx_with_options(
             }
         }
 
-        // フラットシェーディングフォールバック
-        let needs_normals = vert_normals.iter().all(|n| *n == [0.0; 3]);
-        if needs_normals {
+        // フラットシェーディングフォールバック（ゼロ法線がある面をフラット法線で補完）
+        if vert_normals.iter().any(|n| *n == [0.0f32; 3]) {
             let all_indices: Vec<u32> = mat_triangles
                 .iter()
                 .flatten()
                 .flat_map(|t| t.iter().copied())
                 .collect();
-            mesh::compute_flat_normals(&vert_positions, &mut vert_normals, &all_indices);
+            mesh::fill_missing_normals(&vert_positions, &mut vert_normals, &all_indices);
         }
 
         // スキンウェイト

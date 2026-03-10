@@ -54,9 +54,9 @@ pub fn build_pmx_model_with_options(
         comment_en: String::new(),
     };
 
-    // テクスチャパス（textures/フォルダ相対）
+    // テクスチャパス（textures\フォルダ相対、Windows区切り）
     model.textures = ir.textures.iter()
-        .map(|t| format!("textures/{}", t.filename))
+        .map(|t| format!("textures\\{}", t.filename))
         .collect();
     log::debug!("--- テクスチャ一覧 ---");
     for (i, tex) in ir.textures.iter().enumerate() {

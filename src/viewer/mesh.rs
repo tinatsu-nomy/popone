@@ -32,6 +32,8 @@ pub struct GpuModel {
     pub has_alpha: bool,
     /// ベース頂点（モーフ適用前）
     base_vertices: Vec<Vertex>,
+    /// インデックスバッファの生データ（法線表示フィルタ用）
+    base_indices: Vec<u32>,
     /// IrModel グローバル頂点Index → GPU 頂点Index
     global_to_gpu: Vec<u32>,
     /// VRM 0.0 座標変換を使うか
@@ -62,6 +64,46 @@ impl GpuModel {
     /// バウンディングボックスを取得（キャッシュ済み）
     pub fn bbox(&self) -> (Vec3, Vec3) {
         self.cached_bbox
+    }
+
+    /// ベース頂点を取得（法線表示等に使用）
+    pub fn base_vertices(&self) -> &[Vertex] {
+        &self.base_vertices
+    }
+
+    /// インデックスバッファの生データを取得（法線表示のフィルタ用）
+    pub fn base_indices(&self) -> &[u32] {
+        &self.base_indices
+    }
+
+    /// GPU モデルの法線を IrModel に書き戻す（PMX 変換時に再計算済み法線を反映）
+    /// 座標変換は自己逆（Z反転/X反転を2回で元に戻る）なので同じ関数で逆変換
+    pub fn write_normals_back(&self, ir: &mut IrModel) {
+        let inv_normal_fn: fn(Vec3) -> Vec3 = if self.use_vrm0_coords {
+            gltf_normal_to_pmx_v0
+        } else {
+            gltf_normal_to_pmx
+        };
+
+        let mut mesh_offsets = Vec::with_capacity(ir.meshes.len());
+        let mut offset = 0usize;
+        for mesh in &ir.meshes {
+            mesh_offsets.push(offset);
+            offset += mesh.vertices.len();
+        }
+
+        for (mi, mesh) in ir.meshes.iter_mut().enumerate() {
+            let global_offset = mesh_offsets[mi];
+            for (local_vi, v) in mesh.vertices.iter_mut().enumerate() {
+                let global_vi = global_offset + local_vi;
+                if let Some(&gpu_vi) = self.global_to_gpu.get(global_vi) {
+                    if let Some(gpu_v) = self.base_vertices.get(gpu_vi as usize) {
+                        // GPU法線(PMX座標系) → glTF座標系に逆変換
+                        v.normal = inv_normal_fn(Vec3::from(gpu_v.normal));
+                    }
+                }
+            }
+        }
     }
 
     /// モーフウェイトを適用して頂点バッファを更新
@@ -134,9 +176,10 @@ pub fn build_gpu_model(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     smooth_normals: bool,
+    clear_custom_normals: bool,
 ) -> Result<GpuModel> {
     let gpu_textures = super::texture::upload_textures(ir, images, device, queue)?;
-    build_gpu_model_inner(ir, gpu_textures, device, smooth_normals)
+    build_gpu_model_inner(ir, gpu_textures, device, smooth_normals, clear_custom_normals)
 }
 
 /// IrModel のみから GPU バッファを構築（FBX 用）
@@ -145,9 +188,10 @@ pub fn build_gpu_model_from_ir(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     smooth_normals: bool,
+    clear_custom_normals: bool,
 ) -> Result<GpuModel> {
     let gpu_textures = super::texture::upload_textures_from_ir(ir, device, queue)?;
-    build_gpu_model_inner(ir, gpu_textures, device, smooth_normals)
+    build_gpu_model_inner(ir, gpu_textures, device, smooth_normals, clear_custom_normals)
 }
 
 fn build_gpu_model_inner(
@@ -155,6 +199,7 @@ fn build_gpu_model_inner(
     gpu_textures: Vec<wgpu::TextureView>,
     device: &wgpu::Device,
     smooth_normals: bool,
+    clear_custom_normals: bool,
 ) -> Result<GpuModel> {
     let pos_fn = if ir.source_format.is_vrm0() {
         gltf_pos_to_pmx_v0
@@ -323,6 +368,11 @@ fn build_gpu_model_inner(
         }
     }
 
+    // カスタム法線クリア: ジオメトリから法線を再計算（位置ごとに面法線を加重平均）
+    if clear_custom_normals {
+        recalculate_normals_from_geometry(&mut all_vertices, &all_indices);
+    }
+
     // ベース頂点を保存 + bbox 計算
     let base_vertices = all_vertices.clone();
     let cached_bbox = {
@@ -354,10 +404,80 @@ fn build_gpu_model_inner(
         draws,
         has_alpha,
         base_vertices,
+        base_indices: all_indices,
         global_to_gpu,
         use_vrm0_coords: ir.source_format.is_vrm0(),
         cached_bbox,
     })
+}
+
+/// カスタム法線クリア: ジオメトリから法線を再計算
+/// 同一位置の頂点をグルーピングし、面法線の角度加重平均を割り当てる
+fn recalculate_normals_from_geometry(vertices: &mut [Vertex], indices: &[u32]) {
+    use std::collections::HashMap;
+
+    let num_verts = vertices.len();
+
+    // 位置ごとに頂点インデックスをグルーピング
+    let mut pos_groups: HashMap<[u32; 3], Vec<usize>> = HashMap::new();
+    for (i, v) in vertices.iter().enumerate() {
+        let key = [
+            v.position[0].to_bits(),
+            v.position[1].to_bits(),
+            v.position[2].to_bits(),
+        ];
+        pos_groups.entry(key).or_default().push(i);
+    }
+
+    // 各頂点の法線累積
+    let mut accum = vec![Vec3::ZERO; num_verts];
+
+    // 各三角形の面法線を角度加重で累積
+    for tri in indices.chunks_exact(3) {
+        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+        if i0 >= num_verts || i1 >= num_verts || i2 >= num_verts {
+            continue;
+        }
+        let v0 = Vec3::from(vertices[i0].position);
+        let v1 = Vec3::from(vertices[i1].position);
+        let v2 = Vec3::from(vertices[i2].position);
+        let face_normal = (v1 - v0).cross(v2 - v0);
+        let area = face_normal.length();
+        if area < 1e-10 {
+            continue;
+        }
+        let fn_normalized = face_normal / area;
+
+        // 各頂点の角度を計算して加重
+        let edges = [
+            (i0, v1 - v0, v2 - v0),
+            (i1, v0 - v1, v2 - v1),
+            (i2, v0 - v2, v1 - v2),
+        ];
+        for (vi, e1, e2) in edges {
+            let l1 = e1.length();
+            let l2 = e2.length();
+            if l1 < 1e-10 || l2 < 1e-10 {
+                continue;
+            }
+            let cos_angle = (e1.dot(e2) / (l1 * l2)).clamp(-1.0, 1.0);
+            let angle = cos_angle.acos();
+            accum[vi] += fn_normalized * angle;
+        }
+    }
+
+    // 同一位置の頂点の法線を合算して正規化
+    for group in pos_groups.values() {
+        let mut sum = Vec3::ZERO;
+        for &vi in group {
+            sum += accum[vi];
+        }
+        let n = sum.normalize_or_zero();
+        let n_arr = n.to_array();
+        for &vi in group {
+            vertices[vi].normal = n_arr;
+        }
+    }
 }
 
 /// 頂点統合用キー（位置+UVのビット表現で比較、法線は平均化するため含めない）

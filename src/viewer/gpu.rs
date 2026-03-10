@@ -229,6 +229,7 @@ struct PipelineSet {
     pipeline_alpha_no_cull: wgpu::RenderPipeline,
     pipeline_grid: wgpu::RenderPipeline,
     pipeline_bone: wgpu::RenderPipeline,
+    pipeline_line_overlay: wgpu::RenderPipeline,
 }
 
 pub struct GpuRenderer {
@@ -260,6 +261,16 @@ pub struct GpuRenderer {
     spring_buf: Option<wgpu::Buffer>,
     spring_buf_capacity: usize,
     spring_vertex_count: u32,
+    /// 法線表示頂点バッファ
+    normal_buf: Option<wgpu::Buffer>,
+    normal_buf_capacity: usize,
+    normal_vertex_count: u32,
+    /// 法線キャッシュ無効フラグ（true = 再生成が必要）
+    normal_dirty: bool,
+    /// 法線キャッシュ用: 前回の normal_length
+    normal_cache_length: f32,
+    /// 法線キャッシュ用: 前回の material_visibility
+    normal_cache_visibility: Vec<bool>,
     /// オフスクリーンテクスチャキャッシュ
     offscreen: Option<OffscreenTarget>,
     /// 現在の MSAA 有効状態
@@ -395,6 +406,12 @@ impl GpuRenderer {
             spring_buf: None,
             spring_buf_capacity: 0,
             spring_vertex_count: 0,
+            normal_buf: None,
+            normal_buf_capacity: 0,
+            normal_vertex_count: 0,
+            normal_dirty: true,
+            normal_cache_length: 0.0,
+            normal_cache_visibility: Vec::new(),
             grid_vbuf,
             grid_vertex_count,
             offscreen: None,
@@ -510,7 +527,18 @@ impl GpuRenderer {
             multiview: None, cache: None,
         });
 
-        PipelineSet { pipeline_cull, pipeline_no_cull, pipeline_wireframe, pipeline_alpha_cull, pipeline_alpha_no_cull, pipeline_grid, pipeline_bone }
+        let pipeline_line_overlay = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&format!("line_overlay{suffix}")),
+            layout: Some(grid_pipeline_layout),
+            vertex: wgpu::VertexState { module: grid_shader, entry_point: Some("vs_grid"), buffers: &[GridVertex::layout()], compilation_options: Default::default() },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::LineList, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: Default::default(), bias: Default::default() }),
+            multisample: ms,
+            fragment: Some(wgpu::FragmentState { module: grid_shader, entry_point: Some("fs_grid"), targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba8UnormSrgb, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
+            multiview: None, cache: None,
+        });
+
+        PipelineSet { pipeline_cull, pipeline_no_cull, pipeline_wireframe, pipeline_alpha_cull, pipeline_alpha_no_cull, pipeline_grid, pipeline_bone, pipeline_line_overlay }
     }
 
     /// ワイヤーフレーム対応かどうか
@@ -531,6 +559,11 @@ impl GpuRenderer {
     /// 材質 bind group layout への参照
     pub fn material_bgl(&self) -> &wgpu::BindGroupLayout {
         &self.material_bgl
+    }
+
+    /// 法線キャッシュを無効化（モデル変更・法線再計算時に呼ぶ）
+    pub fn invalidate_normal_cache(&mut self) {
+        self.normal_dirty = true;
     }
 
     /// オフスクリーンテクスチャを確保（サイズ変更または MSAA 切り替え時に再作成）
@@ -648,6 +681,34 @@ impl GpuRenderer {
             } else if let Some(ref buf) = self.bone_buf {
                 queue.write_buffer(buf, 0, data);
             }
+        }
+
+        // 法線表示頂点を更新（入力が変わった時だけ再生成）
+        if params.display.show_normals {
+            let length_changed = (params.display.normal_length - self.normal_cache_length).abs() > 1e-6;
+            let vis_changed = self.normal_cache_visibility.as_slice() != params.material_visibility;
+            if self.normal_dirty || length_changed || vis_changed {
+                let verts = generate_normal_vertices(model, params.display.normal_length, params.material_visibility);
+                self.normal_vertex_count = verts.len() as u32;
+                let data = bytemuck::cast_slice(&verts);
+                if data.len() > self.normal_buf_capacity {
+                    self.normal_buf = Some(device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("normal_vbuf"),
+                            contents: data,
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        },
+                    ));
+                    self.normal_buf_capacity = data.len();
+                } else if let Some(ref buf) = self.normal_buf {
+                    queue.write_buffer(buf, 0, data);
+                }
+                self.normal_dirty = false;
+                self.normal_cache_length = params.display.normal_length;
+                self.normal_cache_visibility = params.material_visibility.to_vec();
+            }
+        } else {
+            self.normal_vertex_count = 0;
         }
 
         // SpringBone頂点を毎フレーム更新
@@ -813,6 +874,16 @@ impl GpuRenderer {
                     pass.set_bind_group(0, &self.camera_bind_group, &[]);
                     pass.set_vertex_buffer(0, bone_buf.slice(..));
                     pass.draw(0..self.bone_vertex_count, 0..1);
+                }
+            }
+
+            // 法線表示（LineList オーバーレイ）
+            if params.display.show_normals && self.normal_vertex_count > 0 {
+                if let Some(ref normal_buf) = self.normal_buf {
+                    pass.set_pipeline(&ps.pipeline_line_overlay);
+                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    pass.set_vertex_buffer(0, normal_buf.slice(..));
+                    pass.draw(0..self.normal_vertex_count, 0..1);
                 }
             }
 
@@ -1194,6 +1265,58 @@ fn draw_ring(
         verts.push(GridVertex { position: p1_outer.to_array(), color });
         verts.push(GridVertex { position: p1_inner.to_array(), color });
     }
+}
+
+/// 法線表示用ジオメトリを生成（LineList: 頂点→先端の2頂点/法線）
+fn generate_normal_vertices(model: &GpuModel, length: f32, material_visibility: &[bool]) -> Vec<GridVertex> {
+    use std::collections::HashSet;
+
+    let color = [0.3, 0.6, 1.0, 0.9]; // 青系
+
+    // 表示中の材質に含まれる頂点を収集
+    let base_verts = model.base_vertices();
+    let indices = model.base_indices();
+    let mut visible = vec![false; base_verts.len()];
+
+    for (draw_idx, draw) in model.draws.iter().enumerate() {
+        if !material_visibility.get(draw_idx).copied().unwrap_or(true) {
+            continue;
+        }
+        let start = draw.index_offset as usize;
+        let end = start + draw.index_count as usize;
+        for &idx in &indices[start..end] {
+            if (idx as usize) < visible.len() {
+                visible[idx as usize] = true;
+            }
+        }
+    }
+
+    // 同一位置・同一法線の重複を除去（位置+法線のビット表現でキー化）
+    let mut seen = HashSet::new();
+    let mut verts = Vec::new();
+    for (i, v) in base_verts.iter().enumerate() {
+        if !visible[i] {
+            continue;
+        }
+        let normal = Vec3::from(v.normal);
+        if normal.length_squared() < 1e-6 {
+            continue;
+        }
+        // 位置と法線をビットキー化（f32 → u32）
+        let key = (
+            v.position[0].to_bits(), v.position[1].to_bits(), v.position[2].to_bits(),
+            v.normal[0].to_bits(), v.normal[1].to_bits(), v.normal[2].to_bits(),
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        let pos = Vec3::from(v.position);
+        let tip = pos + normal.normalize() * length;
+        verts.push(GridVertex { position: pos.to_array(), color });
+        verts.push(GridVertex { position: tip.to_array(), color });
+    }
+
+    verts
 }
 
 /// 2点間のライン（薄いクアッドで描画）

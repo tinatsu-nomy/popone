@@ -14,6 +14,9 @@ use super::gpu::{self, DrawMode, GpuRenderer, LightMode, RenderParams};
 use super::mesh::GpuModel;
 use super::ui;
 
+/// D&D 対応画像拡張子
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tga", "bmp", "psd"];
+
 /// UI 表示用にキャッシュされた材質情報（借用制約回避 + 毎フレーム clone 回避）
 pub struct CachedMaterialInfo {
     /// (draw_index, material_index)
@@ -79,6 +82,12 @@ pub struct DisplaySettings {
     pub msaa: bool,
     /// 法線平滑化（頂点統合 + 法線平均化）
     pub smooth_normals: bool,
+    /// カスタム法線クリア（ジオメトリから法線を再計算）
+    pub clear_custom_normals: bool,
+    /// 法線表示
+    pub show_normals: bool,
+    /// 法線表示の長さ
+    pub normal_length: f32,
 }
 
 impl Default for DisplaySettings {
@@ -97,6 +106,9 @@ impl Default for DisplaySettings {
             align_rigid_rotation: false,
             msaa: true,
             smooth_normals: false,
+            clear_custom_normals: false,
+            show_normals: false,
+            normal_length: 0.5,
         }
     }
 }
@@ -148,6 +160,8 @@ pub struct ViewerApp {
     pub normalize_pose: bool,
     /// ビューポートの高さ（フィット計算用）
     pub last_viewport_height: f32,
+    /// 手動テクスチャ割り当て履歴（材質Index → ファイルパス）
+    pub tex_assignments: HashMap<usize, PathBuf>,
     /// テクスチャD&Dプレビュー
     pub pending_tex_preview: Option<PendingTexPreview>,
     /// ファイル読み込み遅延実行 (path, overlay表示済みフラグ)
@@ -187,6 +201,7 @@ impl ViewerApp {
             confirm_overwrite: false,
             normalize_pose: false,
             last_viewport_height: 720.0,
+            tex_assignments: HashMap::new(),
             pending_tex_preview: None,
             pending_load: None,
             pending_convert: None,
@@ -269,7 +284,7 @@ impl ViewerApp {
 
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
-        let gpu_model = super::mesh::build_gpu_model(&ir, &glb.images, device, queue, self.display.smooth_normals)?;
+        let gpu_model = super::mesh::build_gpu_model(&ir, &glb.images, device, queue, self.display.smooth_normals, self.display.clear_custom_normals)?;
 
         // IrTexture を PNG エンコード済みに変換（convert_ir_to_pmx で統一的に使えるように）
         Self::encode_ir_textures_as_png(&mut ir, &glb.images);
@@ -282,7 +297,7 @@ impl ViewerApp {
         let queue = &self.render_state.queue;
 
         // GPU リソース構築（IrTexture から直接アップロード）
-        let gpu_model = super::mesh::build_gpu_model_from_ir(&ir, device, queue, self.display.smooth_normals)?;
+        let gpu_model = super::mesh::build_gpu_model_from_ir(&ir, device, queue, self.display.smooth_normals, self.display.clear_custom_normals)?;
         self.finish_load_with_gpu(ir, gpu_model, path)
     }
 
@@ -322,6 +337,10 @@ impl ViewerApp {
             stats_cache,
         });
 
+        if let Some(ref mut renderer) = self.renderer {
+            renderer.invalidate_normal_cache();
+        }
+
         Ok(())
     }
 
@@ -331,14 +350,18 @@ impl ViewerApp {
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
         let smooth = self.display.smooth_normals;
+        let clear_normals = self.display.clear_custom_normals;
 
-        match super::mesh::build_gpu_model_from_ir(&loaded.ir, device, queue, smooth) {
+        match super::mesh::build_gpu_model_from_ir(&loaded.ir, device, queue, smooth, clear_normals) {
             Ok(new_model) => {
                 let mat_cache = Self::build_mat_cache(&loaded.ir, &new_model);
                 self.material_visibility = vec![true; new_model.draws.len()];
                 if let Some(loaded) = &mut self.loaded {
                     loaded.gpu_model = new_model;
                     loaded.mat_cache = mat_cache;
+                }
+                if let Some(ref mut renderer) = self.renderer {
+                    renderer.invalidate_normal_cache();
                 }
                 log::info!("GPU モデル再構築完了 (smooth_normals={})", smooth);
             }
@@ -460,6 +483,9 @@ impl ViewerApp {
             path.display()
         );
 
+        // 割り当て履歴を記録（reload_current 時の復元用）
+        self.tex_assignments.insert(material_index, path.to_path_buf());
+
         // 材質キャッシュ更新
         self.update_mat_cache();
     }
@@ -528,6 +554,7 @@ impl ViewerApp {
         let saved_visibility = self.material_visibility.clone();
         let saved_filter = self.material_filter.clone();
         let saved_pmx_path = self.pmx_output_path.clone();
+        let saved_tex_assignments = self.tex_assignments.clone();
 
         self.load_file(path);
 
@@ -542,6 +569,108 @@ impl ViewerApp {
         }
         self.material_filter = saved_filter;
         self.pmx_output_path = saved_pmx_path;
+
+        // テクスチャ割り当てを復元
+        self.tex_assignments = HashMap::new(); // assign 時に再記録されるのでクリア
+        for (mat_idx, tex_path) in &saved_tex_assignments {
+            self.assign_texture_to_material(*mat_idx, tex_path);
+        }
+    }
+
+    /// 1枚のテクスチャをプレビューダイアログで開く
+    fn open_texture_preview(&mut self, path: PathBuf) {
+        let ext = path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let is_psd = ext == "psd";
+        match std::fs::read(&path).and_then(|data|
+            super::texture::upload_texture_from_bytes(
+                &data, is_psd,
+                &self.render_state.device, &self.render_state.queue,
+            ).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        ) {
+            Ok(texture_view) => {
+                let num_mats = self.loaded.as_ref()
+                    .map_or(0, |l| l.ir.materials.len());
+                let preview_tex_id = {
+                    let mut renderer = self.render_state.renderer.write();
+                    Some(renderer.register_native_texture(
+                        &self.render_state.device,
+                        &texture_view,
+                        wgpu::FilterMode::Linear,
+                    ))
+                };
+                self.pending_tex_preview = Some(PendingTexPreview {
+                    path,
+                    selection: vec![false; num_mats],
+                    previewed: vec![false; num_mats],
+                    texture_view,
+                    saved_binds: HashMap::new(),
+                    preview_tex_id,
+                });
+            }
+            Err(e) => {
+                self.convert_message = Some(ConvertResult::Failure(
+                    format!("テクスチャ読み込み失敗: {e}")
+                ));
+            }
+        }
+    }
+
+    /// 複数テクスチャの自動割り当て（ファイル名と材質名のマッチング）
+    fn auto_assign_textures(&mut self, image_files: Vec<PathBuf>) {
+        let Some(ref loaded) = self.loaded else { return };
+        let mat_names: Vec<String> = loaded.ir.materials.iter()
+            .map(|m| m.name.to_lowercase())
+            .collect();
+
+        let mut assigned = 0usize;
+        let mut unmatched: Vec<String> = Vec::new();
+
+        // ファイル名 → マッチする材質インデックスを収集
+        let mut assignments: Vec<(PathBuf, Vec<usize>)> = Vec::new();
+        for path in &image_files {
+            let stem = path.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_lowercase();
+            if stem.is_empty() {
+                continue;
+            }
+            // 材質名にファイル名（拡張子なし）を含む材質を検索
+            let matched: Vec<usize> = mat_names.iter()
+                .enumerate()
+                .filter(|(_, name)| name.contains(&stem) || stem.contains(name.as_str()))
+                .map(|(i, _)| i)
+                .collect();
+            if matched.is_empty() {
+                unmatched.push(path.file_name().unwrap_or_default().to_string_lossy().to_string());
+            } else {
+                assignments.push((path.clone(), matched));
+            }
+        }
+
+        // 割り当て実行
+        for (path, mat_indices) in assignments {
+            for &mat_idx in &mat_indices {
+                self.assign_texture_to_material(mat_idx, &path);
+                assigned += 1;
+            }
+        }
+
+        // 結果メッセージ
+        let mut msg = format!("テクスチャ自動割り当て: {}材質に適用", assigned);
+        if !unmatched.is_empty() {
+            msg += &format!("\nマッチなし: {}", unmatched.join(", "));
+        }
+        if assigned > 0 {
+            self.convert_message = Some(ConvertResult::Success(msg));
+        } else {
+            self.convert_message = Some(ConvertResult::Failure(
+                format!("マッチする材質が見つかりませんでした\nファイル: {}", unmatched.join(", "))
+            ));
+        }
     }
 
     fn open_file_dialog(&mut self) {
@@ -659,14 +788,20 @@ impl ViewerApp {
         });
 
         // 選択した材質の texture_index を更新
+        let path_buf = path.clone();
         for &mat_idx in &selected {
             let mat = &mut loaded.ir.materials[mat_idx];
             mat.texture_index = Some(tex_idx);
             mat.apply_textured_defaults();
             log::info!(
                 "テクスチャ割り当て: 材質[{}] '{}' ← {}",
-                mat_idx, mat.name, path.display()
+                mat_idx, mat.name, path_buf.display()
             );
+        }
+
+        // 割り当て履歴を記録（reload_current 時の復元用）
+        for &mat_idx in &selected {
+            self.tex_assignments.insert(mat_idx, path_buf.clone());
         }
 
         // サムネイル用 egui テクスチャを解放
@@ -736,7 +871,7 @@ impl eframe::App for ViewerApp {
         }
 
         // ドラッグ＆ドロップ処理
-        let (dropped, hover_ext) = ctx.input(|i| {
+        let (dropped_files, hover_ext) = ctx.input(|i| {
             let hover_ext = i.raw.hovered_files.first()
                 .and_then(|f| f.path.as_ref())
                 .and_then(|p| p.extension())
@@ -744,58 +879,45 @@ impl eframe::App for ViewerApp {
                 .map(|e| e.to_lowercase())
                 .unwrap_or_default();
             self.drag_hovering = !i.raw.hovered_files.is_empty();
-            (i.raw.dropped_files.first().and_then(|f| f.path.clone()), hover_ext)
+            let paths: Vec<PathBuf> = i.raw.dropped_files.iter()
+                .filter_map(|f| f.path.clone())
+                .collect();
+            (paths, hover_ext)
         });
-        let is_hover_image = matches!(hover_ext.as_str(), "png" | "jpg" | "jpeg" | "tga" | "bmp" | "psd");
+        let is_hover_image = IMAGE_EXTENSIONS.contains(&hover_ext.as_str());
 
-        if let Some(path) = dropped {
-            let ext = path.extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            let is_image = matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "tga" | "bmp" | "psd");
-            let is_fbx_loaded = self.loaded.as_ref()
-                .map_or(false, |l| l.ir.source_format == crate::intermediate::types::SourceFormat::Fbx);
-
-            if is_image && is_fbx_loaded {
-                // 画像ファイル → テクスチャプレビューダイアログ
-                let is_psd = ext == "psd";
-                match std::fs::read(&path).and_then(|data|
-                    super::texture::upload_texture_from_bytes(
-                        &data, is_psd,
-                        &self.render_state.device, &self.render_state.queue,
-                    ).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-                ) {
-                    Ok(texture_view) => {
-                        let num_mats = self.loaded.as_ref()
-                            .map_or(0, |l| l.ir.materials.len());
-                        // サムネイル用に egui テクスチャとして登録
-                        let preview_tex_id = {
-                            let mut renderer = self.render_state.renderer.write();
-                            Some(renderer.register_native_texture(
-                                &self.render_state.device,
-                                &texture_view,
-                                wgpu::FilterMode::Linear,
-                            ))
-                        };
-                        self.pending_tex_preview = Some(PendingTexPreview {
-                            path,
-                            selection: vec![false; num_mats],
-                            previewed: vec![false; num_mats],
-                            texture_view,
-                            saved_binds: HashMap::new(),
-                            preview_tex_id,
-                        });
-                    }
-                    Err(e) => {
-                        self.convert_message = Some(ConvertResult::Failure(
-                            format!("テクスチャ読み込み失敗: {e}")
-                        ));
-                    }
+        if !dropped_files.is_empty() {
+            // 画像とモデルに分類
+            let mut image_files: Vec<PathBuf> = Vec::new();
+            let mut model_file: Option<PathBuf> = None;
+            for path in dropped_files {
+                let ext = path.extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+                    image_files.push(path);
+                } else {
+                    model_file = Some(path);
                 }
-            } else {
-                // モデルファイル → 読み込み（1フレーム遅延でオーバーレイ表示）
-                self.pending_load = Some((path, false));
+            }
+
+            let has_loaded_model = self.loaded.is_some();
+
+            if let Some(model_path) = model_file {
+                // モデルファイル → 読み込み
+                self.pending_load = Some((model_path, false));
+            }
+
+            if !image_files.is_empty() && has_loaded_model {
+                if image_files.len() == 1 {
+                    // 1枚 → テクスチャプレビューダイアログ（従来動作）
+                    let path = image_files.into_iter().next().unwrap();
+                    self.open_texture_preview(path);
+                } else {
+                    // 複数枚 → 材質名マッチングで自動割り当て
+                    self.auto_assign_textures(image_files);
+                }
             }
         }
 
@@ -840,6 +962,10 @@ impl eframe::App for ViewerApp {
                         DrawMode::Solid => DrawMode::Wireframe,
                         DrawMode::Wireframe => DrawMode::Solid,
                     };
+                }
+                // N: 法線表示切り替え
+                if !i.modifiers.ctrl && i.key_pressed(egui::Key::N) {
+                    self.display.show_normals = !self.display.show_normals;
                 }
                 // L: ライトモード切り替え
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::L) {

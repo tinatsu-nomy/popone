@@ -242,9 +242,21 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     });
                     ui.separator();
                     ui.checkbox(&mut app.display.msaa, "MSAA (アンチエイリアス)");
+                    ui.checkbox(&mut app.display.show_normals, "法線表示 (N)");
+                    if app.display.show_normals {
+                        ui.add(
+                            egui::Slider::new(&mut app.display.normal_length, 0.1..=3.0)
+                                .text("法線長さ"),
+                        );
+                    }
                     let old_smooth = app.display.smooth_normals;
                     ui.checkbox(&mut app.display.smooth_normals, "法線平滑化");
                     if app.display.smooth_normals != old_smooth && app.loaded.is_some() {
+                        needs_rebuild = true;
+                    }
+                    let old_clear = app.display.clear_custom_normals;
+                    ui.checkbox(&mut app.display.clear_custom_normals, "カスタム法線クリア");
+                    if app.display.clear_custom_normals != old_clear && app.loaded.is_some() {
                         needs_rebuild = true;
                     }
                 });
@@ -487,7 +499,7 @@ fn show_overwrite_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
 
 /// PMX変換を実行
 pub fn execute_conversion(app: &mut ViewerApp) {
-    let Some(ref loaded) = app.loaded else { return };
+    if app.loaded.is_none() { return; }
     let output_path = std::path::PathBuf::from(&app.pmx_output_path);
     let log_path = output_path.with_extension("log");
 
@@ -499,6 +511,15 @@ pub fn execute_conversion(app: &mut ViewerApp) {
         .and_then(|p| std::fs::metadata(p).ok())
         .map(|m| m.len())
         .unwrap_or(0);
+
+    // 法線が変更されている場合、IrModel に書き戻してから変換
+    let normals_modified = app.display.smooth_normals || app.display.clear_custom_normals;
+    if normals_modified {
+        if let Some(ref mut loaded) = app.loaded {
+            loaded.gpu_model.write_normals_back(&mut loaded.ir);
+        }
+    }
+    let loaded = app.loaded.as_ref().unwrap();
 
     // VRM/FBX 共通: ビューアの IrModel を直接使用（編集状態を反映）
     let result = crate::convert_ir_to_pmx(&loaded.ir, &output_path, app.display.align_rigid_rotation);
