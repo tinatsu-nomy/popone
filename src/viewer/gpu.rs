@@ -589,6 +589,8 @@ impl GpuRenderer {
     /// 法線キャッシュを無効化（モデル変更・法線再計算時に呼ぶ）
     pub fn invalidate_normal_cache(&mut self) {
         self.normal_dirty = true;
+        self.normal_cache_visibility.clear();
+        self.normal_cache_length = 0.0;
     }
 
     /// オフスクリーンテクスチャを確保（サイズ変更または MSAA 切り替え時に再作成）

@@ -317,7 +317,15 @@ impl ViewerApp {
 
         // テクスチャ割り当て履歴クリア（別モデル読み込み時）
         self.tex_assignments.clear();
-        self.pending_tex_preview = None;
+        // L3: pending_tex_preview の egui TextureId を正しく解放してから破棄
+        if let Some(preview) = self.pending_tex_preview.take() {
+            self.cancel_tex_preview_inner(preview);
+        }
+        // L1: 前モデルの viewport テクスチャIDを解放
+        if let Some(tex_id) = self.viewport_texture_id.take() {
+            let mut renderer = self.render_state.renderer.write();
+            renderer.free_texture(&tex_id);
+        }
 
         // モーフスライダ初期化
         self.morph_weights = vec![0.0; ir.morphs.len()];
