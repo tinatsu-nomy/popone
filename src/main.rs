@@ -232,11 +232,18 @@ fn main() -> Result<()> {
 
 #[cfg(feature = "viewer")]
 fn run_viewer() -> Result<()> {
-    // exe と同じディレクトリに vrm2pmx.log を出力
-    let log_path = std::env::current_exe()
+    // exe と同じディレクトリに logs/ を作成し、タイムスタンプ付きログを出力
+    let logs_dir = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.join("vrm2pmx.log")))
-        .unwrap_or_else(|| std::path::PathBuf::from("vrm2pmx.log"));
+        .and_then(|p| p.parent().map(|d| d.join("logs")))
+        .unwrap_or_else(|| std::path::PathBuf::from("logs"));
+    let _ = std::fs::create_dir_all(&logs_dir);
+
+    // 古いログを削除（5世代保持）
+    rotate_logs(&logs_dir, 5);
+
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let log_path = logs_dir.join(format!("vrm2pmx_{timestamp}.log"));
     setup_logging(log::LevelFilter::Debug, Some(&log_path))?;
 
     // パニック時にログファイルへバックトレースを書き出す
@@ -257,7 +264,7 @@ fn run_viewer() -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
-            .with_title("VRM Viewer")
+            .with_title(format!("Viewer v{}", env!("CARGO_PKG_VERSION")))
             .with_drag_and_drop(true),
         renderer: eframe::Renderer::Wgpu,
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
@@ -283,9 +290,35 @@ fn run_viewer() -> Result<()> {
     };
 
     eframe::run_native(
-        "VRM Viewer",
+        "Viewer",
         options,
-        Box::new(|cc| Ok(Box::new(vrm2pmx::viewer::app::ViewerApp::new(cc)))),
+        Box::new({
+            let logs_dir = logs_dir.clone();
+            let log_path = log_path.clone();
+            move |cc| Ok(Box::new(vrm2pmx::viewer::app::ViewerApp::new(cc, logs_dir, log_path)))
+        }),
     )
     .map_err(|e| anyhow::anyhow!("ビューア起動失敗: {e}"))
+}
+
+/// logs ディレクトリ内の古いログファイルを削除（最新 keep 件を保持）
+#[cfg(feature = "viewer")]
+fn rotate_logs(logs_dir: &std::path::Path, keep: usize) {
+    let mut entries: Vec<_> = std::fs::read_dir(logs_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map_or(false, |n| n.starts_with("vrm2pmx_") && n.ends_with(".log"))
+        })
+        .collect();
+    // ファイル名でソート（タイムスタンプ順）→ 降順
+    entries.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    // keep 件より古いものを削除
+    for entry in entries.into_iter().skip(keep) {
+        let _ = std::fs::remove_file(entry.path());
+    }
 }

@@ -504,9 +504,7 @@ pub fn execute_conversion(app: &mut ViewerApp) {
     let log_path = output_path.with_extension("log");
 
     // 変換前のビューアログファイルサイズを記録
-    let viewer_log_path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("vrm2pmx.log")));
+    let viewer_log_path = Some(app.log_path.clone());
     let log_offset_before = viewer_log_path.as_ref()
         .and_then(|p| std::fs::metadata(p).ok())
         .map(|m| m.len())

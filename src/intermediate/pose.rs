@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use glam::{Mat4, Vec3};
 
-use super::types::{IrBone, IrMesh};
+use super::types::{IrBone, IrMesh, IrMorph, IrMorphKind};
 
 /// Tポーズ→Aスタンス変換（ボーンのみ）
 /// VRM用: メッシュはスキニング経由で global_mats から変形される
@@ -11,19 +11,21 @@ pub fn normalize_pose_to_astance(bones: &mut [IrBone], global_mats: &mut [Mat4])
     apply_bone_corrections(bones, global_mats, &corrections);
 }
 
-/// Tポーズ→Aスタンス変換（ボーン＋メッシュ頂点）
+/// Tポーズ→Aスタンス変換（ボーン＋メッシュ頂点＋モーフオフセット）
 /// FBX用: メッシュ頂点がワールド空間に展開済みなので、スキンウェイトで直接変形する
 pub fn normalize_pose_to_astance_with_meshes(
     bones: &mut [IrBone],
     global_mats: &mut [Mat4],
     meshes: &mut [IrMesh],
+    morphs: &mut [IrMorph],
 ) {
     let corrections = compute_astance_corrections(bones, global_mats);
     if corrections.is_empty() {
         return;
     }
     apply_bone_corrections(bones, global_mats, &corrections);
-    apply_mesh_corrections(bones, meshes, &corrections);
+    let vertex_rot3s = apply_mesh_corrections(bones, meshes, &corrections);
+    apply_morph_corrections(morphs, &vertex_rot3s);
 }
 
 struct AStanceCorrection {
@@ -114,13 +116,14 @@ fn apply_bone_corrections(
 }
 
 /// メッシュ頂点をスキンウェイトに基づいて回転
+/// 戻り値: グローバル頂点インデックスごとの回転行列（モーフオフセット変換用）
 fn apply_mesh_corrections(
     bones: &[IrBone],
     meshes: &mut [IrMesh],
     corrections: &[AStanceCorrection],
-) {
-    // 各補正の影響ボーン集合と回転行列を事前計算
-    let corr_data: Vec<(HashSet<usize>, Mat4)> = corrections
+) -> Vec<glam::Mat3> {
+    // 各補正の影響ボーン集合・位置変換行列・回転行列を事前計算
+    let corr_data: Vec<(HashSet<usize>, Mat4, glam::Mat3)> = corrections
         .iter()
         .map(|corr| {
             let descendants: HashSet<usize> =
@@ -128,19 +131,25 @@ fn apply_mesh_corrections(
             let rot_mat = Mat4::from_translation(corr.pivot)
                 * Mat4::from_quat(corr.rotation)
                 * Mat4::from_translation(-corr.pivot);
-            (descendants, rot_mat)
+            // モーフオフセット（方向ベクトル）用の純粋な回転行列
+            let rot3 = glam::Mat3::from_quat(corr.rotation);
+            (descendants, rot_mat, rot3)
         })
         .collect();
 
+    let total_verts: usize = meshes.iter().map(|m| m.vertices.len()).sum();
+    let mut vertex_rot3s = vec![glam::Mat3::IDENTITY; total_verts];
+    let mut global_offset = 0usize;
+
     for mesh in meshes.iter_mut() {
-        for vert in mesh.vertices.iter_mut() {
+        for (local_vi, vert) in mesh.vertices.iter_mut().enumerate() {
             // この頂点に影響する補正の加重平均を計算
             let mut total_weight = 0.0f32;
             let mut blended_pos = Vec3::ZERO;
             let mut blended_norm = Vec3::ZERO;
             let mut any_correction = false;
 
-            for (affected_bones, rot_mat) in &corr_data {
+            for (affected_bones, rot_mat, rot3) in &corr_data {
                 let mut corr_weight = 0.0f32;
                 for &(bone_idx, w) in &vert.weights {
                     if affected_bones.contains(&bone_idx) {
@@ -150,7 +159,6 @@ fn apply_mesh_corrections(
                 if corr_weight > 0.0 {
                     any_correction = true;
                     let rotated_pos = rot_mat.transform_point3(vert.position);
-                    let rot3 = glam::Mat3::from_mat4(*rot_mat);
                     let rotated_norm = rot3.mul_vec3(vert.normal);
                     blended_pos += rotated_pos * corr_weight;
                     blended_norm += rotated_norm * corr_weight;
@@ -162,6 +170,48 @@ fn apply_mesh_corrections(
                 let remaining = 1.0 - total_weight;
                 vert.position = blended_pos + vert.position * remaining;
                 vert.normal = (blended_norm + vert.normal * remaining).normalize_or_zero();
+
+                // モーフオフセット用: 加重ブレンドされた回転行列を記録
+                // R_blend = Σ(R_i * w_i) + I * (1 - Σw_i)
+                let global_vi = global_offset + local_vi;
+                let mut blended_rot = glam::Mat3::IDENTITY * remaining;
+                for (affected_bones, _rot_mat, rot3) in &corr_data {
+                    let mut corr_weight = 0.0f32;
+                    for &(bone_idx, w) in &vert.weights {
+                        if affected_bones.contains(&bone_idx) {
+                            corr_weight += w;
+                        }
+                    }
+                    if corr_weight > 0.0 {
+                        blended_rot = glam::Mat3::from_cols(
+                            blended_rot.x_axis + rot3.x_axis * corr_weight,
+                            blended_rot.y_axis + rot3.y_axis * corr_weight,
+                            blended_rot.z_axis + rot3.z_axis * corr_weight,
+                        );
+                    }
+                }
+                vertex_rot3s[global_vi] = blended_rot;
+            }
+        }
+        global_offset += mesh.vertices.len();
+    }
+
+    vertex_rot3s
+}
+
+/// モーフオフセットにAスタンス回転を適用
+fn apply_morph_corrections(
+    morphs: &mut [IrMorph],
+    vertex_rot3s: &[glam::Mat3],
+) {
+    for morph in morphs.iter_mut() {
+        if let IrMorphKind::Vertex(ref mut voffs) = morph.kind {
+            for (global_vi, offset) in voffs.iter_mut() {
+                if let Some(rot3) = vertex_rot3s.get(*global_vi) {
+                    if *rot3 != glam::Mat3::IDENTITY {
+                        *offset = rot3.mul_vec3(*offset);
+                    }
+                }
             }
         }
     }

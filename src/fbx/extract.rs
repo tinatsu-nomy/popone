@@ -309,7 +309,7 @@ pub fn extract_ir_model_from_fbx_with_options(
     if normalize_pose {
         let mut global_mats: Vec<Mat4> = ir_bones.iter().map(|b| b.global_mat).collect();
         crate::intermediate::pose::normalize_pose_to_astance_with_meshes(
-            &mut ir_bones, &mut global_mats, &mut ir_meshes,
+            &mut ir_bones, &mut global_mats, &mut ir_meshes, &mut ir_morphs,
         );
     }
 

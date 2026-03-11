@@ -171,10 +171,14 @@ pub struct ViewerApp {
     /// FPS計測用
     last_frame_time: Instant,
     fps_smoothed: f32,
+    /// ログディレクトリパス
+    pub logs_dir: PathBuf,
+    /// 現在のログファイルパス
+    pub log_path: PathBuf,
 }
 
 impl ViewerApp {
-    pub fn new(cc: &eframe::CreationContext) -> Self {
+    pub fn new(cc: &eframe::CreationContext, logs_dir: PathBuf, log_path: PathBuf) -> Self {
         let render_state = cc
             .wgpu_render_state
             .clone()
@@ -207,6 +211,8 @@ impl ViewerApp {
             pending_convert: None,
             last_frame_time: Instant::now(),
             fps_smoothed: 0.0,
+            logs_dir,
+            log_path,
         }
     }
 
@@ -994,6 +1000,10 @@ impl eframe::App for ViewerApp {
                     self.open_file_dialog();
                 }
 
+                if bar.button("ログ").clicked() {
+                    open_directory(&self.logs_dir);
+                }
+
                 if let Some(ref loaded) = self.loaded {
                     bar.separator();
                     bar.label(
@@ -1318,5 +1328,21 @@ impl eframe::App for ViewerApp {
                     }
                 }
             });
+    }
+}
+
+/// ディレクトリをOSのファイルマネージャで開く
+fn open_directory(path: &std::path::Path) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer").arg(path).spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(path).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(path).spawn();
     }
 }
