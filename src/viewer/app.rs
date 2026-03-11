@@ -1115,7 +1115,6 @@ impl eframe::App for ViewerApp {
                     if let Some(ref mut loaded) = self.loaded {
                         let queue = &self.render_state.queue;
                         loaded.gpu_model.apply_morphs(
-                            &loaded.ir,
                             &self.morph_weights,
                             queue,
                         );

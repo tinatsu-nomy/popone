@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use eframe::wgpu;
@@ -12,6 +12,14 @@ use crate::convert::coord::{
 use crate::intermediate::types::{IrModel, IrMorphKind};
 
 use super::gpu::{self, Vertex};
+
+/// GPU空間で重複排除・座標変換済みのモーフデータ
+enum GpuMorphEntry {
+    /// 頂点モーフ: (gpu_vi, 変換済みオフセット)
+    Vertex(Vec<(u32, [f32; 3])>),
+    /// グループモーフ: (サブモーフIndex, ウェイト)
+    Group(Vec<(usize, f32)>),
+}
 
 /// 材質ごとの描画情報
 pub struct DrawCall {
@@ -42,6 +50,8 @@ pub struct GpuModel {
     cached_bbox: (Vec3, Vec3),
     /// モーフ適用用作業バッファ（毎フレーム clone を回避）
     morph_work: Vec<Vertex>,
+    /// GPU空間モーフデータ（重複排除・座標変換済み）
+    gpu_morphs: Vec<GpuMorphEntry>,
 }
 
 impl GpuModel {
@@ -111,62 +121,48 @@ impl GpuModel {
     /// モーフウェイトを適用して頂点バッファを更新
     pub fn apply_morphs(
         &mut self,
-        ir: &IrModel,
         weights: &[f32],
         queue: &wgpu::Queue,
     ) {
-        let pos_fn: fn(Vec3) -> Vec3 = if self.use_vrm0_coords {
-            gltf_pos_to_pmx_v0
-        } else {
-            gltf_pos_to_pmx
-        };
-
         // 作業バッファにベース頂点をコピー（Vec の再割り当てを回避）
         self.morph_work.clear();
         self.morph_work.extend_from_slice(&self.base_vertices);
 
-        for (morph_idx, _morph) in ir.morphs.iter().enumerate() {
+        for morph_idx in 0..self.gpu_morphs.len() {
             let w = weights.get(morph_idx).copied().unwrap_or(0.0);
             if w.abs() < 1e-6 {
                 continue;
             }
-            Self::apply_single_morph_to(&self.global_to_gpu, ir, morph_idx, w, pos_fn, &mut self.morph_work);
+            Self::apply_gpu_morph_to(&self.gpu_morphs, morph_idx, w, &mut self.morph_work);
         }
 
         queue.write_buffer(&self.vertex_buf, 0, bytemuck::cast_slice(&self.morph_work));
     }
 
-    fn apply_single_morph_to(
-        global_to_gpu: &[u32],
-        ir: &IrModel,
+    fn apply_gpu_morph_to(
+        gpu_morphs: &[GpuMorphEntry],
         morph_idx: usize,
         weight: f32,
-        pos_fn: fn(Vec3) -> Vec3,
         vertices: &mut [Vertex],
     ) {
-        match &ir.morphs[morph_idx].kind {
-            IrMorphKind::Vertex(voffs) => {
-                for &(global_vi, offset) in voffs {
-                    if let Some(&gpu_vi) = global_to_gpu.get(global_vi) {
-                        let gpu_vi = gpu_vi as usize;
-                        if gpu_vi < vertices.len() {
-                            let transformed = pos_fn(offset);
-                            vertices[gpu_vi].position[0] += transformed.x * weight;
-                            vertices[gpu_vi].position[1] += transformed.y * weight;
-                            vertices[gpu_vi].position[2] += transformed.z * weight;
-                        }
+        match &gpu_morphs[morph_idx] {
+            GpuMorphEntry::Vertex(voffs) => {
+                for &(gpu_vi, offset) in voffs {
+                    let vi = gpu_vi as usize;
+                    if vi < vertices.len() {
+                        vertices[vi].position[0] += offset[0] * weight;
+                        vertices[vi].position[1] += offset[1] * weight;
+                        vertices[vi].position[2] += offset[2] * weight;
                     }
                 }
             }
-            IrMorphKind::Group(goffs) => {
+            GpuMorphEntry::Group(goffs) => {
                 for &(sub_idx, sub_weight) in goffs {
                     let effective = weight * sub_weight;
-                    if effective.abs() < 1e-6 || sub_idx >= ir.morphs.len() {
+                    if effective.abs() < 1e-6 || sub_idx >= gpu_morphs.len() {
                         continue;
                     }
-                    Self::apply_single_morph_to(
-                        global_to_gpu, ir, sub_idx, effective, pos_fn, vertices,
-                    );
+                    Self::apply_gpu_morph_to(gpu_morphs, sub_idx, effective, vertices);
                 }
             }
         }
@@ -386,6 +382,28 @@ fn build_gpu_model_inner(
         recalculate_normals_from_geometry(&mut all_vertices, &all_indices);
     }
 
+    // GPU空間モーフデータを事前計算（重複排除 + 座標変換済み）
+    let gpu_morphs: Vec<GpuMorphEntry> = ir.morphs.iter().map(|morph| {
+        match &morph.kind {
+            IrMorphKind::Vertex(voffs) => {
+                let mut seen = HashSet::with_capacity(voffs.len());
+                let mut deduped = Vec::with_capacity(voffs.len());
+                for &(global_vi, offset) in voffs {
+                    if let Some(&gpu_vi) = global_to_gpu.get(global_vi) {
+                        if seen.insert(gpu_vi) {
+                            let t = pos_fn(offset);
+                            deduped.push((gpu_vi, t.to_array()));
+                        }
+                    }
+                }
+                GpuMorphEntry::Vertex(deduped)
+            }
+            IrMorphKind::Group(goffs) => {
+                GpuMorphEntry::Group(goffs.clone())
+            }
+        }
+    }).collect();
+
     // ベース頂点を保存 + bbox 計算
     let base_vertices = all_vertices.clone();
     let cached_bbox = {
@@ -423,6 +441,7 @@ fn build_gpu_model_inner(
         use_vrm0_coords: ir.source_format.is_vrm0(),
         cached_bbox,
         morph_work,
+        gpu_morphs,
     })
 }
 
