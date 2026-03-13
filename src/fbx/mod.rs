@@ -7,3 +7,4 @@ pub mod texture;
 pub mod humanoid;
 pub(crate) mod mesh;
 pub mod extract;
+pub mod animation;

@@ -222,8 +222,15 @@ fn detect_rig_type(bone_names: &[(usize, &str)]) -> RigType {
         return RigType::Unreal;
     }
 
-    // Blender 汎用: "Hips" + "Head" が存在（スペース/アンダースコア/ドット区切り）
+    // プレフィックスなし Mixamo: "Hips" + "Spine1" + "LeftArm" が存在
     let has_hips = names.iter().any(|n| n == "hips");
+    let has_spine1 = names.iter().any(|n| n == "spine1");
+    let has_leftarm = names.iter().any(|n| n == "leftarm");
+    if has_hips && has_spine1 && has_leftarm {
+        return RigType::Mixamo;
+    }
+
+    // Blender 汎用: "Hips" + "Head" が存在（スペース/アンダースコア/ドット区切り）
     let has_head = names.iter().any(|n| n == "head");
     if has_hips && has_head {
         return RigType::Blender;

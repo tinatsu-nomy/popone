@@ -5,7 +5,7 @@ use eframe::wgpu;
 use glam::{Mat4, Quat, Vec3};
 
 use crate::convert::coord::PMX_SCALE;
-use crate::intermediate::animation::VrmaAnimation;
+use crate::intermediate::animation::{BoneMatchMode, VrmaAnimation};
 use crate::intermediate::types::IrModel;
 
 use super::gpu::Vertex;
@@ -82,7 +82,7 @@ pub struct AnimationState {
 impl AnimationState {
     /// IrModel と GpuModel からアニメーション再生状態を構築
     pub fn new(animation: Arc<VrmaAnimation>, ir: &IrModel, gpu_model: &GpuModel) -> Self {
-        let skin = build_skinning_data(ir, gpu_model);
+        let skin = build_skinning_data(ir, gpu_model, &animation);
         Self {
             animation,
             playing: true,
@@ -302,72 +302,107 @@ impl AnimationState {
         let mut local_trans = self.skin.rest_local_translations[bone_idx];
 
         if let Some(bone_name) = self.skin.bone_idx_to_name.get(&bone_idx) {
-            // 回転（リターゲティング公式適用）
+            let is_humanoid = matches!(self.animation.match_mode, BoneMatchMode::Humanoid);
+
+            // 回転
             if let Some(anim_rot) = self.animation.sample_bone_rotation(bone_name, self.current_time) {
                 animated = true;
-                if let Some(vrma_rest) = self.animation.bone_rests.get(bone_name.as_str()) {
-                    // VRMA仕様リターゲティング:
-                    // NormalizedLocalRotation = W_vrma * inv(L_vrma) * anim_rot * inv(W_vrma)
-                    // model_local = L_model * inv(W_model) * Normalized * W_model
-                    let w_vrma = vrma_rest.global_rotation;
-                    let l_vrma = vrma_rest.local_rotation;
-                    let l_model = self.skin.rest_local_rotations[bone_idx];
-                    let w_model = self.skin.rest_global_rotations[bone_idx];
+                if is_humanoid {
+                    // VRMA: リターゲティング公式適用
+                    if let Some(vrma_rest) = self.animation.bone_rests.get(bone_name.as_str()) {
+                        let w_vrma = vrma_rest.global_rotation;
+                        let l_vrma = vrma_rest.local_rotation;
+                        let l_model = self.skin.rest_local_rotations[bone_idx];
+                        let w_model = self.skin.rest_global_rotations[bone_idx];
 
-                    let mut normalized = w_vrma * l_vrma.inverse() * anim_rot * w_vrma.inverse();
+                        let mut normalized = w_vrma * l_vrma.inverse() * anim_rot * w_vrma.inverse();
 
-                    // VRM 0.0: 正規化回転（ワールド空間デルタ）をY軸180°共役で変換
-                    // VRM 0.0 は +Z 向き、VRMA/VRM 1.0 は -Z 向き（Y=180°差）
-                    // 共役: (x,y,z,w) → (-x,y,-z,w)
-                    if self.skin.is_vrm0 {
-                        normalized = Quat::from_xyzw(
-                            -normalized.x, normalized.y, -normalized.z, normalized.w,
-                        );
-                    }
+                        if self.skin.is_vrm0 {
+                            normalized = Quat::from_xyzw(
+                                -normalized.x, normalized.y, -normalized.z, normalized.w,
+                            );
+                        }
 
-                    local_rot = l_model * w_model.inverse() * normalized * w_model;
-                } else {
-                    // レスト回転データなし → VRM 0.0 ではY軸180°共役を適用
-                    local_rot = if self.skin.is_vrm0 {
-                        Quat::from_xyzw(-anim_rot.x, anim_rot.y, -anim_rot.z, anim_rot.w)
+                        local_rot = l_model * w_model.inverse() * normalized * w_model;
                     } else {
-                        anim_rot
-                    };
+                        local_rot = if self.skin.is_vrm0 {
+                            Quat::from_xyzw(-anim_rot.x, anim_rot.y, -anim_rot.z, anim_rot.w)
+                        } else {
+                            anim_rot
+                        };
+                    }
+                } else {
+                    // NodeName: グローバル空間リターゲティング
+                    if let Some(src_rest) = self.animation.bone_rests.get(bone_name.as_str()) {
+                        let w_src = src_rest.global_rotation;
+                        let l_src = src_rest.local_rotation;
+                        let l_model = self.skin.rest_local_rotations[bone_idx];
+                        let w_model = self.skin.rest_global_rotations[bone_idx];
+
+                        // ソースレストからのローカルデルタ → グローバル空間に変換（共役）
+                        let local_delta = l_src.inverse() * anim_rot;
+                        let mut normalized = w_src * local_delta * w_src.inverse();
+
+                        // ソースが+Z向き（VRMは-Z向き）の場合、Y軸180°補正
+                        // normalized の X,Z 成分を反転（= Y軸180°共役）
+                        if self.animation.facing_flip_y {
+                            normalized = Quat::from_xyzw(
+                                -normalized.x, normalized.y, -normalized.z, normalized.w,
+                            );
+                        }
+
+                        // ターゲットモデルのローカル空間に変換
+                        local_rot = l_model * w_model.inverse() * normalized * w_model;
+                    } else {
+                        local_rot = anim_rot;
+                    }
                 }
             }
-            // 平行移動（Hipsのみ）: VRMAレスト位置からのデルタをモデルに適用
+            // 平行移動
             if let Some(raw_trans) = self.animation.sample_bone_translation(bone_name, self.current_time) {
                 animated = true;
-                if let Some(vrma_rest) = self.animation.bone_rests.get(bone_name.as_str()) {
-                    // 1. VRMAローカル空間でのデルタ
-                    let delta_local = raw_trans - vrma_rest.local_translation;
-                    // 2. ワールド空間に変換（親回転を適用）
-                    let vrma_parent_rot = vrma_rest.global_rotation * vrma_rest.local_rotation.inverse();
-                    let mut delta_world = vrma_parent_rot * delta_local;
-                    // VRM 0.0: ワールド空間デルタをY軸180°変換
-                    if self.skin.is_vrm0 {
-                        delta_world = Vec3::new(-delta_world.x, delta_world.y, -delta_world.z);
-                    }
-                    // 3. モデルとVRMAのHips高さ比でワールド空間デルタをスケーリング
-                    let model_h = self.skin.rest_global_mats[bone_idx]
-                        .transform_point3(Vec3::ZERO).y;
-                    let vrma_h = (vrma_parent_rot * vrma_rest.local_translation).y;
-                    if vrma_h.abs() > 0.01 {
-                        delta_world *= model_h / vrma_h;
-                    }
-                    // 4. ワールド空間デルタをモデルのローカル空間に変換
-                    let model_parent_rot = self.skin.rest_global_rotations[bone_idx]
-                        * self.skin.rest_local_rotations[bone_idx].inverse();
-                    let delta_model_local = model_parent_rot.inverse() * delta_world;
-                    // 5. モデルのレスト位置にデルタを加算
-                    local_trans = self.skin.rest_local_translations[bone_idx] + delta_model_local;
-                } else {
-                    // レストデータなし → そのまま適用
-                    local_trans = if self.skin.is_vrm0 {
-                        Vec3::new(-raw_trans.x, raw_trans.y, -raw_trans.z)
+                if is_humanoid {
+                    // VRMA: レスト位置からのデルタをワールド空間経由でモデルに適用
+                    if let Some(vrma_rest) = self.animation.bone_rests.get(bone_name.as_str()) {
+                        let delta_local = raw_trans - vrma_rest.local_translation;
+                        let vrma_parent_rot = vrma_rest.global_rotation * vrma_rest.local_rotation.inverse();
+                        let mut delta_world = vrma_parent_rot * delta_local;
+                        if self.skin.is_vrm0 {
+                            delta_world = Vec3::new(-delta_world.x, delta_world.y, -delta_world.z);
+                        }
+                        let model_h = self.skin.rest_global_mats[bone_idx]
+                            .transform_point3(Vec3::ZERO).y;
+                        let vrma_h = (vrma_parent_rot * vrma_rest.local_translation).y;
+                        if vrma_h.abs() > 0.01 {
+                            delta_world *= model_h / vrma_h;
+                        }
+                        let model_parent_rot = self.skin.rest_global_rotations[bone_idx]
+                            * self.skin.rest_local_rotations[bone_idx].inverse();
+                        let delta_model_local = model_parent_rot.inverse() * delta_world;
+                        local_trans = self.skin.rest_local_translations[bone_idx] + delta_model_local;
                     } else {
-                        raw_trans
-                    };
+                        local_trans = if self.skin.is_vrm0 {
+                            Vec3::new(-raw_trans.x, raw_trans.y, -raw_trans.z)
+                        } else {
+                            raw_trans
+                        };
+                    }
+                } else {
+                    // NodeName: ソースレストからのデルタをスケーリングして適用
+                    if let Some(src_rest) = self.animation.bone_rests.get(bone_name.as_str()) {
+                        let mut delta = raw_trans - src_rest.local_translation;
+                        // ソースが+Z向きの場合、平行移動デルタのX,Zを反転（Y180補正）
+                        if self.animation.facing_flip_y {
+                            delta = Vec3::new(-delta.x, delta.y, -delta.z);
+                        }
+                        let src_len = src_rest.local_translation.length();
+                        let model_len = self.skin.rest_local_translations[bone_idx].length();
+                        if src_len > 1e-6 && model_len > 1e-6 {
+                            let scale = model_len / src_len;
+                            local_trans = self.skin.rest_local_translations[bone_idx] + delta * scale;
+                        }
+                        // src_len が 0 に近い場合（ルートなど）はデルタをそのまま適用しない
+                    }
                 }
             }
         }
@@ -393,7 +428,7 @@ impl AnimationState {
 }
 
 /// IrModel と GpuModel からスキニングデータを構築
-fn build_skinning_data(ir: &IrModel, gpu_model: &GpuModel) -> SkinningData {
+fn build_skinning_data(ir: &IrModel, gpu_model: &GpuModel, animation: &VrmaAnimation) -> SkinningData {
     let g2g = gpu_model.global_to_gpu_map();
     let gpu_vert_count = gpu_model.base_vertices().len();
 
@@ -449,20 +484,72 @@ fn build_skinning_data(ir: &IrModel, gpu_model: &GpuModel) -> SkinningData {
         rest_global_rotations[i] = global_rot;
     }
 
-    // ヒューマノイドボーン名 → ボーンインデックスのマッピング
+    // ボーン名 → ボーンインデックスのマッピング（マッチモードに依存）
     let mut bone_name_to_idx: HashMap<String, usize> = HashMap::new();
-    for (i, bone) in ir.bones.iter().enumerate() {
-        if let Some(ref vrm_name) = bone.vrm_bone_name {
-            bone_name_to_idx.insert(vrm_name.clone(), i);
+    match animation.match_mode {
+        BoneMatchMode::Humanoid => {
+            // VRMA: ヒューマノイドボーン名でマッチ
+            for (i, bone) in ir.bones.iter().enumerate() {
+                if let Some(ref vrm_name) = bone.vrm_bone_name {
+                    bone_name_to_idx.insert(vrm_name.clone(), i);
+                }
+            }
+        }
+        BoneMatchMode::NodeName => {
+            // GLB/glTF/FBX: ノード名で直接マッチ
+            // アニメーション内のチャネル名と IrBone の name/name_en を照合
+            let anim_bone_names: std::collections::HashSet<&str> = animation.bone_channels
+                .keys().map(|s| s.as_str()).collect();
+
+            for (i, bone) in ir.bones.iter().enumerate() {
+                // 完全一致（name_en → name の優先順）
+                if anim_bone_names.contains(bone.name_en.as_str()) {
+                    bone_name_to_idx.insert(bone.name_en.clone(), i);
+                } else if anim_bone_names.contains(bone.name.as_str()) {
+                    bone_name_to_idx.insert(bone.name.clone(), i);
+                }
+            }
+
+            // マッチしなかったチャネルをファジーマッチ（サフィックス一致）
+            let matched_names: std::collections::HashSet<String> = bone_name_to_idx
+                .keys().cloned().collect();
+            for anim_name in &anim_bone_names {
+                if matched_names.contains(*anim_name) {
+                    continue;
+                }
+                // "Armature_Hips" → "Hips" のようなサフィックスマッチ
+                for (i, bone) in ir.bones.iter().enumerate() {
+                    if bone_name_to_idx.values().any(|&idx| idx == i) {
+                        continue;
+                    }
+                    let matches = anim_name.ends_with(&bone.name_en)
+                        || anim_name.ends_with(&bone.name)
+                        || bone.name_en.ends_with(anim_name)
+                        || bone.name.ends_with(anim_name);
+                    if matches {
+                        bone_name_to_idx.insert(anim_name.to_string(), i);
+                        break;
+                    }
+                }
+            }
+
+            log::info!(
+                "ボーンマッチング: {}/{}ch マッチ",
+                bone_name_to_idx.len(),
+                animation.bone_channels.len(),
+            );
         }
     }
 
     // 表情名 → モーフインデックスのマッピング
     let mut expr_name_to_morph: HashMap<String, usize> = HashMap::new();
     for (i, morph) in ir.morphs.iter().enumerate() {
-        // IrMorph.name_en がVRM表情名（英語名）
+        // VRM表情名（英語名）とモーフ名の両方で照合
         if !morph.name_en.is_empty() {
             expr_name_to_morph.insert(morph.name_en.clone(), i);
+        }
+        if !morph.name.is_empty() && !expr_name_to_morph.contains_key(&morph.name) {
+            expr_name_to_morph.insert(morph.name.clone(), i);
         }
     }
 

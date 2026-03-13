@@ -370,10 +370,29 @@ impl ViewerApp {
             self.pending_tex_match = None;
         }
 
-        // VRMA はモデル読み込みではなくアニメーション読み込み
+        // アニメーションファイルの判定
         if ext == "vrma" {
             self.try_load_vrma(&path);
             return;
+        }
+        // GLB/glTF: モデルが読み込み済みの場合、アニメーションとして開くか確認
+        if (ext == "glb" || ext == "gltf") && self.loaded.is_some() {
+            // アニメーションが含まれるか先に確認
+            if let Ok(anims) = vrm::animation::load_gltf_animation(&path) {
+                if !anims.is_empty() {
+                    self.try_load_gltf_animation(&path);
+                    return;
+                }
+            }
+        }
+        // FBX: モデルが読み込み済みの場合、アニメーションとして開くか確認
+        if ext == "fbx" && self.loaded.is_some() {
+            if let Ok(anims) = crate::fbx::animation::load_fbx_animation(&path) {
+                if !anims.is_empty() {
+                    self.try_load_fbx_animation(&path);
+                    return;
+                }
+            }
         }
 
         let result = match ext.as_str() {
@@ -390,6 +409,11 @@ impl ViewerApp {
                 self.anim_state = None;
                 self.vrma_library.clear();
                 self.active_vrma_index = None;
+
+                // FBXモデル読み込み後、同じファイルにアニメーションがあれば自動適用
+                if ext == "fbx" {
+                    self.try_load_fbx_animation(&path);
+                }
             }
             Err(e) => {
                 log::error!("読み込み失敗: {e}");
@@ -512,6 +536,94 @@ impl ViewerApp {
                 log::error!("VRMA読み込み失敗: {e}");
                 self.convert_message = Some(ConvertMessage::failure(
                     format!("VRMA読み込み失敗: {e}"),
+                ));
+            }
+        }
+    }
+
+    /// FBXファイルからアニメーションを読み込む
+    pub fn try_load_fbx_animation(&mut self, path: &std::path::Path) {
+        if self.loaded.is_none() {
+            self.convert_message = Some(ConvertMessage::failure(
+                "アニメーションを読み込むには先にモデルを読み込んでください".to_string(),
+            ));
+            return;
+        }
+
+        match crate::fbx::animation::load_fbx_animation(path) {
+            Ok(anims) => {
+                let loaded = self.loaded.as_ref().unwrap();
+                let path_buf = path.to_path_buf();
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+
+                for anim in anims {
+                    let display_name = if anim.name == "animation" {
+                        file_name.clone()
+                    } else {
+                        format!("{} ({})", file_name, anim.name)
+                    };
+                    let anim = Arc::new(anim);
+                    let state = AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
+
+                    // ライブラリに追加
+                    self.vrma_library.push((display_name.clone(), path_buf.clone(), anim));
+                    self.active_vrma_index = Some(self.vrma_library.len() - 1);
+                    self.anim_state = Some(state);
+                }
+
+                log::info!("FBXアニメーション読み込み成功: {}", path.display());
+                self.convert_message = Some(ConvertMessage::success(
+                    format!("FBXアニメーション読み込み成功: {}", file_name),
+                ));
+            }
+            Err(e) => {
+                log::error!("FBXアニメーション読み込み失敗: {e}");
+                self.convert_message = Some(ConvertMessage::failure(
+                    format!("FBXアニメーション読み込み失敗: {e}"),
+                ));
+            }
+        }
+    }
+
+    /// GLB/glTFファイルからアニメーションを読み込む
+    pub fn try_load_gltf_animation(&mut self, path: &std::path::Path) {
+        if self.loaded.is_none() {
+            self.convert_message = Some(ConvertMessage::failure(
+                "アニメーションを読み込むには先にモデルを読み込んでください".to_string(),
+            ));
+            return;
+        }
+
+        match vrm::animation::load_gltf_animation(path) {
+            Ok(anims) => {
+                let loaded = self.loaded.as_ref().unwrap();
+                let path_buf = path.to_path_buf();
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+
+                for anim in anims {
+                    let display_name = if anim.name == "animation" {
+                        file_name.clone()
+                    } else {
+                        format!("{} ({})", file_name, anim.name)
+                    };
+                    let anim = Arc::new(anim);
+                    let state = AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
+
+                    // ライブラリに追加
+                    self.vrma_library.push((display_name.clone(), path_buf.clone(), anim));
+                    self.active_vrma_index = Some(self.vrma_library.len() - 1);
+                    self.anim_state = Some(state);
+                }
+
+                log::info!("glTFアニメーション読み込み成功: {}", path.display());
+                self.convert_message = Some(ConvertMessage::success(
+                    format!("アニメーション読み込み成功: {}", file_name),
+                ));
+            }
+            Err(e) => {
+                log::error!("glTFアニメーション読み込み失敗: {e}");
+                self.convert_message = Some(ConvertMessage::failure(
+                    format!("アニメーション読み込み失敗: {e}"),
                 ));
             }
         }

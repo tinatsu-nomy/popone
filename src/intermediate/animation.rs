@@ -58,19 +58,32 @@ pub struct VrmaBoneRest {
     pub local_translation: Vec3,
 }
 
-/// VRMAアニメーションデータ
+/// ボーンマッチングモード
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoneMatchMode {
+    /// VRMA: ヒューマノイドボーン名でマッチ（リターゲティングあり）
+    Humanoid,
+    /// GLB/glTF/FBX: ノード名で直接マッチ（リターゲティングなし）
+    NodeName,
+}
+
+/// アニメーションデータ（VRMA / GLB / glTF / FBX 共通）
 #[derive(Debug, Clone)]
 pub struct VrmaAnimation {
     /// アニメーション名
     pub name: String,
     /// 総再生時間（秒）
     pub duration: f32,
-    /// ヒューマノイドボーン名 → ボーンチャネル
+    /// ボーン名 → ボーンチャネル（キーはマッチモードに依存）
     pub bone_channels: HashMap<String, BoneChannel>,
     /// 表情名 → 表情チャネル
     pub expression_channels: HashMap<String, ExpressionChannel>,
-    /// VRMAボーンのレスト回転（リターゲティング用）
+    /// VRMAボーンのレスト回転（リターゲティング用、Humanoidモードのみ使用）
     pub bone_rests: HashMap<String, VrmaBoneRest>,
+    /// ボーンマッチングモード
+    pub match_mode: BoneMatchMode,
+    /// ソースモデルがY軸180°反転しているか（+Z向き vs VRMの-Z向き）
+    pub facing_flip_y: bool,
 }
 
 impl VrmaAnimation {

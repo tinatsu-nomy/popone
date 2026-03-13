@@ -59,6 +59,13 @@ impl FbxProperty {
         }
     }
 
+    pub fn as_i64_array(&self) -> Option<&[i64]> {
+        match self {
+            FbxProperty::I64Array(v) => Some(v),
+            _ => None,
+        }
+    }
+
     pub fn as_f32_array(&self) -> Option<&[f32]> {
         match self {
             FbxProperty::F32Array(v) => Some(v),

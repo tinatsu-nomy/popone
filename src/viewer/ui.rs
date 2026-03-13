@@ -1324,16 +1324,25 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
             app.morph_dirty = true;
         }
     } else {
-        ui.label("VRMAファイルをドロップして読み込み");
+        ui.label("アニメーションファイルをドロップして読み込み");
         if app.loaded.is_some() {
-            if ui.small_button("VRMAを開く...").clicked() {
+            if ui.small_button("アニメーションを開く...").clicked() {
                 let paths = rfd::FileDialog::new()
-                    .set_title("VRMAアニメーションを開く（複数選択可）")
+                    .set_title("アニメーションを開く（複数選択可）")
+                    .add_filter("アニメーション", &["vrma", "glb", "gltf", "fbx"])
                     .add_filter("VRMA (.vrma)", &["vrma"])
+                    .add_filter("GLB (.glb)", &["glb"])
+                    .add_filter("glTF (.gltf)", &["gltf"])
+                    .add_filter("FBX (.fbx)", &["fbx"])
                     .pick_files()
                     .unwrap_or_default();
                 for path in &paths {
-                    app.try_load_vrma(path);
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    match ext.to_lowercase().as_str() {
+                        "glb" | "gltf" => app.try_load_gltf_animation(path),
+                        "fbx" => app.try_load_fbx_animation(path),
+                        _ => app.try_load_vrma(path),
+                    }
                 }
             }
         }
@@ -1354,14 +1363,21 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
     }
 
     if app.loaded.is_some() && app.anim_state.is_some() {
-        if ui.small_button("VRMAを追加...").clicked() {
+        if ui.small_button("アニメーションを追加...").clicked() {
             let paths = rfd::FileDialog::new()
-                .set_title("VRMAアニメーションを追加（複数選択可）")
+                .set_title("アニメーションを追加（複数選択可）")
+                .add_filter("アニメーション", &["vrma", "glb", "gltf"])
                 .add_filter("VRMA (.vrma)", &["vrma"])
+                .add_filter("GLB (.glb)", &["glb"])
+                .add_filter("glTF (.gltf)", &["gltf"])
                 .pick_files()
                 .unwrap_or_default();
             for path in &paths {
-                app.try_load_vrma(path);
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                match ext.to_lowercase().as_str() {
+                    "glb" | "gltf" => app.try_load_gltf_animation(path),
+                    _ => app.try_load_vrma(path),
+                }
             }
         }
     }
