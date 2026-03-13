@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::fbx::humanoid::detect_humanoid;
 use crate::intermediate::animation::*;
 
 /// VRMAファイルを読み込みアニメーションデータを返す
@@ -240,15 +241,6 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                 }
             }
 
-            log::info!(
-                "glTFアニメーション読み込み: '{}' ボーン{}ch, 表情{}ch, レスト{}件, {:.2}秒",
-                anim_name,
-                bone_channels.len(),
-                expression_channels.len(),
-                bone_rests.len(),
-                duration,
-            );
-
             // ソースモデルの向きを検出:
             // "Left"を含むボーンのグローバルX位置で判定（+X=Left なら +Z向き = VRMと逆）
             let facing_flip_y = {
@@ -269,13 +261,56 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                 count > 0 && left_x_sum / count as f32 > 0.01
             };
 
+            // ボーン名からヒューマノイドマッピングを試行
+            let glb_names: Vec<(usize, &str)> = bone_channels.keys()
+                .enumerate()
+                .map(|(i, name)| (i, name.as_str()))
+                .collect();
+            let humanoid = detect_humanoid(&glb_names);
+
+            let (final_channels, final_rests, match_mode) = if humanoid.mapping.len() >= 5 {
+                let name_list: Vec<String> = bone_channels.keys().cloned().collect();
+                let mut renamed: HashMap<String, BoneChannel> = HashMap::new();
+                let mut renamed_rests: HashMap<String, VrmaBoneRest> = HashMap::new();
+                let mut mapped_count = 0;
+                for (i, glb_name) in name_list.iter().enumerate() {
+                    if let Some(human_bone) = humanoid.mapping.get(&i) {
+                        let vrm_name = human_bone.as_vrm_name().to_string();
+                        if let Some(ch) = bone_channels.remove(glb_name) {
+                            if let Some(rest) = bone_rests.get(glb_name) {
+                                renamed_rests.insert(vrm_name.clone(), rest.clone());
+                            }
+                            renamed.insert(vrm_name, ch);
+                            mapped_count += 1;
+                        }
+                    }
+                }
+                log::info!(
+                    "glTFヒューマノイド検出: {} ({}/{}ch マッピング)",
+                    humanoid.rig_type.label(), mapped_count, name_list.len(),
+                );
+                (renamed, renamed_rests, BoneMatchMode::Humanoid)
+            } else {
+                (bone_channels, bone_rests, BoneMatchMode::NodeName)
+            };
+
+            log::info!(
+                "glTFアニメーション読み込み: '{}' ボーン{}ch, 表情{}ch, レスト{}件, {:.2}秒, モード={:?}",
+                anim_name,
+                final_channels.len(),
+                expression_channels.len(),
+                final_rests.len(),
+                duration,
+                match_mode,
+            );
+
             animations.push(VrmaAnimation {
                 name: anim_name,
                 duration,
-                bone_channels,
+                bone_channels: final_channels,
                 expression_channels,
-                bone_rests,
-                match_mode: BoneMatchMode::NodeName,
+                bone_rests: final_rests,
+                match_mode,
                 facing_flip_y,
             });
         }
