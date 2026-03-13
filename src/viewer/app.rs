@@ -412,7 +412,11 @@ impl ViewerApp {
 
                 // FBXモデル読み込み後、同じファイルにアニメーションがあれば自動適用
                 if ext == "fbx" {
-                    self.try_load_fbx_animation(&path);
+                    if let Ok(anims) = crate::fbx::animation::load_fbx_animation(&path) {
+                        if !anims.is_empty() {
+                            self.try_load_fbx_animation(&path);
+                        }
+                    }
                 }
             }
             Err(e) => {
