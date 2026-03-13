@@ -265,6 +265,9 @@ impl AnimationState {
         // モーフも重ねて適用
         gpu_model.apply_morphs_to_buf(morph_weights, &mut work);
 
+        // 法線表示同期用にアニメーション済み頂点をキャッシュ
+        gpu_model.set_animated_vertices(work.clone());
+
         queue.write_buffer(&gpu_model.vertex_buf, 0, bytemuck::cast_slice(&work));
     }
 

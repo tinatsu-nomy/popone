@@ -800,11 +800,12 @@ impl GpuRenderer {
             }
         }
 
-        // 法線表示頂点を更新（入力が変わった時だけ再生成）
+        // 法線表示頂点を更新（入力が変わった時、またはアニメーション中に再生成）
         if params.display.show_normals {
             let length_changed = (params.display.normal_length - self.normal_cache_length).abs() > 1e-6;
             let vis_changed = self.normal_cache_visibility.as_slice() != params.material_visibility;
-            if self.normal_dirty || length_changed || vis_changed {
+            let has_animation = model.current_vertices().as_ptr() != model.base_vertices().as_ptr();
+            if self.normal_dirty || length_changed || vis_changed || has_animation {
                 let verts = generate_normal_vertices(model, params.display.normal_length, params.material_visibility);
                 self.normal_vertex_count = verts.len() as u32;
                 let data = bytemuck::cast_slice(&verts);
@@ -1498,8 +1499,8 @@ fn generate_normal_vertices(model: &GpuModel, length: f32, material_visibility: 
 
     let color = [0.3, 0.6, 1.0, 0.9]; // 青系
 
-    // 表示中の材質に含まれる頂点を収集
-    let base_verts = model.base_vertices();
+    // アニメーション済み頂点があればそちらを使用
+    let base_verts = model.current_vertices();
     let indices = model.base_indices();
     let mut visible = vec![false; base_verts.len()];
 

@@ -52,6 +52,8 @@ pub struct GpuModel {
     morph_work: Vec<Vertex>,
     /// GPU空間モーフデータ（重複排除・座標変換済み）
     gpu_morphs: Vec<GpuMorphEntry>,
+    /// アニメーション済み頂点キャッシュ（法線表示同期用）
+    animated_vertices: Option<Vec<Vertex>>,
 }
 
 impl GpuModel {
@@ -86,6 +88,21 @@ impl GpuModel {
     /// ベース頂点を取得（法線表示等に使用）
     pub fn base_vertices(&self) -> &[Vertex] {
         &self.base_vertices
+    }
+
+    /// アニメーション済み頂点を取得（あればアニメ済み、なければベース）
+    pub fn current_vertices(&self) -> &[Vertex] {
+        self.animated_vertices.as_deref().unwrap_or(&self.base_vertices)
+    }
+
+    /// アニメーション済み頂点をキャッシュ
+    pub fn set_animated_vertices(&mut self, verts: Vec<Vertex>) {
+        self.animated_vertices = Some(verts);
+    }
+
+    /// アニメーション済み頂点キャッシュをクリア
+    pub fn clear_animated_vertices(&mut self) {
+        self.animated_vertices = None;
     }
 
     /// インデックスバッファの生データを取得（法線表示のフィルタ用）
@@ -462,6 +479,7 @@ fn build_gpu_model_inner(
         cached_bbox,
         morph_work,
         gpu_morphs,
+        animated_vertices: None,
     })
 }
 
