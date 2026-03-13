@@ -247,6 +247,10 @@ pub struct RenderParams<'a> {
     pub height: u32,
     pub material_visibility: &'a [bool],
     pub display: &'a super::app::DisplaySettings,
+    /// アニメーション済みボーングローバル行列（glTF空間、None=レストポーズ）
+    pub animated_bone_globals: Option<&'a [glam::Mat4]>,
+    /// VRM 0.0 かどうか（座標変換用）
+    pub is_vrm0: bool,
 }
 
 /// 描画モード
@@ -779,7 +783,7 @@ impl GpuRenderer {
             } else {
                 crate::convert::coord::gltf_pos_to_pmx
             };
-            generate_bone_vertices(&mut self.bone_work, ir, pos_fn, params.camera.eye(), params.display.bone_opacity);
+            generate_bone_vertices(&mut self.bone_work, ir, pos_fn, params.camera.eye(), params.display.bone_opacity, params.animated_bone_globals);
             self.bone_vertex_count = self.bone_work.len() as u32;
             let data = bytemuck::cast_slice(&self.bone_work);
             if data.len() > self.bone_buf_capacity {
@@ -829,7 +833,7 @@ impl GpuRenderer {
             self.spring_vertex_count = 0;
         }
         if params.display.show_spring_bones && (!ir.physics.rigid_bodies.is_empty() || !ir.physics.joints.is_empty()) {
-            generate_spring_bone_vertices(&mut self.spring_work, ir, params.display.spring_bone_opacity, params.display.align_rigid_rotation);
+            generate_spring_bone_vertices(&mut self.spring_work, ir, params.display.spring_bone_opacity, params.display.align_rigid_rotation, params.animated_bone_globals, params.is_vrm0);
             self.spring_vertex_count = self.spring_work.len() as u32;
             let data = bytemuck::cast_slice(&self.spring_work);
             if data.len() > self.spring_buf_capacity {
@@ -1177,6 +1181,7 @@ fn generate_bone_vertices(
     pos_fn: fn(Vec3) -> Vec3,
     camera_eye: Vec3,
     opacity: f32,
+    animated_globals: Option<&[glam::Mat4]>,
 ) {
     out.clear();
     let joint_color = [1.0, 0.85, 0.1, opacity];
@@ -1184,8 +1189,17 @@ fn generate_bone_vertices(
     let joint_radius = 0.35_f32;
     let segments = 12u32;
 
-    for bone in &ir.bones {
-        let pos = pos_fn(bone.position);
+    for (bone_i, bone) in ir.bones.iter().enumerate() {
+        // アニメーション済みグローバル行列があればそこからglTF位置を取得
+        let pos = if let Some(globals) = animated_globals {
+            if bone_i < globals.len() {
+                pos_fn(globals[bone_i].transform_point3(Vec3::ZERO))
+            } else {
+                pos_fn(bone.position)
+            }
+        } else {
+            pos_fn(bone.position)
+        };
 
         // --- ジョイント: カメラ向き円 ---
         let to_cam = (camera_eye - pos).normalize_or_zero();
@@ -1206,7 +1220,15 @@ fn generate_bone_vertices(
             if parent_idx >= ir.bones.len() {
                 continue;
             }
-            let parent_pos = pos_fn(ir.bones[parent_idx].position);
+            let parent_pos = if let Some(globals) = animated_globals {
+                if parent_idx < globals.len() {
+                    pos_fn(globals[parent_idx].transform_point3(Vec3::ZERO))
+                } else {
+                    pos_fn(ir.bones[parent_idx].position)
+                }
+            } else {
+                pos_fn(ir.bones[parent_idx].position)
+            };
             let dir = pos - parent_pos;
             let len = dir.length();
             if len < 0.001 {
@@ -1263,6 +1285,8 @@ fn generate_spring_bone_vertices(
     ir: &IrModel,
     opacity: f32,
     align_rigid_rotation: bool,
+    animated_globals: Option<&[glam::Mat4]>,
+    is_vrm0: bool,
 ) {
     use crate::intermediate::types::RigidShape;
 
@@ -1274,25 +1298,73 @@ fn generate_spring_bone_vertices(
     let segments = 16u32;
     let line_width = 0.15_f32; // 線の太さ（ワイヤフレーム風の三角ストリップ幅）
 
+    // ボーンごとのデルタ変換を事前計算（アニメーション有効時）
+    let pos_fn: fn(Vec3) -> Vec3 = if is_vrm0 {
+        crate::convert::coord::gltf_pos_to_pmx_v0
+    } else {
+        crate::convert::coord::gltf_pos_to_pmx
+    };
+    let bone_deltas: Option<Vec<(Vec3, glam::Quat)>> = animated_globals.map(|globals| {
+        ir.bones.iter().enumerate().map(|(i, bone)| {
+            if i < globals.len() {
+                let rest_pos_pmx = pos_fn(bone.position);
+                let anim_pos_pmx = pos_fn(globals[i].transform_point3(Vec3::ZERO));
+                let pos_delta = anim_pos_pmx - rest_pos_pmx;
+                // glTF空間での回転デルタ
+                let (_, rest_rot, _) = bone.global_mat.to_scale_rotation_translation();
+                let (_, anim_rot, _) = globals[i].to_scale_rotation_translation();
+                let delta_rot_gltf = anim_rot * rest_rot.inverse();
+                // PMX空間への回転変換（ミラー座標系）
+                let delta_rot_pmx = if is_vrm0 {
+                    // X-flip: (x, -y, -z, w)
+                    glam::Quat::from_xyzw(delta_rot_gltf.x, -delta_rot_gltf.y, -delta_rot_gltf.z, delta_rot_gltf.w)
+                } else {
+                    // Z-flip: (-x, -y, z, w)
+                    glam::Quat::from_xyzw(-delta_rot_gltf.x, -delta_rot_gltf.y, delta_rot_gltf.z, delta_rot_gltf.w)
+                };
+                (pos_delta, delta_rot_pmx)
+            } else {
+                (Vec3::ZERO, glam::Quat::IDENTITY)
+            }
+        }).collect()
+    });
+
     // 剛体の形状を描画
     for rb in &ir.physics.rigid_bodies {
         let color = if rb.group == 1 { collider_color } else { spring_color };
 
         // PMX Euler → 回転クォータニオン（ZXY: R = Rz * Rx * Ry）
         let rotation = if align_rigid_rotation { rb.rotation } else { Vec3::ZERO };
-        let quat = glam::Quat::from_euler(
+        let mut quat = glam::Quat::from_euler(
             glam::EulerRot::ZXY,
             rotation.z,
             rotation.x,
             rotation.y,
         );
 
+        // アニメーション適用: 剛体をボーンに追従させる
+        let rb_pos = if let (Some(bone_idx), Some(ref deltas)) = (rb.bone_index, &bone_deltas) {
+            if bone_idx < deltas.len() {
+                let (pos_delta, rot_delta) = deltas[bone_idx];
+                let rest_bone_pmx = pos_fn(ir.bones[bone_idx].position);
+                // 剛体のボーンからのオフセットを回転適用
+                let offset = rb.position - rest_bone_pmx;
+                let rotated_offset = rot_delta * offset;
+                quat = rot_delta * quat;
+                rest_bone_pmx + pos_delta + rotated_offset
+            } else {
+                rb.position
+            }
+        } else {
+            rb.position
+        };
+
         match &rb.shape {
             RigidShape::Sphere { radius } => {
                 // 3つの大円リング（XY, XZ, YZ平面）
-                draw_ring(out, rb.position, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
-                draw_ring(out, rb.position, quat, *radius, Vec3::Y, Vec3::X, segments, line_width, color);
-                draw_ring(out, rb.position, quat, *radius, Vec3::Z, Vec3::Y, segments, line_width, color);
+                draw_ring(out, rb_pos, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
+                draw_ring(out, rb_pos, quat, *radius, Vec3::Y, Vec3::X, segments, line_width, color);
+                draw_ring(out, rb_pos, quat, *radius, Vec3::Z, Vec3::Y, segments, line_width, color);
             }
             RigidShape::Capsule { radius, height } => {
                 // カプセル: Y軸がボーン方向
@@ -1303,15 +1375,15 @@ fn generate_spring_bone_vertices(
                 let top_offset = quat * Vec3::new(0.0, half_h, 0.0);
                 let bot_offset = quat * Vec3::new(0.0, -half_h, 0.0);
 
-                draw_ring(out, rb.position + top_offset, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
-                draw_ring(out, rb.position + bot_offset, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
+                draw_ring(out, rb_pos + top_offset, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
+                draw_ring(out, rb_pos + bot_offset, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
 
                 // 4本の接続線（上端→下端）
                 for i in 0..4u32 {
                     let angle = std::f32::consts::FRAC_PI_2 * i as f32;
                     let local_offset = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
-                    let top = rb.position + top_offset + quat * local_offset;
-                    let bot = rb.position + bot_offset + quat * local_offset;
+                    let top = rb_pos + top_offset + quat * local_offset;
+                    let bot = rb_pos + bot_offset + quat * local_offset;
                     draw_line_quad(out, top, bot, line_width * 0.5, color);
                 }
             }
@@ -1332,23 +1404,47 @@ fn generate_spring_bone_vertices(
                     (0,4),(1,5),(2,6),(3,7), // 接続
                 ];
                 for (a, b) in edges {
-                    let pa = rb.position + quat * corners[a];
-                    let pb = rb.position + quat * corners[b];
+                    let pa = rb_pos + quat * corners[a];
+                    let pb = rb_pos + quat * corners[b];
                     draw_line_quad(out, pa, pb, line_width * 0.5, color);
                 }
             }
         }
     }
 
-    // ジョイント接続線を描画
+    // ジョイント接続線を描画（アニメーション済み剛体位置を使用）
     for joint in &ir.physics.joints {
         if joint.rigid_a < ir.physics.rigid_bodies.len()
             && joint.rigid_b < ir.physics.rigid_bodies.len()
         {
-            let pos_a = ir.physics.rigid_bodies[joint.rigid_a].position;
-            let pos_b = ir.physics.rigid_bodies[joint.rigid_b].position;
+            let rb_a = &ir.physics.rigid_bodies[joint.rigid_a];
+            let rb_b = &ir.physics.rigid_bodies[joint.rigid_b];
+            let pos_a = compute_animated_rb_pos(rb_a, ir, &bone_deltas, pos_fn);
+            let pos_b = compute_animated_rb_pos(rb_b, ir, &bone_deltas, pos_fn);
             draw_line_quad(out, pos_a, pos_b, line_width * 0.4, joint_color);
         }
+    }
+}
+
+/// 剛体のアニメーション済み位置を計算（ジョイント描画用）
+fn compute_animated_rb_pos(
+    rb: &crate::intermediate::types::IrRigidBody,
+    ir: &IrModel,
+    bone_deltas: &Option<Vec<(Vec3, glam::Quat)>>,
+    pos_fn: fn(Vec3) -> Vec3,
+) -> Vec3 {
+    if let (Some(bone_idx), Some(ref deltas)) = (rb.bone_index, bone_deltas) {
+        if bone_idx < deltas.len() {
+            let (pos_delta, rot_delta) = deltas[bone_idx];
+            let rest_bone_pmx = pos_fn(ir.bones[bone_idx].position);
+            let offset = rb.position - rest_bone_pmx;
+            let rotated_offset = rot_delta * offset;
+            rest_bone_pmx + pos_delta + rotated_offset
+        } else {
+            rb.position
+        }
+    } else {
+        rb.position
     }
 }
 

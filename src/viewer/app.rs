@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 use eframe::egui;
@@ -9,6 +10,7 @@ use eframe::wgpu;
 use crate::intermediate::types::IrModel;
 use crate::vrm;
 
+use super::animation::AnimationState;
 use super::camera::OrbitCamera;
 use super::gpu::{self, DrawMode, GpuRenderer, LightMode, RenderParams};
 use super::mesh::GpuModel;
@@ -179,6 +181,19 @@ pub struct PendingTexPreview {
     pub preview_tex_id: Option<egui::TextureId>,
 }
 
+/// 右パネルのタブ
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidePanelTab {
+    /// 情報: モデル情報 + メタ情報
+    Info,
+    /// 操作: 表情モーフ + アニメーション制御
+    Control,
+    /// 表示: 表示設定 + 材質表示
+    Display,
+    /// 出力: PMX変換 + UVマップ
+    Export,
+}
+
 /// ビューアのメイン状態
 pub struct ViewerApp {
     pub loaded: Option<LoadedModel>,
@@ -252,6 +267,14 @@ pub struct ViewerApp {
     pub link_same_name_materials: bool,
     /// pkgテクスチャポップアップ用フィルタ
     pub pkg_popup_filter: String,
+    /// VRMA アニメーション再生状態
+    pub anim_state: Option<AnimationState>,
+    /// 読み込み済みVRMAライブラリ（名前, パス, アニメーションデータ）
+    pub vrma_library: Vec<(String, PathBuf, Arc<crate::intermediate::animation::VrmaAnimation>)>,
+    /// 現在アクティブなVRMAのインデックス
+    pub active_vrma_index: Option<usize>,
+    /// 右パネルの現在のタブ
+    pub side_panel_tab: SidePanelTab,
 }
 
 impl ViewerApp {
@@ -303,6 +326,10 @@ impl ViewerApp {
             selected_fbx_name: None,
             link_same_name_materials: true,
             pkg_popup_filter: String::new(),
+            anim_state: None,
+            vrma_library: Vec::new(),
+            active_vrma_index: None,
+            side_panel_tab: SidePanelTab::Info,
         }
     }
 
@@ -343,6 +370,12 @@ impl ViewerApp {
             self.pending_tex_match = None;
         }
 
+        // VRMA はモデル読み込みではなくアニメーション読み込み
+        if ext == "vrma" {
+            self.try_load_vrma(&path);
+            return;
+        }
+
         let result = match ext.as_str() {
             "fbx" => self.try_load_fbx(&path),
             "unitypackage" => self.try_load_unitypackage(&path),
@@ -353,11 +386,15 @@ impl ViewerApp {
             Ok(()) => {
                 log::info!("読み込み成功: {}", path.display());
                 self.convert_message = None;
+                // モデル読み込み時にアニメーションをクリア
+                self.anim_state = None;
+                self.vrma_library.clear();
+                self.active_vrma_index = None;
             }
             Err(e) => {
                 log::error!("読み込み失敗: {e}");
                 self.convert_message = Some(ConvertMessage::failure(format!(
-                    "読み込み失敗: {e}\n対応形式: VRM (.vrm), FBX (.fbx), UnityPackage (.unitypackage)\n別のファイルを試してください。"
+                    "読み込み失敗: {e}\n対応形式: VRM (.vrm), FBX (.fbx), UnityPackage (.unitypackage), VRMA (.vrma)\n別のファイルを試してください。"
                 )));
             }
         }
@@ -438,6 +475,57 @@ impl ViewerApp {
         }
 
         Ok(())
+    }
+
+    pub fn try_load_vrma(&mut self, path: &std::path::Path) {
+        if self.loaded.is_none() {
+            self.convert_message = Some(ConvertMessage::failure(
+                "VRMAを読み込むには先にVRMモデルを読み込んでください".to_string(),
+            ));
+            return;
+        }
+
+        match vrm::animation::load_vrma(path) {
+            Ok(anim) => {
+                let anim = Arc::new(anim);
+                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let loaded = self.loaded.as_ref().unwrap();
+                let state = AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
+                log::info!("VRMA読み込み成功: {}", path.display());
+
+                // ライブラリに追加（重複パスは上書き）
+                let path_buf = path.to_path_buf();
+                if let Some(idx) = self.vrma_library.iter().position(|(_, p, _)| p == &path_buf) {
+                    self.vrma_library[idx] = (name.clone(), path_buf, anim);
+                    self.active_vrma_index = Some(idx);
+                } else {
+                    self.vrma_library.push((name.clone(), path_buf, anim));
+                    self.active_vrma_index = Some(self.vrma_library.len() - 1);
+                }
+
+                self.anim_state = Some(state);
+                self.convert_message = Some(ConvertMessage::success(
+                    format!("VRMA読み込み成功: {}", name),
+                ));
+            }
+            Err(e) => {
+                log::error!("VRMA読み込み失敗: {e}");
+                self.convert_message = Some(ConvertMessage::failure(
+                    format!("VRMA読み込み失敗: {e}"),
+                ));
+            }
+        }
+    }
+
+    /// VRMAライブラリからインデックス指定で切り替え
+    pub fn switch_vrma(&mut self, index: usize) {
+        if let Some((_, _, ref anim)) = self.vrma_library.get(index) {
+            if let Some(ref loaded) = self.loaded {
+                let state = AnimationState::new(Arc::clone(anim), &loaded.ir, &loaded.gpu_model);
+                self.anim_state = Some(state);
+                self.active_vrma_index = Some(index);
+            }
+        }
     }
 
     fn try_load_vrm(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
@@ -548,6 +636,22 @@ impl ViewerApp {
                 }
                 if let Some(ref mut renderer) = self.renderer {
                     renderer.invalidate_normal_cache();
+                }
+                // アニメーション状態を新しい gpu_model で再構築
+                if let (Some(ref loaded), Some(ref old_anim)) = (&self.loaded, &self.anim_state) {
+                    let mut new_state = AnimationState::new(
+                        Arc::clone(&old_anim.animation),
+                        &loaded.ir,
+                        &loaded.gpu_model,
+                    );
+                    new_state.playing = old_anim.playing;
+                    new_state.loop_mode = old_anim.loop_mode;
+                    new_state.speed = old_anim.speed;
+                    new_state.current_time = old_anim.current_time;
+                    new_state.ab_start = old_anim.ab_start;
+                    new_state.ab_end = old_anim.ab_end;
+                    new_state.ping_pong_direction = old_anim.ping_pong_direction;
+                    self.anim_state = Some(new_state);
                 }
                 log::info!("GPU モデル再構築完了 (smooth_normals={})", smooth);
             }
@@ -883,6 +987,8 @@ impl ViewerApp {
         let saved_tex_assignments = self.tex_assignments.clone();
         let saved_pkg_tex_assignments = self.pkg_tex_assignments.clone();
         let saved_pkg_textures = self.pkg_textures.take();
+        let saved_vrma_library = std::mem::take(&mut self.vrma_library);
+        let saved_vrma_index = self.active_vrma_index.take();
 
         // unitypackage の場合は再展開せず FBX として再読み込み
         // （source_format が Fbx なら try_load_fbx を使う）
@@ -930,6 +1036,14 @@ impl ViewerApp {
             self.assign_texture_to_material(*mat_idx, tex_path);
         }
         self.link_same_name_materials = saved_link;
+
+        // VRMAライブラリを復元し、アクティブなアニメーションを再構築
+        if !saved_vrma_library.is_empty() {
+            self.vrma_library = saved_vrma_library;
+            if let Some(idx) = saved_vrma_index {
+                self.switch_vrma(idx);
+            }
+        }
     }
 
     /// unitypackage 再読み込み（FBX再展開 + テクスチャ復元）
@@ -1118,11 +1232,12 @@ impl ViewerApp {
 
     fn open_file_dialog(&mut self) {
         let mut dialog = rfd::FileDialog::new()
-            .set_title("3Dモデルを開く")
-            .add_filter("3D Models", &["vrm", "fbx", "unitypackage"])
-            .add_filter("VRM", &["vrm"])
-            .add_filter("FBX", &["fbx"])
-            .add_filter("UnityPackage", &["unitypackage"]);
+            .set_title("3Dモデル / VRMAアニメーションを開く")
+            .add_filter("対応形式 (VRM/FBX/UnityPackage/VRMA)", &["vrm", "fbx", "unitypackage", "vrma"])
+            .add_filter("VRM (.vrm)", &["vrm"])
+            .add_filter("FBX (.fbx)", &["fbx"])
+            .add_filter("UnityPackage (.unitypackage)", &["unitypackage"])
+            .add_filter("VRMA (.vrma)", &["vrma"]);
         if let Some(ref dir) = self.last_model_dir {
             dialog = dialog.set_directory(dir);
         }
@@ -1412,6 +1527,31 @@ impl eframe::App for ViewerApp {
             ui::execute_conversion(self);
         }
 
+        // アニメーション更新
+        if let Some(ref mut anim) = self.anim_state {
+            if anim.playing {
+                anim.advance(dt);
+                ctx.request_repaint(); // 再生中のみ連続再描画
+            }
+
+            // 表情ウェイト適用
+            let expr_changed = anim.apply_expressions(&mut self.morph_weights);
+            if expr_changed {
+                self.morph_dirty = true;
+            }
+
+            // ボーンアニメーション + モーフ適用
+            if let Some(ref mut loaded) = self.loaded {
+                let queue = &self.render_state.queue;
+                anim.apply_bone_animation(
+                    &mut loaded.gpu_model,
+                    queue,
+                    &self.morph_weights,
+                );
+                self.morph_dirty = false; // ボーンアニメーション内でモーフも適用済み
+            }
+        }
+
         // ドラッグ＆ドロップ処理
         let (dropped_files, hover_ext) = ctx.input(|i| {
             let hover_ext = i.raw.hovered_files.first()
@@ -1517,6 +1657,28 @@ impl eframe::App for ViewerApp {
                         LightMode::Fixed => LightMode::CameraFollow,
                     };
                 }
+                // Space: アニメーション再生/一時停止
+                if i.key_pressed(egui::Key::Space) {
+                    if let Some(ref mut anim) = self.anim_state {
+                        anim.playing = !anim.playing;
+                    }
+                }
+                // ←: 1フレーム戻る（一時停止中のみ）
+                if i.key_pressed(egui::Key::ArrowLeft) {
+                    if let Some(ref mut anim) = self.anim_state {
+                        if !anim.playing {
+                            anim.step_frame(false);
+                        }
+                    }
+                }
+                // →: 1フレーム進む（一時停止中のみ）
+                if i.key_pressed(egui::Key::ArrowRight) {
+                    if let Some(ref mut anim) = self.anim_state {
+                        if !anim.playing {
+                            anim.step_frame(true);
+                        }
+                    }
+                }
             }
         });
 
@@ -1598,15 +1760,7 @@ impl eframe::App for ViewerApp {
                         );
                     }
 
-                    // FPS表示（右端に配置）
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let fps_text = format!("{:.0} fps", self.fps_smoothed);
-                        ui.label(
-                            egui::RichText::new(fps_text)
-                                .font(egui::FontId::proportional(11.0))
-                                .color(egui::Color32::from_gray(0x60))
-                        );
-                    });
+                    // (FPS表示はビューポートオーバーレイに移動)
                 });
             });
 
@@ -1650,12 +1804,18 @@ impl eframe::App for ViewerApp {
                             let device = &self.render_state.device;
                             let queue = &self.render_state.queue;
 
+                            let animated_globals = self.anim_state.as_ref()
+                                .map(|anim| anim.animated_globals());
+                            let is_vrm0 = loaded.ir.source_format.is_vrm0();
+
                             let render_params = RenderParams {
                                 camera: &self.camera,
                                 width,
                                 height,
                                 material_visibility: &self.material_visibility,
                                 display: &self.display,
+                                animated_bone_globals: animated_globals,
+                                is_vrm0,
                             };
 
                             let (texture_id, _) = renderer.render_to_texture(
@@ -1762,6 +1922,19 @@ impl eframe::App for ViewerApp {
                             }
                         });
                     });
+                }
+
+                // FPS表示（右上オーバーレイ）
+                {
+                    let rect = response.rect;
+                    let fps_text = format!("{:.0} fps", self.fps_smoothed);
+                    viewport.painter().text(
+                        egui::pos2(rect.right() - 10.0, rect.top() + 10.0),
+                        egui::Align2::RIGHT_TOP,
+                        &fps_text,
+                        egui::FontId::monospace(11.0),
+                        egui::Color32::BLACK,
+                    );
                 }
 
                 // 操作ヒント（左下、常時表示）

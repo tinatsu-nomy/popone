@@ -78,6 +78,11 @@ impl GpuModel {
         self.cached_bbox
     }
 
+    /// グローバル頂点Index → GPU頂点Index マッピングを取得（アニメーション用）
+    pub fn global_to_gpu_map(&self) -> &[u32] {
+        &self.global_to_gpu
+    }
+
     /// ベース頂点を取得（法線表示等に使用）
     pub fn base_vertices(&self) -> &[Vertex] {
         &self.base_vertices
@@ -137,6 +142,21 @@ impl GpuModel {
         }
 
         queue.write_buffer(&self.vertex_buf, 0, bytemuck::cast_slice(&self.morph_work));
+    }
+
+    /// モーフウェイトを外部バッファに適用（アニメーション用：GPU アップロードはしない）
+    pub fn apply_morphs_to_buf(
+        &self,
+        weights: &[f32],
+        vertices: &mut [Vertex],
+    ) {
+        for morph_idx in 0..self.gpu_morphs.len() {
+            let w = weights.get(morph_idx).copied().unwrap_or(0.0);
+            if w.abs() < 1e-6 {
+                continue;
+            }
+            Self::apply_gpu_morph_to(&self.gpu_morphs, morph_idx, w, vertices);
+        }
     }
 
     fn apply_gpu_morph_to(

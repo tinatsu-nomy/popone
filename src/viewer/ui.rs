@@ -2,7 +2,7 @@ use std::path::Path;
 
 use eframe::egui;
 
-use super::app::{ConvertMessage, DisplaySettings, ViewerApp};
+use super::app::{ConvertMessage, DisplaySettings, SidePanelTab, ViewerApp};
 use super::gpu::{DrawMode, LightMode};
 
 /// 材質パネルからのテクスチャ割り当てリクエスト
@@ -21,455 +21,22 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
         .default_width(300.0)
         .width_range(200.0..=500.0)
         .show(ctx, |ui| {
+            // タブバー
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut app.side_panel_tab, SidePanelTab::Info, "情報");
+                ui.selectable_value(&mut app.side_panel_tab, SidePanelTab::Control, "操作");
+                ui.selectable_value(&mut app.side_panel_tab, SidePanelTab::Display, "表示");
+                ui.selectable_value(&mut app.side_panel_tab, SidePanelTab::Export, "出力");
+            });
+            ui.separator();
+
             egui::ScrollArea::vertical().show(ui, |ui| {
-                let Some(ref loaded) = app.loaded else {
-                    ui.label("VRM ファイルを読み込んでください (Ctrl+O)");
-                    return;
-                };
-
-                let ir = &loaded.ir;
-
-                // モデル情報
-                ui.heading(
-                    egui::RichText::new("モデル情報")
-                        .color(egui::Color32::from_gray(0x20)),
-                );
-                ui.separator();
-                egui::Grid::new("model_info").show(ui, |ui| {
-                    ui.label("名前");
-                    ui.label(&ir.name);
-                    ui.end_row();
-
-                    ui.label("ボーン数");
-                    ui.label(ir.bones.len().to_string());
-                    ui.end_row();
-
-                    ui.label("頂点数");
-                    ui.label(ir.total_vertices().to_string());
-                    ui.end_row();
-
-                    ui.label("面数");
-                    ui.label(ir.total_faces().to_string());
-                    ui.end_row();
-
-                    ui.label("材質数");
-                    ui.label(ir.materials.len().to_string());
-                    ui.end_row();
-
-                    ui.label("テクスチャ数");
-                    ui.label(ir.textures.len().to_string());
-                    ui.end_row();
-
-                    ui.label("モーフ数");
-                    ui.label(ir.morphs.len().to_string());
-                    ui.end_row();
-
-                    ui.label("形式");
-                    ui.label(ir.source_format.label());
-                    ui.end_row();
-
-                    if let Some(ref rig) = ir.rig_type {
-                        ui.label("リグ");
-                        ui.label(rig);
-                        ui.end_row();
-
-                        ui.label("Humanoid");
-                        if ir.humanoid_bone_count > 0 {
-                            ui.label(format!("{}本マッピング済", ir.humanoid_bone_count));
-                        } else {
-                            ui.colored_label(egui::Color32::GRAY, "非対応");
-                        }
-                        ui.end_row();
-                    }
-                });
-
-                ui.add_space(12.0);
-
-                // メタ情報
-                if !ir.comment.is_empty() {
-                    show_meta_info(ui, &ir.comment);
-                    ui.add_space(8.0);
+                match app.side_panel_tab {
+                    SidePanelTab::Info => show_tab_info(ui, app),
+                    SidePanelTab::Control => show_tab_control(ui, app),
+                    SidePanelTab::Display => show_tab_display(ui, app, &mut tex_assign_request),
+                    SidePanelTab::Export => show_tab_export(ui, app),
                 }
-
-                // 表情モーフスライダ
-                if !ir.morphs.is_empty() {
-                    ui.collapsing("表情モーフ", |ui| {
-                        if ui.small_button("全リセット").clicked() {
-                            for w in app.morph_weights.iter_mut() {
-                                *w = 0.0;
-                            }
-                            app.morph_dirty = true;
-                        }
-                        ui.separator();
-                        for (i, morph) in ir.morphs.iter().enumerate() {
-                            if i < app.morph_weights.len() {
-                                ui.horizontal(|ui| {
-                                    if ui.small_button("0").clicked() {
-                                        app.morph_weights[i] = 0.0;
-                                        app.morph_dirty = true;
-                                    }
-                                    if ui.add(
-                                        egui::Slider::new(&mut app.morph_weights[i], 0.0..=1.0)
-                                            .show_value(false),
-                                    ).changed() {
-                                        app.morph_dirty = true;
-                                    }
-                                    if ui.small_button("1").clicked() {
-                                        app.morph_weights[i] = 1.0;
-                                        app.morph_dirty = true;
-                                    }
-                                    if ui.add(
-                                        egui::DragValue::new(&mut app.morph_weights[i])
-                                            .range(0.0..=1.0)
-                                            .speed(0.01)
-                                            .fixed_decimals(2),
-                                    ).changed() {
-                                        app.morph_dirty = true;
-                                    }
-                                    ui.label(&morph.name);
-                                });
-                            }
-                        }
-                    });
-                    ui.add_space(8.0);
-                }
-
-                // 材質表示
-                if !loaded.gpu_model.draws.is_empty() {
-                    // キャッシュ済みの材質情報を参照（毎フレーム clone 回避）
-                    let draw_info = &loaded.mat_cache.draw_indices;
-                    let mat_tex_info = &loaded.mat_cache.tex_indices;
-                    let mat_names = &loaded.mat_cache.names;
-                    let mat_src_tex = &loaded.mat_cache.source_tex_names;
-                    let num_draws = draw_info.len();
-
-                    ui.collapsing("材質表示", |ui| {
-                        ui.horizontal(|ui| {
-                            if ui.small_button("全表示").clicked() {
-                                app.material_visibility.iter_mut().for_each(|v| *v = true);
-                            }
-                            if ui.small_button("全非表示").clicked() {
-                                app.material_visibility.iter_mut().for_each(|v| *v = false);
-                            }
-                            ui.checkbox(&mut app.link_same_name_materials, "同名連動");
-                            // 外部テクスチャ割り当てがある場合にリセットボタン表示
-                            if !app.tex_assignments.is_empty() {
-                                if ui.small_button("テクスチャリセット").clicked() {
-                                    app.tex_assignments.clear();
-                                    app.pkg_tex_assignments.clear();
-                                    app.pending_reload = Some(false);
-                                }
-                            }
-                        });
-                        // フィルター（材質数が多い場合に便利）
-                        if num_draws > 10 {
-                            ui.horizontal(|ui| {
-                                ui.label("検索:");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut app.material_filter)
-                                        .desired_width(ui.available_width())
-                                        .hint_text("材質名で絞り込み…"),
-                                );
-                            });
-                        }
-                        let filter_lower = app.material_filter.to_lowercase();
-                        let thumb_ids = &app.pkg_thumb_cache;
-                        for &(i, mat_idx) in draw_info.iter() {
-                            if i < app.material_visibility.len() {
-                                let name = mat_names.get(mat_idx)
-                                    .map(|s: &String| s.as_str())
-                                    .unwrap_or("?");
-                                // フィルターに一致しない場合はスキップ
-                                if !filter_lower.is_empty()
-                                    && !name.to_lowercase().contains(&filter_lower)
-                                {
-                                    continue;
-                                }
-                                ui.horizontal(|ui| {
-                                    // テクスチャ状態インジケータ
-                                    {
-                                        let has_tex = mat_tex_info.get(mat_idx)
-                                            .and_then(|t| *t)
-                                            .is_some();
-                                        let indicator = if has_tex {
-                                            egui::RichText::new("\u{25A3}")  // ▣ (テクスチャ有)
-                                                .color(egui::Color32::from_rgb(0x40, 0xC0, 0x40))
-                                                .size(16.0)
-                                        } else {
-                                            egui::RichText::new("\u{25A1}")  // □ (テクスチャ無)
-                                                .color(egui::Color32::from_rgb(0xA0, 0x60, 0x60))
-                                                .size(16.0)
-                                        };
-                                        let src_name = mat_src_tex.get(mat_idx)
-                                            .and_then(|s: &Option<String>| s.as_deref());
-                                        let tooltip = match (has_tex, src_name) {
-                                            (true, Some(s)) => format!("テクスチャ設定済 ({})\nクリックで変更", s),
-                                            (true, None) => "テクスチャ設定済\nクリックで変更".to_string(),
-                                            (false, Some(s)) => format!("テクスチャ未設定 ({})\nクリックで割り当て", s),
-                                            (false, None) => "テクスチャ未設定\nクリックで割り当て".to_string(),
-                                        };
-                                        let resp = ui.add(egui::Label::new(indicator).sense(egui::Sense::click()))
-                                            .on_hover_text(&tooltip);
-                                        let has_pkg = app.pkg_textures.is_some();
-                                        let popup_id = ui.id().with(("pkg_tex_popup", mat_idx));
-                                        if resp.clicked() {
-                                            if has_pkg {
-                                                ui.memory_mut(|m| m.toggle_popup(popup_id));
-                                            } else {
-                                                tex_assign_request = Some(TexAssignRequest::FileDialog(mat_idx));
-                                            }
-                                        }
-                                        if has_pkg {
-                                            egui::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
-                                                ui.set_min_width(280.0);
-                                                ui.add(
-                                                    egui::TextEdit::singleline(&mut app.pkg_popup_filter)
-                                                        .desired_width(ui.available_width())
-                                                        .hint_text("テクスチャ名で絞り込み…"),
-                                                );
-                                                let filter_lower = app.pkg_popup_filter.to_lowercase();
-                                                egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                                                    if let Some(ref pkg) = app.pkg_textures {
-                                                        for (ti, (tname, _)) in pkg.iter().enumerate() {
-                                                            if !filter_lower.is_empty()
-                                                                && !tname.to_lowercase().contains(&filter_lower)
-                                                            {
-                                                                continue;
-                                                            }
-                                                            let clicked = ui.horizontal(|ui| {
-                                                                if let Some(Some(tex_id)) = thumb_ids.get(ti) {
-                                                                    ui.image(egui::load::SizedTexture::new(*tex_id, [32.0, 32.0]));
-                                                                }
-                                                                ui.button(tname).clicked()
-                                                            }).inner;
-                                                            if clicked {
-                                                                tex_assign_request = Some(TexAssignRequest::PkgTexture(mat_idx, ti));
-                                                                ui.memory_mut(|m| m.toggle_popup(popup_id));
-                                                                app.pkg_popup_filter.clear();
-                                                            }
-                                                        }
-                                                    }
-                                                    ui.separator();
-                                                    if ui.button("ファイルから選択...").clicked() {
-                                                        tex_assign_request = Some(TexAssignRequest::FileDialog(mat_idx));
-                                                        ui.memory_mut(|m| m.toggle_popup(popup_id));
-                                                        app.pkg_popup_filter.clear();
-                                                    }
-                                                });
-                                            });
-                                        }
-                                    }
-                                    // 外部割当済みならそのファイル名、なければソース名を表示
-                                    let assigned_name = app.tex_assignments.get(&mat_idx)
-                                        .and_then(|p| p.file_name())
-                                        .map(|f| f.to_string_lossy().to_string());
-                                    let display_tex = assigned_name.as_deref()
-                                        .or_else(|| {
-                                            mat_src_tex.get(mat_idx)
-                                                .and_then(|s| s.as_deref())
-                                        });
-                                    if let Some(tex_name) = display_tex {
-                                        ui.checkbox(
-                                            &mut app.material_visibility[i],
-                                            format!("{} [{}]", name, tex_name),
-                                        );
-                                    } else {
-                                        ui.checkbox(&mut app.material_visibility[i], name);
-                                    }
-                                });
-                            }
-                        }
-                    });
-                    ui.add_space(8.0);
-                }
-
-                // 表示設定
-                let has_bones = app.loaded.as_ref()
-                    .map_or(false, |l| !l.ir.bones.is_empty());
-                let has_spring = app.loaded.as_ref()
-                    .map_or(false, |l| !l.ir.physics.rigid_bodies.is_empty());
-                ui.collapsing("表示設定", |ui| {
-                    if ui.small_button("ライト初期値").clicked() {
-                        let d = DisplaySettings::default();
-                        app.display.light_intensity = d.light_intensity;
-                        app.display.ambient_intensity = d.ambient_intensity;
-                        app.display.bg_brightness = d.bg_brightness;
-                    }
-                    ui.add(
-                        egui::Slider::new(&mut app.display.light_intensity, 0.0..=2.0)
-                            .text("ライト"),
-                    );
-                    ui.add(
-                        egui::Slider::new(&mut app.display.ambient_intensity, 0.0..=1.0)
-                            .text("環境光"),
-                    );
-                    ui.add(
-                        egui::Slider::new(&mut app.display.bg_brightness, 0.0..=1.0)
-                            .text("背景"),
-                    );
-                    ui.checkbox(&mut app.display.show_grid, "グリッド表示 (G)");
-                    ui.add_enabled_ui(has_bones, |ui| {
-                        ui.checkbox(&mut app.display.show_bones, "ボーン表示 (B)");
-                        if app.display.show_bones {
-                            ui.add(
-                                egui::Slider::new(&mut app.display.bone_opacity, 0.05..=1.0)
-                                    .text("ボーン濃度"),
-                            );
-                        }
-                    });
-                    ui.add_enabled_ui(has_spring, |ui| {
-                        ui.checkbox(&mut app.display.show_spring_bones, "物理表示 (P)");
-                        if app.display.show_spring_bones {
-                            ui.add(
-                                egui::Slider::new(&mut app.display.spring_bone_opacity, 0.05..=1.0)
-                                    .text("物理濃度"),
-                            );
-                        }
-                    });
-                    // ワイヤーフレーム
-                    let supports_wire = app.renderer.as_ref()
-                        .map(|r| r.supports_wireframe()).unwrap_or(false);
-                    if supports_wire {
-                        ui.horizontal(|ui| {
-                            ui.label("描画 (W):");
-                            ui.selectable_value(&mut app.display.draw_mode, DrawMode::Solid, "Solid");
-                            ui.selectable_value(&mut app.display.draw_mode, DrawMode::Wireframe, "Wire");
-                            ui.selectable_value(&mut app.display.draw_mode, DrawMode::SolidWireframe, "S+W");
-                        });
-                    }
-                    // ライトモード
-                    ui.horizontal(|ui| {
-                        ui.label("ライト:");
-                        ui.selectable_value(&mut app.display.light_mode, LightMode::CameraFollow, "カメラ追従");
-                        ui.selectable_value(&mut app.display.light_mode, LightMode::Fixed, "固定 (L)");
-                    });
-                    ui.separator();
-                    ui.checkbox(&mut app.display.msaa, "MSAA (アンチエイリアス)");
-                    ui.checkbox(&mut app.display.show_normals, "法線表示 (N)");
-                    if app.display.show_normals {
-                        ui.add(
-                            egui::Slider::new(&mut app.display.normal_length, 0.1..=3.0)
-                                .text("法線長さ"),
-                        );
-                    }
-                    let old_smooth = app.display.smooth_normals;
-                    ui.checkbox(&mut app.display.smooth_normals, "法線平滑化");
-                    if app.display.smooth_normals != old_smooth && app.loaded.is_some() {
-                        app.pending_rebuild = Some(false);
-                    }
-                    let old_clear = app.display.clear_custom_normals;
-                    ui.checkbox(&mut app.display.clear_custom_normals, "カスタム法線クリア");
-                    if app.display.clear_custom_normals != old_clear && app.loaded.is_some() {
-                        app.pending_rebuild = Some(false);
-                    }
-                });
-                ui.add_space(8.0);
-
-                // PMX 変換
-                ui.separator();
-                ui.add_space(4.0);
-                let has_humanoid = app.loaded.as_ref()
-                    .map_or(false, |l| l.ir.humanoid_bone_count > 0);
-                let has_physics = app.loaded.as_ref()
-                    .map_or(false, |l| !l.ir.physics.rigid_bodies.is_empty());
-                let has_model = app.loaded.is_some();
-                let is_processing = app.pending_load.is_some()
-                    || app.pending_convert.is_some()
-                    || app.pending_rebuild.is_some()
-                    || app.pending_reload.is_some()
-                    || app.pending_fbx_load.is_some();
-                ui.add_enabled_ui(has_model && !is_processing, |ui| {
-                    if ui.button("PMX 変換").clicked() {
-                        let default_path = if app.pmx_output_path.is_empty() {
-                            std::path::PathBuf::from("output.pmx")
-                        } else {
-                            std::path::PathBuf::from(&app.pmx_output_path)
-                        };
-                        let mut dialog = rfd::FileDialog::new()
-                            .set_title("PMX出力先を選択")
-                            .add_filter("PMX", &["pmx"]);
-                        if let Some(dir) = default_path.parent() {
-                            dialog = dialog.set_directory(dir);
-                        }
-                        if let Some(name) = default_path.file_name() {
-                            dialog = dialog.set_file_name(name.to_string_lossy());
-                        }
-                        if let Some(path) = dialog.save_file() {
-                            app.pmx_output_path = path.to_string_lossy().to_string();
-                            app.pending_convert = Some(false);
-                        }
-                    }
-                });
-                ui.add_enabled_ui(has_humanoid, |ui| {
-                    if ui.checkbox(
-                        &mut app.normalize_pose,
-                        "Aスタンス変換",
-                    ).changed() {
-                        app.pending_reload = Some(false);
-                    }
-                });
-                ui.add_enabled_ui(has_physics, |ui| {
-                    ui.checkbox(
-                        &mut app.display.align_rigid_rotation,
-                        "剛体回転をボーン方向に揃える",
-                    );
-                });
-                ui.checkbox(&mut app.output_log, "ログ出力");
-
-                // UVマップ出力
-                ui.separator();
-                ui.add_space(2.0);
-                ui.add_enabled_ui(has_model && !is_processing, |ui| {
-                    if ui.button("UVマップ出力").clicked() {
-                        let default_path = if app.pmx_output_path.is_empty() {
-                            std::path::PathBuf::from("uvmap.psd")
-                        } else {
-                            std::path::PathBuf::from(&app.pmx_output_path)
-                                .with_extension("psd")
-                        };
-                        let mut dialog = rfd::FileDialog::new()
-                            .set_title("UVマップ出力先を選択")
-                            .add_filter("PSD", &["psd"]);
-                        if let Some(dir) = default_path.parent() {
-                            dialog = dialog.set_directory(dir);
-                        }
-                        if let Some(name) = default_path.file_name() {
-                            dialog = dialog.set_file_name(name.to_string_lossy());
-                        }
-                        if let Some(path) = dialog.save_file() {
-                            match crate::convert::uvmap::export_uv_map(
-                                &app.loaded.as_ref().unwrap().ir,
-                                &path,
-                                app.uv_map_size,
-                            ) {
-                                Ok(()) => {
-                                    app.convert_message = Some(ConvertMessage::success(
-                                        format!("UVマップ出力完了: {}", path.display()),
-                                    ));
-                                }
-                                Err(e) => {
-                                    app.convert_message = Some(ConvertMessage::failure(
-                                        format!("UVマップ出力失敗: {e}"),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("解像度:");
-                    egui::ComboBox::from_id_salt("uv_size")
-                        .selected_text(format!("{}", app.uv_map_size))
-                        .width(70.0)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut app.uv_map_size, 1024, "1024");
-                            ui.selectable_value(&mut app.uv_map_size, 2048, "2048");
-                            ui.selectable_value(&mut app.uv_map_size, 4096, "4096");
-                            ui.selectable_value(&mut app.uv_map_size, 8192, "8192");
-                        });
-                });
-
-                // (結果メッセージはビューポートオーバーレイで表示)
             });
         });
 
@@ -923,6 +490,509 @@ pub fn execute_conversion(app: &mut ViewerApp) {
 }
 
 /// メタ情報をセクションごとに折り畳み可能な Grid で表示
+/// 情報タブ: モデル情報 + メタ情報
+fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
+    let Some(ref loaded) = app.loaded else {
+        ui.label("VRM ファイルを読み込んでください (Ctrl+O)");
+        return;
+    };
+    let ir = &loaded.ir;
+
+    ui.heading(
+        egui::RichText::new("モデル情報")
+            .color(egui::Color32::from_gray(0x20)),
+    );
+    ui.separator();
+    egui::Grid::new("model_info").show(ui, |ui| {
+        ui.label("名前");
+        ui.label(&ir.name);
+        ui.end_row();
+
+        ui.label("ボーン数");
+        ui.label(ir.bones.len().to_string());
+        ui.end_row();
+
+        ui.label("頂点数");
+        ui.label(ir.total_vertices().to_string());
+        ui.end_row();
+
+        ui.label("面数");
+        ui.label(ir.total_faces().to_string());
+        ui.end_row();
+
+        ui.label("材質数");
+        ui.label(ir.materials.len().to_string());
+        ui.end_row();
+
+        ui.label("テクスチャ数");
+        ui.label(ir.textures.len().to_string());
+        ui.end_row();
+
+        ui.label("モーフ数");
+        ui.label(ir.morphs.len().to_string());
+        ui.end_row();
+
+        ui.label("形式");
+        ui.label(ir.source_format.label());
+        ui.end_row();
+
+        if let Some(ref rig) = ir.rig_type {
+            ui.label("リグ");
+            ui.label(rig);
+            ui.end_row();
+
+            ui.label("Humanoid");
+            if ir.humanoid_bone_count > 0 {
+                ui.label(format!("{}本マッピング済", ir.humanoid_bone_count));
+            } else {
+                ui.colored_label(egui::Color32::GRAY, "非対応");
+            }
+            ui.end_row();
+        }
+    });
+
+    ui.add_space(12.0);
+
+    // メタ情報
+    if !ir.comment.is_empty() {
+        show_meta_info(ui, &ir.comment);
+    }
+}
+
+/// 操作タブ: アニメーション制御 + 表情モーフスライダ
+fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
+    show_animation_controls(ui, app);
+
+    ui.add_space(8.0);
+
+    let Some(ref loaded) = app.loaded else {
+        return;
+    };
+    let ir = &loaded.ir;
+
+    if ir.morphs.is_empty() {
+        return;
+    }
+
+    // アニメーションが制御中の表情名を収集
+    let anim_expr_morphs: std::collections::HashSet<usize> = if let Some(ref anim) = app.anim_state {
+        ir.morphs.iter().enumerate().filter_map(|(i, morph)| {
+            if anim.animation.expression_channels.contains_key(&morph.name_en) {
+                Some(i)
+            } else {
+                None
+            }
+        }).collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+
+    ui.heading(
+        egui::RichText::new("表情モーフ")
+            .color(egui::Color32::from_gray(0x20)),
+    );
+    ui.separator();
+    if ui.small_button("全リセット").clicked() {
+        for (i, w) in app.morph_weights.iter_mut().enumerate() {
+            if !anim_expr_morphs.contains(&i) {
+                *w = 0.0;
+            }
+        }
+        app.morph_dirty = true;
+    }
+    ui.separator();
+    for (i, morph) in ir.morphs.iter().enumerate() {
+        if i < app.morph_weights.len() {
+            let is_anim_controlled = anim_expr_morphs.contains(&i);
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(!is_anim_controlled, |ui| {
+                    if ui.small_button("0").clicked() {
+                        app.morph_weights[i] = 0.0;
+                        app.morph_dirty = true;
+                    }
+                    if ui.add(
+                        egui::Slider::new(&mut app.morph_weights[i], 0.0..=1.0)
+                            .show_value(false),
+                    ).changed() {
+                        app.morph_dirty = true;
+                    }
+                    if ui.small_button("1").clicked() {
+                        app.morph_weights[i] = 1.0;
+                        app.morph_dirty = true;
+                    }
+                    if ui.add(
+                        egui::DragValue::new(&mut app.morph_weights[i])
+                            .range(0.0..=1.0)
+                            .speed(0.01)
+                            .fixed_decimals(2),
+                    ).changed() {
+                        app.morph_dirty = true;
+                    }
+                });
+                ui.label(&morph.name);
+                if is_anim_controlled {
+                    ui.weak("(VRMA)");
+                }
+            });
+        }
+    }
+}
+
+/// 表示タブ: 表示設定 + 材質表示
+fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: &mut Option<TexAssignRequest>) {
+    // 表示設定
+    ui.heading(
+        egui::RichText::new("表示設定")
+            .color(egui::Color32::from_gray(0x20)),
+    );
+    ui.separator();
+
+    if ui.small_button("ライト初期値").clicked() {
+        let d = DisplaySettings::default();
+        app.display.light_intensity = d.light_intensity;
+        app.display.ambient_intensity = d.ambient_intensity;
+        app.display.bg_brightness = d.bg_brightness;
+    }
+    ui.add(
+        egui::Slider::new(&mut app.display.light_intensity, 0.0..=2.0)
+            .text("ライト"),
+    );
+    ui.add(
+        egui::Slider::new(&mut app.display.ambient_intensity, 0.0..=1.0)
+            .text("環境光"),
+    );
+    ui.add(
+        egui::Slider::new(&mut app.display.bg_brightness, 0.0..=1.0)
+            .text("背景"),
+    );
+    ui.checkbox(&mut app.display.show_grid, "グリッド表示 (G)");
+
+    let has_bones = app.loaded.as_ref().map_or(false, |l| !l.ir.bones.is_empty());
+    let has_spring = app.loaded.as_ref().map_or(false, |l| !l.ir.physics.rigid_bodies.is_empty());
+    ui.add_enabled_ui(has_bones, |ui| {
+        ui.checkbox(&mut app.display.show_bones, "ボーン表示 (B)");
+        if app.display.show_bones {
+            ui.add(
+                egui::Slider::new(&mut app.display.bone_opacity, 0.05..=1.0)
+                    .text("ボーン濃度"),
+            );
+        }
+    });
+    ui.add_enabled_ui(has_spring, |ui| {
+        ui.checkbox(&mut app.display.show_spring_bones, "物理表示 (P)");
+        if app.display.show_spring_bones {
+            ui.add(
+                egui::Slider::new(&mut app.display.spring_bone_opacity, 0.05..=1.0)
+                    .text("物理濃度"),
+            );
+        }
+    });
+    // ワイヤーフレーム
+    let supports_wire = app.renderer.as_ref()
+        .map(|r| r.supports_wireframe()).unwrap_or(false);
+    if supports_wire {
+        ui.horizontal(|ui| {
+            ui.label("描画 (W):");
+            ui.selectable_value(&mut app.display.draw_mode, DrawMode::Solid, "Solid");
+            ui.selectable_value(&mut app.display.draw_mode, DrawMode::Wireframe, "Wire");
+            ui.selectable_value(&mut app.display.draw_mode, DrawMode::SolidWireframe, "S+W");
+        });
+    }
+    // ライトモード
+    ui.horizontal(|ui| {
+        ui.label("ライト:");
+        ui.selectable_value(&mut app.display.light_mode, LightMode::CameraFollow, "カメラ追従");
+        ui.selectable_value(&mut app.display.light_mode, LightMode::Fixed, "固定 (L)");
+    });
+    ui.separator();
+    ui.checkbox(&mut app.display.msaa, "MSAA (アンチエイリアス)");
+    ui.checkbox(&mut app.display.show_normals, "法線表示 (N)");
+    if app.display.show_normals {
+        ui.add(
+            egui::Slider::new(&mut app.display.normal_length, 0.1..=3.0)
+                .text("法線長さ"),
+        );
+    }
+    let old_smooth = app.display.smooth_normals;
+    ui.checkbox(&mut app.display.smooth_normals, "法線平滑化");
+    if app.display.smooth_normals != old_smooth && app.loaded.is_some() {
+        app.pending_rebuild = Some(false);
+    }
+    let old_clear = app.display.clear_custom_normals;
+    ui.checkbox(&mut app.display.clear_custom_normals, "カスタム法線クリア");
+    if app.display.clear_custom_normals != old_clear && app.loaded.is_some() {
+        app.pending_rebuild = Some(false);
+    }
+
+    ui.add_space(12.0);
+
+    // 材質表示
+    let Some(ref loaded) = app.loaded else { return };
+    if loaded.gpu_model.draws.is_empty() {
+        return;
+    }
+
+    let draw_info = &loaded.mat_cache.draw_indices;
+    let mat_tex_info = &loaded.mat_cache.tex_indices;
+    let mat_names = &loaded.mat_cache.names;
+    let mat_src_tex = &loaded.mat_cache.source_tex_names;
+    let num_draws = draw_info.len();
+
+    ui.heading(
+        egui::RichText::new("材質表示")
+            .color(egui::Color32::from_gray(0x20)),
+    );
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui.small_button("全表示").clicked() {
+            app.material_visibility.iter_mut().for_each(|v| *v = true);
+        }
+        if ui.small_button("全非表示").clicked() {
+            app.material_visibility.iter_mut().for_each(|v| *v = false);
+        }
+        ui.checkbox(&mut app.link_same_name_materials, "同名連動");
+        if !app.tex_assignments.is_empty() {
+            if ui.small_button("テクスチャリセット").clicked() {
+                app.tex_assignments.clear();
+                app.pkg_tex_assignments.clear();
+                app.pending_reload = Some(false);
+            }
+        }
+    });
+    // フィルター（材質数が多い場合に便利）
+    if num_draws > 10 {
+        ui.horizontal(|ui| {
+            ui.label("検索:");
+            ui.add(
+                egui::TextEdit::singleline(&mut app.material_filter)
+                    .desired_width(ui.available_width())
+                    .hint_text("材質名で絞り込み…"),
+            );
+        });
+    }
+    let filter_lower = app.material_filter.to_lowercase();
+    let thumb_ids = &app.pkg_thumb_cache;
+    for &(i, mat_idx) in draw_info.iter() {
+        if i < app.material_visibility.len() {
+            let name = mat_names.get(mat_idx)
+                .map(|s: &String| s.as_str())
+                .unwrap_or("?");
+            if !filter_lower.is_empty()
+                && !name.to_lowercase().contains(&filter_lower)
+            {
+                continue;
+            }
+            ui.horizontal(|ui| {
+                // テクスチャ状態インジケータ
+                {
+                    let has_tex = mat_tex_info.get(mat_idx)
+                        .and_then(|t| *t)
+                        .is_some();
+                    let indicator = if has_tex {
+                        egui::RichText::new("\u{25A3}")
+                            .color(egui::Color32::from_rgb(0x40, 0xC0, 0x40))
+                            .size(16.0)
+                    } else {
+                        egui::RichText::new("\u{25A1}")
+                            .color(egui::Color32::from_rgb(0xA0, 0x60, 0x60))
+                            .size(16.0)
+                    };
+                    let src_name = mat_src_tex.get(mat_idx)
+                        .and_then(|s: &Option<String>| s.as_deref());
+                    let tooltip = match (has_tex, src_name) {
+                        (true, Some(s)) => format!("テクスチャ設定済 ({})\nクリックで変更", s),
+                        (true, None) => "テクスチャ設定済\nクリックで変更".to_string(),
+                        (false, Some(s)) => format!("テクスチャ未設定 ({})\nクリックで割り当て", s),
+                        (false, None) => "テクスチャ未設定\nクリックで割り当て".to_string(),
+                    };
+                    let resp = ui.add(egui::Label::new(indicator).sense(egui::Sense::click()))
+                        .on_hover_text(&tooltip);
+                    let has_pkg = app.pkg_textures.is_some();
+                    let popup_id = ui.id().with(("pkg_tex_popup", mat_idx));
+                    if resp.clicked() {
+                        if has_pkg {
+                            ui.memory_mut(|m| m.toggle_popup(popup_id));
+                        } else {
+                            *tex_assign_request = Some(TexAssignRequest::FileDialog(mat_idx));
+                        }
+                    }
+                    if has_pkg {
+                        egui::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                            ui.set_min_width(280.0);
+                            ui.add(
+                                egui::TextEdit::singleline(&mut app.pkg_popup_filter)
+                                    .desired_width(ui.available_width())
+                                    .hint_text("テクスチャ名で絞り込み…"),
+                            );
+                            let filter_lower = app.pkg_popup_filter.to_lowercase();
+                            egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                                if let Some(ref pkg) = app.pkg_textures {
+                                    for (ti, (tname, _)) in pkg.iter().enumerate() {
+                                        if !filter_lower.is_empty()
+                                            && !tname.to_lowercase().contains(&filter_lower)
+                                        {
+                                            continue;
+                                        }
+                                        let clicked = ui.horizontal(|ui| {
+                                            if let Some(Some(tex_id)) = thumb_ids.get(ti) {
+                                                ui.image(egui::load::SizedTexture::new(*tex_id, [32.0, 32.0]));
+                                            }
+                                            ui.button(tname).clicked()
+                                        }).inner;
+                                        if clicked {
+                                            *tex_assign_request = Some(TexAssignRequest::PkgTexture(mat_idx, ti));
+                                            ui.memory_mut(|m| m.toggle_popup(popup_id));
+                                            app.pkg_popup_filter.clear();
+                                        }
+                                    }
+                                }
+                                ui.separator();
+                                if ui.button("ファイルから選択...").clicked() {
+                                    *tex_assign_request = Some(TexAssignRequest::FileDialog(mat_idx));
+                                    ui.memory_mut(|m| m.toggle_popup(popup_id));
+                                    app.pkg_popup_filter.clear();
+                                }
+                            });
+                        });
+                    }
+                }
+                let assigned_name = app.tex_assignments.get(&mat_idx)
+                    .and_then(|p| p.file_name())
+                    .map(|f| f.to_string_lossy().to_string());
+                let display_tex = assigned_name.as_deref()
+                    .or_else(|| {
+                        mat_src_tex.get(mat_idx)
+                            .and_then(|s| s.as_deref())
+                    });
+                if let Some(tex_name) = display_tex {
+                    ui.checkbox(
+                        &mut app.material_visibility[i],
+                        format!("{} [{}]", name, tex_name),
+                    );
+                } else {
+                    ui.checkbox(&mut app.material_visibility[i], name);
+                }
+            });
+        }
+    }
+}
+
+/// 出力タブ: PMX変換 + UVマップ出力
+fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
+    let has_humanoid = app.loaded.as_ref()
+        .map_or(false, |l| l.ir.humanoid_bone_count > 0);
+    let has_physics = app.loaded.as_ref()
+        .map_or(false, |l| !l.ir.physics.rigid_bodies.is_empty());
+    let has_model = app.loaded.is_some();
+    let is_processing = app.pending_load.is_some()
+        || app.pending_convert.is_some()
+        || app.pending_rebuild.is_some()
+        || app.pending_reload.is_some()
+        || app.pending_fbx_load.is_some();
+
+    ui.heading(
+        egui::RichText::new("PMX 変換")
+            .color(egui::Color32::from_gray(0x20)),
+    );
+    ui.separator();
+
+    ui.add_enabled_ui(has_model && !is_processing, |ui| {
+        if ui.button("PMX 変換").clicked() {
+            let default_path = if app.pmx_output_path.is_empty() {
+                std::path::PathBuf::from("output.pmx")
+            } else {
+                std::path::PathBuf::from(&app.pmx_output_path)
+            };
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("PMX出力先を選択")
+                .add_filter("PMX", &["pmx"]);
+            if let Some(dir) = default_path.parent() {
+                dialog = dialog.set_directory(dir);
+            }
+            if let Some(name) = default_path.file_name() {
+                dialog = dialog.set_file_name(name.to_string_lossy());
+            }
+            if let Some(path) = dialog.save_file() {
+                app.pmx_output_path = path.to_string_lossy().to_string();
+                app.pending_convert = Some(false);
+            }
+        }
+    });
+    ui.add_enabled_ui(has_humanoid, |ui| {
+        if ui.checkbox(
+            &mut app.normalize_pose,
+            "Aスタンス変換",
+        ).changed() {
+            app.pending_reload = Some(false);
+        }
+    });
+    ui.add_enabled_ui(has_physics, |ui| {
+        ui.checkbox(
+            &mut app.display.align_rigid_rotation,
+            "剛体回転をボーン方向に揃える",
+        );
+    });
+    ui.checkbox(&mut app.output_log, "ログ出力");
+
+    ui.add_space(12.0);
+
+    // UVマップ出力
+    ui.heading(
+        egui::RichText::new("UVマップ出力")
+            .color(egui::Color32::from_gray(0x20)),
+    );
+    ui.separator();
+    ui.add_enabled_ui(has_model && !is_processing, |ui| {
+        if ui.button("UVマップ出力").clicked() {
+            let default_path = if app.pmx_output_path.is_empty() {
+                std::path::PathBuf::from("uvmap.psd")
+            } else {
+                std::path::PathBuf::from(&app.pmx_output_path)
+                    .with_extension("psd")
+            };
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("UVマップ出力先を選択")
+                .add_filter("PSD", &["psd"]);
+            if let Some(dir) = default_path.parent() {
+                dialog = dialog.set_directory(dir);
+            }
+            if let Some(name) = default_path.file_name() {
+                dialog = dialog.set_file_name(name.to_string_lossy());
+            }
+            if let Some(path) = dialog.save_file() {
+                match crate::convert::uvmap::export_uv_map(
+                    &app.loaded.as_ref().unwrap().ir,
+                    &path,
+                    app.uv_map_size,
+                ) {
+                    Ok(()) => {
+                        app.convert_message = Some(ConvertMessage::success(
+                            format!("UVマップ出力完了: {}", path.display()),
+                        ));
+                    }
+                    Err(e) => {
+                        app.convert_message = Some(ConvertMessage::failure(
+                            format!("UVマップ出力失敗: {e}"),
+                        ));
+                    }
+                }
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("解像度:");
+        egui::ComboBox::from_id_salt("uv_size")
+            .selected_text(format!("{}", app.uv_map_size))
+            .width(70.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut app.uv_map_size, 1024, "1024");
+                ui.selectable_value(&mut app.uv_map_size, 2048, "2048");
+                ui.selectable_value(&mut app.uv_map_size, 4096, "4096");
+                ui.selectable_value(&mut app.uv_map_size, 8192, "8192");
+            });
+    });
+}
+
 fn show_meta_info(ui: &mut egui::Ui, comment: &str) {
     // comment 形式: "[Section]" 行でセクション区切り、"  label: value" 行がフィールド
     // まずセクション単位にパースする
@@ -1077,5 +1147,222 @@ fn write_convert_log(
         let _ = writeln!(file);
         let _ = writeln!(file, "=== デバッグログ ===");
         let _ = write!(file, "{}", logs);
+    }
+}
+
+/// アニメーション再生コントロールUI
+fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
+    use super::animation::LoopMode;
+
+    ui.heading(
+        egui::RichText::new("アニメーション")
+            .color(egui::Color32::from_gray(0x20)),
+    );
+    ui.separator();
+
+    // VRMAライブラリ
+    if !app.vrma_library.is_empty() {
+        ui.label(format!("VRMAリスト ({}件):", app.vrma_library.len()));
+        let mut switch_to: Option<usize> = None;
+        let mut remove_idx: Option<usize> = None;
+        for (i, (name, _, _)) in app.vrma_library.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let is_active = app.active_vrma_index == Some(i);
+                let label = if is_active {
+                    format!("▶ {}", name)
+                } else {
+                    format!("   {}", name)
+                };
+                if ui.selectable_label(is_active, label).clicked() && !is_active {
+                    switch_to = Some(i);
+                }
+                if ui.small_button("×").clicked() {
+                    remove_idx = Some(i);
+                }
+            });
+        }
+        if let Some(idx) = switch_to {
+            app.switch_vrma(idx);
+        }
+        if let Some(idx) = remove_idx {
+            let was_active = app.active_vrma_index == Some(idx);
+            app.vrma_library.remove(idx);
+            if was_active {
+                if app.vrma_library.is_empty() {
+                    app.anim_state = None;
+                    app.active_vrma_index = None;
+                    app.morph_dirty = true;
+                } else {
+                    let new_idx = idx.min(app.vrma_library.len() - 1);
+                    app.switch_vrma(new_idx);
+                }
+            } else if let Some(ref mut ai) = app.active_vrma_index {
+                if *ai > idx {
+                    *ai -= 1;
+                }
+            }
+        }
+        ui.separator();
+    }
+
+    let mut switch_anim: Option<bool> = None;
+
+    if let Some(ref mut anim) = app.anim_state {
+        ui.label(format!("{} ({:.1}秒)", anim.animation.name, anim.animation.duration));
+
+        ui.horizontal(|ui| {
+            if ui.button("⏮").on_hover_text("前のアニメーション / 先頭に戻す").clicked() {
+                let (lo, _) = anim.effective_range();
+                if anim.current_time - lo < 0.5 && app.vrma_library.len() > 1 {
+                    switch_anim = Some(false);
+                } else {
+                    anim.current_time = lo;
+                    anim.ping_pong_direction = 1.0;
+                }
+            }
+            let step_back = ui.add_enabled(!anim.playing, egui::Button::new("|◀").min_size(egui::vec2(24.0, 0.0)))
+                .on_hover_text("コマ戻し");
+            if step_back.clicked() {
+                anim.step_frame(false);
+            }
+            if ui.button("◀").on_hover_text("逆再生").clicked() {
+                anim.speed = -anim.speed.abs();
+                anim.playing = true;
+            }
+            let play_label = if anim.playing { "⏸" } else { "▶" };
+            if ui.button(play_label).clicked() {
+                if !anim.playing {
+                    if anim.speed < 0.0 {
+                        anim.speed = anim.speed.abs();
+                    }
+                }
+                anim.playing = !anim.playing;
+            }
+            let step_fwd = ui.add_enabled(!anim.playing, egui::Button::new("▶|").min_size(egui::vec2(24.0, 0.0)))
+                .on_hover_text("コマ送り");
+            if step_fwd.clicked() {
+                anim.step_frame(true);
+            }
+            let has_next = app.vrma_library.len() > 1;
+            let next_btn = ui.add_enabled(has_next, egui::Button::new("⏭"))
+                .on_hover_text("次のアニメーション");
+            if next_btn.clicked() {
+                switch_anim = Some(true);
+            }
+        });
+
+        let duration = anim.animation.duration;
+        if duration > 0.0 {
+            ui.horizontal(|ui| {
+                ui.label(format!("{:.2}s", anim.current_time));
+                ui.add(
+                    egui::Slider::new(&mut anim.current_time, 0.0..=duration)
+                        .show_value(false),
+                );
+            });
+            if anim.loop_mode == LoopMode::AB || anim.loop_mode == LoopMode::PingPong {
+                if anim.ab_start.is_some() || anim.ab_end.is_some() {
+                    let a_str = anim.ab_start.map_or("-".to_string(), |t| format!("{:.2}s", t));
+                    let b_str = anim.ab_end.map_or("-".to_string(), |t| format!("{:.2}s", t));
+                    ui.label(format!("A:{} B:{}", a_str, b_str));
+                }
+            }
+        }
+
+        ui.horizontal(|ui| {
+            ui.label("速度");
+            ui.add(
+                egui::DragValue::new(&mut anim.speed)
+                    .range(-3.0..=3.0)
+                    .speed(0.05)
+                    .fixed_decimals(1)
+                    .suffix("x"),
+            );
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("ループ");
+            egui::ComboBox::from_id_salt("loop_mode")
+                .selected_text(match anim.loop_mode {
+                    LoopMode::None => "なし",
+                    LoopMode::Normal => "ループ",
+                    LoopMode::AB => "A-B",
+                    LoopMode::PingPong => "ピンポン",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut anim.loop_mode, LoopMode::None, "なし");
+                    ui.selectable_value(&mut anim.loop_mode, LoopMode::Normal, "ループ");
+                    ui.selectable_value(&mut anim.loop_mode, LoopMode::AB, "A-B");
+                    ui.selectable_value(&mut anim.loop_mode, LoopMode::PingPong, "ピンポン");
+                });
+        });
+
+        if anim.loop_mode == LoopMode::AB || anim.loop_mode == LoopMode::PingPong {
+            ui.horizontal(|ui| {
+                if ui.small_button("𝄆").on_hover_text("リピート開始点を設定").clicked() {
+                    anim.ab_start = Some(anim.current_time);
+                }
+                if ui.small_button("𝄇").on_hover_text("リピート終了点を設定").clicked() {
+                    anim.ab_end = Some(anim.current_time);
+                }
+                if ui.small_button("クリア").clicked() {
+                    anim.ab_start = None;
+                    anim.ab_end = None;
+                }
+            });
+        }
+
+        ui.label(format!(
+            "ボーン: {}ch / 表情: {}ch",
+            anim.animation.bone_channels.len(),
+            anim.animation.expression_channels.len(),
+        ));
+
+        if ui.small_button("アニメーション解除").clicked() {
+            app.anim_state = None;
+            app.active_vrma_index = None;
+            app.morph_dirty = true;
+        }
+    } else {
+        ui.label("VRMAファイルをドロップして読み込み");
+        if app.loaded.is_some() {
+            if ui.small_button("VRMAを開く...").clicked() {
+                let paths = rfd::FileDialog::new()
+                    .set_title("VRMAアニメーションを開く（複数選択可）")
+                    .add_filter("VRMA (.vrma)", &["vrma"])
+                    .pick_files()
+                    .unwrap_or_default();
+                for path in &paths {
+                    app.try_load_vrma(path);
+                }
+            }
+        }
+    }
+
+    if let Some(is_next) = switch_anim {
+        if let Some(active) = app.active_vrma_index {
+            let len = app.vrma_library.len();
+            if len > 1 {
+                let new_idx = if is_next {
+                    (active + 1) % len
+                } else {
+                    (active + len - 1) % len
+                };
+                app.switch_vrma(new_idx);
+            }
+        }
+    }
+
+    if app.loaded.is_some() && app.anim_state.is_some() {
+        if ui.small_button("VRMAを追加...").clicked() {
+            let paths = rfd::FileDialog::new()
+                .set_title("VRMAアニメーションを追加（複数選択可）")
+                .add_filter("VRMA (.vrma)", &["vrma"])
+                .pick_files()
+                .unwrap_or_default();
+            for path in &paths {
+                app.try_load_vrma(path);
+            }
+        }
     }
 }
