@@ -2,14 +2,14 @@
 // Explorer からの起動時にコンソールウィンドウを表示しない
 #![cfg_attr(all(feature = "viewer", target_os = "windows"), windows_subsystem = "windows")]
 
-use vrm2pmx::{vrm, pmx, convert, intermediate};
+use popone::{vrm, pmx, convert, intermediate};
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
-#[command(name = "vrm2pmx", about = "VRMファイルをPMX形式に変換します\n引数なしで起動するとビューアが開きます")]
+#[command(name = "popone", about = "VRMファイルをPMX形式に変換します\n引数なしで起動するとビューアが開きます")]
 struct Args {
     /// 入力ファイルパス（VRM/FBX）
     input: Option<PathBuf>,
@@ -175,7 +175,7 @@ fn run_main(args: Args) -> Result<()> {
         {
             anyhow::bail!(
                 "ビューアは viewer feature 付きでビルドする必要があります。\n\
-                 使い方: vrm2pmx <入力.vrm> <出力.pmx>\n\
+                 使い方: popone <入力.vrm> <出力.pmx>\n\
                  ビューア: cargo build --features viewer"
             );
         }
@@ -193,7 +193,7 @@ fn run_main(args: Args) -> Result<()> {
     }
 
     let output = args.output.context(
-        "出力ファイルパスを指定してください。\n使い方: vrm2pmx <入力.vrm> <出力.pmx>"
+        "出力ファイルパスを指定してください。\n使い方: popone <入力.vrm> <出力.pmx>"
     )?;
 
     // ロガー初期化（dump 時はファイルログなし）
@@ -219,19 +219,19 @@ fn run_main(args: Args) -> Result<()> {
         "fbx" => {
             let data = std::fs::read(&input)
                 .with_context(|| format!("FBXファイル読み込み失敗: {}", input.display()))?;
-            vrm2pmx::fbx::extract::extract_ir_model_from_fbx(&data, Some(&input))
+            popone::fbx::extract::extract_ir_model_from_fbx(&data, Some(&input))
                 .context("FBX中間表現の抽出に失敗")?
         }
         "unitypackage" => {
             let archive_data = std::fs::read(&input)
                 .with_context(|| format!("unitypackage読み込み失敗: {}", input.display()))?;
             let (fbx_data, fbx_name, textures) =
-                vrm2pmx::unitypackage::extract_fbx_from_unitypackage(&archive_data)
+                popone::unitypackage::extract_fbx_from_unitypackage(&archive_data)
                     .context("unitypackage展開失敗")?;
             log::info!("unitypackage内FBX: {}", fbx_name);
-            let mut ir = vrm2pmx::fbx::extract::extract_ir_model_from_fbx(&fbx_data, Some(&input))
+            let mut ir = popone::fbx::extract::extract_ir_model_from_fbx(&fbx_data, Some(&input))
                 .context("FBX中間表現の抽出に失敗")?;
-            vrm2pmx::unitypackage::embed_textures_into_ir(&mut ir, &textures);
+            popone::unitypackage::embed_textures_into_ir(&mut ir, &textures);
             ir
         }
         _ => {
@@ -346,7 +346,7 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
     rotate_logs(&logs_dir, 5);
 
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let log_path = logs_dir.join(format!("vrm2pmx_{timestamp}.log"));
+    let log_path = logs_dir.join(format!("popone_{timestamp}.log"));
     setup_logging(log::LevelFilter::Debug, Some(&log_path))?;
 
     {
@@ -411,7 +411,7 @@ fn run_viewer_inner(
         "Viewer",
         options,
         Box::new(move |cc| {
-            let mut app = vrm2pmx::viewer::app::ViewerApp::new(cc, logs_dir, log_path);
+            let mut app = popone::viewer::app::ViewerApp::new(cc, logs_dir, log_path);
             if let Some(path) = initial_file {
                 app.pending_load = Some((path, false));
             }
@@ -432,7 +432,7 @@ fn rotate_logs(logs_dir: &std::path::Path, keep: usize) {
             e.path()
                 .file_name()
                 .and_then(|n| n.to_str())
-                .map_or(false, |n| n.starts_with("vrm2pmx_") && n.ends_with(".log"))
+                .map_or(false, |n| n.starts_with("popone_") && n.ends_with(".log"))
         })
         .collect();
     // ファイル名でソート（タイムスタンプ順）→ 降順

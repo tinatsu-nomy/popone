@@ -1,15 +1,15 @@
 [package]
-name = "vrm2pmx"
+name = "popone"
 version = "0.1.17"
 edition = "2021"
 license = "0BSD"
 
 [lib]
-name = "vrm2pmx"
+name = "popone"
 path = "src/lib.rs"
 
 [[bin]]
-name = "vrm2pmx"
+name = "popone"
 path = "src/main.rs"
 
 [dependencies]

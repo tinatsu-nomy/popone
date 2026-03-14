@@ -1,4 +1,4 @@
-# vrm2pmx
+# popone
 
 [日本語](README.md)
 
@@ -7,9 +7,9 @@ Single Rust binary — launches as a viewer with no arguments, or as a CLI conve
 
 ## Download
 
-Latest release: **[vrm2pmx_v0.1.17.exe](https://github.com/tinatsu-nomy/vrm2pmx/releases/download/v0.1.17/vrm2pmx_v0.1.17.exe)**
+Latest release: **[popone_v0.1.17.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.1.17/popone_v0.1.17.exe)**
 
-All releases: [Releases](https://github.com/tinatsu-nomy/vrm2pmx/releases)
+All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
 ## Supported Formats
 
@@ -29,16 +29,16 @@ All releases: [Releases](https://github.com/tinatsu-nomy/vrm2pmx/releases)
 
 ```bash
 # Launch viewer (or double-click the exe)
-vrm2pmx.exe
+popone.exe
 
 # Open file in viewer (auto-viewer mode when output is omitted)
-vrm2pmx.exe input.vrm
-vrm2pmx.exe input.fbx
+popone.exe input.vrm
+popone.exe input.fbx
 
 # CLI conversion (when output is specified)
-vrm2pmx.exe input.vrm output.pmx
-vrm2pmx.exe input.fbx output.pmx
-vrm2pmx.exe input.unitypackage output.pmx
+popone.exe input.vrm output.pmx
+popone.exe input.fbx output.pmx
+popone.exe input.unitypackage output.pmx
 ```
 
 In the viewer, drag & drop files or use the "Open" button, then click "PMX Convert" in the right panel.
@@ -124,14 +124,14 @@ cargo build --release
 cargo build --release --features viewer
 ```
 
-Output: `target/release/vrm2pmx.exe`
+Output: `target/release/popone.exe`
 
 > **Windows GUI Subsystem**: Exe built with `--features viewer` won't show a console window. When run with CLI arguments, it auto-attaches to the parent console and detaches when launching the viewer.
 
 ## CLI Options
 
 ```bash
-vrm2pmx <input> [output.pmx] [options]
+popone <input> [output.pmx] [options]
 
 When output is omitted, the viewer opens automatically (viewer feature build only).
 
@@ -171,10 +171,10 @@ For detailed source structure, coordinate transforms, and bone insertion steps, 
 
 ## Library API
 
-`vrm2pmx` can also be used as a library:
+`popone` can also be used as a library:
 
 ```rust
-use vrm2pmx::{convert_vrm_to_pmx, convert_fbx_to_pmx};
+use popone::{convert_vrm_to_pmx, convert_fbx_to_pmx};
 use std::path::Path;
 
 // VRM to PMX

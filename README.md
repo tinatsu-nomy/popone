@@ -1,4 +1,4 @@
-# vrm2pmx
+# popone
 
 [English](README.en.md)
 
@@ -7,9 +7,9 @@ Rust 製の単一バイナリで、引数なしでビューア、引数ありで
 
 ## ダウンロード
 
-最新リリース: **[vrm2pmx_v0.1.17.exe](https://github.com/tinatsu-nomy/vrm2pmx/releases/download/v0.1.17/vrm2pmx_v0.1.17.exe)**
+最新リリース: **[popone_v0.1.17.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.1.17/popone_v0.1.17.exe)**
 
-全リリース一覧: [Releases](https://github.com/tinatsu-nomy/vrm2pmx/releases)
+全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
 ## 対応形式
 
@@ -29,16 +29,16 @@ Rust 製の単一バイナリで、引数なしでビューア、引数ありで
 
 ```bash
 # ビューア起動（ダブルクリックでも可）
-vrm2pmx.exe
+popone.exe
 
 # ビューアでファイルを開く（出力未指定で自動的にビューアモード）
-vrm2pmx.exe input.vrm
-vrm2pmx.exe input.fbx
+popone.exe input.vrm
+popone.exe input.fbx
 
 # CLI で PMX 変換（出力指定時）
-vrm2pmx.exe input.vrm output.pmx
-vrm2pmx.exe input.fbx output.pmx
-vrm2pmx.exe input.unitypackage output.pmx
+popone.exe input.vrm output.pmx
+popone.exe input.fbx output.pmx
+popone.exe input.unitypackage output.pmx
 ```
 
 ビューアではファイルをドラッグ＆ドロップするか「開く」ボタンで読み込み、右パネルの「PMX 変換」ボタンで変換できる。
@@ -124,14 +124,14 @@ cargo build --release
 cargo build --release --features viewer
 ```
 
-成果物: `target/release/vrm2pmx.exe`
+成果物: `target/release/popone.exe`
 
 > **Windows GUI サブシステム**: `--features viewer` でビルドした exe はコンソールウィンドウを表示しない。CLI 引数付きで実行すると親コンソールに自動接続し、ビューア起動時にはコンソールを切り離す。
 
 ## CLI オプション
 
 ```bash
-vrm2pmx <入力> [出力.pmx] [オプション]
+popone <入力> [出力.pmx] [オプション]
 
 出力を省略すると自動的にビューアモードで起動する（viewer feature ビルド時）。
 
@@ -171,10 +171,10 @@ Seed-san.vrm（VRM 1.0）:
 
 ## ライブラリ API
 
-`vrm2pmx` はライブラリとしても使用可能:
+`popone` はライブラリとしても使用可能:
 
 ```rust
-use vrm2pmx::{convert_vrm_to_pmx, convert_fbx_to_pmx};
+use popone::{convert_vrm_to_pmx, convert_fbx_to_pmx};
 use std::path::Path;
 
 // VRM → PMX
