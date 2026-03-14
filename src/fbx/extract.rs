@@ -15,6 +15,15 @@ use super::scene::FbxScene;
 use super::skin;
 use super::texture;
 
+/// FBX バイナリデータにメッシュ（Geometry）が含まれるかを高速チェック
+pub fn fbx_has_mesh(data: &[u8]) -> bool {
+    let Ok(doc) = parser::parse(data) else {
+        return false;
+    };
+    let scene = FbxScene::from_document(&doc);
+    !scene.geometries().is_empty()
+}
+
 /// FBX バイナリデータから IrModel を構築
 pub fn extract_ir_model_from_fbx(
     data: &[u8],

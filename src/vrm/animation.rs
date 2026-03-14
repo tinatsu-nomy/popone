@@ -312,6 +312,8 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                 bone_rests: final_rests,
                 match_mode,
                 facing_flip_y,
+                is_additive: false,
+                is_bone_local_delta: false,
             });
         }
     }
@@ -478,6 +480,8 @@ fn parse_vrma(
         bone_rests,
         match_mode: BoneMatchMode::Humanoid,
         facing_flip_y: false,
+        is_additive: false,
+        is_bone_local_delta: false,
     })
 }
 

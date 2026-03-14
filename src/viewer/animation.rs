@@ -310,7 +310,25 @@ impl AnimationState {
             // 回転
             if let Some(anim_rot) = self.animation.sample_bone_rotation(bone_name, self.current_time) {
                 animated = true;
-                if is_humanoid {
+                if self.animation.is_additive {
+                    if self.animation.is_bone_local_delta {
+                        // ボーンローカルデルタ（Unity Muscle SwingTwist）:
+                        // anim_rot = postQ × SwingTwist(sign×deg) × Inv(postQ)
+                        // 正規化スケルトン基準のデルタ（muscle=0で Identity）
+                        // 最終ローカル回転 = rest × anim_rot
+                        //   = (rest × postQ) × SwingTwist × Inv(postQ)
+                        //   = preQ_model × SwingTwist × Inv(postQ)
+                        local_rot = self.skin.rest_local_rotations[bone_idx] * anim_rot;
+                    } else {
+                        // ワールド空間デルタ:
+                        // 親のレストグローバル回転で共役変換 → ローカル空間デルタに変換
+                        let parent_rest_rot = self.skin.bone_parents[bone_idx]
+                            .map(|pi| self.skin.rest_global_rotations[pi])
+                            .unwrap_or(Quat::IDENTITY);
+                        let local_delta = parent_rest_rot.inverse() * anim_rot * parent_rest_rot;
+                        local_rot = local_delta * self.skin.rest_local_rotations[bone_idx];
+                    }
+                } else if is_humanoid {
                     // VRMA: リターゲティング公式適用
                     if let Some(vrma_rest) = self.animation.bone_rests.get(bone_name.as_str()) {
                         let w_vrma = vrma_rest.global_rotation;
@@ -364,7 +382,10 @@ impl AnimationState {
             // 平行移動
             if let Some(raw_trans) = self.animation.sample_bone_translation(bone_name, self.current_time) {
                 animated = true;
-                if is_humanoid {
+                if self.animation.is_additive {
+                    // Additive: デルタ値をレスト位置に加算
+                    local_trans = self.skin.rest_local_translations[bone_idx] + raw_trans;
+                } else if is_humanoid {
                     // VRMA: レスト位置からのデルタをワールド空間経由でモデルに適用
                     if let Some(vrma_rest) = self.animation.bone_rests.get(bone_name.as_str()) {
                         let delta_local = raw_trans - vrma_rest.local_translation;

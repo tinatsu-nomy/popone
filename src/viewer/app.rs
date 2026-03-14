@@ -82,19 +82,44 @@ impl ConvertMessage {
 }
 
 /// unitypackage 内に複数FBXがある場合の選択待ち状態
+/// unitypackage 内のモデルファイル種別
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PkgModelType {
+    Fbx,
+    Vrm,
+}
+
 pub struct PendingUnityPackage {
     pub assets: Vec<crate::unitypackage::ExtractedAsset>,
-    pub fbx_list: Vec<(usize, String)>,  // (アセットIndex, ファイル名)
+    /// (アセットIndex, ファイル名, モデル種別)
+    pub model_list: Vec<(usize, String, PkgModelType)>,
     pub source_path: PathBuf,
 }
 
-/// unitypackage FBX 遅延読み込み状態
+/// unitypackage モデル遅延読み込み状態
 pub struct PendingFbxLoad {
     pub assets: Vec<crate::unitypackage::ExtractedAsset>,
     pub fbx_index: usize,
+    pub model_type: PkgModelType,
     pub source_path: PathBuf,
     /// オーバーレイ表示済みフラグ
     pub shown: bool,
+}
+
+/// FBX読み込み方法選択ダイアログの状態（モデル+アニメーション両方含むFBX用）
+pub struct PendingFbxChoice {
+    pub path: PathBuf,
+    pub load_model: bool,
+    pub load_animation: bool,
+    /// unitypackage 経由の場合のデータ
+    pub pkg_context: Option<PendingFbxChoicePkg>,
+}
+
+/// unitypackage 経由 FBX 選択時の追加コンテキスト
+pub struct PendingFbxChoicePkg {
+    pub assets: Vec<crate::unitypackage::ExtractedAsset>,
+    pub fbx_index: usize,
+    pub source_path: PathBuf,
 }
 
 /// unitypackage テクスチャ手動割当ダイアログの状態
@@ -230,6 +255,8 @@ pub struct ViewerApp {
     pub pkg_tex_assignments: HashMap<usize, String>,
     /// テクスチャD&Dプレビュー
     pub pending_tex_preview: Option<PendingTexPreview>,
+    /// FBX読み込み方法選択待ち（モデル+アニメ両方含む場合）
+    pub pending_fbx_choice: Option<PendingFbxChoice>,
     /// unitypackage FBX選択待ち
     pub pending_unity_pkg: Option<PendingUnityPackage>,
     /// FBX遅延読み込み
@@ -275,6 +302,10 @@ pub struct ViewerApp {
     pub active_vrma_index: Option<usize>,
     /// 右パネルの現在のタブ
     pub side_panel_tab: SidePanelTab,
+    /// Unity .anim Muscle 角度スケール（デフォルト 0.1）
+    pub muscle_scale: f32,
+    /// ウィンドウタイトル更新要求
+    pub window_title: Option<String>,
 }
 
 impl ViewerApp {
@@ -307,6 +338,7 @@ impl ViewerApp {
             tex_assignments: HashMap::new(),
             pkg_tex_assignments: HashMap::new(),
             pending_tex_preview: None,
+            pending_fbx_choice: None,
             pending_unity_pkg: None,
             pending_fbx_load: None,
             pkg_textures: None,
@@ -330,6 +362,8 @@ impl ViewerApp {
             vrma_library: Vec::new(),
             active_vrma_index: None,
             side_panel_tab: SidePanelTab::Info,
+            muscle_scale: 1.0,
+            window_title: None,
         }
     }
 
@@ -385,15 +419,48 @@ impl ViewerApp {
                 }
             }
         }
-        // FBX: モデルが読み込み済みの場合、アニメーションとして開くか確認
-        if ext == "fbx" && self.loaded.is_some() {
-            if let Ok(anims) = crate::fbx::animation::load_fbx_animation(&path) {
-                if !anims.is_empty() {
-                    self.try_load_fbx_animation(&path);
-                    return;
-                }
-            }
+        // Unity .anim: アニメーションとして読み込む
+        if ext == "anim" && self.loaded.is_some() {
+            self.try_load_unity_animation(&path);
+            return;
         }
+
+        // FBX: モデル読み込み済みの場合、メッシュ+アニメーション両方含むなら選択ダイアログ
+        if ext == "fbx" && self.loaded.is_some() {
+            let has_mesh = match std::fs::read(&path) {
+                Ok(ref data) => crate::fbx::extract::fbx_has_mesh(data),
+                Err(_) => false,
+            };
+            let has_anim = crate::fbx::animation::load_fbx_animation(&path)
+                .map_or(false, |a| !a.is_empty());
+
+            if has_mesh && has_anim {
+                // 両方含む → 選択ダイアログを表示
+                self.pending_fbx_choice = Some(PendingFbxChoice {
+                    path: path.clone(),
+                    load_model: true,
+                    load_animation: true,
+                    pkg_context: None,
+                });
+                return;
+            } else if !has_mesh && has_anim {
+                // アニメーションのみ
+                self.try_load_fbx_animation(&path);
+                return;
+            }
+            // メッシュのみ or どちらもなし → モデルとして読み込み（下へ続行）
+        }
+
+        self.load_file_as_model(path);
+    }
+
+    /// モデルとしてファイルを読み込む（FBX選択ダイアログ不要時のパス）
+    fn load_file_as_model(&mut self, path: PathBuf) {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
 
         let result = match ext.as_str() {
             "fbx" => self.try_load_fbx(&path),
@@ -405,7 +472,6 @@ impl ViewerApp {
             Ok(()) => {
                 log::info!("読み込み成功: {}", path.display());
                 self.convert_message = None;
-                // モデル読み込み時にアニメーションをクリア
                 self.anim_state = None;
                 self.vrma_library.clear();
                 self.active_vrma_index = None;
@@ -428,6 +494,48 @@ impl ViewerApp {
         }
     }
 
+    /// FBX読み込み方法選択ダイアログの結果を実行
+    pub fn execute_fbx_choice(&mut self, choice: PendingFbxChoice) {
+        let PendingFbxChoice { path, load_model, load_animation, pkg_context } = choice;
+
+        if let Some(pkg) = pkg_context {
+            // unitypackage 経由
+            match self.load_fbx_from_assets(pkg.assets, pkg.fbx_index, &pkg.source_path, load_model, load_animation) {
+                Ok(()) => {
+                    log::info!("読み込み成功: {}", pkg.source_path.display());
+                    self.convert_message = None;
+                }
+                Err(e) => {
+                    log::error!("読み込み失敗: {e}");
+                    self.convert_message = Some(ConvertMessage::failure(format!("読み込み失敗: {e}")));
+                }
+            }
+        } else {
+            // ファイル直接
+            if load_model {
+                match self.try_load_fbx(&path) {
+                    Ok(()) => {
+                        log::info!("FBXモデル読み込み成功: {}", path.display());
+                        self.convert_message = None;
+                        self.anim_state = None;
+                        self.vrma_library.clear();
+                        self.active_vrma_index = None;
+
+                        if load_animation {
+                            self.try_load_fbx_animation(&path);
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("読み込み失敗: {e}");
+                        self.convert_message = Some(ConvertMessage::failure(format!("読み込み失敗: {e}")));
+                    }
+                }
+            } else if load_animation {
+                self.try_load_fbx_animation(&path);
+            }
+        }
+    }
+
     fn try_load_fbx(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         let data = std::fs::read(path)?;
         let ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
@@ -439,27 +547,35 @@ impl ViewerApp {
     fn try_load_unitypackage(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         let archive_data = std::fs::read(path)?;
         let assets = crate::unitypackage::extract_all_assets(&archive_data)?;
-        let fbx_list = crate::unitypackage::find_fbx_list(&assets);
 
-        if fbx_list.is_empty() {
-            anyhow::bail!(".unitypackage 内に FBX ファイルが見つかりません");
+        // FBX と VRM を統合したモデルリストを構築
+        let mut model_list: Vec<(usize, String, PkgModelType)> = Vec::new();
+        for (idx, name) in crate::unitypackage::find_vrm_list(&assets) {
+            model_list.push((idx, name, PkgModelType::Vrm));
+        }
+        for (idx, name) in crate::unitypackage::find_fbx_list(&assets) {
+            model_list.push((idx, name, PkgModelType::Fbx));
         }
 
-        if fbx_list.len() == 1 {
-            // FBX が1つだけ → プログレス表示後に遅延ロード
-            let fbx_idx = fbx_list[0].0;
+        if model_list.is_empty() {
+            anyhow::bail!(".unitypackage 内に VRM / FBX ファイルが見つかりません");
+        }
+
+        if model_list.len() == 1 {
+            // モデルが1つだけ → プログレス表示後に遅延ロード
+            let (idx, _, model_type) = model_list[0];
             self.pending_fbx_load = Some(PendingFbxLoad {
-                assets, fbx_index: fbx_idx, source_path: path.to_path_buf(), shown: false,
+                assets, fbx_index: idx, model_type, source_path: path.to_path_buf(), shown: false,
             });
         } else {
-            // 複数FBX → 選択ダイアログを表示
-            log::info!(".unitypackage 内に {} 個の FBX が見つかりました:", fbx_list.len());
-            for (_, name) in &fbx_list {
-                log::info!("  FBX: {}", name);
+            // 複数 → 選択ダイアログを表示
+            log::info!(".unitypackage 内に {} 個のモデルが見つかりました:", model_list.len());
+            for (_, name, mtype) in &model_list {
+                log::info!("  {:?}: {}", mtype, name);
             }
             self.pending_unity_pkg = Some(PendingUnityPackage {
                 assets,
-                fbx_list,
+                model_list,
                 source_path: path.to_path_buf(),
             });
         }
@@ -467,42 +583,109 @@ impl ViewerApp {
     }
 
     /// 展開済みアセットから指定FBXをロード
+    /// load_model=false の場合はモデルを読み込まず、アニメーションのみ適用
     pub fn load_fbx_from_assets(
         &mut self,
         assets: Vec<crate::unitypackage::ExtractedAsset>,
         fbx_index: usize,
         source_path: &std::path::Path,
+        load_model: bool,
+        load_animation: bool,
     ) -> anyhow::Result<()> {
         let (fbx_data, fbx_name, textures) =
             crate::unitypackage::take_fbx_and_textures(assets, fbx_index)?;
         log::info!("unitypackage内FBX: {} テクスチャ: {}個", fbx_name, textures.len());
         self.selected_fbx_name = Some(fbx_name.clone());
 
-        let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-            &fbx_data, Some(source_path), self.normalize_pose,
-        )?;
+        if load_model {
+            let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                &fbx_data, Some(source_path), self.normalize_pose,
+            )?;
 
-        let unmatched = crate::unitypackage::embed_textures_into_ir(&mut ir, &textures);
+            let unmatched = crate::unitypackage::embed_textures_into_ir(&mut ir, &textures);
 
-        // テクスチャをアプリ状態に保持
-        if !textures.is_empty() {
-            self.pkg_textures = Some(textures);
-            self.rebuild_pkg_thumb_cache();
+            // テクスチャをアプリ状態に保持
+            if !textures.is_empty() {
+                self.pkg_textures = Some(textures);
+                self.rebuild_pkg_thumb_cache();
+            }
+
+            self.finish_load(ir, source_path)?;
+
+            // モデル読み込み時はアニメーションをクリア
+            self.anim_state = None;
+            self.vrma_library.clear();
+            self.active_vrma_index = None;
+
+            // 未割当材質がある場合、手動割当ダイアログを開く
+            if !unmatched.is_empty() && self.pkg_textures.is_some() {
+                let count = unmatched.len();
+                self.pending_tex_match = Some(PendingTexMatch {
+                    mat_indices: unmatched,
+                    selections: vec![None; count],
+                    tex_filter: String::new(),
+                });
+            }
         }
 
-        self.finish_load(ir, source_path)?;
-
-        // 未割当材質がある場合、手動割当ダイアログを開く
-        if !unmatched.is_empty() && self.pkg_textures.is_some() {
-            let count = unmatched.len();
-            self.pending_tex_match = Some(PendingTexMatch {
-                mat_indices: unmatched,
-                selections: vec![None; count],
-                tex_filter: String::new(),
-            });
+        if load_animation {
+            if let Ok(anims) = crate::fbx::animation::load_fbx_animation_from_data(&fbx_data) {
+                for anim in anims {
+                    let display_name = if anim.name == "animation" {
+                        fbx_name.clone()
+                    } else {
+                        format!("{} ({})", fbx_name, anim.name)
+                    };
+                    let anim = std::sync::Arc::new(anim);
+                    if let Some(ref loaded) = self.loaded {
+                        let state = super::animation::AnimationState::new(
+                            std::sync::Arc::clone(&anim), &loaded.ir, &loaded.gpu_model,
+                        );
+                        self.vrma_library.push((display_name, source_path.to_path_buf(), anim));
+                        self.active_vrma_index = Some(self.vrma_library.len() - 1);
+                        self.anim_state = Some(state);
+                    }
+                }
+            }
         }
 
         Ok(())
+    }
+
+    /// 展開済みアセットから指定VRMをロード
+    pub fn load_vrm_from_assets(
+        &mut self,
+        assets: Vec<crate::unitypackage::ExtractedAsset>,
+        vrm_index: usize,
+        source_path: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        let (vrm_data, vrm_name) = crate::unitypackage::take_vrm(assets, vrm_index)?;
+        log::info!("unitypackage内VRM: {} ({}KB)", vrm_name, vrm_data.len() / 1024);
+        self.selected_fbx_name = Some(vrm_name.clone());
+
+        let glb = vrm::loader::load_glb_from_data(&vrm_data)?;
+        let version = vrm::detect::detect_version(&glb.document);
+        let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
+
+        let mut ir = vrm::extract::extract_ir_model_with_options(
+            &glb.document,
+            &glb.buffers,
+            &glb.images,
+            &glb.vrm_extension,
+            &version,
+            &all_extensions,
+            self.normalize_pose,
+        )?;
+
+        let device = &self.render_state.device;
+        let queue = &self.render_state.queue;
+        let gpu_model = super::mesh::build_gpu_model(
+            &ir, &glb.images, device, queue,
+            self.display.smooth_normals, self.display.clear_custom_normals,
+        )?;
+
+        Self::encode_ir_textures_as_png(&mut ir, &glb.images);
+        self.finish_load_with_gpu(ir, gpu_model, source_path)
     }
 
     pub fn try_load_vrma(&mut self, path: &std::path::Path) {
@@ -584,6 +767,42 @@ impl ViewerApp {
                 log::error!("FBXアニメーション読み込み失敗: {e}");
                 self.convert_message = Some(ConvertMessage::failure(
                     format!("FBXアニメーション読み込み失敗: {e}"),
+                ));
+            }
+        }
+    }
+
+    /// Unity .animファイルからアニメーションを読み込む
+    pub fn try_load_unity_animation(&mut self, path: &std::path::Path) {
+        if self.loaded.is_none() {
+            self.convert_message = Some(ConvertMessage::failure(
+                "アニメーションを読み込むには先にモデルを読み込んでください".to_string(),
+            ));
+            return;
+        }
+
+        match crate::unity::animation::load_unity_anim(path, self.muscle_scale) {
+            Ok(anim) => {
+                let loaded = self.loaded.as_ref().unwrap();
+                let path_buf = path.to_path_buf();
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let display_name = format!("{} ({})", file_name, anim.name);
+                let anim = Arc::new(anim);
+                let state = AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
+
+                self.vrma_library.push((display_name, path_buf, anim));
+                self.active_vrma_index = Some(self.vrma_library.len() - 1);
+                self.anim_state = Some(state);
+
+                log::info!("Unity .anim読み込み成功: {}", path.display());
+                self.convert_message = Some(ConvertMessage::success(
+                    format!("Unity .anim読み込み成功: {}", file_name),
+                ));
+            }
+            Err(e) => {
+                log::error!("Unity .anim読み込み失敗: {e}");
+                self.convert_message = Some(ConvertMessage::failure(
+                    format!("Unity .anim読み込み失敗: {e}"),
                 ));
             }
         }
@@ -719,6 +938,7 @@ impl ViewerApp {
             total_faces: ir.total_faces(),
         };
 
+        let format_name = ir.source_format.label().to_string();
         self.loaded = Some(LoadedModel {
             ir,
             gpu_model,
@@ -726,6 +946,13 @@ impl ViewerApp {
             mat_cache,
             stats_cache,
         });
+
+        // ウィンドウタイトル更新
+        self.window_title = Some(format!(
+            "Model Viewer v{} - {}",
+            env!("CARGO_PKG_VERSION"),
+            format_name,
+        ));
 
         if let Some(ref mut renderer) = self.renderer {
             renderer.invalidate_normal_cache();
@@ -1162,7 +1389,7 @@ impl ViewerApp {
         }
     }
 
-    /// unitypackage 再読み込み（FBX再展開 + テクスチャ復元）
+    /// unitypackage 再読み込み（FBX/VRM再展開 + テクスチャ復元）
     fn reload_unitypackage(
         &mut self,
         path: &std::path::Path,
@@ -1171,8 +1398,29 @@ impl ViewerApp {
     ) -> anyhow::Result<()> {
         let archive_data = std::fs::read(path)?;
         let assets = crate::unitypackage::extract_all_assets(&archive_data)?;
-        let fbx_list = crate::unitypackage::find_fbx_list(&assets);
 
+        // 現在のモデルが VRM の場合は VRM として再読み込み
+        let is_vrm = self.loaded.as_ref().map_or(false, |l| {
+            !matches!(l.ir.source_format, crate::intermediate::types::SourceFormat::Fbx)
+        });
+
+        if is_vrm {
+            let vrm_list = crate::unitypackage::find_vrm_list(&assets);
+            if vrm_list.is_empty() {
+                anyhow::bail!(".unitypackage 内に VRM ファイルが見つかりません");
+            }
+            let vrm_idx = if let Some(ref prev_name) = self.selected_fbx_name {
+                vrm_list.iter()
+                    .find(|(_, name)| name == prev_name)
+                    .map(|(idx, _)| *idx)
+                    .unwrap_or(vrm_list[0].0)
+            } else {
+                vrm_list[0].0
+            };
+            return self.load_vrm_from_assets(assets, vrm_idx, path);
+        }
+
+        let fbx_list = crate::unitypackage::find_fbx_list(&assets);
         if fbx_list.is_empty() {
             anyhow::bail!(".unitypackage 内に FBX ファイルが見つかりません");
         }
@@ -1595,6 +1843,11 @@ impl ViewerApp {
 
 impl eframe::App for ViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // ウィンドウタイトル更新
+        if let Some(title) = self.window_title.take() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
+
         // FPS計測（指数移動平均）
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame_time).as_secs_f32();
@@ -1613,20 +1866,70 @@ impl eframe::App for ViewerApp {
             let (path, _) = self.pending_load.take().unwrap();
             self.load_file(path);
         }
-        // unitypackage FBX遅延読み込み
+        // unitypackage モデル遅延読み込み
         if self.pending_fbx_load.as_ref().map_or(false, |p| p.shown) {
             let p = self.pending_fbx_load.take().unwrap();
-            let (assets, fbx_idx, source_path) = (p.assets, p.fbx_index, p.source_path);
-            match self.load_fbx_from_assets(assets, fbx_idx, &source_path) {
-                Ok(()) => {
-                    log::info!("読み込み成功: {}", source_path.display());
-                    self.convert_message = None;
+            let source_path = p.source_path.clone();
+            match p.model_type {
+                PkgModelType::Fbx => {
+                    // モデル読み込み済み → FBXにアニメーションがあるか確認して選択ダイアログ
+                    if self.loaded.is_some() {
+                        // FBXデータからアニメーションの有無を事前チェック
+                        let has_anim = if let Some(asset) = p.assets.get(p.fbx_index) {
+                            crate::fbx::animation::load_fbx_animation_from_data(&asset.data)
+                                .map_or(false, |a| !a.is_empty())
+                        } else {
+                            false
+                        };
+                        if has_anim {
+                            let fbx_name = p.assets.get(p.fbx_index)
+                                .map(|a| a.filename())
+                                .unwrap_or_default();
+                            self.pending_fbx_choice = Some(PendingFbxChoice {
+                                path: std::path::PathBuf::from(&fbx_name),
+                                load_model: true,
+                                load_animation: true,
+                                pkg_context: Some(PendingFbxChoicePkg {
+                                    assets: p.assets,
+                                    fbx_index: p.fbx_index,
+                                    source_path,
+                                }),
+                            });
+                        } else {
+                            // アニメーションなし → モデルのみ読み込み
+                            match self.load_fbx_from_assets(p.assets, p.fbx_index, &source_path, true, false) {
+                                Ok(()) => { self.convert_message = None; }
+                                Err(e) => {
+                                    log::error!("読み込み失敗: {e}");
+                                    self.convert_message = Some(ConvertMessage::failure(format!("読み込み失敗: {e}")));
+                                }
+                            }
+                        }
+                    } else {
+                        // 初回読み込み → モデル+アニメーション両方
+                        match self.load_fbx_from_assets(p.assets, p.fbx_index, &source_path, true, true) {
+                            Ok(()) => {
+                                log::info!("読み込み成功: {}", source_path.display());
+                                self.convert_message = None;
+                            }
+                            Err(e) => {
+                                log::error!("読み込み失敗: {e}");
+                                self.convert_message = Some(ConvertMessage::failure(format!("読み込み失敗: {e}")));
+                            }
+                        }
+                    }
                 }
-                Err(e) => {
-                    log::error!("読み込み失敗: {e}");
-                    self.convert_message = Some(ConvertMessage::failure(
-                        format!("読み込み失敗: {e}")
-                    ));
+                PkgModelType::Vrm => {
+                    match self.load_vrm_from_assets(p.assets, p.fbx_index, &source_path) {
+                        Ok(()) => {
+                            log::info!("読み込み成功: {}", source_path.display());
+                            self.convert_message = None;
+                        }
+                        Err(e) => {
+                            log::error!("読み込み失敗: {e}");
+                            self.convert_message = Some(ConvertMessage::failure(format!("読み込み失敗: {e}")));
+                        }
+                    }
                 }
             }
         }
@@ -1772,6 +2075,62 @@ impl eframe::App for ViewerApp {
                         LightMode::CameraFollow => LightMode::Fixed,
                         LightMode::Fixed => LightMode::CameraFollow,
                     };
+                }
+                // 0-9, Period: Blender 準拠ビュー操作
+                {
+                    let deg15 = 15.0_f32.to_radians();
+                    // 0: 正面
+                    if !i.modifiers.ctrl && i.key_pressed(egui::Key::Num0) {
+                        self.camera.yaw = 0.0;
+                        self.camera.pitch = 0.0;
+                    }
+                    // 1: 左面
+                    if !i.modifiers.ctrl && i.key_pressed(egui::Key::Num1) {
+                        self.camera.yaw = std::f32::consts::FRAC_PI_2;
+                        self.camera.pitch = 0.0;
+                    }
+                    // 2: 下側に回り込む（15° チルト、360° 可能）
+                    if !i.modifiers.ctrl && i.key_pressed(egui::Key::Num2) {
+                        self.camera.pitch -= deg15;
+                    }
+                    // 3: 右面
+                    if !i.modifiers.ctrl && i.key_pressed(egui::Key::Num3) {
+                        self.camera.yaw = -std::f32::consts::FRAC_PI_2;
+                        self.camera.pitch = 0.0;
+                    }
+                    // 4: 左に回り込む（15° パン）
+                    if !i.modifiers.ctrl && i.key_pressed(egui::Key::Num4) {
+                        self.camera.yaw += deg15;
+                    }
+                    // 5: パース／正射影切替
+                    if !i.modifiers.ctrl && i.key_pressed(egui::Key::Num5) {
+                        self.camera.perspective = !self.camera.perspective;
+                    }
+                    // 6: 右に回り込む（15° パン）
+                    if !i.modifiers.ctrl && i.key_pressed(egui::Key::Num6) {
+                        self.camera.yaw -= deg15;
+                    }
+                    // 7: 上面
+                    if !i.modifiers.ctrl && i.key_pressed(egui::Key::Num7) {
+                        self.camera.yaw = 0.0;
+                        self.camera.pitch = std::f32::consts::FRAC_PI_2 - 0.01;
+                    }
+                    // 8: 上側に回り込む（15° チルト、360° 可能）
+                    if !i.modifiers.ctrl && i.key_pressed(egui::Key::Num8) {
+                        self.camera.pitch += deg15;
+                    }
+                    // 9: 背面
+                    if !i.modifiers.ctrl && i.key_pressed(egui::Key::Num9) {
+                        self.camera.yaw = std::f32::consts::PI;
+                        self.camera.pitch = 0.0;
+                    }
+                    // .: フィット
+                    if !i.modifiers.ctrl && i.key_pressed(egui::Key::Period) {
+                        if let Some(ref loaded) = self.loaded {
+                            let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
+                            self.camera.fit_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_height);
+                        }
+                    }
                 }
                 // Space: アニメーション再生/一時停止
                 if i.key_pressed(egui::Key::Space) {

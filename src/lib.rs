@@ -4,6 +4,7 @@ pub mod intermediate;
 pub mod pmx;
 pub mod convert;
 pub mod fbx;
+pub mod unity;
 pub mod unitypackage;
 
 #[cfg(feature = "viewer")]

@@ -76,25 +76,94 @@ fn setup_logging(stderr_level: log::LevelFilter, log_file: Option<&std::path::Pa
 }
 
 /// Windows GUI サブシステムの場合、親コンソールにアタッチして
-/// stdout/stderr を使えるようにする
+/// stdout/stdin/stderr を使えるようにする
 #[cfg(all(feature = "viewer", target_os = "windows"))]
 fn attach_parent_console() {
     extern "system" {
         fn AttachConsole(dw_process_id: u32) -> i32;
+        fn CreateFileA(
+            name: *const u8, access: u32, share: u32,
+            sa: *mut std::ffi::c_void, disp: u32,
+            flags: u32, template: *mut std::ffi::c_void,
+        ) -> *mut std::ffi::c_void;
+        fn SetStdHandle(std_handle: u32, handle: *mut std::ffi::c_void) -> i32;
     }
+
+    const GENERIC_READ: u32 = 0x80000000;
+    const GENERIC_WRITE: u32 = 0x40000000;
+    const FILE_SHARE_READ: u32 = 1;
+    const FILE_SHARE_WRITE: u32 = 2;
+    const OPEN_EXISTING: u32 = 3;
+    const STD_INPUT_HANDLE: u32 = 0xFFFF_FFF6;
+    const STD_OUTPUT_HANDLE: u32 = 0xFFFF_FFF5;
+    const STD_ERROR_HANDLE: u32 = 0xFFFF_FFF4;
+    const INVALID: *mut std::ffi::c_void = -1isize as *mut std::ffi::c_void;
+
     unsafe {
-        AttachConsole(0xFFFFFFFF); // ATTACH_PARENT_PROCESS
+        if AttachConsole(0xFFFFFFFF) == 0 {
+            return;
+        }
+
+        // CONIN$ / CONOUT$ を開いてプロセスの標準ハンドルを差し替え
+        let h_in = CreateFileA(
+            b"CONIN$\0".as_ptr(), GENERIC_READ, FILE_SHARE_READ,
+            std::ptr::null_mut(), OPEN_EXISTING, 0, std::ptr::null_mut(),
+        );
+        if h_in != INVALID {
+            SetStdHandle(STD_INPUT_HANDLE, h_in);
+        }
+
+        let h_out = CreateFileA(
+            b"CONOUT$\0".as_ptr(), GENERIC_WRITE, FILE_SHARE_WRITE,
+            std::ptr::null_mut(), OPEN_EXISTING, 0, std::ptr::null_mut(),
+        );
+        if h_out != INVALID {
+            SetStdHandle(STD_OUTPUT_HANDLE, h_out);
+            SetStdHandle(STD_ERROR_HANDLE, h_out);
+        }
+
+        // Rust の std::io が新しいハンドルを使うよう、
+        // 内部バッファをリセットするために std::io::set_output_capture 等は不要
+        // — SetStdHandle で OS レベルのハンドルが更新されるため、
+        // 以降の Rust print!/stdin は新しいハンドルを使用する
     }
 }
 
-fn main() -> Result<()> {
+/// コンソールを切り離す（ビューア起動前に呼び出す）
+#[cfg(all(feature = "viewer", target_os = "windows"))]
+fn detach_console() {
+    extern "system" {
+        fn FreeConsole() -> i32;
+    }
+    unsafe {
+        FreeConsole();
+    }
+}
+
+
+
+fn main() {
     // GUI サブシステムでも CLI 引数がある場合はコンソール出力を有効にする
     #[cfg(all(feature = "viewer", target_os = "windows"))]
     if std::env::args().len() > 1 {
         attach_parent_console();
     }
 
-    let args = Args::parse();
+    let args = match Args::try_parse() {
+        Ok(args) => args,
+        Err(e) => {
+            let _ = e.print();
+            std::process::exit(e.exit_code());
+        }
+    };
+
+    if let Err(e) = run_main(args) {
+        eprintln!("エラー: {e:#}");
+        std::process::exit(1);
+    }
+}
+
+fn run_main(args: Args) -> Result<()> {
 
     // 引数なし → ビューア起動
     if args.input.is_none() {
@@ -114,6 +183,15 @@ fn main() -> Result<()> {
 
     // unwrap 安全: 上で is_none() チェック済み
     let input = args.input.unwrap();
+
+    // viewer feature: 出力未指定 → ビューアモードで開く
+    #[cfg(feature = "viewer")]
+    {
+        if args.output.is_none() && !args.dump {
+            return run_viewer_with_file(input);
+        }
+    }
+
     let output = args.output.context(
         "出力ファイルパスを指定してください。\n使い方: vrm2pmx <入力.vrm> <出力.pmx>"
     )?;
@@ -249,28 +327,34 @@ fn main() -> Result<()> {
 
 #[cfg(feature = "viewer")]
 fn run_viewer() -> Result<()> {
-    // exe と同じディレクトリに logs/ を作成し、タイムスタンプ付きログを出力
+    run_viewer_with_initial(None)
+}
+
+#[cfg(feature = "viewer")]
+fn run_viewer_with_file(input: PathBuf) -> Result<()> {
+    run_viewer_with_initial(Some(input))
+}
+
+/// ビューア共通起動（ログ・パニックフック・NativeOptions 設定）
+#[cfg(feature = "viewer")]
+fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
     let logs_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("logs")))
         .unwrap_or_else(|| std::path::PathBuf::from("logs"));
     let _ = std::fs::create_dir_all(&logs_dir);
-
-    // 古いログを削除（5世代保持）
     rotate_logs(&logs_dir, 5);
 
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
     let log_path = logs_dir.join(format!("vrm2pmx_{timestamp}.log"));
     setup_logging(log::LevelFilter::Debug, Some(&log_path))?;
 
-    // パニック時にログファイルへバックトレースを書き出す
     {
         let panic_log = log_path.clone();
         std::panic::set_hook(Box::new(move |info| {
             let bt = std::backtrace::Backtrace::force_capture();
             let msg = format!("[PANIC] {info}\n{bt}");
             log::error!("{msg}");
-            // log が flush されない場合に備えて直接書き込み
             if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&panic_log) {
                 use std::io::Write;
                 let _ = writeln!(f, "\n{msg}");
@@ -278,10 +362,14 @@ fn run_viewer() -> Result<()> {
         }));
     }
 
+    if let Some(ref path) = initial_file {
+        log::info!("ビューアモード: {}", path.display());
+    }
+
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
-            .with_title(format!("Viewer v{}", env!("CARGO_PKG_VERSION")))
+            .with_title(format!("Model Viewer v{}", env!("CARGO_PKG_VERSION")))
             .with_drag_and_drop(true),
         renderer: eframe::Renderer::Wgpu,
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
@@ -289,7 +377,6 @@ fn run_viewer() -> Result<()> {
                 eframe::egui_wgpu::WgpuSetupCreateNew {
                     device_descriptor: std::sync::Arc::new(|adapter| {
                         let mut features = eframe::wgpu::Features::default();
-                        // ワイヤーフレーム表示用（対応ハードウェアのみ）
                         if adapter.features().contains(eframe::wgpu::Features::POLYGON_MODE_LINE) {
                             features |= eframe::wgpu::Features::POLYGON_MODE_LINE;
                         }
@@ -306,13 +393,29 @@ fn run_viewer() -> Result<()> {
         ..Default::default()
     };
 
+    // ビューア起動前にコンソールを切り離す
+    #[cfg(target_os = "windows")]
+    detach_console();
+
+    run_viewer_inner(options, logs_dir, log_path, initial_file)
+}
+
+#[cfg(feature = "viewer")]
+fn run_viewer_inner(
+    options: eframe::NativeOptions,
+    logs_dir: PathBuf,
+    log_path: PathBuf,
+    initial_file: Option<PathBuf>,
+) -> Result<()> {
     eframe::run_native(
         "Viewer",
         options,
-        Box::new({
-            let logs_dir = logs_dir.clone();
-            let log_path = log_path.clone();
-            move |cc| Ok(Box::new(vrm2pmx::viewer::app::ViewerApp::new(cc, logs_dir, log_path)))
+        Box::new(move |cc| {
+            let mut app = vrm2pmx::viewer::app::ViewerApp::new(cc, logs_dir, log_path);
+            if let Some(path) = initial_file {
+                app.pending_load = Some((path, false));
+            }
+            Ok(Box::new(app))
         }),
     )
     .map_err(|e| anyhow::anyhow!("ビューア起動失敗: {e}"))

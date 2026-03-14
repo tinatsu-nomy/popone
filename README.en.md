@@ -17,7 +17,7 @@ All releases: [Releases](https://github.com/tinatsu-nomy/vrm2pmx/releases)
 |-------|-------------|
 | VRM 0.0 / 1.0 (`.vrm`) | glTF 2.0-based VR avatar format |
 | FBX Binary (`.fbx`) | Custom parser. Auto-detects Mixamo / Blender / Maya rigs |
-| UnityPackage (`.unitypackage`) | Extracts FBX + textures from tar.gz archive |
+| UnityPackage (`.unitypackage`) | Extracts VRM / FBX + textures from tar.gz archive |
 
 | Output | Description |
 |--------|-------------|
@@ -31,7 +31,11 @@ All releases: [Releases](https://github.com/tinatsu-nomy/vrm2pmx/releases)
 # Launch viewer (or double-click the exe)
 vrm2pmx.exe
 
-# CLI conversion
+# Open file in viewer (auto-viewer mode when output is omitted)
+vrm2pmx.exe input.vrm
+vrm2pmx.exe input.fbx
+
+# CLI conversion (when output is specified)
 vrm2pmx.exe input.vrm output.pmx
 vrm2pmx.exe input.fbx output.pmx
 vrm2pmx.exe input.unitypackage output.pmx
@@ -49,12 +53,14 @@ In the viewer, drag & drop files or use the "Open" button, then click "PMX Conve
 - **Material Visibility** — Per-material ON/OFF toggle with search filter
 - **Texture Assignment** — Assign external textures (PNG/JPG/TGA/BMP/PSD) via drag & drop or dialog. Real-time preview. VRM embedded texture replacement supported (reset button to restore)
 - **Same-Name Material Linking** — ON/OFF toggle to assign textures to all materials sharing the same name simultaneously
-- **UnityPackage Support** — FBX selection dialog, auto texture matching (manual assignment with thumbnail preview and search filter)
+- **UnityPackage Support** — VRM / FBX model selection dialog, auto texture matching (manual assignment with thumbnail preview and search filter)
 - **Wireframe** — 3 modes (Solid / Wire / S+W). W key to cycle
 - **Bone & Physics Visualization** — Wireframe display of joints, rigid bodies, and colliders
 - **Normal Tools** — Normal smoothing, custom normal clear, normal direction visualization
 - **MSAA** — 4x anti-aliasing (toggleable)
 - **UV Map Export** — PSD output with per-material layers (1024–8192 resolution)
+- **Animation Playback** — Load VRMA / glTF / FBX animations via drag & drop or dialog. Humanoid retargeting support. Speed control, A-B loop, ping-pong, frame stepping, expression keyframe sync
+- **FBX Load Selection** — When an FBX contains both model and animation, choose which to load via dialog
 - **PMX Conversion** — Convert directly from viewer with UI options (A-stance, rigid body alignment)
 
 <details>
@@ -65,14 +71,29 @@ In the viewer, drag & drop files or use the "Open" button, then click "PMX Conve
 | Ctrl+O | Open file |
 | F | Fit to model |
 | R | Reset camera |
+| 0 / 1 / 3 / 7 / 9 | View presets (Front / Left / Right / Top / Back) |
+| 2 / 8 | Tilt (orbit down / up by 15°, 360° capable) |
+| 4 / 6 | Pan (orbit left / right by 15°) |
+| 5 | Toggle perspective / orthographic |
+| . | Fit to model |
 | G | Toggle grid |
 | B | Toggle bones |
 | P | Toggle physics |
 | W | Cycle wireframe |
 | N | Toggle normals |
 | L | Cycle light mode |
+| Space | Play/pause animation |
+| Left/Right | Step frame (when paused) |
 
 </details>
+
+### Animation
+
+- VRMA (`.vrma`): VRM Animation format. Humanoid retargeting for cross-model application
+- glTF / GLB (`.gltf` / `.glb`): glTF 2.0 animations with humanoid retargeting
+- FBX (`.fbx`): FBX animation with PreRotation composition, coordinate conversion, and facing detection + Y180 correction
+- 4 loop modes (None / Normal / A-B repeat / Ping-pong)
+- Speed control, frame stepping, seek bar, expression keyframe sync
 
 ### FBX Support
 
@@ -105,12 +126,14 @@ cargo build --release --features viewer
 
 Output: `target/release/vrm2pmx.exe`
 
-> **Windows GUI Subsystem**: Exe built with `--features viewer` won't show a console window. When run with CLI arguments, it auto-attaches to the parent console.
+> **Windows GUI Subsystem**: Exe built with `--features viewer` won't show a console window. When run with CLI arguments, it auto-attaches to the parent console and detaches when launching the viewer.
 
 ## CLI Options
 
 ```bash
-vrm2pmx <input> <output.pmx> [options]
+vrm2pmx <input> [output.pmx] [options]
+
+When output is omitted, the viewer opens automatically (viewer feature build only).
 
 Options:
   --dump                  Print bone/vertex counts only (no PMX output)

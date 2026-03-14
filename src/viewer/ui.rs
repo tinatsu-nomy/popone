@@ -91,35 +91,86 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
         None => {}
     }
 
-    // unitypackage FBX選択ダイアログ
+    // FBX読み込み方法選択ダイアログ
+    show_fbx_choice_dialog(ctx, app);
+
+    // unitypackage モデル選択ダイアログ
     show_fbx_select_dialog(ctx, app);
 
     // unitypackage テクスチャ手動割当ダイアログ
     show_tex_match_dialog(ctx, app);
 }
 
-/// unitypackage内に複数FBXがある場合の選択ダイアログ
-fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
-    let Some(ref pending) = app.pending_unity_pkg else { return };
-    let fbx_list = pending.fbx_list.clone();
+/// FBX読み込み方法選択ダイアログ（モデル+アニメーション両方含む場合）
+fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
+    let Some(ref mut pending) = app.pending_fbx_choice else { return };
 
-    let mut selected: Option<usize> = None;
+    let file_name = pending.path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let mut confirmed = false;
     let mut cancelled = false;
     let mut open = true;
 
-    egui::Window::new("FBX選択")
+    egui::Window::new("FBX読み込み")
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .show(ctx, |ui| {
-            ui.label(".unitypackage 内に複数の FBX が見つかりました。");
+            ui.label(format!("\"{}\"", file_name));
+            ui.label("モデルとアニメーションの両方が含まれています。");
+            ui.separator();
+            ui.checkbox(&mut pending.load_model, "モデルを読み込む");
+            ui.checkbox(&mut pending.load_animation, "アニメーションを読み込む");
+            ui.separator();
+            ui.horizontal(|ui| {
+                let can_ok = pending.load_model || pending.load_animation;
+                if ui.add_enabled(can_ok, egui::Button::new("OK")).clicked() {
+                    confirmed = true;
+                }
+                if ui.button("キャンセル").clicked() {
+                    cancelled = true;
+                }
+            });
+        });
+
+    if confirmed {
+        let choice = app.pending_fbx_choice.take().unwrap();
+        app.execute_fbx_choice(choice);
+    } else if cancelled || !open {
+        app.pending_fbx_choice = None;
+    }
+}
+
+/// unitypackage内に複数モデルがある場合の選択ダイアログ
+fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
+    let Some(ref pending) = app.pending_unity_pkg else { return };
+    let model_list = pending.model_list.clone();
+
+    let mut selected: Option<(usize, super::app::PkgModelType)> = None;
+    let mut cancelled = false;
+    let mut open = true;
+
+    egui::Window::new("モデル選択")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.label(".unitypackage 内に複数のモデルが見つかりました。");
             ui.label("読み込むファイルを選択してください。");
             ui.separator();
             egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                for (asset_idx, name) in &fbx_list {
-                    if ui.button(name).clicked() {
-                        selected = Some(*asset_idx);
+                for (asset_idx, name, model_type) in &model_list {
+                    let type_label = match model_type {
+                        super::app::PkgModelType::Vrm => "[VRM]",
+                        super::app::PkgModelType::Fbx => "[FBX]",
+                    };
+                    if ui.button(format!("{} {}", type_label, name)).clicked() {
+                        selected = Some((*asset_idx, *model_type));
                     }
                 }
             });
@@ -129,12 +180,12 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             }
         });
 
-    if let Some(fbx_idx) = selected {
-        // pending_unity_pkg を消してダイアログを閉じ、pending_fbx_load に移す
+    if let Some((idx, model_type)) = selected {
         let pending = app.pending_unity_pkg.take().unwrap();
         app.pending_fbx_load = Some(super::app::PendingFbxLoad {
             assets: pending.assets,
-            fbx_index: fbx_idx,
+            fbx_index: idx,
+            model_type,
             source_path: pending.source_path,
             shown: false,
         });
@@ -1030,7 +1081,7 @@ fn show_meta_info(ui: &mut egui::Ui, comment: &str) {
         let id = egui::Id::new(format!("meta_section_{i}"));
         egui::CollapsingHeader::new(&sec.title)
             .id_salt(id)
-            .default_open(i == 0) // 最初のセクションだけ開く
+            .default_open(true)
             .show(ui, |ui| {
                 egui::Grid::new(format!("meta_grid_{i}"))
                     .num_columns(2)
@@ -1162,7 +1213,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
 
     // VRMAライブラリ
     if !app.vrma_library.is_empty() {
-        ui.label(format!("VRMAリスト ({}件):", app.vrma_library.len()));
+        ui.label(format!("アニメーションリスト ({}件):", app.vrma_library.len()));
         let mut switch_to: Option<usize> = None;
         let mut remove_idx: Option<usize> = None;
         for (i, (name, _, _)) in app.vrma_library.iter().enumerate() {
@@ -1206,6 +1257,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
     }
 
     let mut switch_anim: Option<bool> = None;
+    let mut muscle_scale_changed = false;
 
     if let Some(ref mut anim) = app.anim_state {
         ui.label(format!("{} ({:.1}秒)", anim.animation.name, anim.animation.duration));
@@ -1280,6 +1332,23 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
             );
         });
 
+        // Unity .anim の Muscle スケール調整（is_additive の場合のみ）
+        if anim.animation.is_additive {
+            ui.horizontal(|ui| {
+                ui.label("Muscle倍率");
+                let old_scale = app.muscle_scale;
+                ui.add(
+                    egui::DragValue::new(&mut app.muscle_scale)
+                        .range(0.01..=2.0)
+                        .speed(0.01)
+                        .fixed_decimals(2),
+                );
+                if (app.muscle_scale - old_scale).abs() > 1e-6 {
+                    muscle_scale_changed = true;
+                }
+            });
+        }
+
         ui.horizontal(|ui| {
             ui.label("ループ");
             egui::ComboBox::from_id_salt("loop_mode")
@@ -1341,6 +1410,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     match ext.to_lowercase().as_str() {
                         "glb" | "gltf" => app.try_load_gltf_animation(path),
                         "fbx" => app.try_load_fbx_animation(path),
+                        "anim" => app.try_load_unity_animation(path),
                         _ => app.try_load_vrma(path),
                     }
                 }
@@ -1362,20 +1432,48 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     }
 
+    // Muscle倍率変更 → .anim 再読み込み
+    if muscle_scale_changed {
+        if let Some(idx) = app.active_vrma_index {
+            let path = app.vrma_library[idx].1.clone();
+            if path.extension().map_or(false, |e| e.eq_ignore_ascii_case("anim")) {
+                // 現在の再生位置・状態を保存
+                let (cur_time, was_playing) = app.anim_state.as_ref()
+                    .map(|s| (s.current_time, s.playing))
+                    .unwrap_or((0.0, false));
+                if let Ok(new_anim) = crate::unity::animation::load_unity_anim(&path, app.muscle_scale) {
+                    let new_anim = std::sync::Arc::new(new_anim);
+                    if let Some(ref loaded) = app.loaded {
+                        let mut state = super::animation::AnimationState::new(
+                            std::sync::Arc::clone(&new_anim), &loaded.ir, &loaded.gpu_model,
+                        );
+                        state.current_time = cur_time;
+                        state.playing = was_playing;
+                        app.vrma_library[idx].2 = new_anim;
+                        app.anim_state = Some(state);
+                    }
+                }
+            }
+        }
+    }
+
     if app.loaded.is_some() && app.anim_state.is_some() {
         if ui.small_button("アニメーションを追加...").clicked() {
             let paths = rfd::FileDialog::new()
                 .set_title("アニメーションを追加（複数選択可）")
-                .add_filter("アニメーション", &["vrma", "glb", "gltf"])
+                .add_filter("アニメーション", &["vrma", "glb", "gltf", "fbx"])
                 .add_filter("VRMA (.vrma)", &["vrma"])
                 .add_filter("GLB (.glb)", &["glb"])
                 .add_filter("glTF (.gltf)", &["gltf"])
+                .add_filter("FBX (.fbx)", &["fbx"])
                 .pick_files()
                 .unwrap_or_default();
             for path in &paths {
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                 match ext.to_lowercase().as_str() {
                     "glb" | "gltf" => app.try_load_gltf_animation(path),
+                    "fbx" => app.try_load_fbx_animation(path),
+                    "anim" => app.try_load_unity_animation(path),
                     _ => app.try_load_vrma(path),
                 }
             }

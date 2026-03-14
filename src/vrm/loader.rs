@@ -24,6 +24,21 @@ pub fn load_glb(path: &Path) -> Result<GlbData> {
     })
 }
 
+/// バイト列から GLB/VRM を読み込む（unitypackage 内 VRM 用）
+pub fn load_glb_from_data(data: &[u8]) -> Result<GlbData> {
+    let (document, buffers, images) = gltf::import_slice(data)
+        .context("GLBデータの読み込みに失敗")?;
+
+    let vrm_extension = extract_vrm_extension(&document)?;
+
+    Ok(GlbData {
+        document,
+        buffers,
+        images,
+        vrm_extension,
+    })
+}
+
 fn extract_vrm_extension(document: &gltf::Document) -> Result<Value> {
     let json = document.as_json();
 

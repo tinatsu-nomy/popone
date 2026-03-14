@@ -9,6 +9,8 @@ pub struct OrbitCamera {
     pub pitch: f32,  // ラジアン
     /// モデルのバウンディング球の半径（ズーム感度に使用）
     pub model_radius: f32,
+    /// 透視投影（true）/ 正射影（false）
+    pub perspective: bool,
 }
 
 impl Default for OrbitCamera {
@@ -19,6 +21,7 @@ impl Default for OrbitCamera {
             yaw: 0.0,
             pitch: 0.0,
             model_radius: 20.0,
+            perspective: true,
         }
     }
 }
@@ -71,7 +74,8 @@ impl OrbitCamera {
     /// ビュー空間の右方向と上方向を返す
     fn view_axes(&self) -> (Vec3, Vec3) {
         let forward = (self.target - self.eye()).normalize();
-        let right = forward.cross(Vec3::Y).normalize_or_zero();
+        let world_up = self.up_vector();
+        let right = forward.cross(world_up).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
         // pitch ≈ ±90° で right がゼロになる場合のフォールバック
         if right.length_squared() < 1e-6 {
@@ -80,18 +84,36 @@ impl OrbitCamera {
         (right, up)
     }
 
+    /// pitch に応じた up ベクトル（360° チルト対応）
+    fn up_vector(&self) -> Vec3 {
+        // pitch が ±90° を超えると逆さまになるので、cos(pitch) の符号で up を反転
+        if self.pitch.cos() >= 0.0 {
+            Vec3::Y
+        } else {
+            Vec3::NEG_Y
+        }
+    }
+
     /// View-Projection 行列（左手系、wgpu NDC: Z∈[0,1]）
     /// near/far はカメラ距離に応じて動的調整
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
-        let view = Mat4::look_at_lh(self.eye(), self.target, Vec3::Y);
+        let view = Mat4::look_at_lh(self.eye(), self.target, self.up_vector());
         let near = (self.distance * 0.005).clamp(0.01, 1.0);
         let far = (self.distance * 50.0).clamp(100.0, 50000.0);
-        let proj = Mat4::perspective_lh(
-            45.0_f32.to_radians(),
-            aspect,
-            near,
-            far,
-        );
+        let proj = if self.perspective {
+            Mat4::perspective_lh(
+                45.0_f32.to_radians(),
+                aspect,
+                near,
+                far,
+            )
+        } else {
+            // 正射影: 透視投影と同じ距離でのビュー高さに合わせる
+            let fov_half = (45.0_f32 / 2.0).to_radians();
+            let half_h = self.distance * fov_half.tan();
+            let half_w = half_h * aspect;
+            Mat4::orthographic_lh(-half_w, half_w, -half_h, half_h, near, far)
+        };
         proj * view
     }
 
@@ -153,7 +175,8 @@ impl OrbitCamera {
     /// ライト方向 — カメラ追従モード
     pub fn camera_following_light_dir(&self) -> Vec3 {
         let forward = (self.target - self.eye()).normalize();
-        let right = forward.cross(Vec3::Y).normalize_or_zero();
+        let world_up = self.up_vector();
+        let right = forward.cross(world_up).normalize_or_zero();
         let up = right.cross(forward);
         (forward + right * 0.3 + up * 0.5).normalize()
     }

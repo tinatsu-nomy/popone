@@ -26,8 +26,13 @@ struct FbxAxisConfig {
 pub fn load_fbx_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
     let data = std::fs::read(path)
         .with_context(|| format!("FBXファイルの読み込みに失敗: {}", path.display()))?;
-    let doc = super::parser::parse(&data)
-        .with_context(|| format!("FBXパースに失敗: {}", path.display()))?;
+    load_fbx_animation_from_data(&data)
+}
+
+/// FBXバイナリデータからアニメーションを読み込む
+pub fn load_fbx_animation_from_data(data: &[u8]) -> Result<Vec<VrmaAnimation>> {
+    let doc = super::parser::parse(data)
+        .with_context(|| "FBXパースに失敗")?;
     let scene = FbxScene::from_document(&doc);
     let axis_config = read_axis_config(&doc);
 
@@ -362,6 +367,8 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
                 bone_rests: matched_rests,
                 match_mode,
                 facing_flip_y,
+                is_additive: false,
+                is_bone_local_delta: false,
             });
         }
     }

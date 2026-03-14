@@ -84,6 +84,11 @@ pub struct VrmaAnimation {
     pub match_mode: BoneMatchMode,
     /// ソースモデルがY軸180°反転しているか（+Z向き vs VRMの-Z向き）
     pub facing_flip_y: bool,
+    /// 回転がレストポーズからのデルタか（Unity Muscle等）
+    pub is_additive: bool,
+    /// ボーンローカル空間でのデルタか（true: parent共役変換省略）
+    /// Unity Muscle の場合 true（回転は既にボーンローカル空間）
+    pub is_bone_local_delta: bool,
 }
 
 impl VrmaAnimation {

@@ -119,6 +119,37 @@ pub fn take_fbx_and_textures(
     Ok((fbx_data, fbx_name, textures))
 }
 
+/// 展開済みアセットからVRM一覧を取得
+/// 戻り値: [(アセットインデックス, ファイル名)]
+pub fn find_vrm_list(assets: &[ExtractedAsset]) -> Vec<(usize, String)> {
+    assets
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.pathname.to_lowercase().ends_with(".vrm"))
+        .map(|(i, a)| (i, a.filename()))
+        .collect()
+}
+
+/// 展開済みアセットから指定VRMを取り出す
+/// assets は消費される（所有権移動）
+pub fn take_vrm(
+    mut assets: Vec<ExtractedAsset>,
+    vrm_index: usize,
+) -> Result<(Vec<u8>, String)> {
+    if vrm_index >= assets.len() {
+        bail!("VRMインデックスが範囲外: {}", vrm_index);
+    }
+    let vrm_asset = assets.swap_remove(vrm_index);
+    let vrm_name = vrm_asset.filename();
+    let vrm_data = vrm_asset.data;
+    log::info!(
+        ".unitypackage 展開: VRM={} ({}KB)",
+        vrm_name,
+        vrm_data.len() / 1024,
+    );
+    Ok((vrm_data, vrm_name))
+}
+
 /// .unitypackage から FBX を探して抽出する（CLI用: 最初のFBXを使用）
 /// 戻り値: (FBXデータ, FBXファイル名, テクスチャ一覧 [(パス名, データ)])
 pub fn extract_fbx_from_unitypackage(
