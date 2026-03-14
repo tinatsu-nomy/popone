@@ -3,9 +3,10 @@ use super::gpu::GridVertex;
 /// グリッド床の頂点データを生成
 /// PMX スケールで Y=0 平面に描画
 pub fn build_grid_vertices() -> (Vec<GridVertex>, u32) {
-    let mut verts = Vec::new();
     let extent = 100.0_f32; // PMX単位
     let step = 5.0_f32;
+    let lines_per_axis = (2.0 * extent / step) as usize + 1;
+    let mut verts = Vec::with_capacity(lines_per_axis * 4);
     let color = [0.35, 0.35, 0.35, 1.0];
     let axis_color_x = [0.6, 0.3, 0.3, 1.0]; // X軸（赤っぽい）
     let axis_color_z = [0.3, 0.3, 0.6, 1.0]; // Z軸（青っぽい）

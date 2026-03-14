@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 620" font-family="'Segoe UI','Noto Sans JP',sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#555"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#3080D0"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#40A050"/>
+    </marker>
+  </defs>
+
+  <!-- 背景 -->
+  <rect width="900" height="620" fill="#FAFAFA" rx="8"/>
+
+  <!-- タイトル -->
+  <text x="450" y="30" text-anchor="middle" font-size="16" font-weight="bold" fill="#333">vrm2pmx アーキテクチャ</text>
+
+  <!-- 入力ファイル -->
+  <rect x="60" y="50" width="130" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
+  <text x="125" y="73" text-anchor="middle" font-weight="bold" fill="#1A56DB">VRM (.vrm/.glb)</text>
+
+  <rect x="240" y="50" width="110" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
+  <text x="295" y="73" text-anchor="middle" font-weight="bold" fill="#1A56DB">FBX (.fbx)</text>
+
+  <!-- 出力ファイル -->
+  <rect x="740" y="170" width="120" height="36" rx="18" fill="#FDE8E8" stroke="#E04040" stroke-width="1.5"/>
+  <text x="800" y="193" text-anchor="middle" font-weight="bold" fill="#C02020">PMX (.pmx)</text>
+
+  <!-- 分岐ラベル -->
+  <text x="300" y="112" font-size="11" fill="#666">[引数あり] CLI 変換</text>
+  <text x="160" y="460" font-size="11" fill="#666">[引数なし] ビューア</text>
+
+  <!-- ── モジュールボックス群 ── -->
+
+  <!-- vrm/ -->
+  <rect x="40" y="140" width="140" height="120" rx="6" fill="#E3F2FD" stroke="#1976D2" stroke-width="1.5"/>
+  <text x="110" y="160" text-anchor="middle" font-weight="bold" fill="#1565C0">vrm/</text>
+  <text x="55" y="180" font-size="11" fill="#444">loader</text>
+  <text x="55" y="196" font-size="11" fill="#444">extract</text>
+  <text x="55" y="212" font-size="11" fill="#444">detect</text>
+  <text x="55" y="228" font-size="11" fill="#444">types_v0 / v1</text>
+
+  <!-- fbx/ -->
+  <rect x="210" y="140" width="140" height="150" rx="6" fill="#E3F2FD" stroke="#1976D2" stroke-width="1.5"/>
+  <text x="280" y="160" text-anchor="middle" font-weight="bold" fill="#1565C0">fbx/</text>
+  <text x="225" y="180" font-size="11" fill="#444">parser</text>
+  <text x="225" y="196" font-size="11" fill="#444">scene</text>
+  <text x="225" y="212" font-size="11" fill="#444">extract</text>
+  <text x="225" y="228" font-size="11" fill="#444">bone / mesh / skin</text>
+  <text x="225" y="244" font-size="11" fill="#444">texture</text>
+  <text x="225" y="260" font-size="11" fill="#444">humanoid / blendshape</text>
+
+  <!-- intermediate/ -->
+  <rect x="390" y="140" width="150" height="90" rx="6" fill="#FFF3E0" stroke="#E65100" stroke-width="1.5"/>
+  <text x="465" y="160" text-anchor="middle" font-weight="bold" fill="#BF360C">intermediate/</text>
+  <text x="405" y="182" font-size="11" fill="#444">IrModel</text>
+  <text x="405" y="198" font-size="11" fill="#444">pose (Aスタンス)</text>
+  <text x="405" y="214" font-size="11" fill="#444">types</text>
+
+  <!-- pmx/ -->
+  <rect x="590" y="140" width="130" height="100" rx="6" fill="#FCE4EC" stroke="#C62828" stroke-width="1.5"/>
+  <text x="655" y="160" text-anchor="middle" font-weight="bold" fill="#B71C1C">pmx/</text>
+  <text x="605" y="182" font-size="11" fill="#444">build</text>
+  <text x="605" y="198" font-size="11" fill="#444">writer</text>
+  <text x="605" y="214" font-size="11" fill="#444">types</text>
+
+  <!-- convert/ -->
+  <rect x="390" y="270" width="150" height="150" rx="6" fill="#E8F5E9" stroke="#2E7D32" stroke-width="1.5"/>
+  <text x="465" y="290" text-anchor="middle" font-weight="bold" fill="#1B5E20">convert/</text>
+  <text x="405" y="312" font-size="11" fill="#444">coord — 座標変換</text>
+  <text x="405" y="328" font-size="11" fill="#444">bone_map — ボーン名</text>
+  <text x="405" y="344" font-size="11" fill="#444">material — 材質変換</text>
+  <text x="405" y="360" font-size="11" fill="#444">morph — モーフ名</text>
+  <text x="405" y="376" font-size="11" fill="#444">physics — 物理変換</text>
+  <text x="405" y="392" font-size="11" fill="#444">texture — テクスチャ</text>
+  <text x="405" y="408" font-size="11" fill="#444">uvmap — UVマップPSD</text>
+
+  <!-- viewer/ -->
+  <rect x="40" y="480" width="300" height="130" rx="6" fill="#F3E5F5" stroke="#7B1FA2" stroke-width="1.5"/>
+  <text x="190" y="500" text-anchor="middle" font-weight="bold" fill="#6A1B9A">viewer/</text>
+  <text x="50" y="498" font-size="10" fill="#9C27B0">feature = "viewer"</text>
+  <text x="55" y="522" font-size="11" fill="#444">app.rs — eframe::App 状態管理</text>
+  <text x="55" y="538" font-size="11" fill="#444">gpu.rs — wgpu パイプライン・描画</text>
+  <text x="55" y="554" font-size="11" fill="#444">mesh.rs — IrModel → GPU バッファ</text>
+  <text x="55" y="570" font-size="11" fill="#444">texture.rs / camera.rs / grid.rs</text>
+  <text x="55" y="586" font-size="11" fill="#444">ui.rs — 情報パネル・モーフ・変換</text>
+
+  <!-- ── 矢印（データフロー） ── -->
+
+  <!-- VRM → vrm/ -->
+  <line x1="125" y1="86" x2="110" y2="138" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- FBX → fbx/ -->
+  <line x1="295" y1="86" x2="280" y2="138" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- vrm/ → intermediate/ -->
+  <line x1="180" y1="190" x2="388" y2="190" stroke="#3080D0" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+  <!-- fbx/ → intermediate/ -->
+  <line x1="350" y1="190" x2="388" y2="190" stroke="#3080D0" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+  <!-- intermediate/ → pmx/ -->
+  <line x1="540" y1="190" x2="588" y2="190" stroke="#3080D0" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+  <!-- pmx/ → PMX output -->
+  <line x1="720" y1="190" x2="738" y2="190" stroke="#E04040" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- convert/ → intermediate/ (上向き) -->
+  <line x1="465" y1="268" x2="465" y2="232" stroke="#40A050" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+  <!-- convert/ → pmx/ (右上向き) -->
+  <line x1="540" y1="310" x2="620" y2="242" stroke="#40A050" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+  <!-- intermediate/ → viewer/ (下向き、左に曲がる) -->
+  <path d="M420,230 L420,440 L190,440 L190,478" fill="none" stroke="#7B1FA2" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- viewer/ → pmx/ (PMX変換ボタン) -->
+  <path d="M340,545 L660,545 L660,242" fill="none" stroke="#C62828" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#arrow)"/>
+  <text x="530" y="540" font-size="10" fill="#C62828">(PMX 変換ボタン)</text>
+
+  <!-- 凡例 -->
+  <rect x="620" y="480" width="250" height="120" rx="6" fill="#F5F5F5" stroke="#CCC" stroke-width="1"/>
+  <text x="635" y="500" font-size="12" font-weight="bold" fill="#555">凡例</text>
+  <line x1="635" y1="516" x2="670" y2="516" stroke="#3080D0" stroke-width="2"/>
+  <text x="678" y="520" font-size="11" fill="#444">データフロー</text>
+  <line x1="635" y1="536" x2="670" y2="536" stroke="#40A050" stroke-width="2"/>
+  <text x="678" y="540" font-size="11" fill="#444">変換ロジック参照</text>
+  <line x1="635" y1="556" x2="670" y2="556" stroke="#C62828" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="678" y="560" font-size="11" fill="#444">ビューアからの変換</text>
+  <line x1="635" y1="576" x2="670" y2="576" stroke="#7B1FA2" stroke-width="2"/>
+  <text x="678" y="580" font-size="11" fill="#444">ビューア表示</text>
+</svg>

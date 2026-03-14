@@ -42,7 +42,7 @@ pub fn gltf_quat_to_pmx(q: Quat) -> Quat {
 
 /// 面の巻き順反転（X反転でフロントフェースが逆になるため）
 /// [a, b, c] → [a, c, b]
-pub fn flip_face_winding(indices: &mut Vec<u32>) {
+pub fn flip_face_winding(indices: &mut [u32]) {
     let n = indices.len();
     let mut i = 0;
     while i + 2 < n {

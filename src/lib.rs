@@ -3,6 +3,8 @@ pub mod vrm;
 pub mod intermediate;
 pub mod pmx;
 pub mod convert;
+pub mod fbx;
+pub mod unitypackage;
 
 #[cfg(feature = "viewer")]
 pub mod viewer;
@@ -28,17 +30,37 @@ pub fn convert_vrm_to_pmx(
     output_path: &Path,
     no_physics: bool,
 ) -> Result<ConvertStats> {
+    convert_vrm_to_pmx_with_options(input_path, output_path, no_physics, false)
+}
+
+pub fn convert_vrm_to_pmx_with_options(
+    input_path: &Path,
+    output_path: &Path,
+    no_physics: bool,
+    align_rigid_rotation: bool,
+) -> Result<ConvertStats> {
+    convert_vrm_to_pmx_full(input_path, output_path, no_physics, align_rigid_rotation, false)
+}
+
+pub fn convert_vrm_to_pmx_full(
+    input_path: &Path,
+    output_path: &Path,
+    no_physics: bool,
+    align_rigid_rotation: bool,
+    normalize_pose: bool,
+) -> Result<ConvertStats> {
     let glb = vrm::loader::load_glb(input_path)?;
     let version = vrm::detect::detect_version(&glb.document);
     let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
 
-    let mut ir = vrm::extract::extract_ir_model(
+    let mut ir = vrm::extract::extract_ir_model_with_options(
         &glb.document,
         &glb.buffers,
         &glb.images,
         &glb.vrm_extension,
         &version,
         &all_extensions,
+        normalize_pose,
     )?;
 
     if no_physics {
@@ -49,8 +71,40 @@ pub fn convert_vrm_to_pmx(
     let tex_dir = output_dir.join("textures");
     convert::texture::write_all_textures(&ir.textures, &glb.images, &tex_dir)?;
 
-    let pmx_model = pmx::build::build_pmx_model(&ir)?;
+    let pmx_model = pmx::build::build_pmx_model_with_options(&ir, align_rigid_rotation)?;
+    write_pmx_and_stats(&pmx_model, output_path, &tex_dir)
+}
 
+/// FBX → PMX 変換
+pub fn convert_fbx_to_pmx(
+    input_path: &Path,
+    output_path: &Path,
+) -> Result<ConvertStats> {
+    let data = std::fs::read(input_path)?;
+    let ir = fbx::extract::extract_ir_model_from_fbx(&data, Some(input_path))?;
+    convert_ir_to_pmx(&ir, output_path, false)
+}
+
+/// IrModel から直接 PMX 変換（ビューアで編集済みの IrModel を使用）
+pub fn convert_ir_to_pmx(
+    ir: &intermediate::types::IrModel,
+    output_path: &Path,
+    align_rigid_rotation: bool,
+) -> Result<ConvertStats> {
+    let output_dir = output_path.parent().unwrap_or(Path::new("."));
+    let tex_dir = output_dir.join("textures");
+    convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)?;
+
+    let pmx_model = pmx::build::build_pmx_model_with_options(ir, align_rigid_rotation)?;
+    write_pmx_and_stats(&pmx_model, output_path, &tex_dir)
+}
+
+/// PMX モデルをファイルに書き出して ConvertStats を返す（共通処理）
+fn write_pmx_and_stats(
+    pmx_model: &pmx::types::PmxModel,
+    output_path: &Path,
+    tex_dir: &Path,
+) -> Result<ConvertStats> {
     let stats = ConvertStats {
         output_path: output_path.to_string_lossy().to_string(),
         tex_dir: tex_dir.to_string_lossy().to_string(),
@@ -66,7 +120,23 @@ pub fn convert_vrm_to_pmx(
     let writer = std::io::BufWriter::new(file);
     let header = pmx_model.header.clone();
     let mut pmx_writer = pmx::writer::PmxWriter::new(writer, header);
-    pmx_writer.write_model(&pmx_model)?;
+    pmx_writer.write_model(pmx_model)?;
 
     Ok(stats)
+}
+
+/// 拡張子で VRM/FBX を自動判定して PMX 変換
+pub fn convert_to_pmx(
+    input_path: &Path,
+    output_path: &Path,
+    no_physics: bool,
+) -> Result<ConvertStats> {
+    let ext = input_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+    match ext.as_deref() {
+        Some("fbx") => convert_fbx_to_pmx(input_path, output_path),
+        _ => convert_vrm_to_pmx(input_path, output_path, no_physics),
+    }
 }

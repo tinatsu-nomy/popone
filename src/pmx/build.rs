@@ -18,12 +18,18 @@ pub fn idx_size(n: usize) -> u8 {
     if n <= 127 { 1 } else if n <= 32767 { 2 } else { 4 }
 }
 
-pub fn build_pmx_model(
+pub fn build_pmx_model(ir: &IrModel) -> Result<PmxModel> {
+    build_pmx_model_with_options(ir, false)
+}
+
+#[allow(clippy::field_reassign_with_default)]
+pub fn build_pmx_model_with_options(
     ir: &IrModel,
+    align_rigid_rotation: bool,
 ) -> Result<PmxModel> {
     log::info!("=== PMXモデル構築開始 ===");
     log::info!("モデル名: {}", ir.name);
-    log::info!("VRMバージョン: {}", if ir.is_vrm0 { "0.0" } else { "1.0" });
+    log::info!("ソース形式: {}", ir.source_format.label());
 
     // 入力VRM統計
     log::info!("入力VRM: ボーン={}, メッシュ={}, 頂点={}, 面={}, 材質={}, テクスチャ={}, モーフ={}, 剛体={}, ジョイント={}",
@@ -48,9 +54,9 @@ pub fn build_pmx_model(
         comment_en: String::new(),
     };
 
-    // テクスチャパス（textures/フォルダ相対）
+    // テクスチャパス（textures\フォルダ相対、Windows区切り）
     model.textures = ir.textures.iter()
-        .map(|t| format!("textures/{}", t.filename))
+        .map(|t| format!("textures\\{}", t.filename))
         .collect();
     log::debug!("--- テクスチャ一覧 ---");
     for (i, tex) in ir.textures.iter().enumerate() {
@@ -84,7 +90,7 @@ pub fn build_pmx_model(
     model.bones = build_bones(ir);
 
     // 頂点・面 統合
-    let (vertices, faces, mat_face_counts) = build_vertices_and_faces(ir, ir.is_vrm0);
+    let (vertices, faces, mat_face_counts) = build_vertices_and_faces(ir, ir.source_format.is_vrm0());
     model.vertices = vertices;
     model.faces = faces;
 
@@ -101,10 +107,10 @@ pub fn build_pmx_model(
     }
 
     // モーフ変換
-    model.morphs = build_morphs(ir, ir.is_vrm0);
+    model.morphs = build_morphs(ir, ir.source_format.is_vrm0());
 
     // 剛体・ジョイント
-    model.rigid_bodies = build_rigid_bodies(ir);
+    model.rigid_bodies = build_rigid_bodies(ir, align_rigid_rotation);
     model.joints = build_joints(ir);
 
     // 全データ揃った後に標準ボーン挿入（頂点・剛体・既存ボーンのindex調整もここで）
@@ -178,10 +184,10 @@ fn move_bone_in_model(model: &mut PmxModel, from: usize, to: usize) {
     let n = model.bones.len();
     let mut remap: Vec<i32> = (0..n as i32).collect();
     if from < to {
-        for i in (from + 1)..=to { remap[i] = (i - 1) as i32; }
+        for (i, slot) in remap[(from + 1)..=to].iter_mut().enumerate() { *slot = (from + i) as i32; }
         remap[from] = to as i32;
     } else {
-        for i in to..from { remap[i] = (i + 1) as i32; }
+        for (i, slot) in remap[to..from].iter_mut().enumerate() { *slot = (to + i + 1) as i32; }
         remap[from] = to as i32;
     }
 
@@ -380,7 +386,7 @@ fn insert_standard_bones(model: &mut PmxModel) {
     }
 
     // 既存ボーンを後ろに連結して置き換え
-    new_bones.extend(model.bones.drain(..));
+    new_bones.append(&mut model.bones);
     model.bones = new_bones;
     log::debug!("[step6] 既存ボーンを連結 → 合計{}本", model.bones.len());
 
@@ -899,7 +905,7 @@ fn project_on_bone(vtx_pos: Vec3, start: Vec3, end: Vec3) -> f32 {
 
 /// 親ボーン(arm_idx)のウェイトを投影値 t で捩りボーン(twist_idx)と分割する
 fn redistribute_twist_weight(
-    vertices: &mut Vec<PmxVertex>,
+    vertices: &mut [PmxVertex],
     parent_pos: Vec3,
     child_pos: Vec3,
     arm_idx: i32,
@@ -1095,8 +1101,8 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) {
 }
 
 fn build_bones(ir: &IrModel) -> Vec<PmxBone> {
-    let mut pmx_bones = Vec::new();
-    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if ir.is_vrm0 { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
+    let mut pmx_bones = Vec::with_capacity(ir.bones.len());
+    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if ir.source_format.is_vrm0() { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
 
     for bone in ir.bones.iter() {
         let pmx_pos = pos_fn(bone.position);
@@ -1123,7 +1129,7 @@ fn build_bones(ir: &IrModel) -> Vec<PmxBone> {
 
         // フラグ
         let mut flags = BONE_FLAG_ROTATABLE | BONE_FLAG_VISIBLE | BONE_FLAG_OPERABLE;
-        if bone.children.first().is_some() {
+        if !bone.children.is_empty() {
             flags |= BONE_FLAG_TAIL_IS_BONE;
         }
         if bone.is_physics {
@@ -1147,11 +1153,13 @@ fn build_bones(ir: &IrModel) -> Vec<PmxBone> {
     pmx_bones
 }
 
-fn build_vertices_and_faces(ir: &IrModel, is_vrm0: bool) -> (Vec<PmxVertex>, Vec<[u32; 3]>, Vec<u32>) {
-    let mut all_vertices: Vec<PmxVertex> = Vec::new();
-    let mut all_faces: Vec<[u32; 3]> = Vec::new();
-    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if is_vrm0 { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
-    let nrm_fn: fn(glam::Vec3) -> glam::Vec3 = if is_vrm0 { gltf_normal_to_pmx_v0 } else { gltf_normal_to_pmx };
+fn build_vertices_and_faces(ir: &IrModel, use_vrm0_coords: bool) -> (Vec<PmxVertex>, Vec<[u32; 3]>, Vec<u32>) {
+    let total_verts: usize = ir.meshes.iter().map(|m| m.vertices.len()).sum();
+    let total_faces: usize = ir.meshes.iter().map(|m| m.indices.len() / 3).sum();
+    let mut all_vertices: Vec<PmxVertex> = Vec::with_capacity(total_verts);
+    let mut all_faces: Vec<[u32; 3]> = Vec::with_capacity(total_faces);
+    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if use_vrm0_coords { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
+    let nrm_fn: fn(glam::Vec3) -> glam::Vec3 = if use_vrm0_coords { gltf_normal_to_pmx_v0 } else { gltf_normal_to_pmx };
 
     let mat_count = ir.materials.len().max(1);
     let mut mat_face_counts = vec![0u32; mat_count];
@@ -1170,7 +1178,7 @@ fn build_vertices_and_faces(ir: &IrModel, is_vrm0: bool) -> (Vec<PmxVertex>, Vec
             all_vertices.push(PmxVertex {
                 position: pmx_pos,
                 normal: pmx_normal,
-                uv: vtx.uv,
+                uv: glam::Vec2::new(fract_uv(vtx.uv.x), fract_uv(vtx.uv.y)),
                 weight,
                 edge_scale: vtx.edge_scale,
             });
@@ -1180,7 +1188,7 @@ fn build_vertices_and_faces(ir: &IrModel, is_vrm0: bool) -> (Vec<PmxVertex>, Vec
     // 2. 面を材質順にグループ化（PMX要件: 材質ごとに連続した面配列）
     // VRM 1.0: (x,y,-z) → det=-1、VRM 0.0: (-x,y,z) → det=-1
     // 両バージョンとも行列式 -1 → b,c を swap して巻き順を反転
-    for mat_idx in 0..mat_count {
+    for (mat_idx, face_count_slot) in mat_face_counts.iter_mut().enumerate() {
         for (mesh_i, mesh) in ir.meshes.iter().enumerate() {
             if mesh.material_index != mat_idx { continue; }
             let vertex_offset = mesh_vertex_start[mesh_i];
@@ -1192,7 +1200,7 @@ fn build_vertices_and_faces(ir: &IrModel, is_vrm0: bool) -> (Vec<PmxVertex>, Vec
                 let c = indices[i * 3 + 2] + vertex_offset;
                 all_faces.push([a, c, b]);
             }
-            mat_face_counts[mat_idx] += (face_count * 3) as u32;
+            *face_count_slot += (face_count * 3) as u32;
         }
     }
 
@@ -1227,7 +1235,7 @@ fn build_weight(weights: &[(usize, f32)]) -> PmxWeightType {
         _ => {
             // 上位4ウェイト
             let mut sorted = weights.to_vec();
-            sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             sorted.truncate(4);
 
             // 正規化
@@ -1249,8 +1257,8 @@ fn build_weight(weights: &[(usize, f32)]) -> PmxWeightType {
     }
 }
 
-fn build_morphs(ir: &IrModel, is_vrm0: bool) -> Vec<PmxMorph> {
-    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if is_vrm0 { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
+fn build_morphs(ir: &IrModel, use_vrm0_coords: bool) -> Vec<PmxMorph> {
+    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if use_vrm0_coords { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
 
     let panel_name = |p: u8| -> &'static str {
         match p { 1 => "眉", 2 => "目", 3 => "口", 4 => "その他", _ => "?" }
@@ -1362,7 +1370,7 @@ fn classify_bone(name: &str) -> BoneCategory {
 }
 
 fn build_display_frames(bones: &[PmxBone], morphs: &[PmxMorph]) -> Vec<PmxDisplayFrame> {
-    let mut frames = Vec::new();
+    let mut frames = Vec::with_capacity(7);
 
     // 枠0: Root（特殊枠）
     frames.push(PmxDisplayFrame {
@@ -1465,7 +1473,7 @@ fn build_display_frames(bones: &[PmxBone], morphs: &[PmxMorph]) -> Vec<PmxDispla
     frames
 }
 
-fn build_rigid_bodies(ir: &IrModel) -> Vec<PmxRigidBody> {
+fn build_rigid_bodies(ir: &IrModel, align_rigid_rotation: bool) -> Vec<PmxRigidBody> {
     let mode_name = |m: u8| -> &'static str {
         match m { 0 => "ボーン追従", 1 => "物理演算", 2 => "物理+Bone", _ => "?" }
     };
@@ -1504,7 +1512,7 @@ fn build_rigid_bodies(ir: &IrModel) -> Vec<PmxRigidBody> {
             shape,
             size,
             position: rb.position,
-            rotation: rb.rotation,
+            rotation: if align_rigid_rotation { rb.rotation } else { Vec3::ZERO },
             mass: rb.mass,
             linear_damping: rb.linear_damping,
             angular_damping: rb.angular_damping,
@@ -1521,8 +1529,8 @@ fn build_rigid_bodies(ir: &IrModel) -> Vec<PmxRigidBody> {
 }
 
 /// ボーン名の重複を解決（2番目以降に "_N" サフィックスを付加）
-/// PMXEditor の NameDupliBones エラーを防止する
-fn fix_duplicate_names(bones: &mut Vec<PmxBone>) {
+/// 重複ボーン名を連番サフィックスで解消する
+fn fix_duplicate_names(bones: &mut [PmxBone]) {
     use std::collections::HashMap;
     // 同名ボーンの出現回数をカウント
     let mut count: HashMap<String, usize> = HashMap::new();
@@ -1549,7 +1557,7 @@ fn fix_duplicate_names(bones: &mut Vec<PmxBone>) {
     }
 }
 
-/// ボーンを変形順序規則に従い並べ替え（PMXEditor IllegalOrderBones 対策）
+/// ボーンを変形順序規則に従い並べ替え（親が子より先に来るよう保証）
 ///
 /// 規則（優先順位）:
 ///   1. AfterPhysics=OFF のボーンが先、ON が後
@@ -1599,8 +1607,8 @@ fn sort_bones_topological(model: &mut PmxModel) {
     }
 
     // 循環参照・孤立ボーンは末尾に追加（フォールバック）
-    for i in 0..n {
-        if !added[i] {
+    for (i, &is_added) in added.iter().enumerate() {
+        if !is_added {
             log::warn!("sort_bones_topological: \"{}\"(idx={}) が到達不能 → 末尾に追加", model.bones[i].name, i);
             result.push(i);
         }
@@ -1687,4 +1695,11 @@ fn build_joints(ir: &IrModel) -> Vec<PmxJoint> {
     }).collect();
     log::info!("ジョイント: {}個", joints.len());
     joints
+}
+
+/// UV値を 0..1 に正規化（負値対応の fract）
+#[inline]
+fn fract_uv(v: f32) -> f32 {
+    let f = v % 1.0;
+    if f < 0.0 { f + 1.0 } else { f }
 }

@@ -1,7 +1,8 @@
 [package]
 name = "vrm2pmx"
-version = "0.1.0"
+version = "0.1.17"
 edition = "2021"
+license = "0BSD"
 
 [lib]
 name = "vrm2pmx"
@@ -16,7 +17,9 @@ gltf        = { version = "1.4", features = ["extensions"] }
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
 byteorder   = "1.5"
-glam        = "0.28"
+glam        = "0.29"
+flate2      = "1"
+tar         = "0.4"
 image       = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 anyhow      = "1"
 log         = "0.4"

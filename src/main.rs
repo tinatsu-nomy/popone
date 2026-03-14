@@ -1,3 +1,7 @@
+// viewer feature 有効時は Windows GUI サブシステムでビルドし、
+// Explorer からの起動時にコンソールウィンドウを表示しない
+#![cfg_attr(all(feature = "viewer", target_os = "windows"), windows_subsystem = "windows")]
+
 use vrm2pmx::{vrm, pmx, convert, intermediate};
 
 use anyhow::{Context, Result};
@@ -7,7 +11,7 @@ use std::path::{Path, PathBuf};
 #[derive(Parser, Debug)]
 #[command(name = "vrm2pmx", about = "VRMファイルをPMX形式に変換します\n引数なしで起動するとビューアが開きます")]
 struct Args {
-    /// 入力VRMファイルパス
+    /// 入力ファイルパス（VRM/FBX）
     input: Option<PathBuf>,
 
     /// 出力PMXファイルパス
@@ -20,6 +24,14 @@ struct Args {
     /// 物理変換をスキップ
     #[arg(long)]
     no_physics: bool,
+
+    /// 剛体の回転をボーン方向に揃える（デフォルト: off）
+    #[arg(long)]
+    align_rigid_rotation: bool,
+
+    /// Tポーズの腕をAスタンスに変換する（デフォルト: off）
+    #[arg(long)]
+    normalize_pose: bool,
 
     /// ログレベル (error, warn, info, debug)
     #[arg(long, default_value = "info")]
@@ -63,7 +75,25 @@ fn setup_logging(stderr_level: log::LevelFilter, log_file: Option<&std::path::Pa
     base.apply().map_err(|e| anyhow::anyhow!("ロガー初期化失敗: {}", e))
 }
 
+/// Windows GUI サブシステムの場合、親コンソールにアタッチして
+/// stdout/stderr を使えるようにする
+#[cfg(all(feature = "viewer", target_os = "windows"))]
+fn attach_parent_console() {
+    extern "system" {
+        fn AttachConsole(dw_process_id: u32) -> i32;
+    }
+    unsafe {
+        AttachConsole(0xFFFFFFFF); // ATTACH_PARENT_PROCESS
+    }
+}
+
 fn main() -> Result<()> {
+    // GUI サブシステムでも CLI 引数がある場合はコンソール出力を有効にする
+    #[cfg(all(feature = "viewer", target_os = "windows"))]
+    if std::env::args().len() > 1 {
+        attach_parent_console();
+    }
+
     let args = Args::parse();
 
     // 引数なし → ビューア起動
@@ -82,6 +112,7 @@ fn main() -> Result<()> {
         }
     }
 
+    // unwrap 安全: 上で is_none() チェック済み
     let input = args.input.unwrap();
     let output = args.output.context(
         "出力ファイルパスを指定してください。\n使い方: vrm2pmx <入力.vrm> <出力.pmx>"
@@ -99,26 +130,49 @@ fn main() -> Result<()> {
 
     log::info!("入力ファイル: {}", input.display());
 
-    // GLB読み込み
-    let glb = vrm::loader::load_glb(&input)
-        .with_context(|| format!("GLB読み込み失敗: {}", input.display()))?;
+    let ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
 
-    // バージョン判定
-    let version = vrm::detect::detect_version(&glb.document);
-    log::info!("VRMバージョン: {:?}", version);
-
-    // 全拡張取得
-    let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
-
-    // 中間表現抽出
-    let mut ir = vrm::extract::extract_ir_model(
-        &glb.document,
-        &glb.buffers,
-        &glb.images,
-        &glb.vrm_extension,
-        &version,
-        &all_extensions,
-    ).context("VRM中間表現の抽出に失敗")?;
+    // 中間表現抽出（VRM / FBX / unitypackage 分岐）
+    let mut ir = match ext.as_str() {
+        "fbx" => {
+            let data = std::fs::read(&input)
+                .with_context(|| format!("FBXファイル読み込み失敗: {}", input.display()))?;
+            vrm2pmx::fbx::extract::extract_ir_model_from_fbx(&data, Some(&input))
+                .context("FBX中間表現の抽出に失敗")?
+        }
+        "unitypackage" => {
+            let archive_data = std::fs::read(&input)
+                .with_context(|| format!("unitypackage読み込み失敗: {}", input.display()))?;
+            let (fbx_data, fbx_name, textures) =
+                vrm2pmx::unitypackage::extract_fbx_from_unitypackage(&archive_data)
+                    .context("unitypackage展開失敗")?;
+            log::info!("unitypackage内FBX: {}", fbx_name);
+            let mut ir = vrm2pmx::fbx::extract::extract_ir_model_from_fbx(&fbx_data, Some(&input))
+                .context("FBX中間表現の抽出に失敗")?;
+            vrm2pmx::unitypackage::embed_textures_into_ir(&mut ir, &textures);
+            ir
+        }
+        _ => {
+            let glb = vrm::loader::load_glb(&input)
+                .with_context(|| format!("GLB読み込み失敗: {}", input.display()))?;
+            let version = vrm::detect::detect_version(&glb.document);
+            log::info!("VRMバージョン: {:?}", version);
+            let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
+            vrm::extract::extract_ir_model_with_options(
+                &glb.document,
+                &glb.buffers,
+                &glb.images,
+                &glb.vrm_extension,
+                &version,
+                &all_extensions,
+                args.normalize_pose,
+            ).context("VRM中間表現の抽出に失敗")?
+        }
+    };
 
     if args.no_physics {
         ir.physics = intermediate::types::IrPhysics::default();
@@ -126,7 +180,7 @@ fn main() -> Result<()> {
     }
 
     if args.dump {
-        println!("=== VRM dump ===");
+        println!("=== {} dump ===", ir.source_format.label());
         println!("モデル名: {}", ir.name);
         println!("ボーン数: {}", ir.bones.len());
         println!("メッシュ数: {}", ir.meshes.len());
@@ -137,6 +191,9 @@ fn main() -> Result<()> {
         println!("モーフ数: {}", ir.morphs.len());
         println!("剛体数: {}", ir.physics.rigid_bodies.len());
         println!("ジョイント数: {}", ir.physics.joints.len());
+        if let Some(ref rig) = ir.rig_type {
+            println!("リグ種別: {} (Humanoid: {}本)", rig, ir.humanoid_bone_count);
+        }
 
         println!("\n--- ボーン一覧 ---");
         for (i, bone) in ir.bones.iter().enumerate() {
@@ -158,11 +215,20 @@ fn main() -> Result<()> {
 
     // テクスチャ書き出し
     let tex_dir = output_dir.join("textures");
-    convert::texture::write_all_textures(&ir.textures, &glb.images, &tex_dir)
-        .context("テクスチャ書き出し失敗")?;
+    match ext.as_str() {
+        "fbx" | "unitypackage" => {
+            convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)
+                .context("テクスチャ書き出し失敗")?;
+        }
+        _ => {
+            let glb = vrm::loader::load_glb(&input)?;
+            convert::texture::write_all_textures(&ir.textures, &glb.images, &tex_dir)
+                .context("テクスチャ書き出し失敗")?;
+        }
+    }
 
     // PMXモデル構築
-    let pmx_model = pmx::build::build_pmx_model(&ir)
+    let pmx_model = pmx::build::build_pmx_model_with_options(&ir, args.align_rigid_rotation)
         .context("PMXモデル構築失敗")?;
 
     // PMX書き出し
@@ -183,21 +249,93 @@ fn main() -> Result<()> {
 
 #[cfg(feature = "viewer")]
 fn run_viewer() -> Result<()> {
-    env_logger::init();
+    // exe と同じディレクトリに logs/ を作成し、タイムスタンプ付きログを出力
+    let logs_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("logs")))
+        .unwrap_or_else(|| std::path::PathBuf::from("logs"));
+    let _ = std::fs::create_dir_all(&logs_dir);
+
+    // 古いログを削除（5世代保持）
+    rotate_logs(&logs_dir, 5);
+
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let log_path = logs_dir.join(format!("vrm2pmx_{timestamp}.log"));
+    setup_logging(log::LevelFilter::Debug, Some(&log_path))?;
+
+    // パニック時にログファイルへバックトレースを書き出す
+    {
+        let panic_log = log_path.clone();
+        std::panic::set_hook(Box::new(move |info| {
+            let bt = std::backtrace::Backtrace::force_capture();
+            let msg = format!("[PANIC] {info}\n{bt}");
+            log::error!("{msg}");
+            // log が flush されない場合に備えて直接書き込み
+            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&panic_log) {
+                use std::io::Write;
+                let _ = writeln!(f, "\n{msg}");
+            }
+        }));
+    }
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 800.0])
-            .with_title("VRM Viewer")
+            .with_inner_size([1280.0, 720.0])
+            .with_title(format!("Viewer v{}", env!("CARGO_PKG_VERSION")))
             .with_drag_and_drop(true),
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(
+                eframe::egui_wgpu::WgpuSetupCreateNew {
+                    device_descriptor: std::sync::Arc::new(|adapter| {
+                        let mut features = eframe::wgpu::Features::default();
+                        // ワイヤーフレーム表示用（対応ハードウェアのみ）
+                        if adapter.features().contains(eframe::wgpu::Features::POLYGON_MODE_LINE) {
+                            features |= eframe::wgpu::Features::POLYGON_MODE_LINE;
+                        }
+                        eframe::wgpu::DeviceDescriptor {
+                            required_features: features,
+                            ..Default::default()
+                        }
+                    }),
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        },
         ..Default::default()
     };
 
     eframe::run_native(
-        "VRM Viewer",
+        "Viewer",
         options,
-        Box::new(|cc| Ok(Box::new(vrm2pmx::viewer::app::ViewerApp::new(cc)))),
+        Box::new({
+            let logs_dir = logs_dir.clone();
+            let log_path = log_path.clone();
+            move |cc| Ok(Box::new(vrm2pmx::viewer::app::ViewerApp::new(cc, logs_dir, log_path)))
+        }),
     )
     .map_err(|e| anyhow::anyhow!("ビューア起動失敗: {e}"))
+}
+
+/// logs ディレクトリ内の古いログファイルを削除（最新 keep 件を保持）
+#[cfg(feature = "viewer")]
+fn rotate_logs(logs_dir: &std::path::Path, keep: usize) {
+    let mut entries: Vec<_> = std::fs::read_dir(logs_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map_or(false, |n| n.starts_with("vrm2pmx_") && n.ends_with(".log"))
+        })
+        .collect();
+    // ファイル名でソート（タイムスタンプ順）→ 降順
+    entries.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    // keep 件より古いものを削除
+    for entry in entries.into_iter().skip(keep) {
+        let _ = std::fs::remove_file(entry.path());
+    }
 }
