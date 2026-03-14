@@ -81,6 +81,14 @@ impl ConvertMessage {
     }
 }
 
+/// FBX 読み込みモード（モデル/アニメーション/両方）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FbxLoadMode {
+    ModelOnly,
+    AnimationOnly,
+    Both,
+}
+
 /// unitypackage 内に複数FBXがある場合の選択待ち状態
 /// unitypackage 内のモデルファイル種別
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,7 +105,7 @@ pub struct PendingUnityPackage {
 }
 
 /// unitypackage モデル遅延読み込み状態
-pub struct PendingFbxLoad {
+pub struct PendingPkgModelLoad {
     pub assets: Vec<crate::unitypackage::ExtractedAsset>,
     pub fbx_index: usize,
     pub model_type: PkgModelType,
@@ -260,7 +268,7 @@ pub struct ViewerApp {
     /// unitypackage FBX選択待ち
     pub pending_unity_pkg: Option<PendingUnityPackage>,
     /// FBX遅延読み込み
-    pub pending_fbx_load: Option<PendingFbxLoad>,
+    pub pending_pkg_load: Option<PendingPkgModelLoad>,
     /// unitypackage内テクスチャ（モデル読み込み中保持）
     pub pkg_textures: Option<Vec<(String, Vec<u8>)>>,
     /// pkg_textures のサムネイル TextureId キャッシュ
@@ -340,7 +348,7 @@ impl ViewerApp {
             pending_tex_preview: None,
             pending_fbx_choice: None,
             pending_unity_pkg: None,
-            pending_fbx_load: None,
+            pending_pkg_load: None,
             pkg_textures: None,
             pkg_thumb_cache: Vec::new(),
             pending_tex_match: None,
@@ -427,11 +435,13 @@ impl ViewerApp {
 
         // FBX: モデル読み込み済みの場合、メッシュ+アニメーション両方含むなら選択ダイアログ
         if ext == "fbx" && self.loaded.is_some() {
-            let has_mesh = match std::fs::read(&path) {
-                Ok(ref data) => crate::fbx::extract::fbx_has_mesh(data),
-                Err(_) => false,
+            // ファイルを1回だけ読み込んで、メッシュとアニメーションの有無を判定
+            let data = match std::fs::read(&path) {
+                Ok(d) => d,
+                Err(_) => { self.load_file_as_model(path); return; }
             };
-            let has_anim = crate::fbx::animation::load_fbx_animation(&path)
+            let has_mesh = crate::fbx::extract::fbx_has_mesh(&data);
+            let has_anim = crate::fbx::animation::load_fbx_animation_from_data(&data)
                 .map_or(false, |a| !a.is_empty());
 
             if has_mesh && has_anim {
@@ -498,9 +508,16 @@ impl ViewerApp {
     pub fn execute_fbx_choice(&mut self, choice: PendingFbxChoice) {
         let PendingFbxChoice { path, load_model, load_animation, pkg_context } = choice;
 
+        let mode = match (load_model, load_animation) {
+            (true, true) => FbxLoadMode::Both,
+            (true, false) => FbxLoadMode::ModelOnly,
+            (false, true) => FbxLoadMode::AnimationOnly,
+            (false, false) => return,
+        };
+
         if let Some(pkg) = pkg_context {
             // unitypackage 経由
-            match self.load_fbx_from_assets(pkg.assets, pkg.fbx_index, &pkg.source_path, load_model, load_animation) {
+            match self.load_fbx_from_assets(pkg.assets, pkg.fbx_index, &pkg.source_path, mode) {
                 Ok(()) => {
                     log::info!("読み込み成功: {}", pkg.source_path.display());
                     self.convert_message = None;
@@ -512,26 +529,29 @@ impl ViewerApp {
             }
         } else {
             // ファイル直接
-            if load_model {
-                match self.try_load_fbx(&path) {
-                    Ok(()) => {
-                        log::info!("FBXモデル読み込み成功: {}", path.display());
-                        self.convert_message = None;
-                        self.anim_state = None;
-                        self.vrma_library.clear();
-                        self.active_vrma_index = None;
+            match mode {
+                FbxLoadMode::Both | FbxLoadMode::ModelOnly => {
+                    match self.try_load_fbx(&path) {
+                        Ok(()) => {
+                            log::info!("FBXモデル読み込み成功: {}", path.display());
+                            self.convert_message = None;
+                            self.anim_state = None;
+                            self.vrma_library.clear();
+                            self.active_vrma_index = None;
 
-                        if load_animation {
-                            self.try_load_fbx_animation(&path);
+                            if mode == FbxLoadMode::Both {
+                                self.try_load_fbx_animation(&path);
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("読み込み失敗: {e}");
+                            self.convert_message = Some(ConvertMessage::failure(format!("読み込み失敗: {e}")));
                         }
                     }
-                    Err(e) => {
-                        log::error!("読み込み失敗: {e}");
-                        self.convert_message = Some(ConvertMessage::failure(format!("読み込み失敗: {e}")));
-                    }
                 }
-            } else if load_animation {
-                self.try_load_fbx_animation(&path);
+                FbxLoadMode::AnimationOnly => {
+                    self.try_load_fbx_animation(&path);
+                }
             }
         }
     }
@@ -564,7 +584,7 @@ impl ViewerApp {
         if model_list.len() == 1 {
             // モデルが1つだけ → プログレス表示後に遅延ロード
             let (idx, _, model_type) = model_list[0];
-            self.pending_fbx_load = Some(PendingFbxLoad {
+            self.pending_pkg_load = Some(PendingPkgModelLoad {
                 assets, fbx_index: idx, model_type, source_path: path.to_path_buf(), shown: false,
             });
         } else {
@@ -583,19 +603,20 @@ impl ViewerApp {
     }
 
     /// 展開済みアセットから指定FBXをロード
-    /// load_model=false の場合はモデルを読み込まず、アニメーションのみ適用
     pub fn load_fbx_from_assets(
         &mut self,
         assets: Vec<crate::unitypackage::ExtractedAsset>,
         fbx_index: usize,
         source_path: &std::path::Path,
-        load_model: bool,
-        load_animation: bool,
+        mode: FbxLoadMode,
     ) -> anyhow::Result<()> {
         let (fbx_data, fbx_name, textures) =
             crate::unitypackage::take_fbx_and_textures(assets, fbx_index)?;
         log::info!("unitypackage内FBX: {} テクスチャ: {}個", fbx_name, textures.len());
         self.selected_fbx_name = Some(fbx_name.clone());
+
+        let load_model = matches!(mode, FbxLoadMode::ModelOnly | FbxLoadMode::Both);
+        let load_animation = matches!(mode, FbxLoadMode::AnimationOnly | FbxLoadMode::Both);
 
         if load_model {
             let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
@@ -1615,7 +1636,7 @@ impl ViewerApp {
 
     /// プログレスオーバーレイ描画（ビューポート上、結果メッセージと同じスタイル）
     fn paint_progress_overlay(&self, viewport: &egui::Ui, rect: egui::Rect, ctx: &egui::Context) {
-        let msg = if self.pending_load.is_some() || self.pending_fbx_load.is_some() {
+        let msg = if self.pending_load.is_some() || self.pending_pkg_load.is_some() {
             Some("読み込み中...")
         } else if self.pending_rebuild.is_some() || self.pending_reload.is_some() {
             Some("処理中...")
@@ -1658,7 +1679,7 @@ impl ViewerApp {
                 ctx.request_repaint();
             }
         }
-        if let Some(ref mut p) = self.pending_fbx_load {
+        if let Some(ref mut p) = self.pending_pkg_load {
             if !p.shown {
                 p.shown = true;
                 ctx.request_repaint();
@@ -1867,8 +1888,8 @@ impl eframe::App for ViewerApp {
             self.load_file(path);
         }
         // unitypackage モデル遅延読み込み
-        if self.pending_fbx_load.as_ref().map_or(false, |p| p.shown) {
-            let p = self.pending_fbx_load.take().unwrap();
+        if self.pending_pkg_load.as_ref().map_or(false, |p| p.shown) {
+            let p = self.pending_pkg_load.take().unwrap();
             let source_path = p.source_path.clone();
             match p.model_type {
                 PkgModelType::Fbx => {
@@ -1897,7 +1918,7 @@ impl eframe::App for ViewerApp {
                             });
                         } else {
                             // アニメーションなし → モデルのみ読み込み
-                            match self.load_fbx_from_assets(p.assets, p.fbx_index, &source_path, true, false) {
+                            match self.load_fbx_from_assets(p.assets, p.fbx_index, &source_path, FbxLoadMode::ModelOnly) {
                                 Ok(()) => { self.convert_message = None; }
                                 Err(e) => {
                                     log::error!("読み込み失敗: {e}");
@@ -1907,7 +1928,7 @@ impl eframe::App for ViewerApp {
                         }
                     } else {
                         // 初回読み込み → モデル+アニメーション両方
-                        match self.load_fbx_from_assets(p.assets, p.fbx_index, &source_path, true, true) {
+                        match self.load_fbx_from_assets(p.assets, p.fbx_index, &source_path, FbxLoadMode::Both) {
                             Ok(()) => {
                                 log::info!("読み込み成功: {}", source_path.display());
                                 self.convert_message = None;

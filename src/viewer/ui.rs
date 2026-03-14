@@ -182,7 +182,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
 
     if let Some((idx, model_type)) = selected {
         let pending = app.pending_unity_pkg.take().unwrap();
-        app.pending_fbx_load = Some(super::app::PendingFbxLoad {
+        app.pending_pkg_load = Some(super::app::PendingPkgModelLoad {
             assets: pending.assets,
             fbx_index: idx,
             model_type,
@@ -939,7 +939,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         || app.pending_convert.is_some()
         || app.pending_rebuild.is_some()
         || app.pending_reload.is_some()
-        || app.pending_fbx_load.is_some();
+        || app.pending_pkg_load.is_some();
 
     ui.heading(
         egui::RichText::new("PMX 変換")
@@ -1337,13 +1337,14 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
             ui.horizontal(|ui| {
                 ui.label("Muscle倍率");
                 let old_scale = app.muscle_scale;
-                ui.add(
+                let response = ui.add(
                     egui::DragValue::new(&mut app.muscle_scale)
                         .range(0.01..=2.0)
                         .speed(0.01)
                         .fixed_decimals(2),
                 );
-                if (app.muscle_scale - old_scale).abs() > 1e-6 {
+                // DragValue確定時（ドラッグ解放 or Enter）のみ再読み込み
+                if (app.muscle_scale - old_scale).abs() > 1e-6 && response.drag_stopped() || response.lost_focus() {
                     muscle_scale_changed = true;
                 }
             });

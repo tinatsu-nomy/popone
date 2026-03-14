@@ -553,6 +553,32 @@ pub struct HumanoidParams {
     muscle_ranges: HashMap<usize, (f32, f32)>,
 }
 
+/// JSON配列から Unity左手系 → glTF右手系 のクォータニオンをパース
+fn parse_quat_lh_to_rh(json: &serde_json::Value, key: &str) -> Quat {
+    if let Some(arr) = json.get(key).and_then(|v| v.as_array()) {
+        let x = arr.get(0).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let y = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let z = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let w = arr.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+        Quat::from_xyzw(x, -y, -z, w).normalize()
+    } else {
+        Quat::IDENTITY
+    }
+}
+
+/// JSON配列からf32×3タプルをパース（デフォルト値指定可）
+fn parse_f32x3(json: &serde_json::Value, key: &str, default: (f32, f32, f32)) -> (f32, f32, f32) {
+    if let Some(arr) = json.get(key).and_then(|v| v.as_array()) {
+        (
+            arr.get(0).and_then(|v| v.as_f64()).unwrap_or(default.0 as f64) as f32,
+            arr.get(1).and_then(|v| v.as_f64()).unwrap_or(default.1 as f64) as f32,
+            arr.get(2).and_then(|v| v.as_f64()).unwrap_or(default.2 as f64) as f32,
+        )
+    } else {
+        default
+    }
+}
+
 /// DumpHumanoidParams.cs が出力した JSON を読み込む
 pub fn load_humanoid_params(path: &Path) -> Result<HumanoidParams> {
     let text = std::fs::read_to_string(path)
@@ -575,56 +601,15 @@ pub fn load_humanoid_params(path: &Path) -> Result<HumanoidParams> {
             }
 
             // preQ/postQ: Unity 左手系 → glTF 右手系 (x, -y, -z, w)
-            let pre_q = if let Some(arr) = bd.get("preQ").and_then(|v| v.as_array()) {
-                let x = arr.get(0).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let y = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let z = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let w = arr.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-                Quat::from_xyzw(x, -y, -z, w).normalize()
-            } else {
-                Quat::IDENTITY
-            };
+            let pre_q = parse_quat_lh_to_rh(bd, "preQ");
+            let post_q = parse_quat_lh_to_rh(bd, "postQ");
+            let sign = parse_f32x3(bd, "sign", (1.0, 1.0, 1.0));
 
-            let post_q = if let Some(arr) = bd.get("postQ").and_then(|v| v.as_array()) {
-                let x = arr.get(0).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let y = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let z = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let w = arr.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-                Quat::from_xyzw(x, -y, -z, w).normalize()
-            } else {
-                Quat::IDENTITY
-            };
-
-            let sign = if let Some(arr) = bd.get("sign").and_then(|v| v.as_array()) {
-                (
-                    arr.get(0).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32,
-                    arr.get(1).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32,
-                    arr.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32,
-                )
-            } else {
-                (1.0, 1.0, 1.0)
-            };
-
-            // localRotation (Unity LH → glTF RH)
-            let local_rotation = if let Some(arr) = bd.get("localRotation").and_then(|v| v.as_array()) {
-                let x = arr.get(0).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let y = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let z = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let w = arr.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-                Quat::from_xyzw(x, -y, -z, w).normalize()
-            } else {
-                Quat::IDENTITY
-            };
+            let local_rotation = parse_quat_lh_to_rh(bd, "localRotation");
 
             // localPosition (Unity LH → glTF RH)
-            let local_position = if let Some(arr) = bd.get("localPosition").and_then(|v| v.as_array()) {
-                let x = arr.get(0).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let y = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                let z = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                Vec3::new(-x, y, z)
-            } else {
-                Vec3::ZERO
-            };
+            let (lx, ly, lz) = parse_f32x3(bd, "localPosition", (0.0, 0.0, 0.0));
+            let local_position = Vec3::new(-lx, ly, lz);
 
             bones.insert(idx, BoneParams { pre_q, post_q, sign, local_rotation, local_position });
         }
