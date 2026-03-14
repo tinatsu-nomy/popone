@@ -2,14 +2,22 @@
 
 [English](README.en.md)
 
-VRM / FBX / UnityPackage を 3D 表示し、PMX（MikuMikuDance）形式に変換するツール。
-Rust 製の単一バイナリで、引数なしでビューア、引数ありで CLI 変換として動作する。
+VRM / FBX / UnityPackage を 3D 表示します。
 
 ## ダウンロード
 
-最新リリース: **[popone_v0.1.17.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.1.17/popone_v0.1.17.exe)**
+最新リリース: **[popone_v0.2.0.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.0/popone_v0.2.0.exe)**
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
+
+## 注意事項
+
+- 出力 PMX は PmxEditor 等での後段調整を想定しています。
+- 本ツールの使用により発生したいかなる問題についても、作者は一切の責任を負いません。
+
+## ライセンス
+
+[0BSD License](LICENSE) — 帰属表示なしで自由に利用・改変・再配布できます。
 
 ## 対応形式
 
@@ -19,29 +27,18 @@ Rust 製の単一バイナリで、引数なしでビューア、引数ありで
 | FBX バイナリ (`.fbx`) | 自前パーサーによる解析。Mixamo / Blender / Maya 等のリグを自動検出 |
 | UnityPackage (`.unitypackage`) | tar.gz アーカイブから VRM / FBX + テクスチャを自動抽出 |
 
-| 出力 | 説明 |
-|------|------|
-| PMX 2.0 (`.pmx`) | MikuMikuDance / PmxEditor 用。MMD 標準ボーン・IK・物理を自動挿入 |
-| テクスチャ PNG | `textures/` フォルダに出力 |
-| UVマップ PSD | 材質ごとにレイヤー分け（ビューアから出力） |
-
 ## クイックスタート
 
 ```bash
 # ビューア起動（ダブルクリックでも可）
 popone.exe
 
-# ビューアでファイルを開く（出力未指定で自動的にビューアモード）
+# ビューアでファイルを開く
 popone.exe input.vrm
 popone.exe input.fbx
-
-# CLI で PMX 変換（出力指定時）
-popone.exe input.vrm output.pmx
-popone.exe input.fbx output.pmx
-popone.exe input.unitypackage output.pmx
 ```
 
-ビューアではファイルをドラッグ＆ドロップするか「開く」ボタンで読み込み、右パネルの「PMX 変換」ボタンで変換できる。
+ビューアではファイルをドラッグ＆ドロップするか「開く」ボタンで読み込む。
 
 ## 機能一覧
 
@@ -59,9 +56,6 @@ popone.exe input.unitypackage output.pmx
 - **法線ツール** — 法線平滑化、カスタム法線クリア、法線方向の可視化
 - **MSAA** — 4x アンチエイリアシング（ON/OFF 切替可能）
 - **UVマップ出力** — 材質レイヤー分けの PSD として出力（1024〜8192 解像度）
-- **アニメーション再生** — VRMA / glTF / FBX アニメーションの D&D またはダイアログ読み込み。ヒューマノイドリターゲティング対応。再生速度・A-Bループ・ピンポン・フレーム送り・表情キーフレーム再生
-- **FBX 読み込み選択** — モデル+アニメーション両方含む FBX の場合、モデル/アニメーションそれぞれの読み込みを選択可能
-- **PMX 変換** — ビューア上から直接変換。オプション（Aスタンス・剛体回転揃え）も UI で切替可能
 
 <details>
 <summary>キーボードショートカット</summary>
@@ -87,14 +81,6 @@ popone.exe input.unitypackage output.pmx
 
 </details>
 
-### アニメーション
-
-- VRMA（`.vrma`）: VRM Animation 形式。ヒューマノイドリターゲティングにより異なるモデルに適用可能
-- glTF / GLB（`.gltf` / `.glb`）: glTF 2.0 アニメーション。ヒューマノイドリターゲティング対応
-- FBX（`.fbx`）: FBX アニメーション。PreRotation 合成・座標系変換・向き検出＋Y180 補正
-- ループモード 4 種（なし / 通常 / A-B リピート / ピンポン往復）
-- 再生速度調整・フレーム送り・シークバー・表情キーフレーム同期
-
 ### FBX 対応
 
 - バイナリ FBX の自前パーサー（シーングラフ・座標系自動変換・PreRotation・UnitScaleFactor）
@@ -102,7 +88,30 @@ popone.exe input.unitypackage output.pmx
 - ヒューマノイドリグ自動検出（Mixamo / 3ds Max Biped / Maya HumanIK / VRoid / Blender）
 - 零法線の自動補完、埋め込み/外部テクスチャ対応
 
-### PMX 変換
+## おまけ
+
+### アニメーション再生
+
+- VRMA / glTF / FBX アニメーションの D&D またはダイアログ読み込み
+- ヒューマノイドリターゲティング対応（異なるモデルへの適用可能）
+- ループモード 4 種（なし / 通常 / A-B リピート / ピンポン往復）
+- 再生速度調整・フレーム送り・シークバー・表情キーフレーム同期
+
+### PMX（MikuMikuDance）形式に変換
+
+ビューア上から直接変換、または CLI で変換可能。
+
+```bash
+popone.exe input.vrm output.pmx
+popone.exe input.fbx output.pmx
+popone.exe input.unitypackage output.pmx
+```
+
+| 出力 | 説明 |
+|------|------|
+| PMX 2.0 (`.pmx`) | MikuMikuDance / PmxEditor 用。MMD 標準ボーン・IK・物理を自動挿入 |
+| テクスチャ PNG | `textures/` フォルダに出力 |
+| UVマップ PSD | 材質ごとにレイヤー分け（ビューアから出力） |
 
 - VRM 0.0 / 1.0 / FBX / UnityPackage を自動判定
 - MMD 標準ボーン自動挿入（全ての親・センター・グルーブ・腰・足IK・つま先IK）
@@ -259,12 +268,3 @@ cargo test
 | [pollster](https://github.com/zesterer/pollster) | MIT OR Apache-2.0 |
 
 </details>
-
-## ライセンス
-
-[0BSD License](LICENSE) — 帰属表示なしで自由に利用・改変・再配布できます。
-
-## 注意事項
-
-- 出力 PMX は PmxEditor 等での後段調整を想定しています。
-- 本ツールの使用により発生したいかなる問題についても、作者は一切の責任を負いません。

@@ -2,14 +2,22 @@
 
 [日本語](README.md)
 
-A 3D viewer and converter for VRM / FBX / UnityPackage files to PMX (MikuMikuDance) format.
-Single Rust binary — launches as a viewer with no arguments, or as a CLI converter with arguments.
+A 3D viewer for VRM / FBX / UnityPackage files.
 
 ## Download
 
-Latest release: **[popone_v0.1.17.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.1.17/popone_v0.1.17.exe)**
+Latest release: **[popone_v0.2.0.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.0/popone_v0.2.0.exe)**
 
 All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
+
+## Disclaimer
+
+- The output PMX files are intended for further adjustment in tools like PmxEditor.
+- The author assumes no responsibility for any issues arising from the use of this tool.
+
+## License
+
+[0BSD License](LICENSE) — Free to use, modify, and redistribute without attribution.
 
 ## Supported Formats
 
@@ -19,29 +27,18 @@ All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 | FBX Binary (`.fbx`) | Custom parser. Auto-detects Mixamo / Blender / Maya rigs |
 | UnityPackage (`.unitypackage`) | Extracts VRM / FBX + textures from tar.gz archive |
 
-| Output | Description |
-|--------|-------------|
-| PMX 2.0 (`.pmx`) | For MikuMikuDance / PmxEditor. Auto-inserts MMD standard bones, IK, and physics |
-| Texture PNG | Output to `textures/` folder |
-| UV Map PSD | Per-material layers (from viewer) |
-
 ## Quick Start
 
 ```bash
 # Launch viewer (or double-click the exe)
 popone.exe
 
-# Open file in viewer (auto-viewer mode when output is omitted)
+# Open file in viewer
 popone.exe input.vrm
 popone.exe input.fbx
-
-# CLI conversion (when output is specified)
-popone.exe input.vrm output.pmx
-popone.exe input.fbx output.pmx
-popone.exe input.unitypackage output.pmx
 ```
 
-In the viewer, drag & drop files or use the "Open" button, then click "PMX Convert" in the right panel.
+In the viewer, drag & drop files or use the "Open" button to load models.
 
 ## Features
 
@@ -59,9 +56,6 @@ In the viewer, drag & drop files or use the "Open" button, then click "PMX Conve
 - **Normal Tools** — Normal smoothing, custom normal clear, normal direction visualization
 - **MSAA** — 4x anti-aliasing (toggleable)
 - **UV Map Export** — PSD output with per-material layers (1024–8192 resolution)
-- **Animation Playback** — Load VRMA / glTF / FBX animations via drag & drop or dialog. Humanoid retargeting support. Speed control, A-B loop, ping-pong, frame stepping, expression keyframe sync
-- **FBX Load Selection** — When an FBX contains both model and animation, choose which to load via dialog
-- **PMX Conversion** — Convert directly from viewer with UI options (A-stance, rigid body alignment)
 
 <details>
 <summary>Keyboard Shortcuts</summary>
@@ -87,14 +81,6 @@ In the viewer, drag & drop files or use the "Open" button, then click "PMX Conve
 
 </details>
 
-### Animation
-
-- VRMA (`.vrma`): VRM Animation format. Humanoid retargeting for cross-model application
-- glTF / GLB (`.gltf` / `.glb`): glTF 2.0 animations with humanoid retargeting
-- FBX (`.fbx`): FBX animation with PreRotation composition, coordinate conversion, and facing detection + Y180 correction
-- 4 loop modes (None / Normal / A-B repeat / Ping-pong)
-- Speed control, frame stepping, seek bar, expression keyframe sync
-
 ### FBX Support
 
 - Custom binary FBX parser (scene graph, coordinate system conversion, PreRotation, UnitScaleFactor)
@@ -102,7 +88,30 @@ In the viewer, drag & drop files or use the "Open" button, then click "PMX Conve
 - Humanoid rig auto-detection (Mixamo / 3ds Max Biped / Maya HumanIK / VRoid / Blender)
 - Zero-normal auto-repair, embedded/external texture support
 
-### PMX Conversion
+## Extras
+
+### Animation Playback
+
+- Load VRMA / glTF / FBX animations via drag & drop or dialog
+- Humanoid retargeting support (apply across different models)
+- 4 loop modes (None / Normal / A-B repeat / Ping-pong)
+- Speed control, frame stepping, seek bar, expression keyframe sync
+
+### PMX (MikuMikuDance) Conversion
+
+Convert directly from the viewer, or via CLI.
+
+```bash
+popone.exe input.vrm output.pmx
+popone.exe input.fbx output.pmx
+popone.exe input.unitypackage output.pmx
+```
+
+| Output | Description |
+|--------|-------------|
+| PMX 2.0 (`.pmx`) | For MikuMikuDance / PmxEditor. Auto-inserts MMD standard bones, IK, and physics |
+| Texture PNG | Output to `textures/` folder |
+| UV Map PSD | Per-material layers (from viewer) |
 
 - Auto-detection of VRM 0.0 / 1.0 / FBX / UnityPackage
 - MMD standard bone insertion (master, center, groove, waist, leg IK, toe IK)
@@ -259,12 +268,3 @@ cargo test
 | [pollster](https://github.com/zesterer/pollster) | MIT OR Apache-2.0 |
 
 </details>
-
-## License
-
-[0BSD License](LICENSE) — Free to use, modify, and redistribute without attribution.
-
-## Disclaimer
-
-- The output PMX files are intended for further adjustment in tools like PmxEditor.
-- The author assumes no responsibility for any issues arising from the use of this tool.
