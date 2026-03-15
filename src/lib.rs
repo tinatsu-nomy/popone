@@ -2,6 +2,7 @@ pub mod error;
 pub mod vrm;
 pub mod intermediate;
 pub mod pmx;
+pub mod pmd;
 pub mod convert;
 pub mod fbx;
 pub mod unity;

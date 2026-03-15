@@ -123,15 +123,35 @@ pub fn upload_textures(
 
 /// バイト列から RGBA にデコード（PSD 対応）
 pub fn decode_image_to_rgba(data: &[u8], is_psd: bool) -> Result<(Vec<u8>, u32, u32)> {
+    decode_image_to_rgba_with_hint(data, is_psd, None)
+}
+
+pub fn decode_image_to_rgba_with_hint(data: &[u8], is_psd: bool, mime_hint: Option<&str>) -> Result<(Vec<u8>, u32, u32)> {
     if is_psd {
-        decode_psd(data)
-    } else {
-        let img = image::load_from_memory(data)
-            .map_err(|e| anyhow::anyhow!("画像デコード失敗: {}", e))?
-            .to_rgba8();
-        let (w, h) = (img.width(), img.height());
-        Ok((img.into_raw(), w, h))
+        return decode_psd(data);
     }
+
+    // MIME ヒントからフォーマットを明示指定（TGA 等はマジックナンバーがなく自動判定が失敗しうる）
+    let format = match mime_hint {
+        Some("image/tga") => Some(image::ImageFormat::Tga),
+        Some("image/bmp") => Some(image::ImageFormat::Bmp),
+        Some("image/png") => Some(image::ImageFormat::Png),
+        Some("image/jpeg") => Some(image::ImageFormat::Jpeg),
+        _ => None,
+    };
+
+    let img = if let Some(fmt) = format {
+        image::load_from_memory_with_format(data, fmt)
+            .or_else(|_| image::load_from_memory(data))
+            .map_err(|e| anyhow::anyhow!("画像デコード失敗: {}", e))?
+    } else {
+        image::load_from_memory(data)
+            .map_err(|e| anyhow::anyhow!("画像デコード失敗: {}", e))?
+    };
+
+    let img = img.to_rgba8();
+    let (w, h) = (img.width(), img.height());
+    Ok((img.into_raw(), w, h))
 }
 
 /// バイト列からサムネイル RGBA を生成（デコード→縮小）
@@ -164,10 +184,15 @@ pub fn upload_textures_from_ir(
 
     for (i, tex) in ir.textures.iter().enumerate() {
         let is_psd = is_psd_filename(&tex.filename);
-        let decoded = match decode_image_to_rgba(&tex.data, is_psd) {
+        if tex.data.is_empty() {
+            log::warn!("テクスチャ '{}' のデータが空 (index {})", tex.filename, i);
+            views.push(upload_rgba_to_gpu(device, queue, &[255, 0, 255, 255], 1, 1, Some(&format!("texture_{i}"))));
+            continue;
+        }
+        let decoded = match decode_image_to_rgba_with_hint(&tex.data, is_psd, Some(&tex.mime_type)) {
             Ok(d) => d,
             Err(e) => {
-                log::warn!("テクスチャ '{}' のデコード失敗: {} (index {})", tex.filename, e, i);
+                log::warn!("テクスチャ '{}' のデコード失敗: {} (index {}, {} bytes)", tex.filename, e, i, tex.data.len());
                 (vec![255, 0, 255, 255], 1, 1)
             }
         };

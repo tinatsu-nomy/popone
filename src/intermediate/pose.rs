@@ -217,6 +217,171 @@ fn apply_morph_corrections(
     }
 }
 
+/// Aスタンス→Tスタンス変換（ボーン＋メッシュ頂点＋モーフオフセット＋物理）
+/// PMX/PMD用: Aスタンスモデルを水平（T字）に変換
+pub fn normalize_pose_to_tstance_with_meshes(
+    bones: &mut [IrBone],
+    meshes: &mut [IrMesh],
+    morphs: &mut [IrMorph],
+) {
+    let corrections = compute_tstance_corrections(bones);
+    if corrections.is_empty() {
+        return;
+    }
+    // global_mats は bone.global_mat をそのまま使う（PMXではnode_index == bone_index）
+    let mut global_mats: Vec<Mat4> = bones.iter().map(|b| b.global_mat).collect();
+    apply_bone_corrections(bones, &mut global_mats, &corrections);
+    let vertex_rot3s = apply_mesh_corrections(bones, meshes, &corrections);
+    apply_morph_corrections(morphs, &vertex_rot3s);
+}
+
+/// Aスタンス→Tスタンス変換（物理含む全データ）
+pub fn normalize_pose_to_tstance_full(
+    bones: &mut [IrBone],
+    meshes: &mut [IrMesh],
+    morphs: &mut [IrMorph],
+    physics: &mut super::types::IrPhysics,
+    pos_fn: fn(Vec3) -> Vec3,
+) {
+    let corrections = compute_tstance_corrections(bones);
+    if corrections.is_empty() {
+        return;
+    }
+    let mut global_mats: Vec<Mat4> = bones.iter().map(|b| b.global_mat).collect();
+    apply_bone_corrections(bones, &mut global_mats, &corrections);
+    let vertex_rot3s = apply_mesh_corrections(bones, meshes, &corrections);
+    apply_morph_corrections(morphs, &vertex_rot3s);
+    apply_physics_corrections(bones, physics, &corrections, pos_fn);
+}
+
+/// 物理データ（剛体・ジョイント）にスタンス補正を適用
+/// 剛体・ジョイントの位置はPMX座標系なので、pos_fn で変換してから回転し、逆変換する
+fn apply_physics_corrections(
+    bones: &[IrBone],
+    physics: &mut super::types::IrPhysics,
+    corrections: &[AStanceCorrection],
+    pos_fn: fn(Vec3) -> Vec3,
+) {
+    for corr in corrections {
+        let descendants: HashSet<usize> =
+            collect_descendants_inclusive(bones, corr.bone_idx).into_iter().collect();
+        let pivot_pmx = pos_fn(corr.pivot);
+        let rot_mat = Mat4::from_translation(pivot_pmx)
+            * Mat4::from_quat(corr.rotation)
+            * Mat4::from_translation(-pivot_pmx);
+
+        // 剛体
+        for rb in &mut physics.rigid_bodies {
+            if let Some(bi) = rb.bone_index {
+                if descendants.contains(&bi) {
+                    rb.position = rot_mat.transform_point3(rb.position);
+                    // 回転も補正（Euler ZXY → Quat → 回転 → Euler ZXY）
+                    let rb_quat = glam::Quat::from_euler(
+                        glam::EulerRot::ZXY, rb.rotation.z, rb.rotation.x, rb.rotation.y,
+                    );
+                    let new_quat = corr.rotation * rb_quat;
+                    let (rz, rx, ry) = new_quat.to_euler(glam::EulerRot::ZXY);
+                    rb.rotation = Vec3::new(rx, ry, rz);
+                }
+            }
+        }
+
+        // ジョイント（rigid_a のボーンで判定）
+        for joint in &mut physics.joints {
+            let should_transform = if joint.rigid_a < physics.rigid_bodies.len() {
+                physics.rigid_bodies[joint.rigid_a]
+                    .bone_index
+                    .map_or(false, |bi| descendants.contains(&bi))
+            } else {
+                false
+            };
+            if should_transform {
+                joint.position = rot_mat.transform_point3(joint.position);
+                let j_quat = glam::Quat::from_euler(
+                    glam::EulerRot::ZXY, joint.rotation.z, joint.rotation.x, joint.rotation.y,
+                );
+                let new_quat = corr.rotation * j_quat;
+                let (rz, rx, ry) = new_quat.to_euler(glam::EulerRot::ZXY);
+                joint.rotation = Vec3::new(rx, ry, rz);
+            }
+        }
+    }
+}
+
+/// Aスタンス→Tスタンスの補正を計算
+/// vrm_bone_name がない場合はPMXボーン名（日本語）で検索
+fn compute_tstance_corrections(bones: &[IrBone]) -> Vec<AStanceCorrection> {
+    let find_bone = |names: &[&str]| -> Option<usize> {
+        for name in names {
+            // vrm_bone_name で検索
+            if let Some(idx) = bones.iter().position(|b| b.vrm_bone_name.as_deref() == Some(name)) {
+                return Some(idx);
+            }
+        }
+        // PMXボーン名で検索
+        for name in names {
+            if let Some(idx) = bones.iter().position(|b| b.name == *name) {
+                return Some(idx);
+            }
+        }
+        None
+    };
+
+    // (上腕名候補, 前腕名候補) のペア
+    let arm_pairs = [
+        (&["leftUpperArm", "左腕"][..], &["leftLowerArm", "左ひじ"][..]),
+        (&["rightUpperArm", "右腕"][..], &["rightLowerArm", "右ひじ"][..]),
+    ];
+
+    arm_pairs
+        .iter()
+        .filter_map(|(upper_names, lower_names)| {
+            let ua_idx = find_bone(upper_names)?;
+            let la_idx = find_bone(lower_names)?;
+
+            let ua_pos = bones[ua_idx].position;
+            let la_pos = bones[la_idx].position;
+            let dir = (la_pos - ua_pos).normalize_or_zero();
+
+            // 水平方向の成分
+            let horizontal = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
+            if horizontal.length_squared() < 0.001 {
+                return None;
+            }
+
+            // 現在の腕の角度（水平からの下がり角度）
+            let current_angle = dir.dot(horizontal).clamp(-1.0, 1.0).acos();
+            if current_angle < 5.0f32.to_radians() {
+                log::info!(
+                    "A→T変換: {} は既に水平に近い（{:.1}°）、スキップ",
+                    bones[ua_idx].name,
+                    current_angle.to_degrees()
+                );
+                return None;
+            }
+
+            // 腕を上に持ち上げて水平にする → 逆方向に回転
+            let axis = Vec3::Y.cross(dir).normalize_or_zero();
+            if axis.length_squared() < 0.001 {
+                return None;
+            }
+            // T→A では正の角度で下に曲げた。A→T では負の角度で持ち上げる
+            let correction = glam::Quat::from_axis_angle(axis, -current_angle);
+
+            log::info!(
+                "A→T変換: {} を {:.1}° 回転してTスタンスに変換",
+                bones[ua_idx].name,
+                current_angle.to_degrees()
+            );
+            Some(AStanceCorrection {
+                bone_idx: ua_idx,
+                pivot: ua_pos,
+                rotation: correction,
+            })
+        })
+        .collect()
+}
+
 fn collect_descendants_inclusive(bones: &[IrBone], root: usize) -> Vec<usize> {
     let mut result = Vec::new();
     let mut stack = vec![root];

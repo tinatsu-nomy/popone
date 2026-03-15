@@ -34,14 +34,38 @@ pub fn export_uv_map(ir: &IrModel, path: &Path, size: u32) -> io::Result<()> {
                 if tri.len() < 3 {
                     continue;
                 }
-                let uvs: Vec<(i32, i32)> = tri.iter().map(|&idx| {
-                    let uv = verts[idx as usize].uv;
-                    uv_to_pixel(uv.x, uv.y, dim)
-                }).collect();
+                let raw: [(f32, f32); 3] = [
+                    { let uv = verts[tri[0] as usize].uv; (fract_uv(uv.x), fract_uv(uv.y)) },
+                    { let uv = verts[tri[1] as usize].uv; (fract_uv(uv.x), fract_uv(uv.y)) },
+                    { let uv = verts[tri[2] as usize].uv; (fract_uv(uv.x), fract_uv(uv.y)) },
+                ];
 
-                draw_line(&mut buf, dim, uvs[0], uvs[1]);
-                draw_line(&mut buf, dim, uvs[1], uvs[2]);
-                draw_line(&mut buf, dim, uvs[2], uvs[0]);
+                // 境界ラップ検出
+                let u_wraps = uv_wraps(raw[0].0, raw[1].0, raw[2].0);
+                let v_wraps = uv_wraps(raw[0].1, raw[1].1, raw[2].1);
+
+                // ラップする軸ごとに +0 / -1 のオフセット組み合わせで描画
+                let u_offsets: &[f32] = if u_wraps { &[0.0, -1.0] } else { &[0.0] };
+                let v_offsets: &[f32] = if v_wraps { &[0.0, -1.0] } else { &[0.0] };
+
+                for &uo in u_offsets {
+                    for &vo in v_offsets {
+                        // ラップ時: 小さい値の頂点を +1.0 シフトしてから全体にオフセット
+                        let shifted: [(f32, f32); 3] = std::array::from_fn(|i| {
+                            let u = raw[i].0 + if u_wraps && raw[i].0 < 0.5 { 1.0 } else { 0.0 } + uo;
+                            let v = raw[i].1 + if v_wraps && raw[i].1 < 0.5 { 1.0 } else { 0.0 } + vo;
+                            (u, v)
+                        });
+
+                        let px: [(i32, i32); 3] = std::array::from_fn(|i| {
+                            ((shifted[i].0 * dim as f32) as i32, (shifted[i].1 * dim as f32) as i32)
+                        });
+
+                        draw_line(&mut buf, dim, px[0], px[1]);
+                        draw_line(&mut buf, dim, px[1], px[2]);
+                        draw_line(&mut buf, dim, px[2], px[0]);
+                    }
+                }
             }
         }
 
@@ -63,19 +87,19 @@ pub fn export_uv_map(ir: &IrModel, path: &Path, size: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// UV座標 (0..1) をピクセル座標に変換（glTF UV は左上原点、PSD と同じ）
-/// マイナス値や1超は fract で 0..1 に正規化
-fn uv_to_pixel(u: f32, v: f32, dim: usize) -> (i32, i32) {
-    let px = (fract_uv(u) * dim as f32) as i32;
-    let py = (fract_uv(v) * dim as f32) as i32;
-    (px, py)
-}
-
 /// UV値を 0..1 に正規化（負値対応の fract）
 #[inline]
 fn fract_uv(v: f32) -> f32 {
     let f = v % 1.0;
     if f < 0.0 { f + 1.0 } else { f }
+}
+
+/// 三角形の3頂点の UV 座標（fract済み 0..1）が境界をまたぐか判定
+#[inline]
+fn uv_wraps(a: f32, b: f32, c: f32) -> bool {
+    let min = a.min(b).min(c);
+    let max = a.max(b).max(c);
+    (max - min) > 0.5
 }
 
 /// Bresenham 線描画（黒色、アルファ255）

@@ -2,11 +2,11 @@
 
 [日本語](README.md)
 
-A 3D viewer for VRM / FBX / UnityPackage files.
+A 3D viewer for VRM / FBX / PMX / PMD / UnityPackage files.
 
 ## Download
 
-Latest release: **[popone_v0.2.0.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.0/popone_v0.2.0.exe)**
+Latest release: **[popone_v0.2.1.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.1/popone_v0.2.1.exe)**
 
 All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -25,6 +25,8 @@ All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 |-------|-------------|
 | VRM 0.0 / 1.0 (`.vrm`) | glTF 2.0-based VR avatar format |
 | FBX Binary (`.fbx`) | Custom parser. Auto-detects Mixamo / Blender / Maya rigs |
+| PMX 2.0 / 2.1 (`.pmx`) | MikuMikuDance model format. Viewer display + UV map export |
+| PMD (`.pmd`) | MikuMikuDance model format. Shift_JIS support |
 | UnityPackage (`.unitypackage`) | Extracts VRM / FBX + textures from tar.gz archive |
 
 ## Quick Start
@@ -52,10 +54,13 @@ In the viewer, drag & drop files or use the "Open" button to load models.
 - **Same-Name Material Linking** — ON/OFF toggle to assign textures to all materials sharing the same name simultaneously
 - **UnityPackage Support** — VRM / FBX model selection dialog, auto texture matching (manual assignment with thumbnail preview and search filter)
 - **Wireframe** — 3 modes (Solid / Wire / S+W). W key to cycle
-- **Bone & Physics Visualization** — Wireframe display of joints, rigid bodies, and colliders
+- **Bone Display** — Double-circle + direction triangle (◎△), 1px lines. IK bones highlighted in orange. Constant screen-space size regardless of camera distance
+- **Physics Visualization** — Rigid bodies (sphere/capsule/box) in 1px wireframe. Colliders = red, springs = green
+- **Joint Display** — PMX/PMD joints visualized as yellow cubes (rotation-aware, animation-synced). Adjustable opacity
+- **Normal Map View** — Visualize normal vectors as RGB colors (debug/inspection)
 - **Normal Tools** — Normal smoothing, custom normal clear, normal direction visualization
 - **MSAA** — 4x anti-aliasing (toggleable)
-- **UV Map Export** — PSD output with per-material layers (1024–8192 resolution)
+- **UV Map Export** — PSD output with per-material layers (1024–8192 resolution). UV boundary wrap handling for triangles crossing 0/1 edges
 
 <details>
 <summary>Keyboard Shortcuts</summary>
@@ -80,6 +85,16 @@ In the viewer, drag & drop files or use the "Open" button to load models.
 | Left/Right | Step frame (when paused) |
 
 </details>
+
+### PMX / PMD Loading (v0.2.1)
+
+- **PMX 2.0 / 2.1** — Full data structure loading (vertices, faces, materials, bones, morphs, display frames, rigid bodies, joints). SoftBody (2.1) is skipped
+- **PMD** — Automatic Shift_JIS text conversion. IK and morph (base+offset) support. Material name text file (same-name `.txt`) loading
+- **Textures** — Auto-loads PNG/JPEG/BMP/TGA from PMX/PMD relative paths. MIME hint-based format detection
+- **T-Stance Conversion** — Convert A-stance models to T-stance (bones, mesh, morphs, rigid bodies, joints synced)
+- **VRMA Animation** — Auto-mapping from PMX Japanese bone names to VRM humanoid names enables VRMA animation playback
+- **UI Restrictions** — PMX conversion button, normal smoothing, and custom normal clear are grayed out when PMX/PMD is loaded
+- **Comment Display** — PMX/PMD comments shown in model info panel
 
 ### FBX Support
 
@@ -122,6 +137,13 @@ popone.exe input.unitypackage output.pmx
 - MToon outline to PMX edge mapping
 - Auto-classified display frames (Root / Expression / Upper Body / Arms / Fingers / Legs / Other)
 - UV normalization (clamped to 0..1)
+
+## Limitations
+
+- **PMX/PMD is view-only** — PMX conversion (re-export) is not supported. Viewer display and UV map export only
+- **Normal maps not applied** — VRM/FBX normalTexture is not reflected in shading (can be inspected via Normal Map View mode)
+- **Lat-style Hatsune Miku, etc.** — Models optimized for MMD-specific rendering may display some surfaces incorrectly
+- **PMX 2.1 SoftBody** — Skipped (not supported)
 
 ## Build
 
@@ -218,8 +240,9 @@ cargo test
 | gltf | GLB/glTF 2.0 parser (with `extensions` feature) |
 | serde / serde_json | VRM extension JSON deserialization |
 | glam | 3D math (Vec3, Quat, Mat4) |
-| byteorder | PMX binary writing (little-endian) |
-| image | Texture PNG encoding |
+| byteorder | PMX binary read/write (little-endian) |
+| image | Texture PNG/JPEG/BMP/TGA decode/encode |
+| encoding_rs | PMD Shift_JIS text conversion |
 | flate2 | zlib compression/decompression |
 | tar | .unitypackage (tar.gz) extraction |
 | clap | CLI argument parser |
@@ -252,6 +275,7 @@ cargo test
 | [glam](https://github.com/bitshifter/glam-rs) | MIT OR Apache-2.0 |
 | [byteorder](https://github.com/BurntSushi/byteorder) | Unlicense OR MIT |
 | [image](https://github.com/image-rs/image) | MIT OR Apache-2.0 |
+| [encoding_rs](https://github.com/nickel-org/encoding_rs) | MIT OR Apache-2.0 |
 | [flate2](https://github.com/rust-lang/flate2-rs) | MIT OR Apache-2.0 |
 | [tar](https://github.com/alexcrichton/tar-rs) | MIT OR Apache-2.0 |
 | [clap](https://github.com/clap-rs/clap) | MIT OR Apache-2.0 |

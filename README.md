@@ -2,11 +2,11 @@
 
 [English](README.en.md)
 
-VRM / FBX / UnityPackage を 3D 表示します。
+VRM / FBX / PMX / PMD / UnityPackage を 3D 表示します。
 
 ## ダウンロード
 
-最新リリース: **[popone_v0.2.0.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.0/popone_v0.2.0.exe)**
+最新リリース: **[popone_v0.2.1.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.1/popone_v0.2.1.exe)**
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -25,6 +25,8 @@ VRM / FBX / UnityPackage を 3D 表示します。
 |------|------|
 | VRM 0.0 / 1.0 (`.vrm`) | glTF 2.0 ベースの VR アバター形式 |
 | FBX バイナリ (`.fbx`) | 自前パーサーによる解析。Mixamo / Blender / Maya 等のリグを自動検出 |
+| PMX 2.0 / 2.1 (`.pmx`) | MikuMikuDance モデル形式。ビューア表示 + UVマップ出力 |
+| PMD (`.pmd`) | MikuMikuDance モデル形式。Shift_JIS 対応 |
 | UnityPackage (`.unitypackage`) | tar.gz アーカイブから VRM / FBX + テクスチャを自動抽出 |
 
 ## クイックスタート
@@ -52,10 +54,13 @@ popone.exe input.fbx
 - **同名材質連動** — 同じ名前の材質に同時にテクスチャを割り当てる ON/OFF スイッチ
 - **UnityPackage 対応** — VRM / FBX モデル選択ダイアログ、テクスチャ自動割当（サムネイルプレビュー・検索フィルタ付き手動割当も可能）
 - **ワイヤーフレーム** — 3 モード切替（Solid / Wire / S+W）。W キーで巡回
-- **ボーン・物理可視化** — ジョイント・剛体・コライダーのワイヤーフレーム表示
+- **ボーン表示** — ◎△形状（二重円＋方向三角形）、1px 描画。IK ボーンはオレンジで識別。カメラ距離に関わらず一定サイズ
+- **物理可視化** — 剛体（球体・カプセル・ボックス）を 1px ワイヤーフレームで表示。コライダー=レッド、スプリング=グリーン
+- **ジョイント表示** — PMX/PMD のジョイントをイエロー立方体（回転反映・アニメ同期）で可視化。濃さ調整可能
+- **法線マップ表示** — 法線ベクトルを RGB カラーに変換して表示（デバッグ・確認用）
 - **法線ツール** — 法線平滑化、カスタム法線クリア、法線方向の可視化
 - **MSAA** — 4x アンチエイリアシング（ON/OFF 切替可能）
-- **UVマップ出力** — 材質レイヤー分けの PSD として出力（1024〜8192 解像度）
+- **UVマップ出力** — 材質レイヤー分けの PSD として出力（1024〜8192 解像度）。UV 境界をまたぐ三角形のラップ描画対応
 
 <details>
 <summary>キーボードショートカット</summary>
@@ -80,6 +85,16 @@ popone.exe input.fbx
 | ←/→ | フレーム送り（一時停止中） |
 
 </details>
+
+### PMX / PMD ロード（v0.2.1 新機能）
+
+- **PMX 2.0 / 2.1** — 全データ構造の読み込み（頂点・面・材質・ボーン・モーフ・表示枠・剛体・ジョイント）。SoftBody (2.1) は読み飛ばし
+- **PMD** — Shift_JIS テキスト自動変換。IK・モーフ（base+offset 形式）対応。材質名テキストファイル（同名 `.txt`）読み込み
+- **テクスチャ** — PMX/PMD の相対パスから PNG/JPEG/BMP/TGA を自動読み込み。MIME ヒントによるフォーマット判定
+- **Tスタンス変換** — A スタンスモデルを T スタンスに変換（ボーン・メッシュ・モーフ・剛体・ジョイント同期）
+- **VRMA アニメーション** — PMX 日本語ボーン名から VRM ヒューマノイド名への自動マッピングで VRMA アニメーション再生対応
+- **UI 制限** — PMX/PMD ロード時は PMX 変換ボタン・法線平滑化・カスタム法線クリアをグレーアウト
+- **コメント表示** — PMX/PMD のコメントをモデル情報パネルに表示
 
 ### FBX 対応
 
@@ -122,6 +137,13 @@ popone.exe input.unitypackage output.pmx
 - MToon アウトライン → PMX エッジ反映
 - 表示枠の自動分類（Root / 表情 / 体(上) / 腕 / 指 / 足 / その他）
 - UV 正規化（0..1 範囲に補正）
+
+## 制限事項
+
+- **PMX/PMD は閲覧専用** — PMX 変換（再出力）は非対応。ビューア表示と UVマップ出力のみ
+- **法線マップ（ノーマルマップ）未適用** — VRM/FBX の normalTexture はシェーディングに反映されない（法線マップ表示モードで確認は可能）
+- **Lat式初音ミク等** — MMD レンダリングに特化したモデルは一部サーフェイスが正しく表示されない場合がある
+- **PMX 2.1 SoftBody** — 読み飛ばし（未対応）
 
 ## ビルド
 
@@ -218,8 +240,9 @@ cargo test
 | gltf | GLB/glTF 2.0 パーサー（`extensions` 機能有効） |
 | serde / serde_json | VRM 拡張 JSON デシリアライズ |
 | glam | 3D 数学（Vec3, Quat, Mat4） |
-| byteorder | PMX バイナリ書き出し |
-| image | テクスチャ PNG エンコード |
+| byteorder | PMX バイナリ読み書き |
+| image | テクスチャ PNG/JPEG/BMP/TGA デコード・エンコード |
+| encoding_rs | PMD Shift_JIS テキスト変換 |
 | flate2 | zlib 圧縮・展開 |
 | tar | .unitypackage (tar.gz) 展開 |
 | clap | CLI 引数パーサー |
@@ -252,6 +275,7 @@ cargo test
 | [glam](https://github.com/bitshifter/glam-rs) | MIT OR Apache-2.0 |
 | [byteorder](https://github.com/BurntSushi/byteorder) | Unlicense OR MIT |
 | [image](https://github.com/image-rs/image) | MIT OR Apache-2.0 |
+| [encoding_rs](https://github.com/nickel-org/encoding_rs) | MIT OR Apache-2.0 |
 | [flate2](https://github.com/rust-lang/flate2-rs) | MIT OR Apache-2.0 |
 | [tar](https://github.com/alexcrichton/tar-rs) | MIT OR Apache-2.0 |
 | [clap](https://github.com/clap-rs/clap) | MIT OR Apache-2.0 |

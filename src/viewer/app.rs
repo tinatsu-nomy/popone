@@ -158,6 +158,10 @@ pub struct DisplaySettings {
     pub show_spring_bones: bool,
     /// SpringBone 濃度
     pub spring_bone_opacity: f32,
+    /// ジョイント表示（PMX/PMDのみ）
+    pub show_joints: bool,
+    /// ジョイント濃度
+    pub joint_opacity: f32,
     /// 描画モード
     pub draw_mode: DrawMode,
     /// ライトモード
@@ -174,6 +178,8 @@ pub struct DisplaySettings {
     pub show_normals: bool,
     /// 法線表示の長さ
     pub normal_length: f32,
+    /// 法線マップ表示（法線ベクトル→RGB）
+    pub show_normal_map: bool,
 }
 
 impl Default for DisplaySettings {
@@ -187,6 +193,8 @@ impl Default for DisplaySettings {
             bone_opacity: 0.85,
             show_spring_bones: false,
             spring_bone_opacity: 0.75,
+            show_joints: false,
+            joint_opacity: 0.75,
             draw_mode: DrawMode::Solid,
             light_mode: LightMode::CameraFollow,
             align_rigid_rotation: false,
@@ -194,7 +202,8 @@ impl Default for DisplaySettings {
             smooth_normals: false,
             clear_custom_normals: false,
             show_normals: false,
-            normal_length: 0.5,
+            normal_length: 0.1,
+            show_normal_map: false,
         }
     }
 }
@@ -475,6 +484,8 @@ impl ViewerApp {
         let result = match ext.as_str() {
             "fbx" => self.try_load_fbx(&path),
             "unitypackage" => self.try_load_unitypackage(&path),
+            "pmx" => self.try_load_pmx(&path),
+            "pmd" => self.try_load_pmd(&path),
             _ => self.try_load_vrm(&path),
         };
 
@@ -498,7 +509,7 @@ impl ViewerApp {
             Err(e) => {
                 log::error!("読み込み失敗: {e}");
                 self.convert_message = Some(ConvertMessage::failure(format!(
-                    "読み込み失敗: {e}\n対応形式: VRM (.vrm), FBX (.fbx), UnityPackage (.unitypackage), VRMA (.vrma)\n別のファイルを試してください。"
+                    "読み込み失敗: {e}\n対応形式: VRM (.vrm), FBX (.fbx), PMX (.pmx), PMD (.pmd), UnityPackage, VRMA\n別のファイルを試してください。"
                 )));
             }
         }
@@ -882,6 +893,35 @@ impl ViewerApp {
                 self.active_vrma_index = Some(index);
             }
         }
+    }
+
+    fn try_load_pmx(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
+        let pmx_model = crate::pmx::reader::read_pmx(path)?;
+        let pmx_dir = path.parent().unwrap_or(std::path::Path::new("."));
+        let mut ir = crate::pmx::extract::pmx_to_ir(&pmx_model, pmx_dir)?;
+
+        if self.normalize_pose {
+            crate::intermediate::pose::normalize_pose_to_tstance_full(
+                &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
+                crate::convert::coord::gltf_pos_to_pmx,
+            );
+        }
+
+        self.finish_load(ir, path)
+    }
+
+    fn try_load_pmd(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
+        let pmd_model = crate::pmd::reader::read_pmd(path)?;
+        let mut ir = crate::pmd::extract::pmd_to_ir(&pmd_model, path)?;
+
+        if self.normalize_pose {
+            crate::intermediate::pose::normalize_pose_to_tstance_full(
+                &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
+                crate::convert::coord::gltf_pos_to_pmx,
+            );
+        }
+
+        self.finish_load(ir, path)
     }
 
     fn try_load_vrm(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
@@ -1618,9 +1658,11 @@ impl ViewerApp {
     fn open_file_dialog(&mut self) {
         let mut dialog = rfd::FileDialog::new()
             .set_title("3Dモデル / VRMAアニメーションを開く")
-            .add_filter("対応形式 (VRM/FBX/UnityPackage/VRMA)", &["vrm", "fbx", "unitypackage", "vrma"])
+            .add_filter("対応形式", &["vrm", "fbx", "pmx", "pmd", "unitypackage", "vrma"])
             .add_filter("VRM (.vrm)", &["vrm"])
             .add_filter("FBX (.fbx)", &["fbx"])
+            .add_filter("PMX (.pmx)", &["pmx"])
+            .add_filter("PMD (.pmd)", &["pmd"])
             .add_filter("UnityPackage (.unitypackage)", &["unitypackage"])
             .add_filter("VRMA (.vrma)", &["vrma"]);
         if let Some(ref dir) = self.last_model_dir {

@@ -604,9 +604,23 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
 
     ui.add_space(12.0);
 
-    // メタ情報
+    // メタ情報 / コメント
     if !ir.comment.is_empty() {
-        show_meta_info(ui, &ir.comment);
+        if ir.source_format.is_pmx_pmd() {
+            // PMX/PMD: 自由形式コメントをそのまま表示
+            ui.heading(
+                egui::RichText::new("コメント")
+                    .color(egui::Color32::from_gray(0x20)),
+            );
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .max_height(200.0)
+                .show(ui, |ui| {
+                    ui.label(&ir.comment);
+                });
+        } else {
+            show_meta_info(ui, &ir.comment);
+        }
     }
 }
 
@@ -738,6 +752,20 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
             );
         }
     });
+    // ジョイント表示（PMX/PMDのみ）
+    let is_pmx_pmd_joints = app.loaded.as_ref()
+        .map_or(false, |l| l.ir.source_format.is_pmx_pmd());
+    let has_joints = app.loaded.as_ref()
+        .map_or(false, |l| !l.ir.physics.joints.is_empty());
+    if is_pmx_pmd_joints && has_joints {
+        ui.checkbox(&mut app.display.show_joints, "ジョイント表示");
+        if app.display.show_joints {
+            ui.add(
+                egui::Slider::new(&mut app.display.joint_opacity, 0.05..=1.0)
+                    .text("ジョイント濃度"),
+            );
+        }
+    }
     // ワイヤーフレーム
     let supports_wire = app.renderer.as_ref()
         .map(|r| r.supports_wireframe()).unwrap_or(false);
@@ -757,6 +785,7 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
     });
     ui.separator();
     ui.checkbox(&mut app.display.msaa, "MSAA (アンチエイリアス)");
+    ui.checkbox(&mut app.display.show_normal_map, "法線マップ表示");
     ui.checkbox(&mut app.display.show_normals, "法線表示 (N)");
     if app.display.show_normals {
         ui.add(
@@ -764,16 +793,20 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
                 .text("法線長さ"),
         );
     }
-    let old_smooth = app.display.smooth_normals;
-    ui.checkbox(&mut app.display.smooth_normals, "法線平滑化");
-    if app.display.smooth_normals != old_smooth && app.loaded.is_some() {
-        app.pending_rebuild = Some(false);
-    }
-    let old_clear = app.display.clear_custom_normals;
-    ui.checkbox(&mut app.display.clear_custom_normals, "カスタム法線クリア");
-    if app.display.clear_custom_normals != old_clear && app.loaded.is_some() {
-        app.pending_rebuild = Some(false);
-    }
+    let is_pmx_pmd_normals = app.loaded.as_ref()
+        .map_or(false, |l| l.ir.source_format.is_pmx_pmd());
+    ui.add_enabled_ui(!is_pmx_pmd_normals, |ui| {
+        let old_smooth = app.display.smooth_normals;
+        ui.checkbox(&mut app.display.smooth_normals, "法線平滑化");
+        if app.display.smooth_normals != old_smooth && app.loaded.is_some() {
+            app.pending_rebuild = Some(false);
+        }
+        let old_clear = app.display.clear_custom_normals;
+        ui.checkbox(&mut app.display.clear_custom_normals, "カスタム法線クリア");
+        if app.display.clear_custom_normals != old_clear && app.loaded.is_some() {
+            app.pending_rebuild = Some(false);
+        }
+    });
 
     ui.add_space(12.0);
 
@@ -935,6 +968,8 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     let has_physics = app.loaded.as_ref()
         .map_or(false, |l| !l.ir.physics.rigid_bodies.is_empty());
     let has_model = app.loaded.is_some();
+    let is_pmx_pmd = app.loaded.as_ref()
+        .map_or(false, |l| l.ir.source_format.is_pmx_pmd());
     let is_processing = app.pending_load.is_some()
         || app.pending_convert.is_some()
         || app.pending_rebuild.is_some()
@@ -947,7 +982,8 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     );
     ui.separator();
 
-    ui.add_enabled_ui(has_model && !is_processing, |ui| {
+    // PMX/PMD ロード時は PMX 変換関連をグレーアウト
+    ui.add_enabled_ui(has_model && !is_processing && !is_pmx_pmd, |ui| {
         if ui.button("PMX 変換").clicked() {
             let default_path = if app.pmx_output_path.is_empty() {
                 std::path::PathBuf::from("output.pmx")
@@ -969,21 +1005,33 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             }
         }
     });
-    ui.add_enabled_ui(has_humanoid, |ui| {
+    // PMX/PMD 時: T→Aスタンスはグレーアウト、代わりにA→Tスタンスを表示
+    if is_pmx_pmd {
         if ui.checkbox(
             &mut app.normalize_pose,
-            "Aスタンス変換",
+            "Tスタンス変換",
         ).changed() {
             app.pending_reload = Some(false);
         }
-    });
-    ui.add_enabled_ui(has_physics, |ui| {
+    } else {
+        ui.add_enabled_ui(has_humanoid, |ui| {
+            if ui.checkbox(
+                &mut app.normalize_pose,
+                "Aスタンス変換",
+            ).changed() {
+                app.pending_reload = Some(false);
+            }
+        });
+    }
+    ui.add_enabled_ui(has_physics && !is_pmx_pmd, |ui| {
         ui.checkbox(
             &mut app.display.align_rigid_rotation,
             "剛体回転をボーン方向に揃える",
         );
     });
-    ui.checkbox(&mut app.output_log, "ログ出力");
+    ui.add_enabled_ui(!is_pmx_pmd, |ui| {
+        ui.checkbox(&mut app.output_log, "ログ出力");
+    });
 
     ui.add_space(12.0);
 

@@ -40,7 +40,7 @@ pub struct CameraUniform {
     pub light_dir: [f32; 3],
     pub light_intensity: f32,
     pub ambient: [f32; 3],
-    pub _pad1: f32,
+    pub show_normal_map: f32, // 0.0 = 通常, 1.0 = 法線マップ表示
 }
 
 /// 材質 uniform バッファ
@@ -123,6 +123,7 @@ struct CameraUniform {
     light_dir: vec3<f32>,
     light_intensity: f32,
     ambient: vec3<f32>,
+    show_normal_map: f32,
 };
 
 struct MaterialUniform {
@@ -156,6 +157,13 @@ fn vs_main(
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
+
+    // 法線マップ表示: 法線ベクトル → RGB
+    if camera.show_normal_map > 0.5 {
+        let rgb = (n + vec3<f32>(1.0)) * 0.5;
+        return vec4<f32>(rgb, 1.0);
+    }
+
     // Half-Lambert: 裏面にも柔らかく光が回る
     let ndotl = dot(n, camera.light_dir) * 0.5 + 0.5;
     let light = camera.ambient + vec3<f32>(camera.light_intensity) * ndotl;
@@ -173,6 +181,7 @@ struct CameraUniform {
     light_dir: vec3<f32>,
     light_intensity: f32,
     ambient: vec3<f32>,
+    show_normal_map: f32,
 };
 
 struct MaterialUniform {
@@ -213,7 +222,9 @@ const GRID_SHADER_SRC: &str = r#"
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     light_dir: vec3<f32>,
+    light_intensity: f32,
     ambient: vec3<f32>,
+    show_normal_map: f32,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
@@ -313,6 +324,12 @@ pub struct GpuRenderer {
     spring_buf: Option<wgpu::Buffer>,
     spring_buf_capacity: usize,
     spring_vertex_count: u32,
+    joint_buf: Option<wgpu::Buffer>,
+    joint_buf_capacity: usize,
+    joint_vertex_count: u32,
+    joint_edge_buf: Option<wgpu::Buffer>,
+    joint_edge_buf_capacity: usize,
+    joint_edge_vertex_count: u32,
     /// 法線表示頂点バッファ
     normal_buf: Option<wgpu::Buffer>,
     normal_buf_capacity: usize,
@@ -331,6 +348,8 @@ pub struct GpuRenderer {
     bone_work: Vec<GridVertex>,
     /// SpringBone頂点生成用作業バッファ
     spring_work: Vec<GridVertex>,
+    joint_work: Vec<GridVertex>,
+    joint_edge_work: Vec<GridVertex>,
 }
 
 /// MSAA サンプル数
@@ -481,6 +500,12 @@ impl GpuRenderer {
             spring_buf: None,
             spring_buf_capacity: 0,
             spring_vertex_count: 0,
+            joint_buf: None,
+            joint_buf_capacity: 0,
+            joint_vertex_count: 0,
+            joint_edge_buf: None,
+            joint_edge_buf_capacity: 0,
+            joint_edge_vertex_count: 0,
             normal_buf: None,
             normal_buf_capacity: 0,
             normal_vertex_count: 0,
@@ -493,6 +518,8 @@ impl GpuRenderer {
             current_msaa: true,
             bone_work: Vec::new(),
             spring_work: Vec::new(),
+            joint_work: Vec::new(),
+            joint_edge_work: Vec::new(),
         }
     }
 
@@ -826,6 +853,9 @@ impl GpuRenderer {
                 self.normal_cache_visibility = params.material_visibility.to_vec();
             }
         } else {
+            if self.normal_vertex_count > 0 {
+                self.normal_dirty = true; // 再表示時に再生成するためフラグを立てる
+            }
             self.normal_vertex_count = 0;
         }
 
@@ -851,6 +881,44 @@ impl GpuRenderer {
             }
         }
 
+        // ジョイント頂点を毎フレーム更新
+        if !params.display.show_joints || ir.physics.joints.is_empty() {
+            self.joint_vertex_count = 0;
+        }
+        if params.display.show_joints && !ir.physics.joints.is_empty() {
+            generate_joint_vertices(&mut self.joint_work, &mut self.joint_edge_work, ir, params.display.joint_opacity, params.animated_bone_globals, params.is_vrm0);
+            // 面バッファ（TriangleList）
+            self.joint_vertex_count = self.joint_work.len() as u32;
+            let data = bytemuck::cast_slice(&self.joint_work);
+            if data.len() > self.joint_buf_capacity {
+                self.joint_buf = Some(device.create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some("joint_vbuf"),
+                        contents: data,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    },
+                ));
+                self.joint_buf_capacity = data.len();
+            } else if let Some(ref buf) = self.joint_buf {
+                queue.write_buffer(buf, 0, data);
+            }
+            // エッジバッファ（LineList）
+            self.joint_edge_vertex_count = self.joint_edge_work.len() as u32;
+            let edge_data = bytemuck::cast_slice(&self.joint_edge_work);
+            if edge_data.len() > self.joint_edge_buf_capacity {
+                self.joint_edge_buf = Some(device.create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some("joint_edge_vbuf"),
+                        contents: edge_data,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    },
+                ));
+                self.joint_edge_buf_capacity = edge_data.len();
+            } else if let Some(ref buf) = self.joint_edge_buf {
+                queue.write_buffer(buf, 0, edge_data);
+            }
+        }
+
         // Update camera uniform
         let aspect = params.width as f32 / params.height as f32;
         let light_dir = match params.display.light_mode {
@@ -862,7 +930,7 @@ impl GpuRenderer {
             light_dir: light_dir.to_array(),
             light_intensity: params.display.light_intensity,
             ambient: [params.display.ambient_intensity; 3],
-            _pad1: 0.0,
+            show_normal_map: if params.display.show_normal_map { 1.0 } else { 0.0 },
         };
         queue.write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&cam_uniform));
 
@@ -1014,10 +1082,34 @@ impl GpuRenderer {
             }
             } // end if !model.draws.is_empty()
 
-            // ボーン描画（メッシュの上にオーバーレイ、depth=Always）
+            // 描画順: ジョイント → ボーン → 剛体（後が最前面）
+
+            // ジョイント描画（オーバーレイ）
+            if params.display.show_joints {
+                // 面（TriangleList）
+                if self.joint_vertex_count > 0 {
+                    if let Some(ref joint_buf) = self.joint_buf {
+                        pass.set_pipeline(&ps.pipeline_bone);
+                        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                        pass.set_vertex_buffer(0, joint_buf.slice(..));
+                        pass.draw(0..self.joint_vertex_count, 0..1);
+                    }
+                }
+                // エッジ（LineList, 1px）
+                if self.joint_edge_vertex_count > 0 {
+                    if let Some(ref edge_buf) = self.joint_edge_buf {
+                        pass.set_pipeline(&ps.pipeline_line_overlay);
+                        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                        pass.set_vertex_buffer(0, edge_buf.slice(..));
+                        pass.draw(0..self.joint_edge_vertex_count, 0..1);
+                    }
+                }
+            }
+
+            // ボーン描画（1px LineList オーバーレイ）
             if params.display.show_bones && self.bone_vertex_count > 0 {
                 if let Some(ref bone_buf) = self.bone_buf {
-                    pass.set_pipeline(&ps.pipeline_bone);
+                    pass.set_pipeline(&ps.pipeline_line_overlay);
                     pass.set_bind_group(0, &self.camera_bind_group, &[]);
                     pass.set_vertex_buffer(0, bone_buf.slice(..));
                     pass.draw(0..self.bone_vertex_count, 0..1);
@@ -1034,10 +1126,10 @@ impl GpuRenderer {
                 }
             }
 
-            // SpringBone物理描画（オーバーレイ）
+            // 剛体描画（1px LineList オーバーレイ、最前面）
             if params.display.show_spring_bones && self.spring_vertex_count > 0 {
                 if let Some(ref spring_buf) = self.spring_buf {
-                    pass.set_pipeline(&ps.pipeline_bone);
+                    pass.set_pipeline(&ps.pipeline_line_overlay);
                     pass.set_bind_group(0, &self.camera_bind_group, &[]);
                     pass.set_vertex_buffer(0, spring_buf.slice(..));
                     pass.draw(0..self.spring_vertex_count, 0..1);
@@ -1185,13 +1277,15 @@ fn generate_bone_vertices(
     animated_globals: Option<&[glam::Mat4]>,
 ) {
     out.clear();
-    let joint_color = [1.0, 0.85, 0.1, opacity];
-    let bone_color = [0.15, 0.85, 0.3, opacity];
-    let joint_radius = 0.35_f32;
-    let segments = 12u32;
+    // ◎△ 形状: 二重円（ボーン位置） + 底辺なし三角形（親→子）（1px LineList）
+    // 画面上で一定サイズ: 半径 = カメラ距離 × 定数
+    let bone_color = [0.0, 0.0, 1.0, opacity];       // ブルー #0000ff
+    let ik_color = [1.0, 0.588, 0.0, opacity];        // オレンジ #ff9600
+    let outer_factor = 0.004_f32;  // 画面上の外円サイズ
+    let inner_factor = 0.0022_f32; // 画面上の内円サイズ
+    let segments = 16u32;
 
     for (bone_i, bone) in ir.bones.iter().enumerate() {
-        // アニメーション済みグローバル行列があればそこからglTF位置を取得
         let pos = if let Some(globals) = animated_globals {
             if bone_i < globals.len() {
                 pos_fn(globals[bone_i].transform_point3(Vec3::ZERO))
@@ -1202,21 +1296,38 @@ fn generate_bone_vertices(
             pos_fn(bone.position)
         };
 
-        // --- ジョイント: カメラ向き円 ---
-        let to_cam = (camera_eye - pos).normalize_or_zero();
-        let (right, up) = billboard_axes(to_cam);
+        // IKボーン判定（名前に "ＩＫ" を含む）
+        let is_ik = bone.name.contains("ＩＫ") || bone.name.contains("IK");
+        let color = if is_ik { ik_color } else { bone_color };
 
+        // ◎: 二重円（カメラ向きビルボード、画面上一定サイズ）
+        let to_cam_vec = camera_eye - pos;
+        let dist = to_cam_vec.length().max(0.1);
+        let to_cam = to_cam_vec / dist;
+        let (right, up) = billboard_axes(to_cam);
+        let outer_radius = dist * outer_factor;
+        let inner_radius = dist * inner_factor;
+
+        // 外円
         for i in 0..segments {
             let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
             let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
-            let p0 = pos + (right * a0.cos() + up * a0.sin()) * joint_radius;
-            let p1 = pos + (right * a1.cos() + up * a1.sin()) * joint_radius;
-            out.push(GridVertex { position: pos.to_array(), color: joint_color });
-            out.push(GridVertex { position: p0.to_array(), color: joint_color });
-            out.push(GridVertex { position: p1.to_array(), color: joint_color });
+            let p0 = pos + (right * a0.cos() + up * a0.sin()) * outer_radius;
+            let p1 = pos + (right * a1.cos() + up * a1.sin()) * outer_radius;
+            out.push(GridVertex { position: p0.to_array(), color });
+            out.push(GridVertex { position: p1.to_array(), color });
+        }
+        // 内円
+        for i in 0..segments {
+            let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
+            let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
+            let p0 = pos + (right * a0.cos() + up * a0.sin()) * inner_radius;
+            let p1 = pos + (right * a1.cos() + up * a1.sin()) * inner_radius;
+            out.push(GridVertex { position: p0.to_array(), color });
+            out.push(GridVertex { position: p1.to_array(), color });
         }
 
-        // --- 親→子: 三角形 ---
+        // △: 親◎を底辺、自分を頂点とする三角形（底辺なし＝2辺のみ）
         if let Some(parent_idx) = bone.parent {
             if parent_idx >= ir.bones.len() {
                 continue;
@@ -1230,6 +1341,7 @@ fn generate_bone_vertices(
             } else {
                 pos_fn(ir.bones[parent_idx].position)
             };
+
             let dir = pos - parent_pos;
             let len = dir.length();
             if len < 0.001 {
@@ -1239,27 +1351,25 @@ fn generate_bone_vertices(
             let mid = (parent_pos + pos) * 0.5;
             let to_cam_mid = (camera_eye - mid).normalize_or_zero();
             let side = dir_n.cross(to_cam_mid).normalize_or_zero();
-            // side がゼロになる場合（カメラがボーン方向を向いている）
             let side = if side.length_squared() < 0.001 {
                 let (r, _) = billboard_axes(to_cam_mid);
                 r
             } else {
                 side
             };
-            let base_half = (len * 0.10).clamp(0.15, joint_radius);
+            let parent_dist = (camera_eye - parent_pos).length().max(0.1);
+            let base_half = parent_dist * outer_factor;
 
             let base_l = parent_pos + side * base_half;
             let base_r = parent_pos - side * base_half;
             let tip = pos;
 
-            // 表面
-            out.push(GridVertex { position: base_l.to_array(), color: bone_color });
-            out.push(GridVertex { position: tip.to_array(), color: bone_color });
-            out.push(GridVertex { position: base_r.to_array(), color: bone_color });
-            // 裏面（反対からも見えるように）
-            out.push(GridVertex { position: base_r.to_array(), color: bone_color });
-            out.push(GridVertex { position: tip.to_array(), color: bone_color });
-            out.push(GridVertex { position: base_l.to_array(), color: bone_color });
+            // 左辺: base_l → tip
+            out.push(GridVertex { position: base_l.to_array(), color });
+            out.push(GridVertex { position: tip.to_array(), color });
+            // 右辺: base_r → tip
+            out.push(GridVertex { position: base_r.to_array(), color });
+            out.push(GridVertex { position: tip.to_array(), color });
         }
     }
 }
@@ -1292,12 +1402,12 @@ fn generate_spring_bone_vertices(
     use crate::intermediate::types::RigidShape;
 
     out.clear();
-    let collider_color = [0.0, 0.85, 0.9, opacity]; // シアン（group=1: コライダー）
-    let spring_color = [0.9, 0.2, 0.85, opacity];   // マゼンタ（group=2: スプリングチェーン）
-    let joint_color = [1.0, 0.85, 0.1, opacity * 0.6]; // 黄色（ジョイント接続線）
+    let collider_color = [1.0, 0.0, 0.0, opacity];   // レッド #ff0000（group=1: コライダー）
+    let spring_color = [0.0, 1.0, 0.0, opacity];      // グリーン #00ff00（group!=1: スプリングチェーン）
+    let joint_color = [1.0, 1.0, 0.5, opacity * 0.6]; // イエロー #ffff80（ジョイント接続線）
 
     let segments = 16u32;
-    let line_width = 0.15_f32; // 線の太さ（ワイヤフレーム風の三角ストリップ幅）
+    let line_width = 0.0_f32; // 1px描画（draw_ring/draw_line_quad の _width 引数用）
 
     // ボーンごとのデルタ変換を事前計算（アニメーション有効時）
     let pos_fn: fn(Vec3) -> Vec3 = if is_vrm0 {
@@ -1335,7 +1445,8 @@ fn generate_spring_bone_vertices(
         let color = if rb.group == 1 { collider_color } else { spring_color };
 
         // PMX Euler → 回転クォータニオン（ZXY: R = Rz * Rx * Ry）
-        let rotation = if align_rigid_rotation { rb.rotation } else { Vec3::ZERO };
+        // PMX/PMD: 回転は常にファイルの値を使用。VRM: align_rigid_rotation 有効時のみ
+        let rotation = if ir.source_format.is_pmx_pmd() || align_rigid_rotation { rb.rotation } else { Vec3::ZERO };
         let mut quat = glam::Quat::from_euler(
             glam::EulerRot::ZXY,
             rotation.z,
@@ -1362,10 +1473,21 @@ fn generate_spring_bone_vertices(
 
         match &rb.shape {
             RigidShape::Sphere { radius } => {
-                // 3つの大円リング（XY, XZ, YZ平面）
-                draw_ring(out, rb_pos, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
-                draw_ring(out, rb_pos, quat, *radius, Vec3::Y, Vec3::X, segments, line_width, color);
-                draw_ring(out, rb_pos, quat, *radius, Vec3::Z, Vec3::Y, segments, line_width, color);
+                // 8本の経線（Y軸周り45°間隔、大円弧）
+                for i in 0..8u32 {
+                    let angle = std::f32::consts::FRAC_PI_4 * i as f32;
+                    let horiz = Vec3::new(angle.cos(), 0.0, angle.sin());
+                    // 経線 = Y軸と水平方向で張る大円
+                    draw_ring(out, rb_pos, quat, *radius, Vec3::Y, horiz, segments, line_width, color);
+                }
+                // 7本の緯線（上から下へ等間隔）
+                for i in 1..=7u32 {
+                    let lat_angle = std::f32::consts::PI * i as f32 / 8.0;
+                    let y = lat_angle.cos() * radius;
+                    let r = lat_angle.sin() * radius;
+                    let center = rb_pos + quat * Vec3::new(0.0, y, 0.0);
+                    draw_ring(out, center, quat, r, Vec3::Z, Vec3::X, segments, line_width, color);
+                }
             }
             RigidShape::Capsule { radius, height } => {
                 // カプセル: Y軸がボーン方向
@@ -1379,9 +1501,9 @@ fn generate_spring_bone_vertices(
                 draw_ring(out, rb_pos + top_offset, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
                 draw_ring(out, rb_pos + bot_offset, quat, *radius, Vec3::Z, Vec3::X, segments, line_width, color);
 
-                // 4本の接続線（上端→下端）
-                for i in 0..4u32 {
-                    let angle = std::f32::consts::FRAC_PI_2 * i as f32;
+                // 8本の接続線（上端→下端）
+                for i in 0..8u32 {
+                    let angle = std::f32::consts::FRAC_PI_4 * i as f32;
                     let local_offset = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
                     let top = rb_pos + top_offset + quat * local_offset;
                     let bot = rb_pos + bot_offset + quat * local_offset;
@@ -1449,23 +1571,19 @@ fn compute_animated_rb_pos(
     }
 }
 
-/// ワイヤフレーム風リング（三角形ストリップで薄い帯を描画）
+/// 1px リングライン（LineList）
 #[allow(clippy::too_many_arguments)]
 fn draw_ring(
     verts: &mut Vec<GridVertex>,
     center: Vec3,
     quat: glam::Quat,
     radius: f32,
-    axis_a: Vec3, // リング平面の第1軸
-    axis_b: Vec3, // リング平面の第2軸
+    axis_a: Vec3,
+    axis_b: Vec3,
     segments: u32,
-    width: f32,
+    _width: f32,
     color: [f32; 4],
 ) {
-    let half_w = width * 0.5;
-    // リングの法線方向（帯の厚み方向）
-    let normal = axis_a.cross(axis_b).normalize();
-
     for i in 0..segments {
         let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
         let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
@@ -1475,21 +1593,9 @@ fn draw_ring(
 
         let p0 = center + quat * local0;
         let p1 = center + quat * local1;
-        let n = quat * normal * half_w;
 
-        // 薄い帯（2三角形のクアッド）
-        let p0_inner = p0 - n;
-        let p0_outer = p0 + n;
-        let p1_inner = p1 - n;
-        let p1_outer = p1 + n;
-
-        verts.push(GridVertex { position: p0_inner.to_array(), color });
-        verts.push(GridVertex { position: p0_outer.to_array(), color });
-        verts.push(GridVertex { position: p1_outer.to_array(), color });
-
-        verts.push(GridVertex { position: p0_inner.to_array(), color });
-        verts.push(GridVertex { position: p1_outer.to_array(), color });
-        verts.push(GridVertex { position: p1_inner.to_array(), color });
+        verts.push(GridVertex { position: p0.to_array(), color });
+        verts.push(GridVertex { position: p1.to_array(), color });
     }
 }
 
@@ -1546,38 +1652,145 @@ fn generate_normal_vertices(model: &GpuModel, length: f32, material_visibility: 
 }
 
 /// 2点間のライン（薄いクアッドで描画）
+/// 1px ライン（LineList）
 fn draw_line_quad(
     verts: &mut Vec<GridVertex>,
     from: Vec3,
     to: Vec3,
-    half_width: f32,
+    _half_width: f32,
     color: [f32; 4],
 ) {
-    let dir = to - from;
-    if dir.length_squared() < 1e-6 {
+    if (to - from).length_squared() < 1e-6 {
         return;
     }
-    let dir_n = dir.normalize();
+    verts.push(GridVertex { position: from.to_array(), color });
+    verts.push(GridVertex { position: to.to_array(), color });
+}
 
-    // 線に直交する方向を求める
-    let up = if dir_n.cross(Vec3::Y).length_squared() > 0.001 {
-        dir_n.cross(Vec3::Y).normalize()
+/// ジョイント頂点を生成（オレンジ立方体面 + 黒1pxエッジ、回転反映、アニメーション同期）
+fn generate_joint_vertices(
+    faces_out: &mut Vec<GridVertex>,
+    edges_out: &mut Vec<GridVertex>,
+    ir: &IrModel,
+    opacity: f32,
+    animated_globals: Option<&[glam::Mat4]>,
+    is_vrm0: bool,
+) {
+    faces_out.clear();
+    edges_out.clear();
+
+    let orange = [1.0, 1.0, 0.0, opacity]; // イエロー #ffff00
+    let black = [0.0, 0.0, 0.0, opacity.min(1.0)];
+    let size = 0.18_f32;
+
+    let is_pmx_pmd = ir.source_format.is_pmx_pmd();
+
+    let pos_fn: fn(Vec3) -> Vec3 = if is_vrm0 {
+        crate::convert::coord::gltf_pos_to_pmx_v0
     } else {
-        dir_n.cross(Vec3::Z).normalize()
+        crate::convert::coord::gltf_pos_to_pmx
     };
 
-    let offset = up * half_width;
+    // アニメーション用ボーンデルタを事前計算
+    let bone_deltas: Option<Vec<(Vec3, glam::Quat)>> = animated_globals.map(|globals| {
+        ir.bones.iter().enumerate().map(|(i, bone)| {
+            if i < globals.len() {
+                let rest_pos_pmx = pos_fn(bone.position);
+                let anim_pos_pmx = pos_fn(globals[i].transform_point3(Vec3::ZERO));
+                let pos_delta = anim_pos_pmx - rest_pos_pmx;
+                let (_, rest_rot, _) = bone.global_mat.to_scale_rotation_translation();
+                let (_, anim_rot, _) = globals[i].to_scale_rotation_translation();
+                let delta_rot_gltf = anim_rot * rest_rot.inverse();
+                let delta_rot_pmx = if is_vrm0 {
+                    glam::Quat::from_xyzw(delta_rot_gltf.x, -delta_rot_gltf.y, -delta_rot_gltf.z, delta_rot_gltf.w)
+                } else {
+                    glam::Quat::from_xyzw(-delta_rot_gltf.x, -delta_rot_gltf.y, delta_rot_gltf.z, delta_rot_gltf.w)
+                };
+                (pos_delta, delta_rot_pmx)
+            } else {
+                (Vec3::ZERO, glam::Quat::IDENTITY)
+            }
+        }).collect()
+    });
 
-    let a = from - offset;
-    let b = from + offset;
-    let c = to + offset;
-    let d = to - offset;
+    for joint in &ir.physics.joints {
+        if joint.rigid_a >= ir.physics.rigid_bodies.len() {
+            continue;
+        }
 
-    verts.push(GridVertex { position: a.to_array(), color });
-    verts.push(GridVertex { position: b.to_array(), color });
-    verts.push(GridVertex { position: c.to_array(), color });
+        let rb_a = &ir.physics.rigid_bodies[joint.rigid_a];
 
-    verts.push(GridVertex { position: a.to_array(), color });
-    verts.push(GridVertex { position: c.to_array(), color });
-    verts.push(GridVertex { position: d.to_array(), color });
+        // ジョイント位置（PMX座標）
+        // PMX/PMD: joint.position は既にPMX座標。VRM: glTF座標なので pos_fn で変換
+        let joint_rest_pos = if is_pmx_pmd { joint.position } else { pos_fn(joint.position) };
+        // ジョイント回転（Euler ZXY → Quat）
+        let joint_rest_quat = glam::Quat::from_euler(
+            glam::EulerRot::ZXY,
+            joint.rotation.z,
+            joint.rotation.x,
+            joint.rotation.y,
+        );
+
+        // アニメーション適用: rigid_a のボーンからのオフセットで追従
+        let (joint_pos, joint_quat) = if let (Some(bone_idx), Some(ref deltas)) = (rb_a.bone_index, &bone_deltas) {
+            if bone_idx < deltas.len() {
+                let (pos_delta, rot_delta) = deltas[bone_idx];
+                let rest_bone_pmx = pos_fn(ir.bones[bone_idx].position);
+                let offset = joint_rest_pos - rest_bone_pmx;
+                let rotated_offset = rot_delta * offset;
+                let pos = rest_bone_pmx + pos_delta + rotated_offset;
+                let quat = rot_delta * joint_rest_quat;
+                (pos, quat)
+            } else {
+                (joint_rest_pos, joint_rest_quat)
+            }
+        } else {
+            (joint_rest_pos, joint_rest_quat)
+        };
+
+        // 正立方体の8頂点（ローカル座標）
+        let h = size * 0.5;
+        let cube_verts = [
+            Vec3::new(-h, -h, -h), // 0: 左下手前
+            Vec3::new( h, -h, -h), // 1: 右下手前
+            Vec3::new( h,  h, -h), // 2: 右上手前
+            Vec3::new(-h,  h, -h), // 3: 左上手前
+            Vec3::new(-h, -h,  h), // 4: 左下奥
+            Vec3::new( h, -h,  h), // 5: 右下奥
+            Vec3::new( h,  h,  h), // 6: 右上奥
+            Vec3::new(-h,  h,  h), // 7: 左上奥
+        ];
+
+        // 回転適用してワールド座標に変換
+        let wv: Vec<Vec3> = cube_verts.iter().map(|&c| joint_pos + joint_quat * c).collect();
+
+        // 立方体の6面（各面2三角形、オレンジ塗りつぶし）
+        let cube_faces: [[usize; 4]; 6] = [
+            [0, 1, 2, 3], // 手前 (-Z)
+            [5, 4, 7, 6], // 奥 (+Z)
+            [4, 0, 3, 7], // 左 (-X)
+            [1, 5, 6, 2], // 右 (+X)
+            [3, 2, 6, 7], // 上 (+Y)
+            [4, 5, 1, 0], // 下 (-Y)
+        ];
+        for face in &cube_faces {
+            faces_out.push(GridVertex { position: wv[face[0]].to_array(), color: orange });
+            faces_out.push(GridVertex { position: wv[face[1]].to_array(), color: orange });
+            faces_out.push(GridVertex { position: wv[face[2]].to_array(), color: orange });
+            faces_out.push(GridVertex { position: wv[face[0]].to_array(), color: orange });
+            faces_out.push(GridVertex { position: wv[face[2]].to_array(), color: orange });
+            faces_out.push(GridVertex { position: wv[face[3]].to_array(), color: orange });
+        }
+
+        // 黒枠: 12本のエッジを1pxライン（LineList）で描画
+        let edges: [[usize; 2]; 12] = [
+            [0,1],[1,2],[2,3],[3,0],
+            [4,5],[5,6],[6,7],[7,4],
+            [0,4],[1,5],[2,6],[3,7],
+        ];
+        for edge in &edges {
+            edges_out.push(GridVertex { position: wv[edge[0]].to_array(), color: black });
+            edges_out.push(GridVertex { position: wv[edge[1]].to_array(), color: black });
+        }
+    }
 }

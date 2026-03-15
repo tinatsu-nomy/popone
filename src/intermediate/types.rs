@@ -7,6 +7,8 @@ pub enum SourceFormat {
     Vrm1,
     Vrm0,
     Fbx,
+    Pmx,
+    Pmd,
 }
 
 impl SourceFormat {
@@ -15,12 +17,19 @@ impl SourceFormat {
             SourceFormat::Vrm1 => "VRM 1.0",
             SourceFormat::Vrm0 => "VRM 0.0",
             SourceFormat::Fbx => "FBX",
+            SourceFormat::Pmx => "PMX",
+            SourceFormat::Pmd => "PMD",
         }
     }
 
     /// VRM 0.0 の座標変換を使うか
     pub fn is_vrm0(&self) -> bool {
         matches!(self, SourceFormat::Vrm0)
+    }
+
+    /// PMX/PMD 形式か
+    pub fn is_pmx_pmd(&self) -> bool {
+        matches!(self, SourceFormat::Pmx | SourceFormat::Pmd)
     }
 }
 
