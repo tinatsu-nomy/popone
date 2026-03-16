@@ -253,6 +253,8 @@ pub(crate) struct MaterialProps {
     pub shininess: f32,
     pub ambient: [f32; 3],
     pub opacity: f32,
+    /// Opacity=0 と TransparencyFactor=1 が両方明示されている（Unity FBX Exporter の既知パターン）
+    pub opacity_both_zero: bool,
     pub reflection_color: [f32; 3],
     pub reflection_factor: f32,
 }
@@ -263,6 +265,7 @@ pub(crate) fn extract_material_props(mat_node: &FbxNode) -> MaterialProps {
         shininess: 0.0,
         ambient: [0.4, 0.4, 0.4],
         opacity: 1.0,
+        opacity_both_zero: false,
         reflection_color: [0.0; 3],
         reflection_factor: 0.0,
     };
@@ -270,6 +273,7 @@ pub(crate) fn extract_material_props(mat_node: &FbxNode) -> MaterialProps {
         return props;
     };
     let mut has_opacity = false;
+    let mut has_transparency_factor_one = false;
     for p in &p70.children {
         if p.name != "P" {
             continue;
@@ -294,9 +298,12 @@ pub(crate) fn extract_material_props(mat_node: &FbxNode) -> MaterialProps {
                 has_opacity = true;
             }
             "TransparencyFactor" => {
+                let tf = p.properties.get(4).and_then(|v| v.as_f64_value()).unwrap_or(0.0) as f32;
+                if tf >= 1.0 {
+                    has_transparency_factor_one = true;
+                }
                 // Opacity が明示されていなければ TransparencyFactor から算出
                 if !has_opacity {
-                    let tf = p.properties.get(4).and_then(|v| v.as_f64_value()).unwrap_or(0.0) as f32;
                     props.opacity = 1.0 - tf;
                 }
             }
@@ -311,6 +318,8 @@ pub(crate) fn extract_material_props(mat_node: &FbxNode) -> MaterialProps {
             _ => {}
         }
     }
+    // Opacity=0 と TransparencyFactor=1 が両方明示 → Unity FBX Exporter パターン
+    props.opacity_both_zero = has_opacity && props.opacity <= 0.0 && has_transparency_factor_one;
     props
 }
 

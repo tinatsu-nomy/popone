@@ -36,6 +36,10 @@ struct Args {
     /// ログレベル (error, warn, info, debug)
     #[arg(long, default_value = "info")]
     log_level: String,
+
+    /// unitypackage内のFBXファイル名を指定（省略時は最初のFBXを使用）
+    #[arg(long)]
+    fbx_name: Option<String>,
 }
 
 /// ロガーセットアップ。
@@ -226,7 +230,7 @@ fn run_main(args: Args) -> Result<()> {
             let archive_data = std::fs::read(&input)
                 .with_context(|| format!("unitypackage読み込み失敗: {}", input.display()))?;
             let (fbx_data, fbx_name, textures) =
-                popone::unitypackage::extract_fbx_from_unitypackage(&archive_data)
+                popone::unitypackage::extract_fbx_from_unitypackage(&archive_data, args.fbx_name.as_deref())
                     .context("unitypackage展開失敗")?;
             log::info!("unitypackage内FBX: {}", fbx_name);
             let mut ir = popone::fbx::extract::extract_ir_model_from_fbx(&fbx_data, Some(&input))

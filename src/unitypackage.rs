@@ -153,10 +153,12 @@ pub fn take_vrm(
     Ok((vrm_data, vrm_name))
 }
 
-/// .unitypackage から FBX を探して抽出する（CLI用: 最初のFBXを使用）
+/// .unitypackage から FBX を探して抽出する（CLI用）
+/// fbx_name が指定されていればそのFBXを使用、なければ最初のFBXを使用
 /// 戻り値: (FBXデータ, FBXファイル名, テクスチャ一覧 [(パス名, データ)])
 pub fn extract_fbx_from_unitypackage(
     archive_data: &[u8],
+    fbx_name: Option<&str>,
 ) -> Result<FbxWithTextures> {
     let assets = extract_all_assets(archive_data)?;
     let fbx_list = find_fbx_list(&assets);
@@ -168,16 +170,30 @@ pub fn extract_fbx_from_unitypackage(
     // 複数ある場合はログ出力
     if fbx_list.len() > 1 {
         log::info!(
-            ".unitypackage 内に {} 個の FBX が見つかりました。最初のものを使用: {}",
+            ".unitypackage 内に {} 個の FBX が見つかりました:",
             fbx_list.len(),
-            fbx_list[0].1,
         );
         for (_, name) in &fbx_list {
             log::info!("  FBX: {}", name);
         }
     }
 
-    take_fbx_and_textures(assets, fbx_list[0].0)
+    // FBX 名が指定されていればそれを使用
+    let selected_idx = if let Some(target) = fbx_name {
+        let target_lower = target.to_lowercase();
+        fbx_list.iter()
+            .find(|(_, name)| name.to_lowercase().contains(&target_lower))
+            .map(|(idx, _)| *idx)
+            .ok_or_else(|| anyhow::anyhow!(
+                "指定された FBX '{}' が見つかりません。利用可能: {}",
+                target,
+                fbx_list.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>().join(", ")
+            ))?
+    } else {
+        fbx_list[0].0
+    };
+
+    take_fbx_and_textures(assets, selected_idx)
 }
 
 /// unitypackage内テクスチャをIrModelの材質に自動割り当て

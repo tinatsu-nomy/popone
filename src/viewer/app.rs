@@ -43,10 +43,22 @@ pub struct CachedStats {
 }
 
 /// VRM読み込み結果
+/// 追加読み込みされたモデルの情報（リロード時に再マージ用）
+#[derive(Clone)]
+pub struct AppendedModel {
+    pub path: PathBuf,
+    /// unitypackage内の選択モデル名（FBX/VRM直接の場合はNone）
+    pub pkg_model_name: Option<String>,
+}
+
 pub struct LoadedModel {
     pub ir: IrModel,
     pub gpu_model: GpuModel,
     pub file_path: PathBuf,
+    /// 追加読み込みされたモデル一覧（リロード時に再マージ用）
+    pub appended_paths: Vec<AppendedModel>,
+    /// モデル別の材質区間: (モデル名, DrawCall開始Index, DrawCall数)
+    pub material_groups: Vec<(String, usize, usize)>,
     /// 材質情報キャッシュ（テクスチャ割り当て時に更新）
     pub mat_cache: CachedMaterialInfo,
     /// 統計キャッシュ
@@ -105,6 +117,8 @@ pub struct PendingUnityPackage {
     /// (アセットIndex, ファイル名, モデル種別)
     pub model_list: Vec<(usize, String, PkgModelType)>,
     pub source_path: PathBuf,
+    /// アペンドモード（既存モデルに追加）
+    pub append: bool,
 }
 
 /// unitypackage モデル遅延読み込み状態
@@ -115,6 +129,10 @@ pub struct PendingPkgModelLoad {
     pub source_path: PathBuf,
     /// オーバーレイ表示済みフラグ
     pub shown: bool,
+    /// アペンドモード（既存モデルに追加）
+    pub append: bool,
+    /// テクスチャ選択ダイアログを抑制（リロード経由時）
+    pub suppress_tex_match: bool,
 }
 
 /// FBX読み込み方法選択ダイアログの状態（モデル+アニメーション両方含むFBX用）
@@ -349,6 +367,8 @@ pub struct ViewerApp {
     pub pending_pkg_load: Option<PendingPkgModelLoad>,
     /// ファイル読み込み遅延実行 (path, overlay表示済みフラグ)
     pub pending_load: Option<(PathBuf, bool)>,
+    /// モデル追加読み込み遅延実行 (path, overlay表示済みフラグ)
+    pub pending_append: Option<(PathBuf, bool)>,
     /// PMX変換遅延実行
     pub pending_convert: Option<PendingOverlay>,
     /// GPU再構築遅延実行
@@ -374,6 +394,8 @@ pub struct ViewerApp {
     pub side_panel_tab: SidePanelTab,
     /// ウィンドウタイトル更新要求
     pub window_title: Option<String>,
+    /// テクスチャ手動割当ダイアログを抑制（リロード中に使用）
+    pub suppress_tex_match: bool,
 }
 
 impl ViewerApp {
@@ -408,6 +430,7 @@ impl ViewerApp {
             pending_unity_pkg: None,
             pending_pkg_load: None,
             pending_load: None,
+            pending_append: None,
             pending_convert: None,
             pending_rebuild: None,
             pending_reload: None,
@@ -421,6 +444,7 @@ impl ViewerApp {
             anim: AnimLibrary::default(),
             side_panel_tab: SidePanelTab::Info,
             window_title: None,
+            suppress_tex_match: false,
         }
     }
 
@@ -639,7 +663,7 @@ impl ViewerApp {
             // モデルが1つだけ → プログレス表示後に遅延ロード
             let (idx, _, model_type) = model_list[0];
             self.pending_pkg_load = Some(PendingPkgModelLoad {
-                assets, fbx_index: idx, model_type, source_path: path.to_path_buf(), shown: false,
+                assets, fbx_index: idx, model_type, source_path: path.to_path_buf(), shown: false, append: false, suppress_tex_match: false,
             });
         } else {
             // 複数 → 選択ダイアログを表示
@@ -651,9 +675,125 @@ impl ViewerApp {
                 assets,
                 model_list,
                 source_path: path.to_path_buf(),
+                append: false,
             });
         }
         Ok(())
+    }
+
+    /// unitypackage をアペンドモードで読み込み
+    fn try_load_unitypackage_for_append(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
+        let archive_data = std::fs::read(path)?;
+        let assets = crate::unitypackage::extract_all_assets(&archive_data)?;
+
+        let mut model_list: Vec<(usize, String, PkgModelType)> = Vec::new();
+        for (idx, name) in crate::unitypackage::find_vrm_list(&assets) {
+            model_list.push((idx, name, PkgModelType::Vrm));
+        }
+        for (idx, name) in crate::unitypackage::find_fbx_list(&assets) {
+            model_list.push((idx, name, PkgModelType::Fbx));
+        }
+
+        if model_list.is_empty() {
+            anyhow::bail!(".unitypackage 内に VRM / FBX ファイルが見つかりません");
+        }
+
+        if model_list.len() == 1 {
+            let (idx, _, model_type) = model_list[0];
+            self.pending_pkg_load = Some(PendingPkgModelLoad {
+                assets, fbx_index: idx, model_type, source_path: path.to_path_buf(), shown: false, append: true, suppress_tex_match: self.suppress_tex_match,
+            });
+        } else {
+            self.pending_unity_pkg = Some(PendingUnityPackage {
+                assets,
+                model_list,
+                source_path: path.to_path_buf(),
+                append: true,
+            });
+        }
+        Ok(())
+    }
+
+    /// リロード時の unitypackage 同期アペンド（遅延処理を避け、テクスチャ復元も行う）
+    /// リロード時の unitypackage 同期アペンド（遅延処理を避け、テクスチャ復元も行う）
+    fn reload_append_unitypackage(
+        &mut self,
+        path: &std::path::Path,
+        pkg_model_name: Option<&str>,
+        saved_pkg_tex_assignments: &HashMap<usize, String>,
+    ) {
+        let archive_data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(e) => {
+                log::error!("unitypackage 再読み込み失敗: {e}");
+                return;
+            }
+        };
+        let assets = match crate::unitypackage::extract_all_assets(&archive_data) {
+            Ok(a) => a,
+            Err(e) => {
+                log::error!("unitypackage 展開失敗: {e}");
+                return;
+            }
+        };
+
+        // 保存されたモデル名で照合（なければ selected_fbx_name にフォールバック）
+        let fbx_list = crate::unitypackage::find_fbx_list(&assets);
+        let vrm_list = crate::unitypackage::find_vrm_list(&assets);
+
+        let search_name = pkg_model_name.or(self.selected_fbx_name.as_deref());
+        let (model_index, model_type) = if let Some(prev_name) = search_name {
+            if let Some((idx, _)) = fbx_list.iter().find(|(_, name)| name == prev_name) {
+                (*idx, PkgModelType::Fbx)
+            } else if let Some((idx, _)) = vrm_list.iter().find(|(_, name)| name == prev_name) {
+                (*idx, PkgModelType::Vrm)
+            } else if !fbx_list.is_empty() {
+                (fbx_list[0].0, PkgModelType::Fbx)
+            } else if !vrm_list.is_empty() {
+                (vrm_list[0].0, PkgModelType::Vrm)
+            } else {
+                log::error!("unitypackage 内にモデルが見つかりません");
+                return;
+            }
+        } else if !fbx_list.is_empty() {
+            (fbx_list[0].0, PkgModelType::Fbx)
+        } else if !vrm_list.is_empty() {
+            (vrm_list[0].0, PkgModelType::Vrm)
+        } else {
+            log::error!("unitypackage 内にモデルが見つかりません");
+            return;
+        };
+
+        // マージ前の材質オフセットを記録
+        let mat_offset = self.loaded.as_ref()
+            .map(|l| l.ir.materials.len())
+            .unwrap_or(0);
+
+        // 同期的にアペンド
+        self.append_from_pkg(assets, model_index, model_type, path);
+
+        // 追加材質に対するpkgテクスチャ割り当てを復元
+        if !saved_pkg_tex_assignments.is_empty() {
+            // 割り当て対象を先に収集（借用解放のため）
+            let assignments_to_restore: Vec<(usize, String, Vec<u8>)> = {
+                let pkg_src = self.tex.pkg_textures.as_deref().unwrap_or(&[]);
+                let name_to_data: HashMap<&str, &[u8]> = pkg_src.iter()
+                    .map(|(name, data)| (name.as_str(), data.as_slice()))
+                    .collect();
+                let mat_count = self.loaded.as_ref().map(|l| l.ir.materials.len()).unwrap_or(0);
+                saved_pkg_tex_assignments.iter()
+                    .filter(|(idx, _)| **idx >= mat_offset && **idx < mat_count)
+                    .filter_map(|(idx, tex_name)| {
+                        name_to_data.get(tex_name.as_str())
+                            .map(|data| (*idx, tex_name.clone(), data.to_vec()))
+                    })
+                    .collect()
+            };
+            for (mat_idx, tex_name, data) in &assignments_to_restore {
+                self.assign_texture_data_to_material(*mat_idx, tex_name, data);
+                self.tex.pkg_assignments.insert(*mat_idx, tex_name.clone());
+            }
+        }
     }
 
     /// 展開済みアセットから指定FBXをロード
@@ -692,8 +832,8 @@ impl ViewerApp {
             self.anim.library.clear();
             self.anim.active_index = None;
 
-            // 未割当材質がある場合、手動割当ダイアログを開く
-            if !unmatched.is_empty() && self.tex.pkg_textures.is_some() {
+            // 未割当材質がある場合、手動割当ダイアログを開く（リロード中は抑制）
+            if !unmatched.is_empty() && self.tex.pkg_textures.is_some() && !self.suppress_tex_match {
                 let count = unmatched.len();
                 self.tex.pending_match = Some(PendingTexMatch {
                     mat_indices: unmatched,
@@ -1045,10 +1185,14 @@ impl ViewerApp {
         };
 
         let format_name = ir.source_format.label().to_string();
+        let model_name = ir.name.clone();
+        let draw_count = gpu_model.draws.len();
         self.loaded = Some(LoadedModel {
             ir,
             gpu_model,
             file_path: path.to_path_buf(),
+            appended_paths: Vec::new(),
+            material_groups: vec![(model_name, 0, draw_count)],
             mat_cache,
             stats_cache,
         });
@@ -1425,7 +1569,10 @@ impl ViewerApp {
     /// カメラ・モーフ・材質表示などの状態は保持する
     pub fn reload_current(&mut self) {
         let Some(ref loaded) = self.loaded else { return };
+        // リロード中はテクスチャ選択ダイアログを抑制
+        self.suppress_tex_match = true;
         let path = loaded.file_path.clone();
+        let saved_appended = loaded.appended_paths.clone();
         let saved_camera = self.camera.clone();
         let saved_morphs = self.morph_weights.clone();
         let saved_visibility = self.material_visibility.clone();
@@ -1450,6 +1597,39 @@ impl ViewerApp {
                 Ok(())
             }
         };
+
+        // リロード時はテクスチャ選択ダイアログを抑制（後で割り当てを復元するため不要）
+        self.tex.pending_match = None;
+
+        // 追加モデルを再マージ（ベースモデルが正しく再ロードされた場合のみ）
+        // 再ロード成功 = loaded の appended_paths が空（新規 LoadedModel が作られた）
+        if let Some(ref loaded) = self.loaded {
+            if loaded.appended_paths.is_empty() && !saved_appended.is_empty() {
+                // リロード中フラグON（テクスチャ選択ダイアログ抑制）
+                self.suppress_tex_match = true;
+                for appended in &saved_appended {
+                    let ext = appended.path.extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if ext == "unitypackage" {
+                        // unitypackage は同期的にアペンド（遅延処理を避ける）
+                        self.reload_append_unitypackage(&appended.path, appended.pkg_model_name.as_deref(), &saved_pkg_tex_assignments);
+                    } else {
+                        self.append_model(appended.path.clone());
+                    }
+                }
+                self.suppress_tex_match = false;
+                // リロード経由の再アペンドではテクスチャ選択ダイアログを抑制
+                self.tex.pending_match = None;
+                // アペンド失敗のエラーメッセージは保持、成功メッセージのみクリア
+                if let Some(ref msg) = self.convert_message {
+                    if matches!(msg.result, ConvertResult::Success(_)) {
+                        self.convert_message = None;
+                    }
+                }
+            }
+        }
 
         if let Err(e) = result {
             log::error!("再読み込み失敗: {e}");
@@ -1479,8 +1659,11 @@ impl ViewerApp {
         let saved_link = self.tex.link_same_name;
         self.tex.link_same_name = false;
         self.tex.assignments = HashMap::new();
+        let current_mat_count = self.loaded.as_ref().map(|l| l.ir.materials.len()).unwrap_or(0);
         for (mat_idx, tex_path) in &saved_tex_assignments {
-            self.assign_texture_to_material(*mat_idx, tex_path);
+            if *mat_idx < current_mat_count {
+                self.assign_texture_to_material(*mat_idx, tex_path);
+            }
         }
         self.tex.link_same_name = saved_link;
 
@@ -1491,6 +1674,8 @@ impl ViewerApp {
                 self.switch_vrma(idx);
             }
         }
+        // リロード完了: テクスチャ選択ダイアログ抑制を解除
+        self.suppress_tex_match = false;
     }
 
     /// unitypackage 再読み込み（FBX/VRM再展開 + テクスチャ復元）
@@ -1719,9 +1904,376 @@ impl ViewerApp {
         }
     }
 
+    /// モデル追加読み込みダイアログ
+    fn open_append_dialog(&mut self) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("モデルを追加読み込み")
+            .add_filter("3Dモデル", &["vrm", "fbx", "pmx", "pmd", "unitypackage"])
+            .add_filter("VRM (.vrm)", &["vrm"])
+            .add_filter("FBX (.fbx)", &["fbx"])
+            .add_filter("PMX (.pmx)", &["pmx"])
+            .add_filter("PMD (.pmd)", &["pmd"])
+            .add_filter("UnityPackage (.unitypackage)", &["unitypackage"]);
+        if let Some(ref dir) = self.last_model_dir {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(path) = dialog.pick_file() {
+            if let Some(dir) = path.parent() {
+                self.last_model_dir = Some(dir.to_path_buf());
+            }
+            self.pending_append = Some((path, false));
+        }
+    }
+
+    /// モデルを既存モデルに追加（マージ）
+    fn append_model(&mut self, path: PathBuf) {
+        let ext = path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        // unitypackage は専用フローで処理（FBX/VRM選択が必要なため）
+        if ext == "unitypackage" {
+            match self.try_load_unitypackage_for_append(&path) {
+                Ok(()) => {}
+                Err(e) => {
+                    log::error!("追加読み込み失敗(pkg): {e}");
+                    self.convert_message = Some(ConvertMessage::failure(
+                        format!("追加読み込みに失敗しました。\n詳細: {e}")
+                    ));
+                }
+            }
+            return;
+        }
+
+        // 追加モデルの IrModel を構築
+        let ir_result: anyhow::Result<IrModel> = (|| -> anyhow::Result<IrModel> {
+            match ext.as_str() {
+                "fbx" => {
+                    crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                        &std::fs::read(&path)?, Some(&path), self.normalize_pose,
+                    )
+                }
+                "pmx" => {
+                    let pmx_model = crate::pmx::reader::read_pmx(&path)?;
+                    let pmx_dir = path.parent().unwrap_or(std::path::Path::new("."));
+                    let mut ir = crate::pmx::extract::pmx_to_ir(&pmx_model, pmx_dir)?;
+                    if self.normalize_pose {
+                        crate::intermediate::pose::normalize_pose_to_tstance_full(
+                            &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
+                            crate::convert::coord::gltf_pos_to_pmx,
+                        );
+                    }
+                    Ok(ir)
+                }
+                "pmd" => {
+                    let pmd_model = crate::pmd::reader::read_pmd(&path)?;
+                    let mut ir = crate::pmd::extract::pmd_to_ir(&pmd_model, &path)?;
+                    if self.normalize_pose {
+                        crate::intermediate::pose::normalize_pose_to_tstance_full(
+                            &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
+                            crate::convert::coord::gltf_pos_to_pmx,
+                        );
+                    }
+                    Ok(ir)
+                }
+                _ => {
+                    // VRM
+                    self.load_vrm_as_ir(&path)
+                }
+            }
+        })();
+
+        match ir_result {
+            Ok(other_ir) => {
+                // 座標系の互換性チェック
+                if let Some(ref loaded) = self.loaded {
+                    let host_fmt = loaded.ir.source_format;
+                    let other_fmt = other_ir.source_format;
+                    // VRM 0.0 は座標変換が異なるため、異種混在を警告
+                    if host_fmt.is_vrm0() != other_fmt.is_vrm0() {
+                        log::warn!(
+                            "座標系の異なるモデルの追加: {} + {}",
+                            host_fmt.label(), other_fmt.label()
+                        );
+                        self.convert_message = Some(ConvertMessage::failure(format!(
+                            "座標系が異なるモデルは追加できません。\nホスト: {}, 追加: {}",
+                            host_fmt.label(), other_fmt.label()
+                        )));
+                        return;
+                    }
+                }
+                self.finish_append(other_ir, &path);
+            }
+            Err(e) => {
+                log::error!("追加読み込み失敗: {e}");
+                self.convert_message = Some(ConvertMessage::failure(
+                    format!("追加読み込みに失敗しました。\n詳細: {e}")
+                ));
+            }
+        }
+    }
+
+    /// VRMファイルを IrModel として読み込む（追加用・GPU構築なし）
+    fn load_vrm_as_ir(&mut self, path: &std::path::Path) -> anyhow::Result<IrModel> {
+        let glb = vrm::loader::load_glb(path)?;
+        let version = vrm::detect::detect_version(&glb.document);
+        let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
+
+        let mut ir = vrm::extract::extract_ir_model_with_options(
+            &glb.document,
+            &glb.buffers,
+            &glb.images,
+            &glb.vrm_extension,
+            &version,
+            &all_extensions,
+            self.normalize_pose,
+        )?;
+
+        // IrTexture を PNG エンコード済みに変換
+        Self::encode_ir_textures_as_png(&mut ir, &glb.images);
+        Ok(ir)
+    }
+
+    /// unitypackage 内のモデルを既存モデルに追加（アペンド）
+    fn append_from_pkg(
+        &mut self,
+        assets: Vec<crate::unitypackage::ExtractedAsset>,
+        model_index: usize,
+        model_type: PkgModelType,
+        source_path: &std::path::Path,
+    ) {
+        let normalize = self.normalize_pose;
+        // 未マッチ材質（マージ前のローカルIndex）
+        let mut pkg_unmatched: Vec<usize> = Vec::new();
+        // pkg内モデル名（リロード時の照合用）
+        let mut pkg_model_name: Option<String> = None;
+        // GPU構築成功後に蓄積するpkgテクスチャ
+        let mut pkg_textures_to_add: Vec<(String, Vec<u8>)> = Vec::new();
+        let ir_result: anyhow::Result<IrModel> = (|| -> anyhow::Result<IrModel> {
+            match model_type {
+                PkgModelType::Fbx => {
+                    let (fbx_data, fbx_name, textures) =
+                        crate::unitypackage::take_fbx_and_textures(assets, model_index)?;
+                    log::info!("追加(pkg内FBX): {} テクスチャ: {}個", fbx_name, textures.len());
+                    pkg_model_name = Some(fbx_name.clone());
+                    let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                        &fbx_data, Some(source_path), normalize,
+                    )?;
+                    // pkg内テクスチャを IrModel に埋め込み
+                    let unmatched = crate::unitypackage::embed_textures_into_ir(&mut ir, &textures);
+                    log::info!("追加(pkg): {}材質マッチ, 未割当: {}",
+                        ir.materials.len() - unmatched.len(), unmatched.len());
+                    pkg_unmatched = unmatched;
+                    // テクスチャは成功後に蓄積するため、ここでは保持のみ
+                    pkg_textures_to_add = textures;
+                    Ok(ir)
+                }
+                PkgModelType::Vrm => {
+                    let (vrm_data, vrm_name) =
+                        crate::unitypackage::take_vrm(assets, model_index)?;
+                    log::info!("追加(pkg内VRM): {}", vrm_name);
+                    pkg_model_name = Some(vrm_name.clone());
+                    let glb = vrm::loader::load_glb_from_data(&vrm_data)?;
+                    let version = vrm::detect::detect_version(&glb.document);
+                    let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
+                    let mut ir = vrm::extract::extract_ir_model_with_options(
+                        &glb.document, &glb.buffers, &glb.images,
+                        &glb.vrm_extension, &version, &all_extensions,
+                        normalize,
+                    )?;
+                    Self::encode_ir_textures_as_png(&mut ir, &glb.images);
+                    Ok(ir)
+                }
+            }
+        })();
+
+        match ir_result {
+            Ok(other_ir) => {
+                // マージ前の材質数を記録（未マッチIndexのオフセット用）
+                let mat_offset = self.loaded.as_ref()
+                    .map(|l| l.ir.materials.len())
+                    .unwrap_or(0);
+                let appended_before = self.loaded.as_ref().map(|l| l.appended_paths.len()).unwrap_or(0);
+                self.finish_append_with_pkg_name(other_ir, source_path, pkg_model_name);
+                let appended_after = self.loaded.as_ref().map(|l| l.appended_paths.len()).unwrap_or(0);
+                // アペンド成功後のみpkgテクスチャを蓄積（ロールバック時はスキップ）
+                if appended_after > appended_before && !pkg_textures_to_add.is_empty() {
+                    if let Some(ref mut existing) = self.tex.pkg_textures {
+                        existing.extend(pkg_textures_to_add);
+                    } else {
+                        self.tex.pkg_textures = Some(pkg_textures_to_add);
+                    }
+                    self.rebuild_pkg_thumb_cache();
+                }
+                // 未割当材質がある場合、手動割当ダイアログを開く（リロード中は抑制）
+                if !pkg_unmatched.is_empty() && self.tex.pkg_textures.is_some() && !self.suppress_tex_match {
+                    // ローカルIndexにマージ後の材質オフセットを加算
+                    let global_unmatched: Vec<usize> = pkg_unmatched.iter()
+                        .map(|&i| i + mat_offset)
+                        .collect();
+                    let count = global_unmatched.len();
+                    self.tex.pending_match = Some(PendingTexMatch {
+                        mat_indices: global_unmatched,
+                        selections: vec![None; count],
+                        tex_filter: String::new(),
+                    });
+                }
+            }
+            Err(e) => {
+                log::error!("追加読み込み失敗(pkg): {e}");
+                self.convert_message = Some(ConvertMessage::failure(
+                    format!("追加読み込みに失敗しました。\n詳細: {e}")
+                ));
+            }
+        }
+    }
+
+    /// 追加モデルの IrModel を既存モデルにマージしてGPU再構築
+    fn finish_append(&mut self, other_ir: crate::intermediate::types::IrModel, path: &std::path::Path) {
+        self.finish_append_ext(other_ir, path, false, None);
+    }
+
+    fn finish_append_with_pkg_name(&mut self, other_ir: crate::intermediate::types::IrModel, path: &std::path::Path, pkg_model_name: Option<String>) {
+        self.finish_append_ext(other_ir, path, false, pkg_model_name);
+    }
+
+    fn finish_append_ext(&mut self, other_ir: crate::intermediate::types::IrModel, path: &std::path::Path, silent: bool, pkg_model_name: Option<String>) {
+        let Some(ref mut loaded) = self.loaded else { return };
+
+        let added_name = other_ir.name.clone();
+        let added_bones = other_ir.bones.len();
+        let added_meshes = other_ir.meshes.len();
+        let added_materials = other_ir.materials.len();
+
+        // ロールバック用: マージ前の状態を退避
+        let saved_bone_count = loaded.ir.bones.len();
+        let saved_mesh_count = loaded.ir.meshes.len();
+        let saved_material_count = loaded.ir.materials.len();
+        let saved_texture_count = loaded.ir.textures.len();
+        let saved_morph_count = loaded.ir.morphs.len();
+        let saved_rigid_count = loaded.ir.physics.rigid_bodies.len();
+        let saved_joint_count = loaded.ir.physics.joints.len();
+        let saved_name = loaded.ir.name.clone();
+        let saved_node_to_bone = loaded.ir.node_to_bone.clone();
+        let saved_humanoid_count = loaded.ir.humanoid_bone_count;
+        // 既存ボーンの children と vrm_bone_name を退避（merge で変更されるため）
+        let saved_bone_meta: Vec<(Vec<usize>, Option<String>)> = loaded.ir.bones.iter()
+            .map(|b| (b.children.clone(), b.vrm_bone_name.clone()))
+            .collect();
+
+        // IrModel をマージ（同名ボーン統合）
+        let (merged_bones, new_bones) = loaded.ir.merge(other_ir);
+
+        // GPU モデル再構築
+        let device = &self.render_state.device;
+        let queue = &self.render_state.queue;
+        match super::mesh::build_gpu_model_from_ir(
+            &loaded.ir, device, queue,
+            self.display.smooth_normals, self.display.clear_custom_normals,
+        ) {
+            Ok(gpu_model) => {
+                // ビューポートテクスチャ解放
+                if let Some(tex_id) = self.viewport_texture_id.take() {
+                    let mut renderer = self.render_state.renderer.write();
+                    renderer.free_texture(&tex_id);
+                }
+                // 材質表示フラグ更新（既存分を保持、追加分はtrue）
+                let new_draw_count = gpu_model.draws.len();
+                self.material_visibility.resize(new_draw_count, true);
+                // モーフスライダ更新（既存分を保持、追加分は0.0）
+                let new_morph_count = loaded.ir.morphs.len();
+                self.morph_weights.resize(new_morph_count, 0.0);
+                self.morph_dirty = self.morph_weights.iter().any(|&w| w != 0.0);
+                // キャッシュ再構築
+                loaded.mat_cache = Self::build_mat_cache(&loaded.ir, &gpu_model);
+                loaded.stats_cache = CachedStats {
+                    total_vertices: loaded.ir.total_vertices(),
+                    total_faces: loaded.ir.total_faces(),
+                };
+                // 材質グループを更新（追加モデル分を記録）
+                let prev_draw_end: usize = loaded.material_groups.iter()
+                    .map(|(_, start, count)| start + count)
+                    .max()
+                    .unwrap_or(0);
+                let new_draws = gpu_model.draws.len().saturating_sub(prev_draw_end);
+                if new_draws > 0 {
+                    loaded.material_groups.push((added_name.clone(), prev_draw_end, new_draws));
+                }
+                loaded.gpu_model = gpu_model;
+                // 追加パスを記録（リロード時に再マージ用）
+                loaded.appended_paths.push(AppendedModel {
+                    path: path.to_path_buf(),
+                    pkg_model_name: pkg_model_name.clone(),
+                });
+                // テクスチャダイアログの初期ディレクトリを追加モデルのディレクトリに設定
+                if let Some(dir) = path.parent() {
+                    self.tex.last_dir = Some(dir.to_path_buf());
+                }
+                // 可視化キャッシュ無効化
+                if let Some(ref mut renderer) = self.renderer {
+                    renderer.invalidate_visualization_cache();
+                    renderer.invalidate_normal_cache();
+                }
+                // アニメーション状態を再構築（ボーン/メッシュ構成が変わったため）
+                if let (Some(ref loaded), Some(ref old_anim)) = (&self.loaded, &self.anim.state) {
+                    let mut new_state = AnimationState::new(
+                        Arc::clone(&old_anim.animation),
+                        &loaded.ir,
+                        &loaded.gpu_model,
+                    );
+                    new_state.playing = old_anim.playing;
+                    new_state.loop_mode = old_anim.loop_mode;
+                    new_state.speed = old_anim.speed;
+                    new_state.current_time = old_anim.current_time;
+                    new_state.ab_start = old_anim.ab_start;
+                    new_state.ab_end = old_anim.ab_end;
+                    new_state.ping_pong_direction = old_anim.ping_pong_direction;
+                    self.anim.state = Some(new_state);
+                }
+                log::info!(
+                    "追加読み込み成功: {} (ボーン:{} → 統合:{}/新規:{}, メッシュ:{}, 材質:{})",
+                    added_name, added_bones, merged_bones, new_bones, added_meshes, added_materials,
+                );
+                if !silent {
+                    self.convert_message = Some(ConvertMessage::success(
+                        format!(
+                            "追加読み込み完了: {}\nボーン:{} (統合:{} + 新規:{}), メッシュ:{}, 材質:{}",
+                            added_name, added_bones, merged_bones, new_bones, added_meshes, added_materials,
+                        )
+                    ));
+                }
+            }
+            Err(e) => {
+                log::error!("GPU再構築失敗（マージをロールバック）: {e}");
+                // IR をマージ前の状態にロールバック
+                loaded.ir.bones.truncate(saved_bone_count);
+                loaded.ir.meshes.truncate(saved_mesh_count);
+                loaded.ir.materials.truncate(saved_material_count);
+                loaded.ir.textures.truncate(saved_texture_count);
+                loaded.ir.morphs.truncate(saved_morph_count);
+                loaded.ir.physics.rigid_bodies.truncate(saved_rigid_count);
+                loaded.ir.physics.joints.truncate(saved_joint_count);
+                loaded.ir.name = saved_name;
+                loaded.ir.node_to_bone = saved_node_to_bone;
+                loaded.ir.humanoid_bone_count = saved_humanoid_count;
+                // 既存ボーンの children と vrm_bone_name を退避した状態に完全復元
+                for (i, bone) in loaded.ir.bones.iter_mut().enumerate() {
+                    if i < saved_bone_meta.len() {
+                        bone.children = saved_bone_meta[i].0.clone();
+                        bone.vrm_bone_name = saved_bone_meta[i].1.clone();
+                    }
+                }
+                self.convert_message = Some(ConvertMessage::failure(
+                    format!("追加読み込み後のGPU再構築に失敗しました。\n詳細: {e}")
+                ));
+            }
+        }
+    }
+
     /// プログレスオーバーレイ描画（ビューポート上、結果メッセージと同じスタイル）
     fn paint_progress_overlay(&self, viewport: &egui::Ui, rect: egui::Rect, ctx: &egui::Context) {
-        let msg = if self.pending_load.is_some() || self.pending_pkg_load.is_some() {
+        let msg = if self.pending_load.is_some() || self.pending_append.is_some() || self.pending_pkg_load.is_some() {
             Some("読み込み中...")
         } else if self.pending_rebuild.is_some() || self.pending_reload.is_some() {
             Some("処理中...")
@@ -1759,6 +2311,12 @@ impl ViewerApp {
     /// プログレスフラグ更新（次フレームで処理を実行するためのトリガー）
     fn update_progress_flags(&mut self, ctx: &egui::Context) {
         if let Some((_, ref mut shown)) = self.pending_load {
+            if !*shown {
+                *shown = true;
+                ctx.request_repaint();
+            }
+        }
+        if let Some((_, ref mut shown)) = self.pending_append {
             if !*shown {
                 *shown = true;
                 ctx.request_repaint();
@@ -1952,10 +2510,26 @@ impl ViewerApp {
             let (path, _) = self.pending_load.take().expect("pending_load は Some(true) 確認済み");
             self.load_file(path);
         }
+        // モデル追加読み込み（アペンド）
+        if let Some((_, true)) = self.pending_append {
+            let (path, _) = self.pending_append.take().expect("pending_append は Some(true) 確認済み");
+            self.append_model(path);
+        }
         // unitypackage モデル遅延読み込み
         if self.pending_pkg_load.as_ref().is_some_and(|p| p.shown) {
             let p = self.pending_pkg_load.take().expect("pending_pkg_load は shown 確認済み");
             let source_path = p.source_path.clone();
+
+            // アペンドモード: unitypackage内モデルを既存モデルに追加
+            if p.append {
+                // リロード経由の場合はテクスチャ選択ダイアログを抑制
+                if p.suppress_tex_match {
+                    self.suppress_tex_match = true;
+                }
+                self.append_from_pkg(p.assets, p.fbx_index, p.model_type, &source_path);
+                self.suppress_tex_match = false;
+                // 以下の通常ロードをスキップ
+            } else {
             match p.model_type {
                 PkgModelType::Fbx => {
                     if self.loaded.is_some() {
@@ -2014,6 +2588,7 @@ impl ViewerApp {
                     }
                 }
             }
+            } // else (通常ロード)
         }
         if self.pending_rebuild == Some(PendingOverlay::Ready) {
             self.pending_rebuild = None;
@@ -2056,7 +2631,7 @@ impl ViewerApp {
 
     /// ドラッグ＆ドロップ処理。(画像ホバー中, モデルホバー中) を返す
     fn process_drag_and_drop(&mut self, ctx: &egui::Context) -> (bool, bool) {
-        let (dropped_files, hover_ext) = ctx.input(|i| {
+        let (dropped_files, hover_ext, shift_held) = ctx.input(|i| {
             let hover_ext = i.raw.hovered_files.first()
                 .and_then(|f| f.path.as_ref())
                 .and_then(|p| p.extension())
@@ -2067,7 +2642,7 @@ impl ViewerApp {
             let paths: Vec<PathBuf> = i.raw.dropped_files.iter()
                 .filter_map(|f| f.path.clone())
                 .collect();
-            (paths, hover_ext)
+            (paths, hover_ext, i.modifiers.shift)
         });
         let is_hover_image = IMAGE_EXTENSIONS.contains(&hover_ext.as_str());
         let is_hover_model = MODEL_EXTENSIONS.contains(&hover_ext.as_str());
@@ -2090,7 +2665,18 @@ impl ViewerApp {
             let has_loaded_model = self.loaded.is_some();
 
             if let Some(model_path) = model_file {
-                self.pending_load = Some((model_path, false));
+                // アペンド対応形式: VRM/FBX/PMX/PMD のみ
+                let append_ext = model_path.extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let is_appendable = matches!(append_ext.as_str(), "vrm" | "fbx" | "pmx" | "pmd" | "unitypackage");
+                if shift_held && has_loaded_model && is_appendable {
+                    // Shift+D&D: 既存モデルに追加
+                    self.pending_append = Some((model_path, false));
+                } else {
+                    self.pending_load = Some((model_path, false));
+                }
             }
 
             if !image_files.is_empty() && has_loaded_model {
@@ -2249,6 +2835,13 @@ impl eframe::App for ViewerApp {
             egui::menu::bar(bar, |bar| {
                 if bar.button("開く").clicked() {
                     self.open_file_dialog();
+                }
+
+                // モデル読み込み済みの場合のみ「追加」ボタンを表示
+                if self.loaded.is_some() {
+                    if bar.button("追加").on_hover_text("モデルを追加読み込み（Shift+D&Dでも可）").clicked() {
+                        self.open_append_dialog();
+                    }
                 }
 
                 if bar.button("ログ").clicked() {
@@ -2422,10 +3015,18 @@ impl eframe::App for ViewerApp {
                             "先にモデルを読み込んでください",
                         )
                     } else if is_hover_model {
-                        (
-                            egui::Color32::from_rgba_unmultiplied(0x40, 0x80, 0xFF, 0x60),
-                            "モデルファイルを読み込み",
-                        )
+                        let shift = ctx.input(|i| i.modifiers.shift);
+                        if shift && has_model {
+                            (
+                                egui::Color32::from_rgba_unmultiplied(0x40, 0xC0, 0xFF, 0x60),
+                                "モデルを追加読み込み（Shift）",
+                            )
+                        } else {
+                            (
+                                egui::Color32::from_rgba_unmultiplied(0x40, 0x80, 0xFF, 0x60),
+                                "モデルファイルを読み込み",
+                            )
+                        }
                     } else {
                         (
                             egui::Color32::from_rgba_unmultiplied(0x80, 0x80, 0x80, 0x60),

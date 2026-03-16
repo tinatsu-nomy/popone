@@ -188,6 +188,8 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             model_type,
             source_path: pending.source_path,
             shown: false,
+            append: pending.append,
+            suppress_tex_match: false,
         });
     } else if cancelled || !open {
         app.pending_unity_pkg = None;
@@ -255,7 +257,9 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                 .map(|p| p.tex_filter.to_lowercase())
                 .unwrap_or_default();
 
-            egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+            egui::ScrollArea::vertical().max_height(400.0)
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                .show(ui, |ui| {
                 egui::Grid::new("tex_match_grid")
                     .num_columns(3)
                     .spacing([8.0, 4.0])
@@ -423,7 +427,9 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                 }
             });
             ui.separator();
-            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+            egui::ScrollArea::vertical().max_height(300.0)
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                .show(ui, |ui| {
                 for &(_draw_idx, mat_idx) in loaded.mat_cache.draw_indices.iter() {
                     if mat_idx >= preview.selection.len() {
                         continue;
@@ -860,8 +866,161 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
     }
     let filter_lower = app.material_filter.to_lowercase();
     let thumb_ids = &app.tex.pkg_thumb_cache;
-    for &(i, mat_idx) in draw_info.iter() {
-        if i < app.material_visibility.len() {
+    // グループ情報をクローン（借用解放のため）
+    let groups: Vec<(String, usize, usize)> = app.loaded.as_ref()
+        .map(|l| l.material_groups.clone())
+        .unwrap_or_default();
+    let has_groups = groups.len() > 1;
+
+    if has_groups {
+        // DrawCall Index → グループIndex
+        let mut draw_to_group: Vec<usize> = vec![0; num_draws];
+        for (gi, (_, start, count)) in groups.iter().enumerate() {
+            for di in *start..(*start + *count).min(num_draws) {
+                draw_to_group[di] = gi;
+            }
+        }
+        // draw_info もクローン（CollapsingHeader クロージャ内で使うため）
+        let draw_info_owned = draw_info.to_vec();
+        // loaded の借用を解放
+        let _ = draw_info;
+        let _ = mat_tex_info;
+        let _ = mat_names;
+        let _ = mat_src_tex;
+
+        for (gi, (group_name, _, _)) in groups.iter().enumerate() {
+            let group_draws: Vec<(usize, usize)> = draw_info_owned.iter()
+                .filter(|&&(i, _)| i < num_draws && draw_to_group[i] == gi)
+                .copied()
+                .collect();
+            if group_draws.is_empty() { continue; }
+            let id = ui.id().with(("mat_group", gi));
+            egui::CollapsingHeader::new(
+                egui::RichText::new(&*group_name)
+                    .color(egui::Color32::from_rgb(0x60, 0xA0, 0xFF))
+                    .strong()
+            )
+            .id_salt(id)
+            .default_open(true)
+            .show(ui, |ui| {
+                let loaded = app.loaded.as_ref().unwrap();
+                let mat_tex_info = &loaded.mat_cache.tex_indices;
+                let mat_names = &loaded.mat_cache.names;
+                let mat_src_tex = &loaded.mat_cache.source_tex_names;
+                for &(i, mat_idx) in &group_draws {
+                    if i >= app.material_visibility.len() { continue; }
+                    let name = mat_names.get(mat_idx)
+                        .map(|s: &String| s.as_str())
+                        .unwrap_or("?");
+                    if !filter_lower.is_empty()
+                        && !name.to_lowercase().contains(&filter_lower)
+                    {
+                        continue;
+                    }
+                    ui.horizontal(|ui| {
+                // テクスチャ状態インジケータ
+                {
+                    let has_tex = mat_tex_info.get(mat_idx)
+                        .and_then(|t| *t)
+                        .is_some();
+                    let indicator = if has_tex {
+                        egui::RichText::new("\u{25A3}")
+                            .color(egui::Color32::from_rgb(0x40, 0xC0, 0x40))
+                            .size(16.0)
+                    } else {
+                        egui::RichText::new("\u{25A1}")
+                            .color(egui::Color32::from_rgb(0xA0, 0x60, 0x60))
+                            .size(16.0)
+                    };
+                    let src_name = mat_src_tex.get(mat_idx)
+                        .and_then(|s: &Option<String>| s.as_deref());
+                    let tooltip = match (has_tex, src_name) {
+                        (true, Some(s)) => format!("テクスチャ設定済 ({})\nクリックで変更", s),
+                        (true, None) => "テクスチャ設定済\nクリックで変更".to_string(),
+                        (false, Some(s)) => format!("テクスチャ未設定 ({})\nクリックで割り当て", s),
+                        (false, None) => "テクスチャ未設定\nクリックで割り当て".to_string(),
+                    };
+                    let resp = ui.add(egui::Label::new(indicator).sense(egui::Sense::click()))
+                        .on_hover_text(&tooltip);
+                    let has_pkg = app.tex.pkg_textures.is_some();
+                    let popup_id = ui.id().with(("pkg_tex_popup", mat_idx));
+                    if resp.clicked() {
+                        if has_pkg {
+                            ui.memory_mut(|m| m.toggle_popup(popup_id));
+                        } else {
+                            *tex_assign_request = Some(TexAssignRequest::FileDialog(mat_idx));
+                        }
+                    }
+                    if has_pkg {
+                        egui::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                            ui.set_min_width(280.0);
+                            // 「ファイルから選択」を先頭に配置
+                            if ui.button("ファイルから選択...").clicked() {
+                                *tex_assign_request = Some(TexAssignRequest::FileDialog(mat_idx));
+                                ui.memory_mut(|m| m.toggle_popup(popup_id));
+                                app.tex.pkg_popup_filter.clear();
+                            }
+                            ui.separator();
+                            ui.add(
+                                egui::TextEdit::singleline(&mut app.tex.pkg_popup_filter)
+                                    .desired_width(ui.available_width())
+                                    .hint_text("テクスチャ名で絞り込み…"),
+                            );
+                            let filter_lower = app.tex.pkg_popup_filter.to_lowercase();
+                            egui::ScrollArea::vertical().max_height(400.0)
+                                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                                .show(ui, |ui| {
+                                if let Some(ref pkg) = app.tex.pkg_textures {
+                                    for (ti, (tname, _)) in pkg.iter().enumerate() {
+                                        if !filter_lower.is_empty()
+                                            && !tname.to_lowercase().contains(&filter_lower)
+                                        {
+                                            continue;
+                                        }
+                                        let clicked = ui.horizontal(|ui| {
+                                            if let Some(Some(tex_id)) = thumb_ids.get(ti) {
+                                                ui.image(egui::load::SizedTexture::new(*tex_id, [32.0, 32.0]));
+                                            }
+                                            ui.button(tname).clicked()
+                                        }).inner;
+                                        if clicked {
+                                            *tex_assign_request = Some(TexAssignRequest::PkgTexture(mat_idx, ti));
+                                            ui.memory_mut(|m| m.toggle_popup(popup_id));
+                                            app.tex.pkg_popup_filter.clear();
+                                        }
+                                    }
+                                }
+                            });
+                        });
+                    }
+                }
+                let assigned_name = app.tex.assignments.get(&mat_idx)
+                    .and_then(|p| p.file_name())
+                    .map(|f| f.to_string_lossy().to_string());
+                let display_tex = assigned_name.as_deref()
+                    .or_else(|| {
+                        mat_src_tex.get(mat_idx)
+                            .and_then(|s| s.as_deref())
+                    });
+                if let Some(tex_name) = display_tex {
+                    ui.checkbox(
+                        &mut app.material_visibility[i],
+                        format!("{} [{}]", name, tex_name),
+                    );
+                } else {
+                    ui.checkbox(&mut app.material_visibility[i], name);
+                }
+                    });
+                }
+            });
+        }
+    } else {
+        for &(i, mat_idx) in draw_info.iter() {
+            if i >= app.material_visibility.len() { continue; }
+            let loaded = app.loaded.as_ref().unwrap();
+            let mat_tex_info = &loaded.mat_cache.tex_indices;
+            let mat_names = &loaded.mat_cache.names;
+            let mat_src_tex = &loaded.mat_cache.source_tex_names;
             let name = mat_names.get(mat_idx)
                 .map(|s: &String| s.as_str())
                 .unwrap_or("?");
@@ -907,13 +1066,21 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
                     if has_pkg {
                         egui::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
                             ui.set_min_width(280.0);
+                            if ui.button("ファイルから選択...").clicked() {
+                                *tex_assign_request = Some(TexAssignRequest::FileDialog(mat_idx));
+                                ui.memory_mut(|m| m.toggle_popup(popup_id));
+                                app.tex.pkg_popup_filter.clear();
+                            }
+                            ui.separator();
                             ui.add(
                                 egui::TextEdit::singleline(&mut app.tex.pkg_popup_filter)
                                     .desired_width(ui.available_width())
                                     .hint_text("テクスチャ名で絞り込み…"),
                             );
                             let filter_lower = app.tex.pkg_popup_filter.to_lowercase();
-                            egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                            egui::ScrollArea::vertical().max_height(400.0)
+                                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                                .show(ui, |ui| {
                                 if let Some(ref pkg) = app.tex.pkg_textures {
                                     for (ti, (tname, _)) in pkg.iter().enumerate() {
                                         if !filter_lower.is_empty()
@@ -933,12 +1100,6 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
                                             app.tex.pkg_popup_filter.clear();
                                         }
                                     }
-                                }
-                                ui.separator();
-                                if ui.button("ファイルから選択...").clicked() {
-                                    *tex_assign_request = Some(TexAssignRequest::FileDialog(mat_idx));
-                                    ui.memory_mut(|m| m.toggle_popup(popup_id));
-                                    app.tex.pkg_popup_filter.clear();
                                 }
                             });
                         });
@@ -975,6 +1136,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     let is_pmx_pmd = app.loaded.as_ref()
         .is_some_and(|l| l.ir.source_format.is_pmx_pmd());
     let is_processing = app.pending_load.is_some()
+        || app.pending_append.is_some()
         || app.pending_convert.is_some()
         || app.pending_rebuild.is_some()
         || app.pending_reload.is_some()
