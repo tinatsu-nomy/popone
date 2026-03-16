@@ -6,7 +6,7 @@ A 3D viewer for VRM / FBX / PMX / PMD / UnityPackage files.
 
 ## Download
 
-Latest release: **[popone_v0.2.1.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.1/popone_v0.2.1.exe)**
+Latest release: **[popone_v0.2.2.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.2/popone_v0.2.2.exe)**
 
 All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -86,7 +86,7 @@ In the viewer, drag & drop files or use the "Open" button to load models.
 
 </details>
 
-### PMX / PMD Loading (v0.2.1)
+### PMX / PMD Loading
 
 - **PMX 2.0 / 2.1** — Full data structure loading (vertices, faces, materials, bones, morphs, display frames, rigid bodies, joints). SoftBody (2.1) is skipped
 - **PMD** — Automatic Shift_JIS text conversion. IK and morph (base+offset) support. Material name text file (same-name `.txt`) loading
@@ -95,6 +95,13 @@ In the viewer, drag & drop files or use the "Open" button to load models.
 - **VRMA Animation** — Auto-mapping from PMX Japanese bone names to VRM humanoid names enables VRMA animation playback
 - **UI Restrictions** — PMX conversion button, normal smoothing, and custom normal clear are grayed out when PMX/PMD is loaded
 - **Comment Display** — PMX/PMD comments shown in model info panel
+
+### Code Quality & Performance (v0.2.2)
+
+- **Performance** — Eliminated per-frame vertex buffer allocation, HashMap O(1) bone lookup, GPU visualization dirty flags
+- **Tests** — 10 → 51 tests. Coordinate roundtrip, bone name mapping, PMX write/read roundtrip, VRM→PMX E2E
+- **Zero Clippy warnings** — `cargo clippy --all-targets --all-features -- -D warnings` fully clean
+- **UX** — 4-pattern D&D overlay, 2-line operation hints, disabled UI tooltips
 
 ### FBX Support
 
@@ -228,6 +235,18 @@ println!("Bones: {}, Vertices: {}", stats.bones, stats.vertices);
 
 ```bash
 cargo test
+```
+
+51 tests (40 unit + 11 integration). Integration tests support environment variables for test data paths:
+
+```bash
+# Test data root directory
+export POPONE_TEST_DATA=/path/to/test-fixtures
+
+# Or specify individual files
+export POPONE_TEST_VRM_SEED_SAN=/path/to/Seed-san.vrm
+export POPONE_TEST_PMX_SEED_SAN=/path/to/Seed-san.pmx
+export POPONE_TEST_PMD_MIKU_V2=/path/to/初音ミクVer2.pmd
 ```
 
 ## Dependencies

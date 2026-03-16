@@ -5,7 +5,6 @@ use std::io::{Cursor, Read, Seek, SeekFrom};
 
 const MAGIC: &[u8; 23] = b"Kaydara FBX Binary  \x00\x1a\x00";
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct FbxDocument {
     pub version: u32,
@@ -19,7 +18,6 @@ pub struct FbxNode {
     pub children: Vec<FbxNode>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum FbxProperty {
     Bool(bool),
@@ -43,7 +41,6 @@ impl FbxNode {
     }
 }
 
-#[allow(dead_code)]
 impl FbxProperty {
     pub fn as_f64_array(&self) -> Option<&[f64]> {
         match self {
@@ -207,28 +204,28 @@ fn parse_property(cursor: &mut Cursor<&[u8]>) -> Result<FbxProperty> {
         b'i' => {
             let raw = read_array_raw(cursor, 4)?;
             let values = raw.chunks_exact(4)
-                .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+                .map(|c| i32::from_le_bytes(c.try_into().expect("chunks_exact(4) guarantees 4 bytes")))
                 .collect();
             Ok(FbxProperty::I32Array(values))
         }
         b'l' => {
             let raw = read_array_raw(cursor, 8)?;
             let values = raw.chunks_exact(8)
-                .map(|c| i64::from_le_bytes(c.try_into().unwrap()))
+                .map(|c| i64::from_le_bytes(c.try_into().expect("chunks_exact(8) guarantees 8 bytes")))
                 .collect();
             Ok(FbxProperty::I64Array(values))
         }
         b'f' => {
             let raw = read_array_raw(cursor, 4)?;
             let values = raw.chunks_exact(4)
-                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .map(|c| f32::from_le_bytes(c.try_into().expect("chunks_exact(4) guarantees 4 bytes")))
                 .collect();
             Ok(FbxProperty::F32Array(values))
         }
         b'd' => {
             let raw = read_array_raw(cursor, 8)?;
             let values = raw.chunks_exact(8)
-                .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+                .map(|c| f64::from_le_bytes(c.try_into().expect("chunks_exact(8) guarantees 8 bytes")))
                 .collect();
             Ok(FbxProperty::F64Array(values))
         }

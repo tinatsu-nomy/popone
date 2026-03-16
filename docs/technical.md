@@ -374,8 +374,8 @@ src/
 │   ├── texture.rs       テクスチャ PNG 書き出し
 │   └── uvmap.rs         UVマップ PSD 出力（材質レイヤー分け、境界ラップ対応）
 └── viewer/              ← feature = "viewer" 時のみコンパイル
-    ├── app.rs           eframe::App メイン状態管理（VRM/FBX/PMX/PMD ロード分岐）
-    ├── gpu.rs           wgpu パイプライン・オフスクリーン描画・法線マップ表示
+    ├── app.rs           eframe::App 状態管理（TextureState / AnimLibrary サブ構造体）
+    ├── gpu.rs           wgpu パイプライン・オフスクリーン描画・可視化バッファ dirty flag
     ├── mesh.rs          IrModel → GPU 頂点バッファ変換
     ├── texture.rs       テクスチャ GPU アップロード（MIME ヒント対応）
     ├── camera.rs        オービットカメラ
@@ -383,6 +383,71 @@ src/
     ├── ui.rs            情報パネル・モーフスライダ・変換ボタン・PMX/PMD グレーアウト
     └── animation.rs     アニメーション再生・リターゲティング（VRMA/glTF/FBX 対応）
 ```
+
+## v0.2.2 内部改善
+
+### ViewerApp サブ構造体化
+
+v0.2.2 で ViewerApp の 43 フィールドを 30 フィールドに削減:
+
+| サブ構造体 | フィールド | アクセス | 内容 |
+|-----------|----------|---------|------|
+| `TextureState` | `self.tex.*` | 9 フィールド | テクスチャ割り当て・パッケージテクスチャ・プレビュー・マッチング |
+| `AnimLibrary` | `self.anim.*` | 4 フィールド | アニメーション再生状態・ライブラリ・Muscle スケール |
+
+Rust の部分借用により `&mut self.tex` と `&self.anim` を同時に借用可能。
+
+### GPU 可視化バッファのキャッシュ戦略
+
+ボーン・物理・ジョイントの可視化頂点を dirty flag で管理:
+
+| 入力 | キャッシュキー | 再生成条件 |
+|------|-------------|----------|
+| ボーン頂点 | `camera.eye()`, `bone_opacity` | カメラ移動 / 不透明度変更 / アニメーション再生中 |
+| SpringBone 頂点 | `spring_bone_opacity`, `align_rigid_rotation` | 設定変更 / アニメーション再生中 |
+| ジョイント頂点 | `joint_opacity` | 設定変更 / アニメーション再生中 |
+
+全バッファ共通:
+- `vertex_count == 0` → 強制再生成（非表示→表示トグル復帰）
+- `cache_had_anim && !has_anim` → アニメーション解除時に1フレーム強制再生成
+
+### アニメーション頂点バッファ最適化
+
+`apply_bone_animation()` のホットパス改善:
+
+| 項目 | Before | After |
+|------|--------|-------|
+| 頂点バッファ | `base.to_vec()` 毎フレーム alloc | `reset_animated_to_base()` capacity 再利用 |
+| デルタ行列 | `Vec::with_capacity()` 毎フレーム | `work_deltas` フィールドで再利用 |
+| globals 計算 | `Vec` 新規生成 + clone | in-place 更新（`work_computed` フラグ再利用） |
+| モーフ適用 | `apply_morphs_to_buf(&self, &mut [Vertex])` | `apply_morphs_to_animated(&mut self)` 借用衝突回避 |
+
+### ボーン名探索 HashMap 化
+
+`insert_standard_bones()` 内の O(n) 線形探索を HashMap O(1) に:
+
+```rust
+// ボーン名 → インデックスの逆引き（重複名は最初の出現を保持）
+fn build_bone_map(bones: &[PmxBone]) -> HashMap<String, usize> {
+    let mut map = HashMap::with_capacity(bones.len());
+    for (i, b) in bones.iter().enumerate() {
+        map.entry(b.name.clone()).or_insert(i);
+    }
+    map
+}
+```
+
+ボーン配列の変更（挿入・移動）後に `bone_map = build_bone_map(&model.bones)` で再構築。
+
+### テストデータパス解決
+
+統合テストのファイルパスは環境変数で設定可能:
+
+| 優先度 | 解決元 | 例 |
+|--------|-------|-----|
+| 1 | ファイル個別環境変数 | `POPONE_TEST_VRM_SEED_SAN=/path/to/Seed-san.vrm` |
+| 2 | ルート環境変数 + 相対パス | `POPONE_TEST_DATA=/fixtures` → `/fixtures/vrm-spec/.../Seed-san.vrm` |
+| 3 | `CARGO_MANIFEST_DIR/..` | ローカル開発時のデフォルト |
 
 ## 制限事項
 

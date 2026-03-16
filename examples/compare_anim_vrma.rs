@@ -6,7 +6,6 @@
 /// VRM モデルを読み込み、両アニメーションの t=0 での最終グローバル回転を比較する。
 /// .anim は is_additive=true（Muscle→ローカルデルタ）、
 /// VRMA は is_additive=false（リターゲティング前のローカル回転）。
-
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -25,6 +24,7 @@ struct SkeletonData {
     bone_parents: Vec<Option<usize>>,
     bone_children: Vec<Vec<usize>>,
     /// ボーンインデックス → VRM ヒューマノイドボーン名
+    #[allow(dead_code)]
     bone_idx_to_name: HashMap<usize, String>,
     /// VRM ヒューマノイドボーン名 → ボーンインデックス
     bone_name_to_idx: HashMap<String, usize>,
@@ -238,7 +238,7 @@ fn main() {
     let mut anim_local_rots: HashMap<usize, Quat> = HashMap::new();
     let mut anim_raw_deltas: HashMap<usize, Quat> = HashMap::new();
     let anim_is_humanoid = matches!(anim.match_mode, BoneMatchMode::Humanoid);
-    for (bone_name, _ch) in &anim.bone_channels {
+    for bone_name in anim.bone_channels.keys() {
         if let Some(&bone_idx) = skel.bone_name_to_idx.get(bone_name.as_str()) {
             if let Some(anim_rot) = anim.sample_bone_rotation(bone_name, t) {
                 anim_raw_deltas.insert(bone_idx, anim_rot);
@@ -281,7 +281,7 @@ fn main() {
     let mut vrma_local_rots: HashMap<usize, Quat> = HashMap::new();
     let mut vrma_raw_values: HashMap<usize, Quat> = HashMap::new();
     let is_humanoid = matches!(vrma.match_mode, BoneMatchMode::Humanoid);
-    for (bone_name, _ch) in &vrma.bone_channels {
+    for bone_name in vrma.bone_channels.keys() {
         if let Some(&bone_idx) = skel.bone_name_to_idx.get(bone_name.as_str()) {
             if let Some(anim_rot) = vrma.sample_bone_rotation(bone_name, t) {
                 vrma_raw_values.insert(bone_idx, anim_rot);
@@ -314,6 +314,7 @@ fn main() {
     // --- 共通ボーンの比較結果を収集 ---
     struct BoneResult {
         name: String,
+        #[allow(dead_code)]
         bone_idx: usize,
         anim_global_rot: Quat,
         vrma_global_rot: Quat,

@@ -76,7 +76,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                     let rotations: Vec<Quat> = reader.read_outputs()
                         .map(|out| {
                             if let gltf::animation::util::ReadOutputs::Rotations(rots) = out {
-                                rots.into_f32().map(|r| Quat::from_array(r)).collect()
+                                rots.into_f32().map(Quat::from_array).collect()
                             } else {
                                 Vec::new()
                             }
@@ -101,7 +101,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                     let translations: Vec<Vec3> = reader.read_outputs()
                         .map(|out| {
                             if let gltf::animation::util::ReadOutputs::Translations(trans) = out {
-                                trans.map(|t| Vec3::from(t)).collect()
+                                trans.map(Vec3::from).collect()
                             } else {
                                 Vec::new()
                             }
@@ -158,8 +158,8 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                         .and_then(|n| n.mesh())
                         .map(|mesh| {
                             let json_mesh = &document.as_json().meshes[mesh.index()];
-                            json_mesh.extras.as_ref()
-                                .and_then(|e: &Box<serde_json::value::RawValue>| {
+                            json_mesh.extras.as_deref()
+                                .and_then(|e: &serde_json::value::RawValue| {
                                     serde_json::from_str::<serde_json::Value>(e.get()).ok()
                                 })
                                 .and_then(|v: serde_json::Value| v.get("targetNames").cloned())
@@ -226,7 +226,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                 }
             }
             // 各ボーンチャネルのレストポーズを保存
-            for (name, _) in &bone_channels {
+            for name in bone_channels.keys() {
                 // ノード名からノードインデックスを検索
                 if let Some(node) = nodes.iter().find(|n| n.name() == Some(name.as_str())) {
                     let (t, r, _s) = node.transform().decomposed();
@@ -389,7 +389,7 @@ fn parse_vrma(
                     let rotations: Vec<Quat> = reader.read_outputs()
                         .map(|out| {
                             if let gltf::animation::util::ReadOutputs::Rotations(rots) = out {
-                                rots.into_f32().map(|r| Quat::from_array(r)).collect()
+                                rots.into_f32().map(Quat::from_array).collect()
                             } else {
                                 Vec::new()
                             }
@@ -414,7 +414,7 @@ fn parse_vrma(
                     let translations: Vec<Vec3> = reader.read_outputs()
                         .map(|out| {
                             if let gltf::animation::util::ReadOutputs::Translations(trans) = out {
-                                trans.map(|t| Vec3::from(t)).collect()
+                                trans.map(Vec3::from).collect()
                             } else {
                                 Vec::new()
                             }
@@ -445,7 +445,7 @@ fn parse_vrma(
                 let translations: Vec<Vec3> = reader.read_outputs()
                     .map(|out| {
                         if let gltf::animation::util::ReadOutputs::Translations(trans) = out {
-                            trans.map(|t| Vec3::from(t)).collect()
+                            trans.map(Vec3::from).collect()
                         } else {
                             Vec::new()
                         }
@@ -557,6 +557,31 @@ fn parse_humanoid_mapping(vrma_ext: &Value) -> HashMap<usize, String> {
     map
 }
 
+/// expressions のノードマッピングをパース（preset + custom）
+fn parse_expression_mapping(vrma_ext: &Value) -> HashMap<usize, String> {
+    let mut map = HashMap::new();
+
+    // プリセット表情
+    if let Some(preset) = vrma_ext.pointer("/expressions/preset").and_then(|v| v.as_object()) {
+        for (name, val) in preset {
+            if let Some(node) = val.get("node").and_then(|v| v.as_u64()) {
+                map.insert(node as usize, name.clone());
+            }
+        }
+    }
+
+    // カスタム表情
+    if let Some(custom) = vrma_ext.pointer("/expressions/custom").and_then(|v| v.as_object()) {
+        for (name, val) in custom {
+            if let Some(node) = val.get("node").and_then(|v| v.as_u64()) {
+                map.insert(node as usize, name.clone());
+            }
+        }
+    }
+
+    map
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,29 +610,4 @@ mod tests {
         let rot = anim.sample_bone_rotation("hips", 0.0);
         assert!(rot.is_some(), "hips rotation サンプリング失敗");
     }
-}
-
-/// expressions のノードマッピングをパース（preset + custom）
-fn parse_expression_mapping(vrma_ext: &Value) -> HashMap<usize, String> {
-    let mut map = HashMap::new();
-
-    // プリセット表情
-    if let Some(preset) = vrma_ext.pointer("/expressions/preset").and_then(|v| v.as_object()) {
-        for (name, val) in preset {
-            if let Some(node) = val.get("node").and_then(|v| v.as_u64()) {
-                map.insert(node as usize, name.clone());
-            }
-        }
-    }
-
-    // カスタム表情
-    if let Some(custom) = vrma_ext.pointer("/expressions/custom").and_then(|v| v.as_object()) {
-        for (name, val) in custom {
-            if let Some(node) = val.get("node").and_then(|v| v.as_u64()) {
-                map.insert(node as usize, name.clone());
-            }
-        }
-    }
-
-    map
 }

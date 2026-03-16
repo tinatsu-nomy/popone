@@ -14,20 +14,12 @@ pub struct Bone {
     pub world_transform: Mat4,
 }
 
+#[derive(Default)]
 pub struct BoneHierarchy {
     pub bones: Vec<Bone>,
-    #[allow(dead_code)]
     pub id_to_index: HashMap<i64, usize>,
 }
 
-impl Default for BoneHierarchy {
-    fn default() -> Self {
-        Self {
-            bones: Vec::new(),
-            id_to_index: HashMap::new(),
-        }
-    }
-}
 
 impl BoneHierarchy {
     pub fn from_scene(scene: &FbxScene) -> Self {

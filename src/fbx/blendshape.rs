@@ -52,7 +52,7 @@ pub(crate) fn extract_blend_shapes_raw(scene: &FbxScene, geom_id: i64) -> Vec<Ra
                     .node
                     .child("Vertices")
                     .and_then(|n| n.properties.first())
-                    .and_then(|p| extract_vec3_array(p))
+                    .and_then(extract_vec3_array)
                     .unwrap_or_default();
 
                 let indices = shape_obj

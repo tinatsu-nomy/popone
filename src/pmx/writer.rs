@@ -412,3 +412,41 @@ impl<W: Write> PmxWriter<W> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pmx_write_read_roundtrip() {
+        let Some(sample) = crate::test_util::try_test_file(crate::test_util::seed_san_pmx()) else { return; };
+        let original = crate::pmx::reader::read_pmx(&sample).expect("PMX読み込み失敗");
+
+        let temp_path = std::env::temp_dir().join("popone_test_roundtrip.pmx");
+        {
+            let file = std::fs::File::create(&temp_path).expect("一時ファイル作成失敗");
+            let writer = std::io::BufWriter::new(file);
+            let header = original.header.clone();
+            let mut pmx_writer = PmxWriter::new(writer, header);
+            pmx_writer.write_model(&original).expect("PMX書き込み失敗");
+        }
+
+        let reloaded = crate::pmx::reader::read_pmx(&temp_path).expect("再読み込み失敗");
+
+        // 基本プロパティの一致確認
+        assert_eq!(original.bones.len(), reloaded.bones.len(), "ボーン数不一致");
+        assert_eq!(original.vertices.len(), reloaded.vertices.len(), "頂点数不一致");
+        assert_eq!(original.materials.len(), reloaded.materials.len(), "材質数不一致");
+        assert_eq!(original.morphs.len(), reloaded.morphs.len(), "モーフ数不一致");
+        assert_eq!(original.textures.len(), reloaded.textures.len(), "テクスチャ数不一致");
+        assert_eq!(original.rigid_bodies.len(), reloaded.rigid_bodies.len(), "剛体数不一致");
+        assert_eq!(original.joints.len(), reloaded.joints.len(), "ジョイント数不一致");
+
+        // ボーン名の一致
+        for (i, (a, b)) in original.bones.iter().zip(reloaded.bones.iter()).enumerate() {
+            assert_eq!(a.name, b.name, "ボーン[{i}]名不一致");
+        }
+
+        let _ = std::fs::remove_file(&temp_path);
+    }
+}

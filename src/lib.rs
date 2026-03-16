@@ -142,3 +142,112 @@ pub fn convert_to_pmx(
         _ => convert_vrm_to_pmx(input_path, output_path, no_physics),
     }
 }
+
+/// テスト用ユーティリティ（テストデータのパス解決）
+///
+/// パス解決の優先順位（ファイルごと）:
+///   1. ファイル個別の環境変数（例: `POPONE_TEST_VRM_SEED_SAN`）
+///   2. ルート環境変数 `POPONE_TEST_DATA` + 相対パス
+///   3. `CARGO_MANIFEST_DIR/..` + 相対パス（ローカル開発デフォルト）
+///
+/// CI 設定例:
+/// ```sh
+/// # ルート指定（全ファイル共通ベース）
+/// export POPONE_TEST_DATA=/path/to/test-fixtures
+///
+/// # または個別指定（特定ファイルだけ別の場所にある場合）
+/// export POPONE_TEST_VRM_SEED_SAN=/data/models/Seed-san.vrm
+/// export POPONE_TEST_PMX_SEED_SAN=/data/converted/Seed-san.pmx
+/// export POPONE_TEST_PMD_MIKU_V2=/data/mmd/初音ミクVer2.pmd
+/// ```
+#[cfg(test)]
+pub mod test_util {
+    use std::path::PathBuf;
+
+    /// テストデータのルートディレクトリ
+    fn test_data_root() -> PathBuf {
+        if let Ok(dir) = std::env::var("POPONE_TEST_DATA") {
+            return PathBuf::from(dir);
+        }
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
+    }
+
+    /// ファイル個別の環境変数 → ルート相対パスの順で解決
+    fn resolve(env_key: &str, relative: &str) -> PathBuf {
+        if let Ok(path) = std::env::var(env_key) {
+            return PathBuf::from(path);
+        }
+        test_data_root().join(relative)
+    }
+
+    /// VRM サンプル (vrm-c/vrm-specification リポジトリ内)
+    /// 環境変数: `POPONE_TEST_VRM_SEED_SAN`
+    pub fn seed_san_vrm() -> PathBuf {
+        resolve(
+            "POPONE_TEST_VRM_SEED_SAN",
+            "vrm-spec/vrm-specification/samples/Seed-san/vrm/Seed-san.vrm",
+        )
+    }
+
+    /// PMX テストファイル (Seed-san.vrm を popone で変換済み)
+    /// 環境変数: `POPONE_TEST_PMX_SEED_SAN`
+    pub fn seed_san_pmx() -> PathBuf {
+        resolve("POPONE_TEST_PMX_SEED_SAN", "tmp/Seed-san.pmx")
+    }
+
+    /// PMD テストファイル (MikuMikuDance_v932x64.zip 同梱)
+    /// 環境変数: `POPONE_TEST_PMD_MIKU_V2`
+    pub fn miku_v2_pmd() -> PathBuf {
+        resolve("POPONE_TEST_PMD_MIKU_V2", "tmp/pmd/初音ミクVer2.pmd")
+    }
+
+    /// テストファイルが存在すれば Some(path)、なければ None を返す
+    pub fn try_test_file(path: PathBuf) -> Option<PathBuf> {
+        if path.exists() {
+            Some(path)
+        } else {
+            eprintln!("テストファイルが存在しません（スキップ）: {}", path.display());
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_vrm_to_pmx_end_to_end() {
+        let Some(input) = crate::test_util::try_test_file(crate::test_util::seed_san_vrm()) else { return; };
+        let output = std::env::temp_dir().join("popone_test_e2e.pmx");
+
+        // VRM → PMX 変換
+        let stats = crate::convert_vrm_to_pmx(&input, &output, false)
+            .expect("VRM→PMX変換失敗");
+
+        // 統計値の確認
+        assert!(stats.bones > 100, "ボーン数が少なすぎる: {}", stats.bones);
+        assert!(stats.vertices > 1000, "頂点数が少なすぎる: {}", stats.vertices);
+        assert!(stats.materials > 0, "材質数がゼロ");
+
+        // 出力ファイルの存在とサイズ確認
+        let metadata = std::fs::metadata(&output).expect("出力ファイルなし");
+        assert!(
+            metadata.len() > 1000,
+            "PMXファイルが小さすぎる: {} bytes",
+            metadata.len()
+        );
+
+        // 読み戻して検証
+        let pmx = crate::pmx::reader::read_pmx(&output).expect("PMX再読み込み失敗");
+        assert!(pmx.bones.len() > 100, "ボーン数が少なすぎる: {}", pmx.bones.len());
+        assert!(
+            pmx.vertices.len() > 1000,
+            "頂点数が少なすぎる: {}",
+            pmx.vertices.len()
+        );
+
+        // テンポラリファイルのクリーンアップ
+        let _ = std::fs::remove_file(&output);
+        let tex_dir = output.parent().unwrap().join("textures");
+        let _ = std::fs::remove_dir_all(&tex_dir);
+    }
+}

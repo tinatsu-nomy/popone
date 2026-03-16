@@ -9,7 +9,6 @@ pub enum ConnectionType {
 
 #[derive(Debug, Clone)]
 pub struct Connection {
-    #[allow(dead_code)]
     pub conn_type: ConnectionType,
     pub child_id: i64,
     pub parent_id: i64,

@@ -263,11 +263,11 @@ pub fn decode_psd(data: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
     // RGBA に組み立て
     let mut rgba = vec![0u8; pixel_count * 4];
     let ch_count = channels.len().min(4);
-    for ch in 0..ch_count {
+    for (ch, ch_data) in channels.iter().enumerate().take(ch_count) {
         let offset = if ch < 3 { ch } else { 3 }; // R=0, G=1, B=2, A=3
         for i in 0..pixel_count {
-            if i < channels[ch].len() {
-                rgba[i * 4 + offset] = channels[ch][i];
+            if i < ch_data.len() {
+                rgba[i * 4 + offset] = ch_data[i];
             }
         }
     }
@@ -331,18 +331,18 @@ fn decode_psd_image_channels(
 
             // 各チャンネルのバイト数を集計
             let mut ch_byte_counts = vec![0usize; channel_count];
-            for ch in 0..channel_count {
+            for (ch, count) in ch_byte_counts.iter_mut().enumerate() {
                 for row in 0..height {
                     let idx = (ch * height + row) * 2;
-                    ch_byte_counts[ch] += u16::from_be_bytes([data[idx], data[idx+1]]) as usize;
+                    *count += u16::from_be_bytes([data[idx], data[idx+1]]) as usize;
                 }
             }
 
             // チャンネルデータをデコード
             let mut offset = header_bytes;
             let mut channels = Vec::with_capacity(channel_count);
-            for ch in 0..channel_count {
-                let end = offset + ch_byte_counts[ch];
+            for (ch, &ch_bytes) in ch_byte_counts.iter().enumerate() {
+                let end = offset + ch_bytes;
                 if end > data.len() {
                     anyhow::bail!("PSD RLE: チャンネル {} のデータが不足", ch);
                 }
@@ -388,7 +388,7 @@ fn packbits_decompress(data: &[u8]) -> Vec<u8> {
             if i < data.len() {
                 let byte = data[i];
                 i += 1;
-                result.extend(std::iter::repeat(byte).take(count));
+                result.extend(std::iter::repeat_n(byte, count));
             }
         }
     }

@@ -1,6 +1,24 @@
 use eframe::egui;
 use glam::{Mat4, Vec3};
 
+/// カメラ操作感度定数
+const YAW_PITCH_SENSITIVITY: f32 = 0.005;
+const PAN_SPEED_FACTOR: f32 = 0.003;
+const ZOOM_SENSITIVITY_BASE: f32 = 0.003;
+const ZOOM_RADIUS_REF: f32 = 20.0;
+const ZOOM_SENSITIVITY_MIN: f32 = 0.5;
+const ZOOM_SENSITIVITY_MAX: f32 = 3.0;
+const DISTANCE_MIN: f32 = 0.1;
+const DISTANCE_MAX: f32 = 5000.0;
+const NEAR_FACTOR: f32 = 0.005;
+const NEAR_MIN: f32 = 0.01;
+const NEAR_MAX: f32 = 1.0;
+const FAR_FACTOR: f32 = 50.0;
+const FAR_MIN: f32 = 100.0;
+const FAR_MAX: f32 = 50000.0;
+const FOV_DEGREES: f32 = 45.0;
+const FIT_MARGIN: f32 = 1.15;
+
 #[derive(Clone)]
 pub struct OrbitCamera {
     pub target: Vec3,
@@ -32,8 +50,8 @@ impl OrbitCamera {
         // 左ドラッグ: 回転
         if response.dragged_by(egui::PointerButton::Primary) {
             let delta = response.drag_delta();
-            self.yaw -= delta.x * 0.005;
-            self.pitch -= delta.y * 0.005;
+            self.yaw -= delta.x * YAW_PITCH_SENSITIVITY;
+            self.pitch -= delta.y * YAW_PITCH_SENSITIVITY;
             self.pitch = self.pitch.clamp(
                 -std::f32::consts::FRAC_PI_2 + 0.01,
                 std::f32::consts::FRAC_PI_2 - 0.01,
@@ -45,7 +63,7 @@ impl OrbitCamera {
             || response.dragged_by(egui::PointerButton::Middle);
         if is_pan {
             let delta = response.drag_delta();
-            let speed = self.distance * 0.003;
+            let speed = self.distance * PAN_SPEED_FACTOR;
             let (right, up) = self.view_axes();
             self.target += -right * delta.x * speed + up * delta.y * speed;
         }
@@ -55,9 +73,9 @@ impl OrbitCamera {
             let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 // モデル半径に応じた感度調整
-                let sensitivity = 0.003 * (self.model_radius / 20.0).clamp(0.5, 3.0);
+                let sensitivity = ZOOM_SENSITIVITY_BASE * (self.model_radius / ZOOM_RADIUS_REF).clamp(ZOOM_SENSITIVITY_MIN, ZOOM_SENSITIVITY_MAX);
                 self.distance *= (-scroll * sensitivity).exp();
-                self.distance = self.distance.clamp(0.1, 5000.0);
+                self.distance = self.distance.clamp(DISTANCE_MIN, DISTANCE_MAX);
             }
         }
     }
@@ -98,18 +116,18 @@ impl OrbitCamera {
     /// near/far はカメラ距離に応じて動的調整
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
         let view = Mat4::look_at_lh(self.eye(), self.target, self.up_vector());
-        let near = (self.distance * 0.005).clamp(0.01, 1.0);
-        let far = (self.distance * 50.0).clamp(100.0, 50000.0);
+        let near = (self.distance * NEAR_FACTOR).clamp(NEAR_MIN, NEAR_MAX);
+        let far = (self.distance * FAR_FACTOR).clamp(FAR_MIN, FAR_MAX);
         let proj = if self.perspective {
             Mat4::perspective_lh(
-                45.0_f32.to_radians(),
+                FOV_DEGREES.to_radians(),
                 aspect,
                 near,
                 far,
             )
         } else {
             // 正射影: 透視投影と同じ距離でのビュー高さに合わせる
-            let fov_half = (45.0_f32 / 2.0).to_radians();
+            let fov_half = (FOV_DEGREES / 2.0).to_radians();
             let half_h = self.distance * fov_half.tan();
             let half_w = half_h * aspect;
             Mat4::orthographic_lh(-half_w, half_w, -half_h, half_h, near, far)
@@ -122,10 +140,10 @@ impl OrbitCamera {
     pub fn fit_to_bbox(&mut self, bbox_min: Vec3, bbox_max: Vec3) {
         let center = (bbox_min + bbox_max) * 0.5;
         let height = bbox_max.y - bbox_min.y;
-        let fov_half = (45.0_f32 / 2.0).to_radians();
+        let fov_half = (FOV_DEGREES / 2.0).to_radians();
         let required = (height * 0.5) / fov_half.tan();
         self.target = center;
-        self.distance = (required * 1.15).max(2.0);
+        self.distance = (required * FIT_MARGIN).max(2.0);
         self.model_radius = (bbox_max - bbox_min).length() * 0.5;
         self.yaw = 0.0;
         self.pitch = 0.0;
@@ -153,7 +171,7 @@ impl OrbitCamera {
     fn compute_fit(bbox_min: Vec3, bbox_max: Vec3, viewport_height: f32) -> (Vec3, f32, f32) {
         let center = (bbox_min + bbox_max) * 0.5;
         let height = bbox_max.y - bbox_min.y;
-        let fov_half = (45.0_f32 / 2.0).to_radians();
+        let fov_half = (FOV_DEGREES / 2.0).to_radians();
 
         // 上部オーバーレイ + 下部ヒントで約60px分の余白が必要
         let margin_px = 60.0;
@@ -161,7 +179,7 @@ impl OrbitCamera {
         let effective_fov_half = (effective_height / viewport_height.max(1.0)) * fov_half;
         let required = (height * 0.5) / effective_fov_half.tan();
 
-        let distance = (required * 1.15).max(2.0);
+        let distance = (required * FIT_MARGIN).max(2.0);
         let model_radius = (bbox_max - bbox_min).length() * 0.5;
 
         // ターゲットを少し下げてオーバーレイ下にモデル中心を配置

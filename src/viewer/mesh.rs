@@ -100,6 +100,24 @@ impl GpuModel {
         self.animated_vertices = Some(verts);
     }
 
+    /// ベース頂点を animated_vertices にコピー（バッファ再利用、毎フレーム alloc 回避）
+    pub fn reset_animated_to_base(&mut self) {
+        match self.animated_vertices {
+            Some(ref mut v) => {
+                v.clear();
+                v.extend_from_slice(&self.base_vertices);
+            }
+            None => {
+                self.animated_vertices = Some(self.base_vertices.clone());
+            }
+        }
+    }
+
+    /// アニメーション済み頂点への可変参照
+    pub fn animated_vertices_mut(&mut self) -> &mut [Vertex] {
+        self.animated_vertices.as_deref_mut().unwrap_or(&mut [])
+    }
+
     /// アニメーション済み頂点キャッシュをクリア
     pub fn clear_animated_vertices(&mut self) {
         self.animated_vertices = None;
@@ -173,6 +191,19 @@ impl GpuModel {
                 continue;
             }
             Self::apply_gpu_morph_to(&self.gpu_morphs, morph_idx, w, vertices);
+        }
+    }
+
+    /// animated_vertices にモーフを直接適用（借用衝突回避版）
+    pub fn apply_morphs_to_animated(&mut self, weights: &[f32]) {
+        if let Some(ref mut verts) = self.animated_vertices {
+            for morph_idx in 0..self.gpu_morphs.len() {
+                let w = weights.get(morph_idx).copied().unwrap_or(0.0);
+                if w.abs() < 1e-6 {
+                    continue;
+                }
+                Self::apply_gpu_morph_to(&self.gpu_morphs, morph_idx, w, verts);
+            }
         }
     }
 

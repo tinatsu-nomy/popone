@@ -463,6 +463,9 @@ const SIGNS: [(f32, f32, f32); 55] = [
 
 /// V-Sekai 正規化スケルトンの postQ_inverse (右手系/glTF座標系)
 /// postQ = conjugate(postQ_inverse) で復元
+/// 左右対称ボーンは意図的に同一値（LeftFoot/RightFoot 等）
+/// 数値は V-Sekai 参照データの固定値（計算値ではない）
+#[allow(clippy::if_same_then_else, clippy::approx_constant)]
 /// 正規化スケルトンでは preQ == postQ
 const POSTQ_INV_NORMALIZED: [(f32, f32, f32, f32); 55] = [
     (0.0, 0.0, 0.0, 1.0),  // 0: Hips
@@ -556,7 +559,7 @@ pub struct HumanoidParams {
 /// JSON配列から Unity左手系 → glTF右手系 のクォータニオンをパース
 fn parse_quat_lh_to_rh(json: &serde_json::Value, key: &str) -> Quat {
     if let Some(arr) = json.get(key).and_then(|v| v.as_array()) {
-        let x = arr.get(0).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let x = arr.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
         let y = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
         let z = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
         let w = arr.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
@@ -570,7 +573,7 @@ fn parse_quat_lh_to_rh(json: &serde_json::Value, key: &str) -> Quat {
 fn parse_f32x3(json: &serde_json::Value, key: &str, default: (f32, f32, f32)) -> (f32, f32, f32) {
     if let Some(arr) = json.get(key).and_then(|v| v.as_array()) {
         (
-            arr.get(0).and_then(|v| v.as_f64()).unwrap_or(default.0 as f64) as f32,
+            arr.first().and_then(|v| v.as_f64()).unwrap_or(default.0 as f64) as f32,
             arr.get(1).and_then(|v| v.as_f64()).unwrap_or(default.1 as f64) as f32,
             arr.get(2).and_then(|v| v.as_f64()).unwrap_or(default.2 as f64) as f32,
         )
@@ -802,12 +805,7 @@ fn build_bone_channels(
         let keyframes: Vec<RotationKeyframe> = all_times.iter().map(|&t| {
             let mut degrees = [0.0f32; 3]; // [twist_x, swing_y, swing_z]
 
-            for dof_idx in 0..3 {
-                let muscle_idx = match dof_idx {
-                    0 => mfb.0,
-                    1 => mfb.1,
-                    _ => mfb.2,
-                };
+            for (dof_idx, &muscle_idx) in [mfb.0, mfb.1, mfb.2].iter().enumerate() {
                 if muscle_idx < 0 {
                     continue;
                 }
@@ -859,10 +857,8 @@ fn build_bone_channels(
     // Root → hips: 回転（RootQ）
     if root_qx.is_some() || root_qy.is_some() || root_qz.is_some() || root_qw.is_some() {
         let mut all_times: Vec<f32> = Vec::new();
-        for opt in [&root_qx, &root_qy, &root_qz, &root_qw] {
-            if let Some(c) = opt {
-                all_times.extend(c.keyframes.iter().map(|(t, _)| *t));
-            }
+        for c in [&root_qx, &root_qy, &root_qz, &root_qw].into_iter().flatten() {
+            all_times.extend(c.keyframes.iter().map(|(t, _)| *t));
         }
         all_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         all_times.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
@@ -917,10 +913,8 @@ fn build_bone_channels(
     // Root → hips: 平行移動（RootT）
     if root_tx.is_some() || root_ty.is_some() || root_tz.is_some() {
         let mut all_times: Vec<f32> = Vec::new();
-        for opt in [&root_tx, &root_ty, &root_tz] {
-            if let Some(c) = opt {
-                all_times.extend(c.keyframes.iter().map(|(t, _)| *t));
-            }
+        for c in [&root_tx, &root_ty, &root_tz].into_iter().flatten() {
+            all_times.extend(c.keyframes.iter().map(|(t, _)| *t));
         }
         all_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         all_times.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
@@ -971,8 +965,8 @@ fn sample_curve_linear(keyframes: &[(f32, f32)], time: f32) -> f32 {
     if keyframes.len() == 1 || time <= keyframes[0].0 {
         return keyframes[0].1;
     }
-    if time >= keyframes.last().unwrap().0 {
-        return keyframes.last().unwrap().1;
+    if time >= keyframes.last().expect("keyframes は空でない").0 {
+        return keyframes.last().expect("keyframes は空でない").1;
     }
     let idx = keyframes.partition_point(|&(t, _)| t <= time);
     let idx = idx.min(keyframes.len() - 1).max(1);

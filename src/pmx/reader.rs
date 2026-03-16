@@ -59,7 +59,7 @@ impl<R: Read> PmxReader<R> {
         }
 
         let version = self.reader.read_f32::<LittleEndian>()?;
-        if version < 2.0 || version > 2.1 {
+        if !(2.0..=2.1).contains(&version) {
             bail!("未対応のPMXバージョン: {}", version);
         }
 
@@ -97,7 +97,7 @@ impl<R: Read> PmxReader<R> {
 
         if self.header.encoding == 0 {
             // UTF-16LE
-            if buf.len() % 2 != 0 {
+            if !buf.len().is_multiple_of(2) {
                 bail!("UTF-16LEテキストのバイト長が奇数: {}", buf.len());
             }
             let utf16: Vec<u16> = buf
@@ -260,7 +260,7 @@ impl<R: Read> PmxReader<R> {
 
     fn read_faces(&mut self) -> Result<Vec<[u32; 3]>> {
         let index_count = self.reader.read_i32::<LittleEndian>()? as usize;
-        if index_count % 3 != 0 {
+        if !index_count.is_multiple_of(3) {
             bail!("面インデックス数が3の倍数でない: {}", index_count);
         }
         let face_count = index_count / 3;
@@ -475,7 +475,7 @@ impl<R: Read> PmxReader<R> {
                     }
                     PmxMorphOffsets::Bone(v)
                 }
-                3 | 4 | 5 | 6 | 7 => {
+                3..=7 => {
                     // UV / 追加UV1〜4
                     let mut v = Vec::with_capacity(offset_count);
                     for _ in 0..offset_count {
@@ -704,17 +704,12 @@ pub fn read_pmx(path: &std::path::Path) -> Result<PmxModel> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn test_read_seed_san_pmx() {
-        let path = Path::new("E:/misc/nomy/vrm_view/tmp/Seed-san.pmx");
-        if !path.exists() {
-            eprintln!("テストPMXファイルが存在しません: {:?}", path);
-            return;
-        }
+        let Some(path) = crate::test_util::try_test_file(crate::test_util::seed_san_pmx()) else { return; };
 
-        let model = read_pmx(path).expect("PMX読み込みに失敗");
+        let model = read_pmx(&path).expect("PMX読み込みに失敗");
 
         // Seed-san の既知の値と照合
         assert_eq!(model.header.version, 2.0);

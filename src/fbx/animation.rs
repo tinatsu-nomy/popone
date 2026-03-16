@@ -152,7 +152,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
 
         // AnimationStack → AnimationLayer
         let layer_ids: Vec<i64> = scene.children_of(stack_id).iter()
-            .filter(|&&id| scene.objects.get(&id).map_or(false, |o| o.class == "AnimationLayer"))
+            .filter(|&&id| scene.objects.get(&id).is_some_and(|o| o.class == "AnimationLayer"))
             .copied()
             .collect();
 
@@ -163,7 +163,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
         for &layer_id in &layer_ids {
             // AnimationLayer → AnimationCurveNode
             let curve_node_ids: Vec<i64> = scene.children_of(layer_id).iter()
-                .filter(|&&id| scene.objects.get(&id).map_or(false, |o| o.class == "AnimationCurveNode"))
+                .filter(|&&id| scene.objects.get(&id).is_some_and(|o| o.class == "AnimationCurveNode"))
                 .copied()
                 .collect();
 
@@ -221,7 +221,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
 
                 // AnimationCurveNode → AnimationCurve（X, Y, Z の3カーブ）
                 let curve_ids: Vec<i64> = scene.children_of(cn_id).iter()
-                    .filter(|&&id| scene.objects.get(&id).map_or(false, |o| o.class == "AnimationCurve"))
+                    .filter(|&&id| scene.objects.get(&id).is_some_and(|o| o.class == "AnimationCurve"))
                     .copied()
                     .collect();
 
@@ -232,11 +232,10 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
                 let mut ordered_curve_ids = Vec::new();
                 for axis in &["d|X", "d|Y", "d|Z"] {
                     for conn in &scene.connections {
-                        if conn.parent_id == cn_id && conn.conn_type == ConnectionType::OP {
-                            if conn.property.as_deref() == Some(axis) {
+                        if conn.parent_id == cn_id && conn.conn_type == ConnectionType::OP
+                            && conn.property.as_deref() == Some(axis) {
                                 ordered_curve_ids.push(conn.child_id);
                             }
-                        }
                     }
                 }
                 // OP接続がない場合はOO接続順
@@ -496,8 +495,8 @@ fn sample_curve(curve: &(Vec<f32>, Vec<f32>), time: f32) -> f32 {
     if times.len() == 1 || time <= times[0] {
         return values[0];
     }
-    if time >= *times.last().unwrap() {
-        return *values.last().unwrap();
+    if time >= *times.last().expect("times は空でない") {
+        return *values.last().expect("values は空でない");
     }
     let idx = times.partition_point(|&t| t <= time);
     let idx = idx.min(times.len() - 1).max(1);
@@ -552,7 +551,7 @@ fn collect_bone_rests(scene: &FbxScene, axis_config: &FbxAxisConfig) -> (HashMap
 
         // 親を探す
         let parent_global = scene.parents_of(id).iter()
-            .find(|&&pid| scene.objects.get(&pid).map_or(false, |o| o.class == "Model"))
+            .find(|&&pid| scene.objects.get(&pid).is_some_and(|o| o.class == "Model"))
             .map(|&pid| compute_global(pid, scene, globals))
             .unwrap_or(Mat4::IDENTITY);
 

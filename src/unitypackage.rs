@@ -5,6 +5,9 @@ use std::io::{Cursor, Read};
 use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 
+/// FBXデータ、ファイル名、テクスチャ一覧のタプル型
+pub type FbxWithTextures = (Vec<u8>, String, Vec<(String, Vec<u8>)>);
+
 /// 展開されたアセット情報
 pub struct ExtractedAsset {
     /// Unity プロジェクト内パス（例: "Assets/Models/xxx.fbx"）
@@ -37,7 +40,7 @@ pub fn extract_all_assets(archive_data: &[u8]) -> Result<Vec<ExtractedAsset>> {
         let mut entry = entry.context("tarエントリ解析失敗")?;
         let path = entry.path().context("パス取得失敗")?.to_string_lossy().to_string();
         // パスは "GUID/filename" 形式
-        let parts: Vec<&str> = path.splitn(3, |c| c == '/' || c == '\\').collect();
+        let parts: Vec<&str> = path.splitn(3, ['/', '\\']).collect();
         if parts.len() < 2 {
             continue;
         }
@@ -85,7 +88,7 @@ pub fn find_fbx_list(assets: &[ExtractedAsset]) -> Vec<(usize, String)> {
 pub fn take_fbx_and_textures(
     mut assets: Vec<ExtractedAsset>,
     fbx_index: usize,
-) -> Result<(Vec<u8>, String, Vec<(String, Vec<u8>)>)> {
+) -> Result<FbxWithTextures> {
     if fbx_index >= assets.len() {
         bail!("FBXインデックスが範囲外: {}", fbx_index);
     }
@@ -154,7 +157,7 @@ pub fn take_vrm(
 /// 戻り値: (FBXデータ, FBXファイル名, テクスチャ一覧 [(パス名, データ)])
 pub fn extract_fbx_from_unitypackage(
     archive_data: &[u8],
-) -> Result<(Vec<u8>, String, Vec<(String, Vec<u8>)>)> {
+) -> Result<FbxWithTextures> {
     let assets = extract_all_assets(archive_data)?;
     let fbx_list = find_fbx_list(&assets);
 

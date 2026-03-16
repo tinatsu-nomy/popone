@@ -231,7 +231,7 @@ fn build_layer_info(
     // チャンネルデータ長を事前計算（raw = 2 + pixel_count per channel）
     let ch_data_len = 2 + pixel_count; // compression(2) + raw data
 
-    for (idx, name) in names.iter().enumerate() {
+    for name in names.iter() {
         // Layer record
         w_u32(&mut buf, 0)?;           // top
         w_u32(&mut buf, 0)?;           // left
@@ -250,7 +250,7 @@ fn build_layer_info(
         buf.extend_from_slice(b"norm");  // blend mode = normal
         buf.push(255);                   // opacity
         buf.push(0);                     // clipping = base
-        buf.push(if idx == 0 { 0 } else { 0 }); // flags (visible)
+        buf.push(0); // flags (visible)
         buf.push(0);                     // filler
 
         // Extra data
@@ -318,7 +318,7 @@ fn encode_pascal_string(s: &str) -> Vec<u8> {
     let mut out = vec![len];
     out.extend_from_slice(&bytes[..len as usize]);
     // 全体を4の倍数にパディング
-    while out.len() % 4 != 0 {
+    while !out.len().is_multiple_of(4) {
         out.push(0);
     }
     out

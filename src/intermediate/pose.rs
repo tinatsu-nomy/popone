@@ -291,7 +291,7 @@ fn apply_physics_corrections(
             let should_transform = if joint.rigid_a < physics.rigid_bodies.len() {
                 physics.rigid_bodies[joint.rigid_a]
                     .bone_index
-                    .map_or(false, |bi| descendants.contains(&bi))
+                    .is_some_and(|bi| descendants.contains(&bi))
             } else {
                 false
             };

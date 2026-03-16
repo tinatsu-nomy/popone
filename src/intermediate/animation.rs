@@ -121,7 +121,7 @@ fn sample_rotation(keyframes: &[RotationKeyframe], interp: Interpolation, time: 
     if keyframes.len() == 1 || time <= keyframes[0].time {
         return keyframes[0].value;
     }
-    let last = keyframes.last().unwrap();
+    let last = keyframes.last().expect("keyframes は空でない");
     if time >= last.time {
         return last.value;
     }
@@ -153,7 +153,7 @@ fn sample_translation(keyframes: &[TranslationKeyframe], interp: Interpolation, 
     if keyframes.len() == 1 || time <= keyframes[0].time {
         return keyframes[0].value;
     }
-    let last = keyframes.last().unwrap();
+    let last = keyframes.last().expect("keyframes は空でない");
     if time >= last.time {
         return last.value;
     }
@@ -184,7 +184,7 @@ fn sample_scalar(keyframes: &[ScalarKeyframe], interp: Interpolation, time: f32)
     if keyframes.len() == 1 || time <= keyframes[0].time {
         return keyframes[0].value;
     }
-    let last = keyframes.last().unwrap();
+    let last = keyframes.last().expect("keyframes は空でない");
     if time >= last.time {
         return last.value;
     }
@@ -204,5 +204,78 @@ fn sample_scalar(keyframes: &[ScalarKeyframe], interp: Interpolation, time: f32)
             };
             a.value + (b.value - a.value) * t
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_scalar_keyframes(pairs: Vec<(f32, f32)>) -> Vec<ScalarKeyframe> {
+        pairs.into_iter().map(|(time, value)| ScalarKeyframe { time, value }).collect()
+    }
+
+    #[test]
+    fn test_scalar_interpolation_at_keyframe() {
+        let kfs = make_scalar_keyframes(vec![(0.0, 0.0), (1.0, 1.0), (2.0, 0.5)]);
+        assert!((sample_scalar(&kfs, Interpolation::Linear, 0.0) - 0.0).abs() < 1e-6);
+        assert!((sample_scalar(&kfs, Interpolation::Linear, 1.0) - 1.0).abs() < 1e-6);
+        assert!((sample_scalar(&kfs, Interpolation::Linear, 2.0) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_scalar_interpolation_midpoint() {
+        let kfs = make_scalar_keyframes(vec![(0.0, 0.0), (1.0, 1.0)]);
+        assert!((sample_scalar(&kfs, Interpolation::Linear, 0.5) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_scalar_clamp_before_first() {
+        let kfs = make_scalar_keyframes(vec![(1.0, 5.0), (2.0, 10.0)]);
+        assert!((sample_scalar(&kfs, Interpolation::Linear, 0.0) - 5.0).abs() < 1e-6,
+            "最初のキーフレームより前はクランプされるべき");
+    }
+
+    #[test]
+    fn test_scalar_clamp_after_last() {
+        let kfs = make_scalar_keyframes(vec![(0.0, 0.0), (1.0, 5.0)]);
+        assert!((sample_scalar(&kfs, Interpolation::Linear, 99.0) - 5.0).abs() < 1e-6,
+            "最後のキーフレームより後はクランプされるべき");
+    }
+
+    #[test]
+    fn test_scalar_step_interpolation() {
+        let kfs = make_scalar_keyframes(vec![(0.0, 0.0), (1.0, 10.0)]);
+        // Step補間では前のキーフレームの値を保持
+        assert!((sample_scalar(&kfs, Interpolation::Step, 0.5) - 0.0).abs() < 1e-6);
+        assert!((sample_scalar(&kfs, Interpolation::Step, 0.99) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_scalar_empty_keyframes() {
+        let kfs: Vec<ScalarKeyframe> = vec![];
+        assert!((sample_scalar(&kfs, Interpolation::Linear, 0.0) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_scalar_single_keyframe() {
+        let kfs = make_scalar_keyframes(vec![(1.0, 42.0)]);
+        assert!((sample_scalar(&kfs, Interpolation::Linear, 0.0) - 42.0).abs() < 1e-6);
+        assert!((sample_scalar(&kfs, Interpolation::Linear, 5.0) - 42.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_rotation_identity_when_empty() {
+        let kfs: Vec<RotationKeyframe> = vec![];
+        let q = sample_rotation(&kfs, Interpolation::Linear, 0.0);
+        assert!((q.x.abs() + q.y.abs() + q.z.abs()) < 1e-6);
+        assert!((q.w - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_translation_zero_when_empty() {
+        let kfs: Vec<TranslationKeyframe> = vec![];
+        let v = sample_translation(&kfs, Interpolation::Linear, 0.0);
+        assert!(v.length() < 1e-6);
     }
 }

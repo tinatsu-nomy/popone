@@ -207,7 +207,7 @@ pub fn extract_ir_model_from_fbx_with_options(
         }
 
         // フラットシェーディングフォールバック（ゼロ法線がある面をフラット法線で補完）
-        if vert_normals.iter().any(|n| *n == [0.0f32; 3]) {
+        if vert_normals.contains(&[0.0f32; 3]) {
             let all_indices: Vec<u32> = mat_triangles
                 .iter()
                 .flatten()
@@ -476,7 +476,7 @@ fn convert_mat4(m: Mat4, coord_fn: &impl Fn([f32; 3]) -> [f32; 3]) -> Mat4 {
         m.col(0),
         m.col(1),
         m.col(2),
-        Vec4::new(new_pos[0], new_pos[1], new_pos[2], 1.0).into(),
+        Vec4::new(new_pos[0], new_pos[1], new_pos[2], 1.0),
     )
 }
 
@@ -519,7 +519,7 @@ fn compute_geometry_world_transform(scene: &FbxScene, geom_id: i64) -> Mat4 {
             scene
                 .objects
                 .get(&pid)
-                .map_or(false, |o| o.class == "Model")
+                .is_some_and(|o| o.class == "Model")
         })
         .copied();
 
@@ -545,7 +545,7 @@ fn compute_geometry_world_transform(scene: &FbxScene, geom_id: i64) -> Mat4 {
                 scene
                     .objects
                     .get(&pid)
-                    .map_or(false, |o| o.class == "Model")
+                    .is_some_and(|o| o.class == "Model")
             })
             .copied();
         match parent {
@@ -557,7 +557,7 @@ fn compute_geometry_world_transform(scene: &FbxScene, geom_id: i64) -> Mat4 {
     // root → leaf の順で累積
     let mut world = Mat4::IDENTITY;
     for local in chain.into_iter().rev() {
-        world = world * local;
+        world *= local;
     }
     world
 }

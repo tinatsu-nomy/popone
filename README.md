@@ -6,7 +6,7 @@ VRM / FBX / PMX / PMD / UnityPackage を 3D 表示します。
 
 ## ダウンロード
 
-最新リリース: **[popone_v0.2.1.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.1/popone_v0.2.1.exe)**
+最新リリース: **[popone_v0.2.2.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.2/popone_v0.2.2.exe)**
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -86,7 +86,7 @@ popone.exe input.fbx
 
 </details>
 
-### PMX / PMD ロード（v0.2.1 新機能）
+### PMX / PMD ロード
 
 - **PMX 2.0 / 2.1** — 全データ構造の読み込み（頂点・面・材質・ボーン・モーフ・表示枠・剛体・ジョイント）。SoftBody (2.1) は読み飛ばし
 - **PMD** — Shift_JIS テキスト自動変換。IK・モーフ（base+offset 形式）対応。材質名テキストファイル（同名 `.txt`）読み込み
@@ -95,6 +95,13 @@ popone.exe input.fbx
 - **VRMA アニメーション** — PMX 日本語ボーン名から VRM ヒューマノイド名への自動マッピングで VRMA アニメーション再生対応
 - **UI 制限** — PMX/PMD ロード時は PMX 変換ボタン・法線平滑化・カスタム法線クリアをグレーアウト
 - **コメント表示** — PMX/PMD のコメントをモデル情報パネルに表示
+
+### コード品質・パフォーマンス改善（v0.2.2）
+
+- **パフォーマンス最適化** — アニメーション頂点バッファの毎フレーム alloc 除去、ボーン名探索の HashMap O(1) 化、GPU 可視化バッファの dirty flag 導入
+- **テスト拡充** — 10 テスト → 51 テスト。座標変換ラウンドトリップ、ボーン名マッピング、PMX 書き込み・読み込みラウンドトリップ、VRM→PMX E2E テスト
+- **Clippy 警告ゼロ** — `cargo clippy --all-targets --all-features -- -D warnings` 完全クリーン
+- **UX 改善** — D&D オーバーレイ 4 パターン化、操作ヒント 2 行分割、グレーアウト UI ツールチップ追加
 
 ### FBX 対応
 
@@ -228,6 +235,18 @@ println!("ボーン: {}, 頂点: {}", stats.bones, stats.vertices);
 
 ```bash
 cargo test
+```
+
+51 テスト（ユニット 40 + 統合 11）。統合テストは環境変数でテストデータの配置を指定可能:
+
+```bash
+# テストデータのルートディレクトリ
+export POPONE_TEST_DATA=/path/to/test-fixtures
+
+# または個別ファイルを直接指定
+export POPONE_TEST_VRM_SEED_SAN=/path/to/Seed-san.vrm
+export POPONE_TEST_PMX_SEED_SAN=/path/to/Seed-san.pmx
+export POPONE_TEST_PMD_MIKU_V2=/path/to/初音ミクVer2.pmd
 ```
 
 ## 依存クレート

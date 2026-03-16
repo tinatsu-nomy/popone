@@ -1,5 +1,6 @@
 use anyhow::Result;
 use glam::Vec3;
+use std::collections::HashMap;
 use std::f32::consts::PI;
 
 use crate::convert::bone_map::vrm_bone_to_pmx_name;
@@ -114,7 +115,7 @@ pub fn build_pmx_model_with_options(
     model.joints = build_joints(ir);
 
     // 全データ揃った後に標準ボーン挿入（頂点・剛体・既存ボーンのindex調整もここで）
-    insert_standard_bones(&mut model);
+    insert_standard_bones(&mut model)?;
 
     // 重複ボーン名を解決（NameDupliBones 対策）
     fix_duplicate_names(&mut model.bones);
@@ -163,10 +164,6 @@ pub fn build_pmx_model_with_options(
     };
 
     Ok(model)
-}
-
-fn find_bone_pos(bones: &[PmxBone], name: &str) -> Option<Vec3> {
-    bones.iter().find(|b| b.name == name).map(|b| b.position)
 }
 
 fn find_bone_idx(bones: &[PmxBone], name: &str) -> Option<i32> {
@@ -241,27 +238,39 @@ fn shift_weight(w: &mut PmxWeightType, offset: i32) {
     }
 }
 
-fn insert_standard_bones(model: &mut PmxModel) {
+fn insert_standard_bones(model: &mut PmxModel) -> Result<()> {
     log::debug!("=== insert_standard_bones 開始 (既存ボーン数: {}) ===", model.bones.len());
 
-    // 1. シフト前に位置・インデックスを取得
-    let hips_y = find_bone_pos(&model.bones, "下半身").map(|p| p.y).unwrap_or(10.0);
+    // ボーン名 → インデックスの逆引きマップ（O(n) 線形探索を O(1) に最適化）
+    // 重複名がある場合は最初の出現を保持（position() と同じセマンティクス）
+    fn build_bone_map(bones: &[PmxBone]) -> HashMap<String, usize> {
+        let mut map = HashMap::with_capacity(bones.len());
+        for (i, b) in bones.iter().enumerate() {
+            map.entry(b.name.clone()).or_insert(i);
+        }
+        map
+    }
 
-    let l_ankle = find_bone_pos(&model.bones, "左足首")
+    let mut bone_map = build_bone_map(&model.bones);
+
+    // 1. シフト前に位置・インデックスを取得
+    let hips_y = bone_map.get("下半身").map(|&i| model.bones[i].position.y).unwrap_or(10.0);
+
+    let l_ankle = bone_map.get("左足首").map(|&i| model.bones[i].position)
         .unwrap_or(Vec3::new(-2.5, 2.0, 0.0));
-    let r_ankle = find_bone_pos(&model.bones, "右足首")
+    let r_ankle = bone_map.get("右足首").map(|&i| model.bones[i].position)
         .unwrap_or(Vec3::new(2.5, 2.0, 0.0));
 
-    let has_toes = find_bone_pos(&model.bones, "左つま先").is_some()
-        && find_bone_pos(&model.bones, "右つま先").is_some();
+    let has_toes = bone_map.contains_key("左つま先")
+        && bone_map.contains_key("右つま先");
 
-    let l_toe = find_bone_pos(&model.bones, "左つま先")
+    let l_toe = bone_map.get("左つま先").map(|&i| model.bones[i].position)
         .unwrap_or(Vec3::new(l_ankle.x, l_ankle.y - 1.5, l_ankle.z + 3.0));
-    let r_toe = find_bone_pos(&model.bones, "右つま先")
+    let r_toe = bone_map.get("右つま先").map(|&i| model.bones[i].position)
         .unwrap_or(Vec3::new(r_ankle.x, r_ankle.y - 1.5, r_ankle.z + 3.0));
 
     // [B-2] 腰ボーン位置（準標準プラグイン準拠: lerp(下半身.y, 右足.y, 0.6)）
-    let r_leg_y = find_bone_pos(&model.bones, "右足").map(|p| p.y).unwrap_or(hips_y);
+    let r_leg_y = bone_map.get("右足").map(|&i| model.bones[i].position.y).unwrap_or(hips_y);
     let waist_y = hips_y * 0.4 + r_leg_y * 0.6;
     let waist_z = hips_y * 0.02;
 
@@ -298,7 +307,7 @@ fn insert_standard_bones(model: &mut PmxModel) {
     // 3.5 上半身のtailを上半身2に明示設定（children順序依存を排除してボーン方向を正す）
     // ※ここは連結前なのでVRM内Vec位置に+nして最終インデックスにする
     {
-        let upper2_idx = model.bones.iter().position(|b| b.name == "上半身2").map(|i| i as i32);
+        let upper2_idx = bone_map.get("上半身2").map(|&i| i as i32);
         if let Some(idx) = upper2_idx {
             if let Some(b) = model.bones.iter_mut().find(|b| b.name == "上半身") {
                 b.tail = BoneTail::BoneIndex(idx + n);
@@ -389,24 +398,27 @@ fn insert_standard_bones(model: &mut PmxModel) {
     new_bones.append(&mut model.bones);
     model.bones = new_bones;
     log::debug!("[step6] 既存ボーンを連結 → 合計{}本", model.bones.len());
+    bone_map = build_bone_map(&model.bones);
 
     // 9. 上半身N群・首・頭・下半身をIK直後（index n）に配置
     // IK → 上半身 → 上半身2 → 上半身3（存在すれば）→ 首 → 頭 → 下半身 → … の順（ミクVer2準拠）
     log::debug!("[step9] 上半身群をIK直後(idx={})に整列", n);
     let mut next_target = n as usize;
     for name in ["上半身", "上半身2", "上半身3", "首", "頭"] {
-        if let Some(cur_idx) = model.bones.iter().position(|b| b.name == name) {
+        if let Some(&cur_idx) = bone_map.get(name) {
             if cur_idx != next_target {
                 log::debug!("[step9]   \"{}\" {}番 → {}番", name, cur_idx, next_target);
                 move_bone_in_model(model, cur_idx, next_target);
+                bone_map = build_bone_map(&model.bones);
             }
             next_target += 1;
         }
     }
-    if let Some(cur_idx) = model.bones.iter().position(|b| b.name == "下半身") {
+    if let Some(&cur_idx) = bone_map.get("下半身") {
         if cur_idx != next_target {
             log::debug!("[step9]   \"下半身\" {}番 → {}番", cur_idx, next_target);
             move_bone_in_model(model, cur_idx, next_target);
+            bone_map = build_bone_map(&model.bones);
         }
     }
 
@@ -414,8 +426,8 @@ fn insert_standard_bones(model: &mut PmxModel) {
     // (1) positionとtailの絶対座標を入れ替える（ボーンが上→下向きになる）
     // (2) 親を腰に設定（確認）
     {
-        let waist_idx = model.bones.iter().position(|b| b.name == "腰").map(|i| i as i32);
-        let lower_idx = model.bones.iter().position(|b| b.name == "下半身");
+        let waist_idx = bone_map.get("腰").map(|&i| i as i32);
+        let lower_idx = bone_map.get("下半身").copied();
         if let Some(li) = lower_idx {
             if let Some(wi) = waist_idx {
                 model.bones[li].parent_index = wi;
@@ -435,225 +447,14 @@ fn insert_standard_bones(model: &mut PmxModel) {
         }
     }
 
-    // 11. [B-1] 腰キャンセルボーン追加
-    // 腰回転を使うVMDで足が引きずられる問題を防ぐ。
-    // 腰キャンセル右/左: 腰の回転を(-1.0)倍で継承し、右足/左足の親となるボーン。
-    {
-        let waist_idx = model.bones.iter().position(|b| b.name == "腰")
-            .map(|i| i as i32);
-        let r_leg_info = model.bones.iter()
-            .find(|b| b.name == "右足")
-            .map(|b| (b.position, b.parent_index));
-        let l_leg_info = model.bones.iter()
-            .find(|b| b.name == "左足")
-            .map(|b| (b.position, b.parent_index));
+    // 11. [B-1] 腰キャンセルボーン追加 → add_waist_cancel_bones()
+    add_waist_cancel_bones(model)?;
 
-        if let (Some(waist_idx), Some((r_pos, r_parent)), Some((l_pos, l_parent))) =
-            (waist_idx, r_leg_info, l_leg_info)
-        {
-            let cancel_flags = BONE_FLAG_ROTATABLE | BONE_FLAG_ROTATION_GRANT;
+    // 12-13. [C] 足Dボーン群 + 足先EX追加 → add_d_and_toe_ex_bones()
+    add_d_and_toe_ex_bones(model, has_toes);
 
-            log::debug!("[step11] \"腰キャンセル右\" 追加 pos=({:.3},{:.3},{:.3})",
-                r_pos.x, r_pos.y, r_pos.z);
-            // 腰キャンセル右を末尾に追加し、右足の直前へ移動
-            let r_cancel_at = model.bones.len();
-            model.bones.push(PmxBone {
-                name: "腰キャンセル右".to_string(),
-                name_en: "waist cancel_R".to_string(),
-                position: r_pos,
-                parent_index: r_parent,
-                deform_layer: 0,
-                flags: cancel_flags,
-                tail: BoneTail::Offset(Vec3::ZERO),
-                ik: None,
-                grant: Some(PmxGrant { parent_index: waist_idx, ratio: -1.0 }),
-            });
-            if let Some(b) = model.bones.iter_mut().find(|b| b.name == "右足") {
-                b.parent_index = r_cancel_at as i32;
-            }
-            let r_leg_at = model.bones.iter().position(|b| b.name == "右足").unwrap();
-            move_bone_in_model(model, r_cancel_at, r_leg_at);
-
-            log::debug!("[step11] \"腰キャンセル左\" 追加 pos=({:.3},{:.3},{:.3})",
-                l_pos.x, l_pos.y, l_pos.z);
-            // 腰キャンセル左を末尾に追加し、左足の直前へ移動（右移動後のindexで）
-            let waist_idx_now = model.bones.iter().position(|b| b.name == "腰")
-                .map(|i| i as i32).unwrap_or(waist_idx);
-            let l_parent_now = model.bones.iter()
-                .find(|b| b.name == "左足").map(|b| b.parent_index).unwrap_or(l_parent);
-            let l_cancel_at = model.bones.len();
-            model.bones.push(PmxBone {
-                name: "腰キャンセル左".to_string(),
-                name_en: "waist cancel_L".to_string(),
-                position: l_pos,
-                parent_index: l_parent_now,
-                deform_layer: 0,
-                flags: cancel_flags,
-                tail: BoneTail::Offset(Vec3::ZERO),
-                ik: None,
-                grant: Some(PmxGrant { parent_index: waist_idx_now, ratio: -1.0 }),
-            });
-            if let Some(b) = model.bones.iter_mut().find(|b| b.name == "左足") {
-                b.parent_index = l_cancel_at as i32;
-            }
-            let l_leg_at = model.bones.iter().position(|b| b.name == "左足").unwrap();
-            move_bone_in_model(model, l_cancel_at, l_leg_at);
-        }
-    }
-
-    // 12. [C] 足Dボーン群（IK影響下のD補助ボーン）
-    // 各IKリンクボーン(a)を複製し回転付与(×1.0)で追従するD補助を作る。
-    // 元ボーン(a)の親子関係は一切変更しない。
-    // DボーンのみがDボーン同士の独自チェーンを形成する:
-    //   親ボーンに対応するDボーンが既に存在する場合はそれを親とする。
-    {
-        let d_pairs: &[(&str, &str, &str)] = if has_toes {
-            &[
-                ("左足",   "左足D",   "leg_LD"),
-                ("左ひざ", "左ひざD", "knee_LD"),
-                ("右足",   "右足D",   "leg_RD"),
-                ("右ひざ", "右ひざD", "knee_RD"),
-                ("左足首", "左足首D", "ankle_LD"),
-                ("右足首", "右足首D", "ankle_RD"),
-            ]
-        } else {
-            &[
-                ("左足",   "左足D",   "leg_LD"),
-                ("左ひざ", "左ひざD", "knee_LD"),
-                ("右足",   "右足D",   "leg_RD"),
-                ("右ひざ", "右ひざD", "knee_RD"),
-            ]
-        };
-
-        for &(src_name, d_name, d_en) in d_pairs {
-            let Some(src_idx) = find_bone_idx(&model.bones, src_name) else { continue; };
-            let src_pos = model.bones[src_idx as usize].position;
-            let src_parent = model.bones[src_idx as usize].parent_index;
-
-            // D補助の親: 元ボーンの親に対応するDボーンが既にあればそれを使う
-            // （例: 左ひざDの親 → 左足の親名"左足"+"D"="左足D" が存在 → 左足D）
-            let d_parent = if src_parent >= 0 {
-                let parent_d_name = format!("{}D", &model.bones[src_parent as usize].name);
-                find_bone_idx(&model.bones, &parent_d_name).unwrap_or(src_parent)
-            } else {
-                src_parent
-            };
-
-            log::debug!("[step12] \"{}\"追加 pos=({:.3},{:.3},{:.3}) grant←\"{}\"(idx={})",
-                d_name, src_pos.x, src_pos.y, src_pos.z, src_name, src_idx);
-            // D補助を末尾に追加（step17で末尾に整列）
-            model.bones.push(PmxBone {
-                name: d_name.to_string(),
-                name_en: d_en.to_string(),
-                position: src_pos,
-                parent_index: d_parent,
-                deform_layer: 1,
-                flags: BONE_FLAG_ROTATABLE | BONE_FLAG_ROTATION_GRANT,
-                tail: BoneTail::Offset(Vec3::ZERO),
-                ik: None,
-                grant: Some(PmxGrant { parent_index: src_idx, ratio: 1.0 }),
-            });
-        }
-    }
-
-    // 13. 足先EX追加（左足首D / 右足首Dの直後）
-    // 足先EXの親は足首D（IK影響下ボーン「足首」のDボーン）とする。
-    // 左つま先 / 右つま先の親は変更しない（ミク準拠: つま先の親は足首のまま）。
-    if has_toes {
-        for (ex_name, ex_en, parent_d) in [
-            ("左足先EX", "ex toe_L", "左足首D"),
-            ("右足先EX", "ex toe_R", "右足首D"),
-        ] {
-            let Some(parent_idx) = find_bone_idx(&model.bones, parent_d) else { continue };
-            let pos = model.bones[parent_idx as usize].position;
-            log::debug!("[step13] \"{}\"追加 pos=({:.3},{:.3},{:.3}) parent=\"{}\"(idx={})",
-                ex_name, pos.x, pos.y, pos.z, parent_d, parent_idx);
-
-            model.bones.push(PmxBone {
-                name: ex_name.to_string(),
-                name_en: ex_en.to_string(),
-                position: pos,
-                parent_index: parent_idx,
-                deform_layer: 1,
-                flags: BONE_FLAG_ROTATABLE | BONE_FLAG_VISIBLE | BONE_FLAG_OPERABLE,
-                tail: BoneTail::Offset(Vec3::new(0.0, -1.0, 0.0)),
-                ik: None,
-                grant: None,
-            });
-            // （step17で末尾に整列）
-        }
-    }
-
-    // 14. [C] IK影響下ボーン（足・ひざ・足首）を親に持つ補助ボーンの親をDボーンへ変更
-    // 足・ひざ・足首・つま先・Dボーン・足先EX 自身は除外する。
-    // 変形階層を変更したボーンの子孫も再帰的に変形階層を伝播する。
-    {
-        let remap_pairs: &[(&str, &str)] = &[
-            ("左足",   "左足D"),
-            ("左ひざ", "左ひざD"),
-            ("左足首", "左足首D"),
-            ("右足",   "右足D"),
-            ("右ひざ", "右ひざD"),
-            ("右足首", "右足首D"),
-        ];
-
-        let exclude: &[&str] = &[
-            "左足", "左ひざ", "左足首", "左つま先",
-            "右足", "右ひざ", "右足首", "右つま先",
-            "左足D", "左ひざD", "左足首D",
-            "右足D", "右ひざD", "右足首D",
-            "左足先EX", "右足先EX",
-        ];
-
-        // 変形階層が実際に変化したボーンのインデックスを記録
-        let mut changed: std::collections::HashSet<usize> = std::collections::HashSet::new();
-
-        for &(src_name, d_name) in remap_pairs {
-            let Some(src_idx) = find_bone_idx(&model.bones, src_name) else { continue };
-            let Some(d_idx)   = find_bone_idx(&model.bones, d_name)   else { continue };
-
-            for (i, bone) in model.bones.iter_mut().enumerate() {
-                if exclude.contains(&bone.name.as_str()) { continue; }
-                if bone.parent_index == src_idx {
-                    bone.parent_index = d_idx;
-                    let old_layer = bone.deform_layer;
-                    let new_layer = bone.deform_layer.max(1);
-                    if new_layer != old_layer {
-                        bone.deform_layer = new_layer;
-                        changed.insert(i);
-                        log::debug!("[step14] \"{}\" 親変更: \"{}\"(idx={}) → \"{}\"(idx={}), layer {} → {}",
-                            bone.name, src_name, src_idx, d_name, d_idx, old_layer, new_layer);
-                    } else {
-                        log::debug!("[step14] \"{}\" 親変更: \"{}\"(idx={}) → \"{}\"(idx={}), layer {} (変更なし)",
-                            bone.name, src_name, src_idx, d_name, d_idx, bone.deform_layer);
-                    }
-                }
-            }
-        }
-
-        // 変形階層を変更したボーンの子孫へ再帰的に伝播（親 → 子 → 孫 ...）
-        loop {
-            let mut any_updated = false;
-            for i in 0..model.bones.len() {
-                let parent_idx = model.bones[i].parent_index;
-                if parent_idx < 0 { continue; }
-                if changed.contains(&(parent_idx as usize)) {
-                    let parent_layer = model.bones[parent_idx as usize].deform_layer;
-                    if model.bones[i].deform_layer < parent_layer {
-                        let old_layer = model.bones[i].deform_layer;
-                        let bone_name = model.bones[i].name.clone();
-                        let parent_name = model.bones[parent_idx as usize].name.clone();
-                        model.bones[i].deform_layer = parent_layer;
-                        changed.insert(i);
-                        any_updated = true;
-                        log::debug!("[step14] deform_layer伝播: \"{}\" {} → {}（親: \"{}\"）",
-                            bone_name, old_layer, parent_layer, parent_name);
-                    }
-                }
-            }
-            if !any_updated { break; }
-        }
-    }
+    // 14. [C] IK影響下ボーンの親をDボーンへ変更 → reparent_d_bone_children()
+    reparent_d_bone_children(model);
 
     // step 15: 腕捩り・手捩りボーン追加
     log::debug!("=== [step15] 腕捩り・手捩りボーン追加 ===");
@@ -662,169 +463,15 @@ fn insert_standard_bones(model: &mut PmxModel) {
 
     // step 16: 肩キャンセルボーン追加
     log::debug!("=== [step16] 肩キャンセルボーン追加 ===");
-    add_shoulder_cancel_bones(model);
+    add_shoulder_cancel_bones(model)?;
     log::debug!("=== [step16] 完了 ボーン数: {} ===", model.bones.len());
 
-    // step 17: IKボーン群を末尾に追加（あにまさ/ミクVer2準拠: 左→右順 + ＩＫ先ボーン）
-    // ※Dボーン(step18)より先に追加することでIK < DボーンのIndex順を保証する
-    log::debug!("=== [step17] IKボーン群を末尾に追加 ===");
-    {
-        let ik_bone_flags = BONE_FLAG_ROTATABLE | BONE_FLAG_VISIBLE | BONE_FLAG_OPERABLE
-            | BONE_FLAG_IK | BONE_FLAG_TRANSLATABLE;
-        let trans_flags_ik = BONE_FLAG_ROTATABLE | BONE_FLAG_VISIBLE | BONE_FLAG_OPERABLE
-            | BONE_FLAG_TRANSLATABLE;
-
-        // 全移動完了後の現在インデックスを取得
-        let l_ankle_fi = find_bone_idx(&model.bones, "左足首");
-        let r_ankle_fi = find_bone_idx(&model.bones, "右足首");
-        let l_knee_fi  = find_bone_idx(&model.bones, "左ひざ");
-        let r_knee_fi  = find_bone_idx(&model.bones, "右ひざ");
-        let l_leg_fi   = find_bone_idx(&model.bones, "左足");
-        let r_leg_fi   = find_bone_idx(&model.bones, "右足");
-        let l_toe_fi   = find_bone_idx(&model.bones, "左つま先");
-        let r_toe_fi   = find_bone_idx(&model.bones, "右つま先");
-
-        // 追加ボーンの配置インデックスを事前計算
-        // 左→右順: 左足IK親(+0), 左足ＩＫ(+1), 右足IK親(+2), 右足ＩＫ(+3)
-        //          [has_toes] 左つま先ＩＫ(+4), 右つま先ＩＫ(+5)
-        // ＩＫ先ボーン: 左足ＩＫ先, 右足ＩＫ先 [, 左つま先ＩＫ先, 右つま先ＩＫ先]
-        let base = model.bones.len() as i32;
-        let l_ik_parent_idx = base;
-        let l_ik_idx        = base + 1;
-        let r_ik_parent_idx = base + 2;
-        let r_ik_idx        = base + 3;
-        let (l_toe_ik_idx, r_toe_ik_idx, ik_tail_base) = if has_toes {
-            (base + 4, base + 5, base + 6)
-        } else {
-            (-1, -1, base + 4)
-        };
-        let l_ik_tail_idx     = ik_tail_base;
-        let r_ik_tail_idx     = ik_tail_base + 1;
-        let l_toe_ik_tail_idx = ik_tail_base + 2;
-        let r_toe_ik_tail_idx = ik_tail_base + 3;
-
-        // IKデータ構築（全移動後インデックスを直接参照）
-        let l_leg_ik = l_ankle_fi.map(|target| {
-            let mut links = Vec::new();
-            if let Some(ki) = l_knee_fi {
-                links.push(IkLink { bone_index: ki, angle_limit: true,
-                    limit_min: Vec3::new(-PI, 0.0, 0.0), limit_max: Vec3::new(-0.005, 0.0, 0.0) });
-            }
-            if let Some(li) = l_leg_fi {
-                links.push(IkLink { bone_index: li, angle_limit: false,
-                    limit_min: Vec3::ZERO, limit_max: Vec3::ZERO });
-            }
-            PmxIk { target_bone: target, loop_count: 40, limit_angle: 2.0, links }
-        });
-        let r_leg_ik = r_ankle_fi.map(|target| {
-            let mut links = Vec::new();
-            if let Some(ki) = r_knee_fi {
-                links.push(IkLink { bone_index: ki, angle_limit: true,
-                    limit_min: Vec3::new(-PI, 0.0, 0.0), limit_max: Vec3::new(-0.005, 0.0, 0.0) });
-            }
-            if let Some(li) = r_leg_fi {
-                links.push(IkLink { bone_index: li, angle_limit: false,
-                    limit_min: Vec3::ZERO, limit_max: Vec3::ZERO });
-            }
-            PmxIk { target_bone: target, loop_count: 40, limit_angle: 2.0, links }
-        });
-        let l_toe_ik = if has_toes {
-            l_toe_fi.map(|target| {
-                let mut links = Vec::new();
-                if let Some(ai) = l_ankle_fi {
-                    links.push(IkLink { bone_index: ai, angle_limit: false,
-                        limit_min: Vec3::ZERO, limit_max: Vec3::ZERO });
-                }
-                PmxIk { target_bone: target, loop_count: 3, limit_angle: 4.0, links }
-            })
-        } else { None };
-        let r_toe_ik = if has_toes {
-            r_toe_fi.map(|target| {
-                let mut links = Vec::new();
-                if let Some(ai) = r_ankle_fi {
-                    links.push(IkLink { bone_index: ai, angle_limit: false,
-                        limit_min: Vec3::ZERO, limit_max: Vec3::ZERO });
-                }
-                PmxIk { target_bone: target, loop_count: 3, limit_angle: 4.0, links }
-            })
-        } else { None };
-
-        // 左足IK親
-        model.bones.push(PmxBone {
-            name: "左足IK親".to_string(), name_en: "leg IK parent_L".to_string(),
-            position: Vec3::new(l_ankle.x, 0.0, 0.0), parent_index: 0,
-            deform_layer: 0, flags: trans_flags_ik | BONE_FLAG_TAIL_IS_BONE,
-            tail: BoneTail::BoneIndex(l_ik_idx), ik: None, grant: None,
-        });
-        // 左足ＩＫ（tail → 左足ＩＫ先）
-        model.bones.push(PmxBone {
-            name: "左足ＩＫ".to_string(), name_en: "leg IK_L".to_string(),
-            position: l_ankle, parent_index: l_ik_parent_idx,
-            deform_layer: 1, flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
-            tail: BoneTail::BoneIndex(l_ik_tail_idx), ik: l_leg_ik, grant: None,
-        });
-        // 右足IK親
-        model.bones.push(PmxBone {
-            name: "右足IK親".to_string(), name_en: "leg IK parent_R".to_string(),
-            position: Vec3::new(r_ankle.x, 0.0, 0.0), parent_index: 0,
-            deform_layer: 0, flags: trans_flags_ik | BONE_FLAG_TAIL_IS_BONE,
-            tail: BoneTail::BoneIndex(r_ik_idx), ik: None, grant: None,
-        });
-        // 右足ＩＫ（tail → 右足ＩＫ先）
-        model.bones.push(PmxBone {
-            name: "右足ＩＫ".to_string(), name_en: "leg IK_R".to_string(),
-            position: r_ankle, parent_index: r_ik_parent_idx,
-            deform_layer: 1, flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
-            tail: BoneTail::BoneIndex(r_ik_tail_idx), ik: r_leg_ik, grant: None,
-        });
-
-        if has_toes {
-            // 左つま先ＩＫ（tail → 左つま先ＩＫ先）
-            model.bones.push(PmxBone {
-                name: "左つま先ＩＫ".to_string(), name_en: "toe IK_L".to_string(),
-                position: l_toe, parent_index: l_ik_idx,
-                deform_layer: 1, flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
-                tail: BoneTail::BoneIndex(l_toe_ik_tail_idx), ik: l_toe_ik, grant: None,
-            });
-            // 右つま先ＩＫ（tail → 右つま先ＩＫ先）
-            model.bones.push(PmxBone {
-                name: "右つま先ＩＫ".to_string(), name_en: "toe IK_R".to_string(),
-                position: r_toe, parent_index: r_ik_idx,
-                deform_layer: 1, flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
-                tail: BoneTail::BoneIndex(r_toe_ik_tail_idx), ik: r_toe_ik, grant: None,
-            });
-        }
-
-        // ＩＫ先ボーン（表示用tail・非表示非操作）
-        model.bones.push(PmxBone {
-            name: "左足ＩＫ先".to_string(), name_en: "leg IK tail_L".to_string(),
-            position: l_ankle + Vec3::new(0.0, 0.0, 1.0), parent_index: l_ik_idx,
-            deform_layer: 1, flags: 0,
-            tail: BoneTail::Offset(Vec3::ZERO), ik: None, grant: None,
-        });
-        model.bones.push(PmxBone {
-            name: "右足ＩＫ先".to_string(), name_en: "leg IK tail_R".to_string(),
-            position: r_ankle + Vec3::new(0.0, 0.0, 1.0), parent_index: r_ik_idx,
-            deform_layer: 1, flags: 0,
-            tail: BoneTail::Offset(Vec3::ZERO), ik: None, grant: None,
-        });
-        if has_toes {
-            model.bones.push(PmxBone {
-                name: "左つま先ＩＫ先".to_string(), name_en: "toe IK tail_L".to_string(),
-                position: l_toe + Vec3::new(0.0, -1.0, 0.0), parent_index: l_toe_ik_idx,
-                deform_layer: 1, flags: 0,
-                tail: BoneTail::Offset(Vec3::ZERO), ik: None, grant: None,
-            });
-            model.bones.push(PmxBone {
-                name: "右つま先ＩＫ先".to_string(), name_en: "toe IK tail_R".to_string(),
-                position: r_toe + Vec3::new(0.0, -1.0, 0.0), parent_index: r_toe_ik_idx,
-                deform_layer: 1, flags: 0,
-                tail: BoneTail::Offset(Vec3::ZERO), ik: None, grant: None,
-            });
-        }
-        log::debug!("[step17] IK+ＩＫ先ボーン追加 → ボーン数: {}", model.bones.len());
-    }
+    // step 17: IKボーン群を末尾に追加 → add_ik_bones()
+    add_ik_bones(model, l_ankle, r_ankle, l_toe, r_toe, has_toes);
     log::debug!("=== [step17] 完了 ボーン数: {} ===", model.bones.len());
+
+    // step 11〜17 でボーンが大幅に変更されたためマップを再構築
+    bone_map = build_bone_map(&model.bones);
 
     // step 18: Dボーン群・足先EXをIKボーンの後（最末尾）に整列（あにまさ/ミクVer2準拠: 右→左順）
     // IKボーンが先に追加されているためDボーンはIKより高インデックスになり、ソート後もIK→Dの順が保たれる
@@ -836,11 +483,12 @@ fn insert_standard_bones(model: &mut PmxModel) {
             &["右足D", "右ひざD", "左足D", "左ひざD"]
         };
         for &name in d_end_order {
-            if let Some(cur_idx) = model.bones.iter().position(|b| b.name == name) {
+            if let Some(&cur_idx) = bone_map.get(name) {
                 let last = model.bones.len() - 1;
                 if cur_idx != last {
                     log::debug!("[step18] \"{}\" {}番 → {}番(末尾)", name, cur_idx, last);
                     move_bone_in_model(model, cur_idx, last);
+                    bone_map = build_bone_map(&model.bones);
                 }
             }
         }
@@ -854,6 +502,7 @@ fn insert_standard_bones(model: &mut PmxModel) {
             i, b.name, b.parent_index, b.deform_layer, b.flags);
     }
     log::debug!("=== insert_standard_bones 完了 ===");
+    Ok(())
 }
 
 /// 位置 insert_at にボーンを挿入した後、insert_at 以降の全参照を +1 シフトする
@@ -955,6 +604,396 @@ fn redistribute_twist_weight(
     }
 }
 
+/// [step11] 腰キャンセルボーン（右・左）を追加し、右足/左足の直前に配置する
+fn add_waist_cancel_bones(model: &mut PmxModel) -> Result<()> {
+    let waist_idx = model.bones.iter().position(|b| b.name == "腰")
+        .map(|i| i as i32);
+    let r_leg_info = model.bones.iter()
+        .find(|b| b.name == "右足")
+        .map(|b| (b.position, b.parent_index));
+    let l_leg_info = model.bones.iter()
+        .find(|b| b.name == "左足")
+        .map(|b| (b.position, b.parent_index));
+
+    if let (Some(waist_idx), Some((r_pos, r_parent)), Some((l_pos, l_parent))) =
+        (waist_idx, r_leg_info, l_leg_info)
+    {
+        let cancel_flags = BONE_FLAG_ROTATABLE | BONE_FLAG_ROTATION_GRANT;
+
+        log::debug!("[step11] \"腰キャンセル右\" 追加 pos=({:.3},{:.3},{:.3})",
+            r_pos.x, r_pos.y, r_pos.z);
+        // 腰キャンセル右を末尾に追加し、右足の直前へ移動
+        let r_cancel_at = model.bones.len();
+        model.bones.push(PmxBone {
+            name: "腰キャンセル右".to_string(),
+            name_en: "waist cancel_R".to_string(),
+            position: r_pos,
+            parent_index: r_parent,
+            deform_layer: 0,
+            flags: cancel_flags,
+            tail: BoneTail::Offset(Vec3::ZERO),
+            ik: None,
+            grant: Some(PmxGrant { parent_index: waist_idx, ratio: -1.0 }),
+        });
+        if let Some(b) = model.bones.iter_mut().find(|b| b.name == "右足") {
+            b.parent_index = r_cancel_at as i32;
+        }
+        let r_leg_at = model.bones.iter().position(|b| b.name == "右足")
+            .ok_or_else(|| anyhow::anyhow!("ボーン「右足」が見つかりません"))?;
+        move_bone_in_model(model, r_cancel_at, r_leg_at);
+
+        log::debug!("[step11] \"腰キャンセル左\" 追加 pos=({:.3},{:.3},{:.3})",
+            l_pos.x, l_pos.y, l_pos.z);
+        // 腰キャンセル左を末尾に追加し、左足の直前へ移動（右移動後のindexで）
+        let waist_idx_now = model.bones.iter().position(|b| b.name == "腰")
+            .map(|i| i as i32).unwrap_or(waist_idx);
+        let l_parent_now = model.bones.iter()
+            .find(|b| b.name == "左足").map(|b| b.parent_index).unwrap_or(l_parent);
+        let l_cancel_at = model.bones.len();
+        model.bones.push(PmxBone {
+            name: "腰キャンセル左".to_string(),
+            name_en: "waist cancel_L".to_string(),
+            position: l_pos,
+            parent_index: l_parent_now,
+            deform_layer: 0,
+            flags: cancel_flags,
+            tail: BoneTail::Offset(Vec3::ZERO),
+            ik: None,
+            grant: Some(PmxGrant { parent_index: waist_idx_now, ratio: -1.0 }),
+        });
+        if let Some(b) = model.bones.iter_mut().find(|b| b.name == "左足") {
+            b.parent_index = l_cancel_at as i32;
+        }
+        let l_leg_at = model.bones.iter().position(|b| b.name == "左足")
+            .ok_or_else(|| anyhow::anyhow!("ボーン「左足」が見つかりません"))?;
+        move_bone_in_model(model, l_cancel_at, l_leg_at);
+    }
+    Ok(())
+}
+
+/// [step12-13] 足Dボーン群（IK影響下のD補助ボーン）と足先EXボーンを追加する
+fn add_d_and_toe_ex_bones(model: &mut PmxModel, has_toes: bool) {
+    // 12. [C] 足Dボーン群（IK影響下のD補助ボーン）
+    // 各IKリンクボーン(a)を複製し回転付与(×1.0)で追従するD補助を作る。
+    // 元ボーン(a)の親子関係は一切変更しない。
+    // DボーンのみがDボーン同士の独自チェーンを形成する:
+    //   親ボーンに対応するDボーンが既に存在する場合はそれを親とする。
+    {
+        let d_pairs: &[(&str, &str, &str)] = if has_toes {
+            &[
+                ("左足",   "左足D",   "leg_LD"),
+                ("左ひざ", "左ひざD", "knee_LD"),
+                ("右足",   "右足D",   "leg_RD"),
+                ("右ひざ", "右ひざD", "knee_RD"),
+                ("左足首", "左足首D", "ankle_LD"),
+                ("右足首", "右足首D", "ankle_RD"),
+            ]
+        } else {
+            &[
+                ("左足",   "左足D",   "leg_LD"),
+                ("左ひざ", "左ひざD", "knee_LD"),
+                ("右足",   "右足D",   "leg_RD"),
+                ("右ひざ", "右ひざD", "knee_RD"),
+            ]
+        };
+
+        for &(src_name, d_name, d_en) in d_pairs {
+            let Some(src_idx) = find_bone_idx(&model.bones, src_name) else { continue; };
+            let src_pos = model.bones[src_idx as usize].position;
+            let src_parent = model.bones[src_idx as usize].parent_index;
+
+            // D補助の親: 元ボーンの親に対応するDボーンが既にあればそれを使う
+            // （例: 左ひざDの親 → 左足の親名"左足"+"D"="左足D" が存在 → 左足D）
+            let d_parent = if src_parent >= 0 {
+                let parent_d_name = format!("{}D", &model.bones[src_parent as usize].name);
+                find_bone_idx(&model.bones, &parent_d_name).unwrap_or(src_parent)
+            } else {
+                src_parent
+            };
+
+            log::debug!("[step12] \"{}\"追加 pos=({:.3},{:.3},{:.3}) grant←\"{}\"(idx={})",
+                d_name, src_pos.x, src_pos.y, src_pos.z, src_name, src_idx);
+            // D補助を末尾に追加（step17で末尾に整列）
+            model.bones.push(PmxBone {
+                name: d_name.to_string(),
+                name_en: d_en.to_string(),
+                position: src_pos,
+                parent_index: d_parent,
+                deform_layer: 1,
+                flags: BONE_FLAG_ROTATABLE | BONE_FLAG_ROTATION_GRANT,
+                tail: BoneTail::Offset(Vec3::ZERO),
+                ik: None,
+                grant: Some(PmxGrant { parent_index: src_idx, ratio: 1.0 }),
+            });
+        }
+    }
+
+    // 13. 足先EX追加（左足首D / 右足首Dの直後）
+    // 足先EXの親は足首D（IK影響下ボーン「足首」のDボーン）とする。
+    // 左つま先 / 右つま先の親は変更しない（ミク準拠: つま先の親は足首のまま）。
+    if has_toes {
+        for (ex_name, ex_en, parent_d) in [
+            ("左足先EX", "ex toe_L", "左足首D"),
+            ("右足先EX", "ex toe_R", "右足首D"),
+        ] {
+            let Some(parent_idx) = find_bone_idx(&model.bones, parent_d) else { continue };
+            let pos = model.bones[parent_idx as usize].position;
+            log::debug!("[step13] \"{}\"追加 pos=({:.3},{:.3},{:.3}) parent=\"{}\"(idx={})",
+                ex_name, pos.x, pos.y, pos.z, parent_d, parent_idx);
+
+            model.bones.push(PmxBone {
+                name: ex_name.to_string(),
+                name_en: ex_en.to_string(),
+                position: pos,
+                parent_index: parent_idx,
+                deform_layer: 1,
+                flags: BONE_FLAG_ROTATABLE | BONE_FLAG_VISIBLE | BONE_FLAG_OPERABLE,
+                tail: BoneTail::Offset(Vec3::new(0.0, -1.0, 0.0)),
+                ik: None,
+                grant: None,
+            });
+            // （step17で末尾に整列）
+        }
+    }
+}
+
+/// [step14] IK影響下ボーン（足・ひざ・足首）を親に持つ補助ボーンの親をDボーンへ変更し、
+/// 変形階層を子孫へ再帰的に伝播する
+fn reparent_d_bone_children(model: &mut PmxModel) {
+    let remap_pairs: &[(&str, &str)] = &[
+        ("左足",   "左足D"),
+        ("左ひざ", "左ひざD"),
+        ("左足首", "左足首D"),
+        ("右足",   "右足D"),
+        ("右ひざ", "右ひざD"),
+        ("右足首", "右足首D"),
+    ];
+
+    let exclude: &[&str] = &[
+        "左足", "左ひざ", "左足首", "左つま先",
+        "右足", "右ひざ", "右足首", "右つま先",
+        "左足D", "左ひざD", "左足首D",
+        "右足D", "右ひざD", "右足首D",
+        "左足先EX", "右足先EX",
+    ];
+
+    // 変形階層が実際に変化したボーンのインデックスを記録
+    let mut changed: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    for &(src_name, d_name) in remap_pairs {
+        let Some(src_idx) = find_bone_idx(&model.bones, src_name) else { continue };
+        let Some(d_idx)   = find_bone_idx(&model.bones, d_name)   else { continue };
+
+        for (i, bone) in model.bones.iter_mut().enumerate() {
+            if exclude.contains(&bone.name.as_str()) { continue; }
+            if bone.parent_index == src_idx {
+                bone.parent_index = d_idx;
+                let old_layer = bone.deform_layer;
+                let new_layer = bone.deform_layer.max(1);
+                if new_layer != old_layer {
+                    bone.deform_layer = new_layer;
+                    changed.insert(i);
+                    log::debug!("[step14] \"{}\" 親変更: \"{}\"(idx={}) → \"{}\"(idx={}), layer {} → {}",
+                        bone.name, src_name, src_idx, d_name, d_idx, old_layer, new_layer);
+                } else {
+                    log::debug!("[step14] \"{}\" 親変更: \"{}\"(idx={}) → \"{}\"(idx={}), layer {} (変更なし)",
+                        bone.name, src_name, src_idx, d_name, d_idx, bone.deform_layer);
+                }
+            }
+        }
+    }
+
+    // 変形階層を変更したボーンの子孫へ再帰的に伝播（親 → 子 → 孫 ...）
+    loop {
+        let mut any_updated = false;
+        for i in 0..model.bones.len() {
+            let parent_idx = model.bones[i].parent_index;
+            if parent_idx < 0 { continue; }
+            if changed.contains(&(parent_idx as usize)) {
+                let parent_layer = model.bones[parent_idx as usize].deform_layer;
+                if model.bones[i].deform_layer < parent_layer {
+                    let old_layer = model.bones[i].deform_layer;
+                    let bone_name = model.bones[i].name.clone();
+                    let parent_name = model.bones[parent_idx as usize].name.clone();
+                    model.bones[i].deform_layer = parent_layer;
+                    changed.insert(i);
+                    any_updated = true;
+                    log::debug!("[step14] deform_layer伝播: \"{}\" {} → {}（親: \"{}\"）",
+                        bone_name, old_layer, parent_layer, parent_name);
+                }
+            }
+        }
+        if !any_updated { break; }
+    }
+}
+
+/// [step17] IKボーン群（足IK親・足ＩＫ・つま先ＩＫ・ＩＫ先）を末尾に追加する
+fn add_ik_bones(
+    model: &mut PmxModel,
+    l_ankle: Vec3,
+    r_ankle: Vec3,
+    l_toe: Vec3,
+    r_toe: Vec3,
+    has_toes: bool,
+) {
+    log::debug!("=== [step17] IKボーン群を末尾に追加 ===");
+
+    let ik_bone_flags = BONE_FLAG_ROTATABLE | BONE_FLAG_VISIBLE | BONE_FLAG_OPERABLE
+        | BONE_FLAG_IK | BONE_FLAG_TRANSLATABLE;
+    let trans_flags_ik = BONE_FLAG_ROTATABLE | BONE_FLAG_VISIBLE | BONE_FLAG_OPERABLE
+        | BONE_FLAG_TRANSLATABLE;
+
+    // 全移動完了後の現在インデックスを取得
+    let l_ankle_fi = find_bone_idx(&model.bones, "左足首");
+    let r_ankle_fi = find_bone_idx(&model.bones, "右足首");
+    let l_knee_fi  = find_bone_idx(&model.bones, "左ひざ");
+    let r_knee_fi  = find_bone_idx(&model.bones, "右ひざ");
+    let l_leg_fi   = find_bone_idx(&model.bones, "左足");
+    let r_leg_fi   = find_bone_idx(&model.bones, "右足");
+    let l_toe_fi   = find_bone_idx(&model.bones, "左つま先");
+    let r_toe_fi   = find_bone_idx(&model.bones, "右つま先");
+
+    // 追加ボーンの配置インデックスを事前計算
+    // 左→右順: 左足IK親(+0), 左足ＩＫ(+1), 右足IK親(+2), 右足ＩＫ(+3)
+    //          [has_toes] 左つま先ＩＫ(+4), 右つま先ＩＫ(+5)
+    // ＩＫ先ボーン: 左足ＩＫ先, 右足ＩＫ先 [, 左つま先ＩＫ先, 右つま先ＩＫ先]
+    let base = model.bones.len() as i32;
+    let l_ik_parent_idx = base;
+    let l_ik_idx        = base + 1;
+    let r_ik_parent_idx = base + 2;
+    let r_ik_idx        = base + 3;
+    let (l_toe_ik_idx, r_toe_ik_idx, ik_tail_base) = if has_toes {
+        (base + 4, base + 5, base + 6)
+    } else {
+        (-1, -1, base + 4)
+    };
+    let l_ik_tail_idx     = ik_tail_base;
+    let r_ik_tail_idx     = ik_tail_base + 1;
+    let l_toe_ik_tail_idx = ik_tail_base + 2;
+    let r_toe_ik_tail_idx = ik_tail_base + 3;
+
+    // IKデータ構築（全移動後インデックスを直接参照）
+    let l_leg_ik = l_ankle_fi.map(|target| {
+        let mut links = Vec::new();
+        if let Some(ki) = l_knee_fi {
+            links.push(IkLink { bone_index: ki, angle_limit: true,
+                limit_min: Vec3::new(-PI, 0.0, 0.0), limit_max: Vec3::new(-0.005, 0.0, 0.0) });
+        }
+        if let Some(li) = l_leg_fi {
+            links.push(IkLink { bone_index: li, angle_limit: false,
+                limit_min: Vec3::ZERO, limit_max: Vec3::ZERO });
+        }
+        PmxIk { target_bone: target, loop_count: 40, limit_angle: 2.0, links }
+    });
+    let r_leg_ik = r_ankle_fi.map(|target| {
+        let mut links = Vec::new();
+        if let Some(ki) = r_knee_fi {
+            links.push(IkLink { bone_index: ki, angle_limit: true,
+                limit_min: Vec3::new(-PI, 0.0, 0.0), limit_max: Vec3::new(-0.005, 0.0, 0.0) });
+        }
+        if let Some(li) = r_leg_fi {
+            links.push(IkLink { bone_index: li, angle_limit: false,
+                limit_min: Vec3::ZERO, limit_max: Vec3::ZERO });
+        }
+        PmxIk { target_bone: target, loop_count: 40, limit_angle: 2.0, links }
+    });
+    let l_toe_ik = if has_toes {
+        l_toe_fi.map(|target| {
+            let mut links = Vec::new();
+            if let Some(ai) = l_ankle_fi {
+                links.push(IkLink { bone_index: ai, angle_limit: false,
+                    limit_min: Vec3::ZERO, limit_max: Vec3::ZERO });
+            }
+            PmxIk { target_bone: target, loop_count: 3, limit_angle: 4.0, links }
+        })
+    } else { None };
+    let r_toe_ik = if has_toes {
+        r_toe_fi.map(|target| {
+            let mut links = Vec::new();
+            if let Some(ai) = r_ankle_fi {
+                links.push(IkLink { bone_index: ai, angle_limit: false,
+                    limit_min: Vec3::ZERO, limit_max: Vec3::ZERO });
+            }
+            PmxIk { target_bone: target, loop_count: 3, limit_angle: 4.0, links }
+        })
+    } else { None };
+
+    // 左足IK親
+    model.bones.push(PmxBone {
+        name: "左足IK親".to_string(), name_en: "leg IK parent_L".to_string(),
+        position: Vec3::new(l_ankle.x, 0.0, 0.0), parent_index: 0,
+        deform_layer: 0, flags: trans_flags_ik | BONE_FLAG_TAIL_IS_BONE,
+        tail: BoneTail::BoneIndex(l_ik_idx), ik: None, grant: None,
+    });
+    // 左足ＩＫ（tail → 左足ＩＫ先）
+    model.bones.push(PmxBone {
+        name: "左足ＩＫ".to_string(), name_en: "leg IK_L".to_string(),
+        position: l_ankle, parent_index: l_ik_parent_idx,
+        deform_layer: 1, flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
+        tail: BoneTail::BoneIndex(l_ik_tail_idx), ik: l_leg_ik, grant: None,
+    });
+    // 右足IK親
+    model.bones.push(PmxBone {
+        name: "右足IK親".to_string(), name_en: "leg IK parent_R".to_string(),
+        position: Vec3::new(r_ankle.x, 0.0, 0.0), parent_index: 0,
+        deform_layer: 0, flags: trans_flags_ik | BONE_FLAG_TAIL_IS_BONE,
+        tail: BoneTail::BoneIndex(r_ik_idx), ik: None, grant: None,
+    });
+    // 右足ＩＫ（tail → 右足ＩＫ先）
+    model.bones.push(PmxBone {
+        name: "右足ＩＫ".to_string(), name_en: "leg IK_R".to_string(),
+        position: r_ankle, parent_index: r_ik_parent_idx,
+        deform_layer: 1, flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
+        tail: BoneTail::BoneIndex(r_ik_tail_idx), ik: r_leg_ik, grant: None,
+    });
+
+    if has_toes {
+        // 左つま先ＩＫ（tail → 左つま先ＩＫ先）
+        model.bones.push(PmxBone {
+            name: "左つま先ＩＫ".to_string(), name_en: "toe IK_L".to_string(),
+            position: l_toe, parent_index: l_ik_idx,
+            deform_layer: 1, flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
+            tail: BoneTail::BoneIndex(l_toe_ik_tail_idx), ik: l_toe_ik, grant: None,
+        });
+        // 右つま先ＩＫ（tail → 右つま先ＩＫ先）
+        model.bones.push(PmxBone {
+            name: "右つま先ＩＫ".to_string(), name_en: "toe IK_R".to_string(),
+            position: r_toe, parent_index: r_ik_idx,
+            deform_layer: 1, flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
+            tail: BoneTail::BoneIndex(r_toe_ik_tail_idx), ik: r_toe_ik, grant: None,
+        });
+    }
+
+    // ＩＫ先ボーン（表示用tail・非表示非操作）
+    model.bones.push(PmxBone {
+        name: "左足ＩＫ先".to_string(), name_en: "leg IK tail_L".to_string(),
+        position: l_ankle + Vec3::new(0.0, 0.0, 1.0), parent_index: l_ik_idx,
+        deform_layer: 1, flags: 0,
+        tail: BoneTail::Offset(Vec3::ZERO), ik: None, grant: None,
+    });
+    model.bones.push(PmxBone {
+        name: "右足ＩＫ先".to_string(), name_en: "leg IK tail_R".to_string(),
+        position: r_ankle + Vec3::new(0.0, 0.0, 1.0), parent_index: r_ik_idx,
+        deform_layer: 1, flags: 0,
+        tail: BoneTail::Offset(Vec3::ZERO), ik: None, grant: None,
+    });
+    if has_toes {
+        model.bones.push(PmxBone {
+            name: "左つま先ＩＫ先".to_string(), name_en: "toe IK tail_L".to_string(),
+            position: l_toe + Vec3::new(0.0, -1.0, 0.0), parent_index: l_toe_ik_idx,
+            deform_layer: 1, flags: 0,
+            tail: BoneTail::Offset(Vec3::ZERO), ik: None, grant: None,
+        });
+        model.bones.push(PmxBone {
+            name: "右つま先ＩＫ先".to_string(), name_en: "toe IK tail_R".to_string(),
+            position: r_toe + Vec3::new(0.0, -1.0, 0.0), parent_index: r_toe_ik_idx,
+            deform_layer: 1, flags: 0,
+            tail: BoneTail::Offset(Vec3::ZERO), ik: None, grant: None,
+        });
+    }
+    log::debug!("[step17] IK+ＩＫ先ボーン追加 → ボーン数: {}", model.bones.len());
+}
+
 /// 腕捩り・手捩りボーン（4本）を追加し、ウェイトを再配分する
 fn add_twist_bones(model: &mut PmxModel) {
     let pairs = [
@@ -1022,7 +1061,7 @@ fn add_twist_bones(model: &mut PmxModel) {
 /// 肩キャンセルボーン（肩P/肩C）を左右に追加する
 /// 肩P: 肩の親になり、ユーザーが操作するボーン
 /// 肩C: 腕の親になり、肩Pの回転を-1倍で打ち消すgrantボーン
-fn add_shoulder_cancel_bones(model: &mut PmxModel) {
+fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
     let pairs = [
         ("右肩", "右腕", "右肩P", "shoulderP_R", "右肩C", "shoulderC_R"),
         ("左肩", "左腕", "左肩P", "shoulderP_L", "左肩C", "shoulderC_L"),
@@ -1062,7 +1101,8 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) {
         model.bones[shoulder_idx as usize].parent_index = p_at as i32;
 
         // 肩Pを肩の直前に移動
-        let shoulder_now = model.bones.iter().position(|b| b.name == shoulder_name).unwrap();
+        let shoulder_now = model.bones.iter().position(|b| b.name == shoulder_name)
+            .ok_or_else(|| anyhow::anyhow!("ボーン「{}」が見つかりません", shoulder_name))?;
         move_bone_in_model(model, p_at, shoulder_now);
 
         log::debug!("[step16] \"{}\" 追加 pos=({:.3},{:.3},{:.3}) parent={}",
@@ -1071,8 +1111,10 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) {
         // 3. 肩Cを末尾に追加 → 腕の直前に移動
         //    肩Cのgrant = 肩P × (-1.0)
         let c_flags = BONE_FLAG_ROTATABLE | BONE_FLAG_ROTATION_GRANT;
-        let shoulder_idx_now = find_bone_idx(&model.bones, shoulder_name).unwrap();
-        let p_idx_now = find_bone_idx(&model.bones, p_jp).unwrap();
+        let shoulder_idx_now = find_bone_idx(&model.bones, shoulder_name)
+            .ok_or_else(|| anyhow::anyhow!("ボーン「{}」が見つかりません", shoulder_name))?;
+        let p_idx_now = find_bone_idx(&model.bones, p_jp)
+            .ok_or_else(|| anyhow::anyhow!("ボーン「{}」が見つかりません", p_jp))?;
 
         let c_at = model.bones.len();
         model.bones.push(PmxBone {
@@ -1088,16 +1130,19 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) {
         });
 
         // 腕の親を肩Cに変更
-        let arm_idx_now = find_bone_idx(&model.bones, arm_name).unwrap();
+        let arm_idx_now = find_bone_idx(&model.bones, arm_name)
+            .ok_or_else(|| anyhow::anyhow!("ボーン「{}」が見つかりません", arm_name))?;
         model.bones[arm_idx_now as usize].parent_index = c_at as i32;
 
         // 肩Cを腕の直前に移動
-        let arm_now = model.bones.iter().position(|b| b.name == arm_name).unwrap();
+        let arm_now = model.bones.iter().position(|b| b.name == arm_name)
+            .ok_or_else(|| anyhow::anyhow!("ボーン「{}」が見つかりません", arm_name))?;
         move_bone_in_model(model, c_at, arm_now);
 
         log::debug!("[step16] \"{}\" 追加 pos=({:.3},{:.3},{:.3}) grant←\"{}\" × -1.0",
             c_jp, arm_pos.x, arm_pos.y, arm_pos.z, p_jp);
     }
+    Ok(())
 }
 
 fn build_bones(ir: &IrModel) -> Vec<PmxBone> {

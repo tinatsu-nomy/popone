@@ -4,11 +4,10 @@ use std::sync::Arc;
 use eframe::wgpu;
 use glam::{Mat4, Quat, Vec3};
 
-use crate::convert::coord::PMX_SCALE;
+use crate::convert::coord::{pmx_pos_to_gltf, gltf_pos_to_pmx_unified, pmx_normal_to_gltf, gltf_normal_to_pmx_unified};
 use crate::intermediate::animation::{BoneMatchMode, VrmaAnimation};
 use crate::intermediate::types::IrModel;
 
-use super::gpu::Vertex;
 use super::mesh::GpuModel;
 
 /// 1フレームの長さ（秒）
@@ -77,6 +76,10 @@ pub struct AnimationState {
     skin: SkinningData,
     /// アニメーション済みグローバル行列キャッシュ（glTF空間）
     cached_animated_globals: Vec<Mat4>,
+    /// デルタ行列の作業バッファ（毎フレーム alloc 回避）
+    work_deltas: Vec<Mat4>,
+    /// compute_animated_globals 用フラグバッファ（毎フレーム alloc 回避）
+    work_computed: Vec<bool>,
 }
 
 impl AnimationState {
@@ -92,6 +95,8 @@ impl AnimationState {
             ab_start: None,
             ab_end: None,
             ping_pong_direction: 1.0,
+            work_deltas: vec![Mat4::IDENTITY; skin.rest_global_mats.len()],
+            work_computed: vec![false; skin.rest_global_mats.len()],
             cached_animated_globals: skin.rest_global_mats.clone(),
             skin,
         }
@@ -167,7 +172,7 @@ impl AnimationState {
     /// 戻り値: 何か変更があったか
     pub fn apply_expressions(&self, morph_weights: &mut [f32]) -> bool {
         let mut changed = false;
-        for (expr_name, _ch) in &self.animation.expression_channels {
+        for expr_name in self.animation.expression_channels.keys() {
             if let Some(&morph_idx) = self.skin.expr_name_to_morph.get(expr_name.as_str()) {
                 if morph_idx < morph_weights.len() {
                     let w = self.animation.sample_expression(expr_name, self.current_time)
@@ -199,96 +204,98 @@ impl AnimationState {
         queue: &wgpu::Queue,
         morph_weights: &[f32],
     ) {
-        // 新しいボーングローバル行列を計算してキャッシュ
-        let new_globals = self.compute_animated_globals();
-        self.cached_animated_globals = new_globals.clone();
+        // グローバル行列を in-place で計算（alloc 回避）
+        self.compute_animated_globals_inplace();
 
-        // デルタ行列を計算（glTF空間）
+        // デルタ行列を作業バッファに計算（alloc 回避）
         let bone_count = self.skin.rest_global_mats.len();
-        let mut deltas: Vec<Mat4> = Vec::with_capacity(bone_count);
+        self.work_deltas.resize(bone_count, Mat4::IDENTITY);
         for i in 0..bone_count {
-            let rest = self.skin.rest_global_mats[i];
-            let new_g = new_globals[i];
-            let inv_rest = rest.inverse();
-            deltas.push(new_g * inv_rest);
+            let inv_rest = self.skin.rest_global_mats[i].inverse();
+            self.work_deltas[i] = self.cached_animated_globals[i] * inv_rest;
         }
 
         let is_vrm0 = self.skin.is_vrm0;
 
-        // 頂点に適用（PMX↔glTF 座標変換を頂点ごとに往復）
-        let base = gpu_model.base_vertices();
-        let mut work: Vec<Vertex> = base.to_vec();
+        // 頂点バッファを再利用（初回のみ alloc、以降は capacity 再利用）
+        gpu_model.reset_animated_to_base();
+        {
+            let work = gpu_model.animated_vertices_mut();
+            let deltas = &self.work_deltas;
 
-        for (vi, vw) in self.skin.vertex_weights.iter().enumerate() {
-            if vi >= work.len() {
-                break;
-            }
-
-            // ブレンドされたデルタ行列を計算（glTF空間）
-            let mut blended = Mat4::ZERO;
-            let mut total_w = 0.0f32;
-            for &(bone_idx, weight) in &vw.bones {
-                if weight > 0.0 && bone_idx < deltas.len() {
-                    blended += weight * deltas[bone_idx];
-                    total_w += weight;
+            for (vi, vw) in self.skin.vertex_weights.iter().enumerate() {
+                if vi >= work.len() {
+                    break;
                 }
+
+                let mut blended = Mat4::ZERO;
+                let mut total_w = 0.0f32;
+                for &(bone_idx, weight) in &vw.bones {
+                    if weight > 0.0 && bone_idx < deltas.len() {
+                        blended += weight * deltas[bone_idx];
+                        total_w += weight;
+                    }
+                }
+
+                if total_w < 1e-6 {
+                    continue;
+                }
+
+                if (total_w - 1.0).abs() > 1e-4 {
+                    blended *= 1.0 / total_w;
+                }
+
+                // PMX位置 → glTF位置 → デルタ適用 → PMX位置
+                let pmx_pos = Vec3::from(work[vi].position);
+                let gltf_pos = pmx_pos_to_gltf(pmx_pos, is_vrm0);
+                let new_pmx = gltf_pos_to_pmx_unified(blended.transform_point3(gltf_pos), is_vrm0);
+                work[vi].position = new_pmx.to_array();
+
+                // 法線
+                let pmx_normal = Vec3::from(work[vi].normal);
+                let gltf_normal = pmx_normal_to_gltf(pmx_normal, is_vrm0);
+                let new_pmx_n = gltf_normal_to_pmx_unified(
+                    blended.transform_vector3(gltf_normal).normalize_or_zero(), is_vrm0,
+                );
+                work[vi].normal = new_pmx_n.to_array();
             }
+        } // work の可変借用をここでドロップ
 
-            if total_w < 1e-6 {
-                continue; // ウェイトなし → 変形なし
-            }
+        // モーフを animated_vertices に直接適用（借用衝突回避）
+        gpu_model.apply_morphs_to_animated(morph_weights);
 
-            // 行列正規化（ウェイト合計が1でない場合）
-            if (total_w - 1.0).abs() > 1e-4 {
-                blended *= 1.0 / total_w;
-            }
-
-            // PMX位置 → glTF位置
-            let pmx_pos = Vec3::from(work[vi].position);
-            let gltf_pos = pmx_to_gltf_pos(pmx_pos, is_vrm0);
-
-            // glTF空間でデルタ適用
-            let new_gltf = blended.transform_point3(gltf_pos);
-
-            // glTF位置 → PMX位置
-            let new_pmx = gltf_to_pmx_pos(new_gltf, is_vrm0);
-            work[vi].position = new_pmx.to_array();
-
-            // 法線も同様に変換
-            let pmx_normal = Vec3::from(work[vi].normal);
-            let gltf_normal = pmx_to_gltf_normal(pmx_normal, is_vrm0);
-            let new_gltf_n = blended.transform_vector3(gltf_normal).normalize_or_zero();
-            let new_pmx_n = gltf_to_pmx_normal(new_gltf_n, is_vrm0);
-            work[vi].normal = new_pmx_n.to_array();
-        }
-
-        // モーフも重ねて適用
-        gpu_model.apply_morphs_to_buf(morph_weights, &mut work);
-
-        // 法線表示同期用にアニメーション済み頂点をキャッシュ
-        gpu_model.set_animated_vertices(work.clone());
-
-        queue.write_buffer(&gpu_model.vertex_buf, 0, bytemuck::cast_slice(&work));
+        // GPU バッファに書き込み
+        queue.write_buffer(&gpu_model.vertex_buf, 0, bytemuck::cast_slice(
+            gpu_model.current_vertices()
+        ));
     }
 
-    /// VRMA のキーフレームからボーンのグローバル行列を計算
-    fn compute_animated_globals(&self) -> Vec<Mat4> {
+    /// VRMA のキーフレームからボーンのグローバル行列を in-place 計算（alloc 回避）
+    fn compute_animated_globals_inplace(&mut self) {
         let bone_count = self.skin.rest_global_mats.len();
-        let mut globals = vec![Mat4::IDENTITY; bone_count];
-        let mut computed = vec![false; bone_count];
+        self.cached_animated_globals.resize(bone_count, Mat4::IDENTITY);
+        self.work_computed.resize(bone_count, false);
+        self.work_computed.fill(false);
+        for i in 0..bone_count {
+            self.cached_animated_globals[i] = Mat4::IDENTITY;
+        }
 
         // ルートボーン（親なし）から階層を辿る
         for i in 0..bone_count {
             if self.skin.bone_parents[i].is_none() {
-                self.compute_global_recursive(i, Mat4::IDENTITY, &mut globals, &mut computed);
+                Self::compute_global_recursive_static(
+                    &self.skin, &self.animation, self.current_time,
+                    i, Mat4::IDENTITY,
+                    &mut self.cached_animated_globals, &mut self.work_computed,
+                );
             }
         }
-
-        globals
     }
 
-    fn compute_global_recursive(
-        &self,
+    fn compute_global_recursive_static(
+        skin: &SkinningData,
+        animation: &VrmaAnimation,
+        current_time: f32,
         bone_idx: usize,
         parent_global: Mat4,
         globals: &mut [Mat4],
@@ -301,44 +308,44 @@ impl AnimationState {
 
         // VRMA アニメーションが適用されるボーンかチェック
         let mut animated = false;
-        let mut local_rot = self.skin.rest_local_rotations[bone_idx];
-        let mut local_trans = self.skin.rest_local_translations[bone_idx];
+        let mut local_rot = skin.rest_local_rotations[bone_idx];
+        let mut local_trans = skin.rest_local_translations[bone_idx];
 
-        if let Some(bone_name) = self.skin.bone_idx_to_name.get(&bone_idx) {
-            let is_humanoid = matches!(self.animation.match_mode, BoneMatchMode::Humanoid);
+        if let Some(bone_name) = skin.bone_idx_to_name.get(&bone_idx) {
+            let is_humanoid = matches!(animation.match_mode, BoneMatchMode::Humanoid);
 
             // 回転
-            if let Some(anim_rot) = self.animation.sample_bone_rotation(bone_name, self.current_time) {
+            if let Some(anim_rot) = animation.sample_bone_rotation(bone_name, current_time) {
                 animated = true;
-                if self.animation.is_additive {
-                    if self.animation.is_bone_local_delta {
+                if animation.is_additive {
+                    if animation.is_bone_local_delta {
                         // ボーンローカルデルタ（Unity Muscle SwingTwist）:
                         // anim_rot = postQ × SwingTwist(sign×deg) × Inv(postQ)
                         // 正規化スケルトン基準のデルタ（muscle=0で Identity）
                         // 最終ローカル回転 = rest × anim_rot
                         //   = (rest × postQ) × SwingTwist × Inv(postQ)
                         //   = preQ_model × SwingTwist × Inv(postQ)
-                        local_rot = self.skin.rest_local_rotations[bone_idx] * anim_rot;
+                        local_rot = skin.rest_local_rotations[bone_idx] * anim_rot;
                     } else {
                         // ワールド空間デルタ:
                         // 親のレストグローバル回転で共役変換 → ローカル空間デルタに変換
-                        let parent_rest_rot = self.skin.bone_parents[bone_idx]
-                            .map(|pi| self.skin.rest_global_rotations[pi])
+                        let parent_rest_rot = skin.bone_parents[bone_idx]
+                            .map(|pi| skin.rest_global_rotations[pi])
                             .unwrap_or(Quat::IDENTITY);
                         let local_delta = parent_rest_rot.inverse() * anim_rot * parent_rest_rot;
-                        local_rot = local_delta * self.skin.rest_local_rotations[bone_idx];
+                        local_rot = local_delta * skin.rest_local_rotations[bone_idx];
                     }
                 } else if is_humanoid {
                     // VRMA: リターゲティング公式適用
-                    if let Some(vrma_rest) = self.animation.bone_rests.get(bone_name.as_str()) {
+                    if let Some(vrma_rest) = animation.bone_rests.get(bone_name.as_str()) {
                         let w_vrma = vrma_rest.global_rotation;
                         let l_vrma = vrma_rest.local_rotation;
-                        let l_model = self.skin.rest_local_rotations[bone_idx];
-                        let w_model = self.skin.rest_global_rotations[bone_idx];
+                        let l_model = skin.rest_local_rotations[bone_idx];
+                        let w_model = skin.rest_global_rotations[bone_idx];
 
                         let mut normalized = w_vrma * l_vrma.inverse() * anim_rot * w_vrma.inverse();
 
-                        if self.skin.is_vrm0 {
+                        if skin.is_vrm0 {
                             normalized = Quat::from_xyzw(
                                 -normalized.x, normalized.y, -normalized.z, normalized.w,
                             );
@@ -346,7 +353,7 @@ impl AnimationState {
 
                         local_rot = l_model * w_model.inverse() * normalized * w_model;
                     } else {
-                        local_rot = if self.skin.is_vrm0 {
+                        local_rot = if skin.is_vrm0 {
                             Quat::from_xyzw(-anim_rot.x, anim_rot.y, -anim_rot.z, anim_rot.w)
                         } else {
                             anim_rot
@@ -354,11 +361,11 @@ impl AnimationState {
                     }
                 } else {
                     // NodeName: グローバル空間リターゲティング
-                    if let Some(src_rest) = self.animation.bone_rests.get(bone_name.as_str()) {
+                    if let Some(src_rest) = animation.bone_rests.get(bone_name.as_str()) {
                         let w_src = src_rest.global_rotation;
                         let l_src = src_rest.local_rotation;
-                        let l_model = self.skin.rest_local_rotations[bone_idx];
-                        let w_model = self.skin.rest_global_rotations[bone_idx];
+                        let l_model = skin.rest_local_rotations[bone_idx];
+                        let w_model = skin.rest_global_rotations[bone_idx];
 
                         // ソースレストからのローカルデルタ → グローバル空間に変換（共役）
                         let local_delta = l_src.inverse() * anim_rot;
@@ -366,7 +373,7 @@ impl AnimationState {
 
                         // ソースが+Z向き（VRMは-Z向き）の場合、Y軸180°補正
                         // normalized の X,Z 成分を反転（= Y軸180°共役）
-                        if self.animation.facing_flip_y {
+                        if animation.facing_flip_y {
                             normalized = Quat::from_xyzw(
                                 -normalized.x, normalized.y, -normalized.z, normalized.w,
                             );
@@ -380,32 +387,32 @@ impl AnimationState {
                 }
             }
             // 平行移動
-            if let Some(raw_trans) = self.animation.sample_bone_translation(bone_name, self.current_time) {
+            if let Some(raw_trans) = animation.sample_bone_translation(bone_name, current_time) {
                 animated = true;
-                if self.animation.is_additive {
+                if animation.is_additive {
                     // Additive: デルタ値をレスト位置に加算
-                    local_trans = self.skin.rest_local_translations[bone_idx] + raw_trans;
+                    local_trans = skin.rest_local_translations[bone_idx] + raw_trans;
                 } else if is_humanoid {
                     // VRMA: レスト位置からのデルタをワールド空間経由でモデルに適用
-                    if let Some(vrma_rest) = self.animation.bone_rests.get(bone_name.as_str()) {
+                    if let Some(vrma_rest) = animation.bone_rests.get(bone_name.as_str()) {
                         let delta_local = raw_trans - vrma_rest.local_translation;
                         let vrma_parent_rot = vrma_rest.global_rotation * vrma_rest.local_rotation.inverse();
                         let mut delta_world = vrma_parent_rot * delta_local;
-                        if self.skin.is_vrm0 {
+                        if skin.is_vrm0 {
                             delta_world = Vec3::new(-delta_world.x, delta_world.y, -delta_world.z);
                         }
-                        let model_h = self.skin.rest_global_mats[bone_idx]
+                        let model_h = skin.rest_global_mats[bone_idx]
                             .transform_point3(Vec3::ZERO).y;
                         let vrma_h = (vrma_parent_rot * vrma_rest.local_translation).y;
                         if vrma_h.abs() > 0.01 {
                             delta_world *= model_h / vrma_h;
                         }
-                        let model_parent_rot = self.skin.rest_global_rotations[bone_idx]
-                            * self.skin.rest_local_rotations[bone_idx].inverse();
+                        let model_parent_rot = skin.rest_global_rotations[bone_idx]
+                            * skin.rest_local_rotations[bone_idx].inverse();
                         let delta_model_local = model_parent_rot.inverse() * delta_world;
-                        local_trans = self.skin.rest_local_translations[bone_idx] + delta_model_local;
+                        local_trans = skin.rest_local_translations[bone_idx] + delta_model_local;
                     } else {
-                        local_trans = if self.skin.is_vrm0 {
+                        local_trans = if skin.is_vrm0 {
                             Vec3::new(-raw_trans.x, raw_trans.y, -raw_trans.z)
                         } else {
                             raw_trans
@@ -413,17 +420,17 @@ impl AnimationState {
                     }
                 } else {
                     // NodeName: ソースレストからのデルタをスケーリングして適用
-                    if let Some(src_rest) = self.animation.bone_rests.get(bone_name.as_str()) {
+                    if let Some(src_rest) = animation.bone_rests.get(bone_name.as_str()) {
                         let mut delta = raw_trans - src_rest.local_translation;
                         // ソースが+Z向きの場合、平行移動デルタのX,Zを反転（Y180補正）
-                        if self.animation.facing_flip_y {
+                        if animation.facing_flip_y {
                             delta = Vec3::new(-delta.x, delta.y, -delta.z);
                         }
                         let src_len = src_rest.local_translation.length();
-                        let model_len = self.skin.rest_local_translations[bone_idx].length();
+                        let model_len = skin.rest_local_translations[bone_idx].length();
                         if src_len > 1e-6 && model_len > 1e-6 {
                             let scale = model_len / src_len;
-                            local_trans = self.skin.rest_local_translations[bone_idx] + delta * scale;
+                            local_trans = skin.rest_local_translations[bone_idx] + delta * scale;
                         }
                         // src_len が 0 に近い場合（ルートなど）はデルタをそのまま適用しない
                     }
@@ -434,19 +441,19 @@ impl AnimationState {
         if animated {
             // アニメーション適用ボーン: スケールを保持して再構成
             let local_mat = Mat4::from_scale_rotation_translation(
-                self.skin.rest_local_scales[bone_idx],
+                skin.rest_local_scales[bone_idx],
                 local_rot,
                 local_trans,
             );
             globals[bone_idx] = parent_global * local_mat;
         } else {
             // 非アニメーションボーン: 生のローカル行列を使用（分解誤差を回避）
-            globals[bone_idx] = parent_global * self.skin.rest_local_mats[bone_idx];
+            globals[bone_idx] = parent_global * skin.rest_local_mats[bone_idx];
         }
 
         // 子ボーンを再帰処理
-        for &child_idx in &self.skin.bone_children[bone_idx] {
-            self.compute_global_recursive(child_idx, globals[bone_idx], globals, computed);
+        for &child_idx in &skin.bone_children[bone_idx] {
+            Self::compute_global_recursive_static(skin, animation, current_time, child_idx, globals[bone_idx], globals, computed);
         }
     }
 }
@@ -599,39 +606,6 @@ fn build_skinning_data(ir: &IrModel, gpu_model: &GpuModel, animation: &VrmaAnima
     }
 }
 
-/// PMX位置 → glTF位置（座標変換の逆、スケール除去 + ミラー）
-#[inline]
-fn pmx_to_gltf_pos(v: Vec3, is_vrm0: bool) -> Vec3 {
-    if is_vrm0 {
-        Vec3::new(-v.x / PMX_SCALE, v.y / PMX_SCALE, v.z / PMX_SCALE)
-    } else {
-        Vec3::new(v.x / PMX_SCALE, v.y / PMX_SCALE, -v.z / PMX_SCALE)
-    }
-}
-
-/// glTF位置 → PMX位置
-#[inline]
-fn gltf_to_pmx_pos(v: Vec3, is_vrm0: bool) -> Vec3 {
-    if is_vrm0 {
-        Vec3::new(-v.x * PMX_SCALE, v.y * PMX_SCALE, v.z * PMX_SCALE)
-    } else {
-        Vec3::new(v.x * PMX_SCALE, v.y * PMX_SCALE, -v.z * PMX_SCALE)
-    }
-}
-
-/// PMX法線 → glTF法線（ミラーのみ、スケールなし）
-#[inline]
-fn pmx_to_gltf_normal(n: Vec3, is_vrm0: bool) -> Vec3 {
-    if is_vrm0 {
-        Vec3::new(-n.x, n.y, n.z)
-    } else {
-        Vec3::new(n.x, n.y, -n.z)
-    }
-}
-
-/// glTF法線 → PMX法線
-#[inline]
-fn gltf_to_pmx_normal(n: Vec3, is_vrm0: bool) -> Vec3 {
-    pmx_to_gltf_normal(n, is_vrm0) // ミラーは自己逆
-}
+// 座標変換関数は crate::convert::coord に統一
+// pmx_pos_to_gltf, gltf_pos_to_pmx_unified, pmx_normal_to_gltf, gltf_normal_to_pmx_unified
 

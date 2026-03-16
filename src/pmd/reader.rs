@@ -69,7 +69,7 @@ pub fn read_pmd(path: &std::path::Path) -> Result<PmdModel> {
 
     // 面
     let face_index_count = r.read_u32::<LittleEndian>()? as usize;
-    if face_index_count % 3 != 0 {
+    if !face_index_count.is_multiple_of(3) {
         bail!("PMD面インデックス数が3の倍数でない: {}", face_index_count);
     }
     let face_count = face_index_count / 3;
@@ -365,18 +365,14 @@ mod tests {
 
     #[test]
     fn test_read_miku_v2_pmd() {
-        let path = std::path::Path::new("E:/misc/nomy/vrm_view/tmp/pmd/初音ミクVer2.pmd");
-        if !path.exists() {
-            eprintln!("テストPMDファイルが存在しません");
-            return;
-        }
+        let Some(path) = crate::test_util::try_test_file(crate::test_util::miku_v2_pmd()) else { return; };
 
-        let model = read_pmd(path).expect("PMD読み込みに失敗");
+        let model = read_pmd(&path).expect("PMD読み込みに失敗");
 
         assert_eq!(model.header.name, "初音ミク");
         assert_eq!(model.bones.len(), 140);
         assert_eq!(model.vertices.len(), 12354);
-        assert!(model.morphs.len() > 0);
+        assert!(!model.morphs.is_empty());
         assert_eq!(model.rigid_bodies.len(), 45);
         assert_eq!(model.joints.len(), 27);
 

@@ -2,7 +2,6 @@ use glam::Mat4;
 use super::parser::FbxProperty;
 use super::scene::FbxScene;
 
-#[allow(dead_code)]
 pub struct Cluster {
     pub bone_id: i64,
     pub bone_name: String,

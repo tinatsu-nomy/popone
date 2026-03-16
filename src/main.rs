@@ -106,7 +106,7 @@ fn attach_parent_console() {
 
         // CONIN$ / CONOUT$ を開いてプロセスの標準ハンドルを差し替え
         let h_in = CreateFileA(
-            b"CONIN$\0".as_ptr(), GENERIC_READ, FILE_SHARE_READ,
+            c"CONIN$".as_ptr().cast(), GENERIC_READ, FILE_SHARE_READ,
             std::ptr::null_mut(), OPEN_EXISTING, 0, std::ptr::null_mut(),
         );
         if h_in != INVALID {
@@ -114,7 +114,7 @@ fn attach_parent_console() {
         }
 
         let h_out = CreateFileA(
-            b"CONOUT$\0".as_ptr(), GENERIC_WRITE, FILE_SHARE_WRITE,
+            c"CONOUT$".as_ptr().cast(), GENERIC_WRITE, FILE_SHARE_WRITE,
             std::ptr::null_mut(), OPEN_EXISTING, 0, std::ptr::null_mut(),
         );
         if h_out != INVALID {
@@ -182,7 +182,7 @@ fn run_main(args: Args) -> Result<()> {
     }
 
     // unwrap 安全: 上で is_none() チェック済み
-    let input = args.input.unwrap();
+    let input = args.input.expect("input は is_none チェック済み");
 
     // viewer feature: 出力未指定 → ビューアモードで開く
     #[cfg(feature = "viewer")]
@@ -432,11 +432,11 @@ fn rotate_logs(logs_dir: &std::path::Path, keep: usize) {
             e.path()
                 .file_name()
                 .and_then(|n| n.to_str())
-                .map_or(false, |n| n.starts_with("popone_") && n.ends_with(".log"))
+                .is_some_and(|n| n.starts_with("popone_") && n.ends_with(".log"))
         })
         .collect();
     // ファイル名でソート（タイムスタンプ順）→ 降順
-    entries.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
     // keep 件より古いものを削除
     for entry in entries.into_iter().skip(keep) {
         let _ = std::fs::remove_file(entry.path());

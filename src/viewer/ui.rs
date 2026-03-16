@@ -2,7 +2,7 @@ use std::path::Path;
 
 use eframe::egui;
 
-use super::app::{ConvertMessage, DisplaySettings, SidePanelTab, ViewerApp};
+use super::app::{ConvertMessage, DisplaySettings, PendingOverlay, SidePanelTab, ViewerApp};
 use super::gpu::{DrawMode, LightMode};
 
 /// 材質パネルからのテクスチャ割り当てリクエスト
@@ -57,30 +57,30 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     dialog = dialog.set_file_name(src_name);
                 }
             }
-            if let Some(ref dir) = app.last_texture_dir {
+            if let Some(ref dir) = app.tex.last_dir {
                 dialog = dialog.set_directory(dir);
             }
             if let Some(path) = dialog.pick_file() {
                 if let Some(dir) = path.parent() {
-                    app.last_texture_dir = Some(dir.to_path_buf());
+                    app.tex.last_dir = Some(dir.to_path_buf());
                 }
                 app.assign_texture_to_material(mat_idx, &path);
             }
         }
         Some(TexAssignRequest::PkgTexture(mat_idx, tex_idx)) => {
-            if let Some(ref pkg) = app.pkg_textures {
+            if let Some(ref pkg) = app.tex.pkg_textures {
                 if let Some((ref tex_name, ref tex_data)) = pkg.get(tex_idx) {
                     let name = tex_name.clone();
                     let data = tex_data.clone();
                     app.assign_texture_data_to_material(mat_idx, &name, &data);
-                    app.pkg_tex_assignments.insert(mat_idx, name.clone());
+                    app.tex.pkg_assignments.insert(mat_idx, name.clone());
                     // 同名連動分もpkg割り当て履歴に記録
-                    if app.link_same_name_materials {
+                    if app.tex.link_same_name {
                         if let Some(ref loaded) = app.loaded {
                             let target_name = loaded.ir.materials[mat_idx].name.clone();
                             for (i, m) in loaded.ir.materials.iter().enumerate() {
                                 if i != mat_idx && m.name == target_name {
-                                    app.pkg_tex_assignments.insert(i, name.clone());
+                                    app.tex.pkg_assignments.insert(i, name.clone());
                                 }
                             }
                         }
@@ -138,7 +138,7 @@ fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         });
 
     if confirmed {
-        let choice = app.pending_fbx_choice.take().unwrap();
+        let choice = app.pending_fbx_choice.take().expect("pending_fbx_choice は Some 確認済み");
         app.execute_fbx_choice(choice);
     } else if cancelled || !open {
         app.pending_fbx_choice = None;
@@ -181,7 +181,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         });
 
     if let Some((idx, model_type)) = selected {
-        let pending = app.pending_unity_pkg.take().unwrap();
+        let pending = app.pending_unity_pkg.take().expect("pending_unity_pkg は Some 確認済み");
         app.pending_pkg_load = Some(super::app::PendingPkgModelLoad {
             assets: pending.assets,
             fbx_index: idx,
@@ -196,15 +196,15 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
 
 /// unitypackage テクスチャ手動割当ダイアログ
 fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
-    let Some(ref pending) = app.pending_tex_match else { return };
+    let Some(ref pending) = app.tex.pending_match else { return };
 
     // pkg_textures のファイル名一覧とサムネイルIDを参照
-    let tex_names: Vec<&str> = app.pkg_textures.as_ref()
+    let tex_names: Vec<&str> = app.tex.pkg_textures.as_ref()
         .map(|t| t.iter().map(|(name, _)| name.as_str()).collect())
         .unwrap_or_default();
-    let thumb_ids = &app.pkg_thumb_cache;
+    let thumb_ids = &app.tex.pkg_thumb_cache;
     if tex_names.is_empty() {
-        app.pending_tex_match = None;
+        app.tex.pending_match = None;
         return;
     }
 
@@ -236,10 +236,10 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             ui.label("自動割当できなかった材質にテクスチャを割り当ててください。");
             ui.horizontal(|ui| {
                 ui.label(format!("パッケージ内テクスチャ: {}個", tex_names.len()));
-                ui.checkbox(&mut app.link_same_name_materials, "同名連動");
+                ui.checkbox(&mut app.tex.link_same_name, "同名連動");
             });
             // テクスチャ名フィルタ（ComboBox内の選択肢を絞り込み）
-            if let Some(ref mut pending) = app.pending_tex_match {
+            if let Some(ref mut pending) = app.tex.pending_match {
                 ui.horizontal(|ui| {
                     ui.label("検索:");
                     ui.add(
@@ -251,7 +251,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             }
             ui.separator();
 
-            let tex_filter_lower = app.pending_tex_match.as_ref()
+            let tex_filter_lower = app.tex.pending_match.as_ref()
                 .map(|p| p.tex_filter.to_lowercase())
                 .unwrap_or_default();
 
@@ -286,7 +286,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                                     .selected_text(current_label)
                                     .width(180.0)
                                     .show_ui(ui, |ui| {
-                                        if ui.selectable_value(&mut new_selections[i], None, "(なし)").clicked() {}
+                                        ui.selectable_value(&mut new_selections[i], None, "(なし)").clicked();
                                         for (ti, name) in tex_names.iter().enumerate() {
                                             if !tex_filter_lower.is_empty()
                                                 && !name.to_lowercase().contains(&tex_filter_lower)
@@ -320,8 +320,8 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         });
 
     // 同名連動: 選択が変わった材質と同名の材質にも同じ選択を反映
-    if app.link_same_name_materials {
-        if let Some(ref pending) = app.pending_tex_match {
+    if app.tex.link_same_name {
+        if let Some(ref pending) = app.tex.pending_match {
             let prev = &pending.selections;
             for i in 0..mat_info.len() {
                 if new_selections[i] != prev[i] {
@@ -339,17 +339,17 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     }
 
     // selections の更新を反映
-    if let Some(ref mut pending) = app.pending_tex_match {
+    if let Some(ref mut pending) = app.tex.pending_match {
         pending.selections = new_selections;
     }
 
     if apply {
-        let pending = app.pending_tex_match.take().unwrap();
+        let pending = app.tex.pending_match.take().expect("pending_match は apply フラグで Some 確認済み");
         // 割り当て情報を先にコピーして借用を解放
         let assignments: Vec<(usize, String, Vec<u8>)> = pending.selections.iter().enumerate()
             .filter_map(|(i, sel)| {
                 sel.and_then(|tex_idx| {
-                    app.pkg_textures.as_ref()
+                    app.tex.pkg_textures.as_ref()
                         .and_then(|pkg| pkg.get(tex_idx))
                         .map(|(name, data)| (pending.mat_indices[i], name.clone(), data.clone()))
                 })
@@ -358,7 +358,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         let count = assignments.len();
         for (mat_idx, tex_name, tex_data) in &assignments {
             app.assign_texture_data_to_material(*mat_idx, tex_name, tex_data);
-            app.pkg_tex_assignments.insert(*mat_idx, tex_name.clone());
+            app.tex.pkg_assignments.insert(*mat_idx, tex_name.clone());
         }
         if count > 0 {
             app.convert_message = Some(ConvertMessage::success(
@@ -366,15 +366,15 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             ));
         }
     } else if cancelled || !open {
-        app.pending_tex_match = None;
+        app.tex.pending_match = None;
     }
 }
 
 /// テクスチャD&D時の材質選択ダイアログ（複数選択＋リアルタイムプレビュー）
 pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
-    let Some(ref mut preview) = app.pending_tex_preview else { return };
+    let Some(ref mut preview) = app.tex.pending_preview else { return };
     let Some(ref loaded) = app.loaded else {
-        app.pending_tex_preview = None;
+        app.tex.pending_preview = None;
         return;
     };
 
@@ -500,7 +500,7 @@ pub fn execute_conversion(app: &mut ViewerApp) {
             loaded.gpu_model.write_normals_back(&mut loaded.ir);
         }
     }
-    let loaded = app.loaded.as_ref().unwrap();
+    let loaded = app.loaded.as_ref().expect("loaded は has_model チェック済み");
 
     // VRM/FBX 共通: ビューアの IrModel を直接使用（編集状態を反映）
     let result = crate::convert_ir_to_pmx(&loaded.ir, &output_path, app.display.align_rigid_rotation);
@@ -640,7 +640,7 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
     }
 
     // アニメーションが制御中の表情名を収集
-    let anim_expr_morphs: std::collections::HashSet<usize> = if let Some(ref anim) = app.anim_state {
+    let anim_expr_morphs: std::collections::HashSet<usize> = if let Some(ref anim) = app.anim.state {
         ir.morphs.iter().enumerate().filter_map(|(i, morph)| {
             if anim.animation.expression_channels.contains_key(&morph.name_en) {
                 Some(i)
@@ -732,10 +732,11 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
     );
     ui.checkbox(&mut app.display.show_grid, "グリッド表示 (G)");
 
-    let has_bones = app.loaded.as_ref().map_or(false, |l| !l.ir.bones.is_empty());
-    let has_spring = app.loaded.as_ref().map_or(false, |l| !l.ir.physics.rigid_bodies.is_empty());
+    let has_bones = app.loaded.as_ref().is_some_and(|l| !l.ir.bones.is_empty());
+    let has_spring = app.loaded.as_ref().is_some_and(|l| !l.ir.physics.rigid_bodies.is_empty());
     ui.add_enabled_ui(has_bones, |ui| {
-        ui.checkbox(&mut app.display.show_bones, "ボーン表示 (B)");
+        ui.checkbox(&mut app.display.show_bones, "ボーン表示 (B)")
+            .on_disabled_hover_text("モデルにボーンがありません");
         if app.display.show_bones {
             ui.add(
                 egui::Slider::new(&mut app.display.bone_opacity, 0.05..=1.0)
@@ -744,7 +745,8 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
         }
     });
     ui.add_enabled_ui(has_spring, |ui| {
-        ui.checkbox(&mut app.display.show_spring_bones, "物理表示 (P)");
+        ui.checkbox(&mut app.display.show_spring_bones, "物理表示 (P)")
+            .on_disabled_hover_text("モデルに物理設定がありません");
         if app.display.show_spring_bones {
             ui.add(
                 egui::Slider::new(&mut app.display.spring_bone_opacity, 0.05..=1.0)
@@ -754,9 +756,9 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
     });
     // ジョイント表示（PMX/PMDのみ）
     let is_pmx_pmd_joints = app.loaded.as_ref()
-        .map_or(false, |l| l.ir.source_format.is_pmx_pmd());
+        .is_some_and(|l| l.ir.source_format.is_pmx_pmd());
     let has_joints = app.loaded.as_ref()
-        .map_or(false, |l| !l.ir.physics.joints.is_empty());
+        .is_some_and(|l| !l.ir.physics.joints.is_empty());
     if is_pmx_pmd_joints && has_joints {
         ui.checkbox(&mut app.display.show_joints, "ジョイント表示");
         if app.display.show_joints {
@@ -794,17 +796,19 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
         );
     }
     let is_pmx_pmd_normals = app.loaded.as_ref()
-        .map_or(false, |l| l.ir.source_format.is_pmx_pmd());
+        .is_some_and(|l| l.ir.source_format.is_pmx_pmd());
     ui.add_enabled_ui(!is_pmx_pmd_normals, |ui| {
         let old_smooth = app.display.smooth_normals;
-        ui.checkbox(&mut app.display.smooth_normals, "法線平滑化");
+        ui.checkbox(&mut app.display.smooth_normals, "法線平滑化")
+            .on_disabled_hover_text("PMX/PMD の法線は変更できません");
         if app.display.smooth_normals != old_smooth && app.loaded.is_some() {
-            app.pending_rebuild = Some(false);
+            app.pending_rebuild = Some(PendingOverlay::WaitingOverlay);
         }
         let old_clear = app.display.clear_custom_normals;
-        ui.checkbox(&mut app.display.clear_custom_normals, "カスタム法線クリア");
+        ui.checkbox(&mut app.display.clear_custom_normals, "カスタム法線クリア")
+            .on_disabled_hover_text("PMX/PMD の法線は変更できません");
         if app.display.clear_custom_normals != old_clear && app.loaded.is_some() {
-            app.pending_rebuild = Some(false);
+            app.pending_rebuild = Some(PendingOverlay::WaitingOverlay);
         }
     });
 
@@ -834,14 +838,14 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
         if ui.small_button("全非表示").clicked() {
             app.material_visibility.iter_mut().for_each(|v| *v = false);
         }
-        ui.checkbox(&mut app.link_same_name_materials, "同名連動");
-        if !app.tex_assignments.is_empty() {
-            if ui.small_button("テクスチャリセット").clicked() {
-                app.tex_assignments.clear();
-                app.pkg_tex_assignments.clear();
-                app.pending_reload = Some(false);
+        ui.checkbox(&mut app.tex.link_same_name, "同名連動")
+            .on_hover_text("同じ名前の材質にテクスチャを同時に割り当て");
+        if !app.tex.assignments.is_empty()
+            && ui.small_button("テクスチャリセット").clicked() {
+                app.tex.assignments.clear();
+                app.tex.pkg_assignments.clear();
+                app.pending_reload = Some(PendingOverlay::WaitingOverlay);
             }
-        }
     });
     // フィルター（材質数が多い場合に便利）
     if num_draws > 10 {
@@ -855,7 +859,7 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
         });
     }
     let filter_lower = app.material_filter.to_lowercase();
-    let thumb_ids = &app.pkg_thumb_cache;
+    let thumb_ids = &app.tex.pkg_thumb_cache;
     for &(i, mat_idx) in draw_info.iter() {
         if i < app.material_visibility.len() {
             let name = mat_names.get(mat_idx)
@@ -891,7 +895,7 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
                     };
                     let resp = ui.add(egui::Label::new(indicator).sense(egui::Sense::click()))
                         .on_hover_text(&tooltip);
-                    let has_pkg = app.pkg_textures.is_some();
+                    let has_pkg = app.tex.pkg_textures.is_some();
                     let popup_id = ui.id().with(("pkg_tex_popup", mat_idx));
                     if resp.clicked() {
                         if has_pkg {
@@ -904,13 +908,13 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
                         egui::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
                             ui.set_min_width(280.0);
                             ui.add(
-                                egui::TextEdit::singleline(&mut app.pkg_popup_filter)
+                                egui::TextEdit::singleline(&mut app.tex.pkg_popup_filter)
                                     .desired_width(ui.available_width())
                                     .hint_text("テクスチャ名で絞り込み…"),
                             );
-                            let filter_lower = app.pkg_popup_filter.to_lowercase();
+                            let filter_lower = app.tex.pkg_popup_filter.to_lowercase();
                             egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                                if let Some(ref pkg) = app.pkg_textures {
+                                if let Some(ref pkg) = app.tex.pkg_textures {
                                     for (ti, (tname, _)) in pkg.iter().enumerate() {
                                         if !filter_lower.is_empty()
                                             && !tname.to_lowercase().contains(&filter_lower)
@@ -926,7 +930,7 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
                                         if clicked {
                                             *tex_assign_request = Some(TexAssignRequest::PkgTexture(mat_idx, ti));
                                             ui.memory_mut(|m| m.toggle_popup(popup_id));
-                                            app.pkg_popup_filter.clear();
+                                            app.tex.pkg_popup_filter.clear();
                                         }
                                     }
                                 }
@@ -934,13 +938,13 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
                                 if ui.button("ファイルから選択...").clicked() {
                                     *tex_assign_request = Some(TexAssignRequest::FileDialog(mat_idx));
                                     ui.memory_mut(|m| m.toggle_popup(popup_id));
-                                    app.pkg_popup_filter.clear();
+                                    app.tex.pkg_popup_filter.clear();
                                 }
                             });
                         });
                     }
                 }
-                let assigned_name = app.tex_assignments.get(&mat_idx)
+                let assigned_name = app.tex.assignments.get(&mat_idx)
                     .and_then(|p| p.file_name())
                     .map(|f| f.to_string_lossy().to_string());
                 let display_tex = assigned_name.as_deref()
@@ -964,12 +968,12 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
 /// 出力タブ: PMX変換 + UVマップ出力
 fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     let has_humanoid = app.loaded.as_ref()
-        .map_or(false, |l| l.ir.humanoid_bone_count > 0);
+        .is_some_and(|l| l.ir.humanoid_bone_count > 0);
     let has_physics = app.loaded.as_ref()
-        .map_or(false, |l| !l.ir.physics.rigid_bodies.is_empty());
+        .is_some_and(|l| !l.ir.physics.rigid_bodies.is_empty());
     let has_model = app.loaded.is_some();
     let is_pmx_pmd = app.loaded.as_ref()
-        .map_or(false, |l| l.ir.source_format.is_pmx_pmd());
+        .is_some_and(|l| l.ir.source_format.is_pmx_pmd());
     let is_processing = app.pending_load.is_some()
         || app.pending_convert.is_some()
         || app.pending_rebuild.is_some()
@@ -984,7 +988,11 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
 
     // PMX/PMD ロード時は PMX 変換関連をグレーアウト
     ui.add_enabled_ui(has_model && !is_processing && !is_pmx_pmd, |ui| {
-        if ui.button("PMX 変換").clicked() {
+        if ui.button("PMX 変換").on_disabled_hover_text(
+            if is_pmx_pmd { "PMX/PMD ファイルからの変換は不要です" }
+            else if is_processing { "処理中です..." }
+            else { "モデルを読み込んでください" }
+        ).clicked() {
             let default_path = if app.pmx_output_path.is_empty() {
                 std::path::PathBuf::from("output.pmx")
             } else {
@@ -1001,7 +1009,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             }
             if let Some(path) = dialog.save_file() {
                 app.pmx_output_path = path.to_string_lossy().to_string();
-                app.pending_convert = Some(false);
+                app.pending_convert = Some(PendingOverlay::WaitingOverlay);
             }
         }
     });
@@ -1011,15 +1019,15 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             &mut app.normalize_pose,
             "Tスタンス変換",
         ).changed() {
-            app.pending_reload = Some(false);
+            app.pending_reload = Some(PendingOverlay::WaitingOverlay);
         }
     } else {
         ui.add_enabled_ui(has_humanoid, |ui| {
             if ui.checkbox(
                 &mut app.normalize_pose,
                 "Aスタンス変換",
-            ).changed() {
-                app.pending_reload = Some(false);
+            ).on_disabled_hover_text("ヒューマノイドボーンがありません").changed() {
+                app.pending_reload = Some(PendingOverlay::WaitingOverlay);
             }
         });
     }
@@ -1027,10 +1035,11 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         ui.checkbox(
             &mut app.display.align_rigid_rotation,
             "剛体回転をボーン方向に揃える",
-        );
+        ).on_disabled_hover_text("物理設定がないか、PMX/PMD形式です");
     });
     ui.add_enabled_ui(!is_pmx_pmd, |ui| {
-        ui.checkbox(&mut app.output_log, "ログ出力");
+        ui.checkbox(&mut app.output_log, "ログ出力")
+            .on_disabled_hover_text("PMX/PMD形式ではログ出力はできません");
     });
 
     ui.add_space(12.0);
@@ -1060,7 +1069,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             }
             if let Some(path) = dialog.save_file() {
                 match crate::convert::uvmap::export_uv_map(
-                    &app.loaded.as_ref().unwrap().ir,
+                    &app.loaded.as_ref().expect("loaded は has_model チェック済み").ir,
                     &path,
                     app.uv_map_size,
                 ) {
@@ -1260,13 +1269,13 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
     ui.separator();
 
     // VRMAライブラリ
-    if !app.vrma_library.is_empty() {
-        ui.label(format!("アニメーションリスト ({}件):", app.vrma_library.len()));
+    if !app.anim.library.is_empty() {
+        ui.label(format!("アニメーションリスト ({}件):", app.anim.library.len()));
         let mut switch_to: Option<usize> = None;
         let mut remove_idx: Option<usize> = None;
-        for (i, (name, _, _)) in app.vrma_library.iter().enumerate() {
+        for (i, (name, _, _)) in app.anim.library.iter().enumerate() {
             ui.horizontal(|ui| {
-                let is_active = app.active_vrma_index == Some(i);
+                let is_active = app.anim.active_index == Some(i);
                 let label = if is_active {
                     format!("▶ {}", name)
                 } else {
@@ -1284,18 +1293,18 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
             app.switch_vrma(idx);
         }
         if let Some(idx) = remove_idx {
-            let was_active = app.active_vrma_index == Some(idx);
-            app.vrma_library.remove(idx);
+            let was_active = app.anim.active_index == Some(idx);
+            app.anim.library.remove(idx);
             if was_active {
-                if app.vrma_library.is_empty() {
-                    app.anim_state = None;
-                    app.active_vrma_index = None;
+                if app.anim.library.is_empty() {
+                    app.anim.state = None;
+                    app.anim.active_index = None;
                     app.morph_dirty = true;
                 } else {
-                    let new_idx = idx.min(app.vrma_library.len() - 1);
+                    let new_idx = idx.min(app.anim.library.len() - 1);
                     app.switch_vrma(new_idx);
                 }
-            } else if let Some(ref mut ai) = app.active_vrma_index {
+            } else if let Some(ref mut ai) = app.anim.active_index {
                 if *ai > idx {
                     *ai -= 1;
                 }
@@ -1307,13 +1316,13 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
     let mut switch_anim: Option<bool> = None;
     let mut muscle_scale_changed = false;
 
-    if let Some(ref mut anim) = app.anim_state {
+    if let Some(ref mut anim) = app.anim.state {
         ui.label(format!("{} ({:.1}秒)", anim.animation.name, anim.animation.duration));
 
         ui.horizontal(|ui| {
             if ui.button("⏮").on_hover_text("前のアニメーション / 先頭に戻す").clicked() {
                 let (lo, _) = anim.effective_range();
-                if anim.current_time - lo < 0.5 && app.vrma_library.len() > 1 {
+                if anim.current_time - lo < 0.5 && app.anim.library.len() > 1 {
                     switch_anim = Some(false);
                 } else {
                     anim.current_time = lo;
@@ -1331,11 +1340,10 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
             }
             let play_label = if anim.playing { "⏸" } else { "▶" };
             if ui.button(play_label).clicked() {
-                if !anim.playing {
-                    if anim.speed < 0.0 {
+                if !anim.playing
+                    && anim.speed < 0.0 {
                         anim.speed = anim.speed.abs();
                     }
-                }
                 anim.playing = !anim.playing;
             }
             let step_fwd = ui.add_enabled(!anim.playing, egui::Button::new("▶|").min_size(egui::vec2(24.0, 0.0)))
@@ -1343,7 +1351,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
             if step_fwd.clicked() {
                 anim.step_frame(true);
             }
-            let has_next = app.vrma_library.len() > 1;
+            let has_next = app.anim.library.len() > 1;
             let next_btn = ui.add_enabled(has_next, egui::Button::new("⏭"))
                 .on_hover_text("次のアニメーション");
             if next_btn.clicked() {
@@ -1360,13 +1368,12 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         .show_value(false),
                 );
             });
-            if anim.loop_mode == LoopMode::AB || anim.loop_mode == LoopMode::PingPong {
-                if anim.ab_start.is_some() || anim.ab_end.is_some() {
+            if (anim.loop_mode == LoopMode::AB || anim.loop_mode == LoopMode::PingPong)
+                && (anim.ab_start.is_some() || anim.ab_end.is_some()) {
                     let a_str = anim.ab_start.map_or("-".to_string(), |t| format!("{:.2}s", t));
                     let b_str = anim.ab_end.map_or("-".to_string(), |t| format!("{:.2}s", t));
                     ui.label(format!("A:{} B:{}", a_str, b_str));
                 }
-            }
         }
 
         ui.horizontal(|ui| {
@@ -1384,15 +1391,15 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
         if anim.animation.is_additive {
             ui.horizontal(|ui| {
                 ui.label("Muscle倍率");
-                let old_scale = app.muscle_scale;
+                let old_scale = app.anim.muscle_scale;
                 let response = ui.add(
-                    egui::DragValue::new(&mut app.muscle_scale)
+                    egui::DragValue::new(&mut app.anim.muscle_scale)
                         .range(0.01..=2.0)
                         .speed(0.01)
                         .fixed_decimals(2),
                 );
                 // DragValue確定時（ドラッグ解放 or Enter）のみ再読み込み
-                if (app.muscle_scale - old_scale).abs() > 1e-6 && response.drag_stopped() || response.lost_focus() {
+                if (app.anim.muscle_scale - old_scale).abs() > 1e-6 && (response.drag_stopped() || response.lost_focus()) {
                     muscle_scale_changed = true;
                 }
             });
@@ -1437,14 +1444,14 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
         ));
 
         if ui.small_button("アニメーション解除").clicked() {
-            app.anim_state = None;
-            app.active_vrma_index = None;
+            app.anim.state = None;
+            app.anim.active_index = None;
             app.morph_dirty = true;
         }
     } else {
         ui.label("アニメーションファイルをドロップして読み込み");
-        if app.loaded.is_some() {
-            if ui.small_button("アニメーションを開く...").clicked() {
+        if app.loaded.is_some()
+            && ui.small_button("アニメーションを開く...").clicked() {
                 let paths = rfd::FileDialog::new()
                     .set_title("アニメーションを開く（複数選択可）")
                     .add_filter("アニメーション", &["vrma", "glb", "gltf", "fbx"])
@@ -1464,12 +1471,11 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     }
                 }
             }
-        }
     }
 
     if let Some(is_next) = switch_anim {
-        if let Some(active) = app.active_vrma_index {
-            let len = app.vrma_library.len();
+        if let Some(active) = app.anim.active_index {
+            let len = app.anim.library.len();
             if len > 1 {
                 let new_idx = if is_next {
                     (active + 1) % len
@@ -1483,14 +1489,14 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
 
     // Muscle倍率変更 → .anim 再読み込み
     if muscle_scale_changed {
-        if let Some(idx) = app.active_vrma_index {
-            let path = app.vrma_library[idx].1.clone();
-            if path.extension().map_or(false, |e| e.eq_ignore_ascii_case("anim")) {
+        if let Some(idx) = app.anim.active_index {
+            let path = app.anim.library[idx].1.clone();
+            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("anim")) {
                 // 現在の再生位置・状態を保存
-                let (cur_time, was_playing) = app.anim_state.as_ref()
+                let (cur_time, was_playing) = app.anim.state.as_ref()
                     .map(|s| (s.current_time, s.playing))
                     .unwrap_or((0.0, false));
-                if let Ok(new_anim) = crate::unity::animation::load_unity_anim(&path, app.muscle_scale) {
+                if let Ok(new_anim) = crate::unity::animation::load_unity_anim(&path, app.anim.muscle_scale) {
                     let new_anim = std::sync::Arc::new(new_anim);
                     if let Some(ref loaded) = app.loaded {
                         let mut state = super::animation::AnimationState::new(
@@ -1498,16 +1504,16 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         );
                         state.current_time = cur_time;
                         state.playing = was_playing;
-                        app.vrma_library[idx].2 = new_anim;
-                        app.anim_state = Some(state);
+                        app.anim.library[idx].2 = new_anim;
+                        app.anim.state = Some(state);
                     }
                 }
             }
         }
     }
 
-    if app.loaded.is_some() && app.anim_state.is_some() {
-        if ui.small_button("アニメーションを追加...").clicked() {
+    if app.loaded.is_some() && app.anim.state.is_some()
+        && ui.small_button("アニメーションを追加...").clicked() {
             let paths = rfd::FileDialog::new()
                 .set_title("アニメーションを追加（複数選択可）")
                 .add_filter("アニメーション", &["vrma", "glb", "gltf", "fbx"])
@@ -1527,5 +1533,4 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 }
             }
         }
-    }
 }

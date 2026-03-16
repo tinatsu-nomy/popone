@@ -302,7 +302,7 @@ pub struct GpuRenderer {
     camera_buf: wgpu::Buffer,
     /// カメラ bind group
     camera_bind_group: wgpu::BindGroup,
-    /// カメラ bind group layout
+    /// カメラ bind group layout（BindGroup の lifetime 維持に必要）
     #[allow(dead_code)]
     camera_bgl: wgpu::BindGroupLayout,
     /// テクスチャ bind group layout
@@ -350,6 +350,18 @@ pub struct GpuRenderer {
     spring_work: Vec<GridVertex>,
     joint_work: Vec<GridVertex>,
     joint_edge_work: Vec<GridVertex>,
+    /// ボーン頂点キャッシュ: 前回のカメラ位置
+    bone_cache_eye: Vec3,
+    /// ボーン頂点キャッシュ: 前回のボーン不透明度
+    bone_cache_opacity: f32,
+    /// SpringBone/Joint キャッシュ: 前回のSpringBone不透明度
+    spring_cache_opacity: f32,
+    /// SpringBone/Joint キャッシュ: 前回のジョイント不透明度
+    joint_cache_opacity: f32,
+    /// SpringBone/Joint キャッシュ: 前回の align_rigid_rotation
+    spring_cache_align: bool,
+    /// 前フレームでアニメーションが有効だったか（Some→None 遷移検出用）
+    cache_had_anim: bool,
 }
 
 /// MSAA サンプル数
@@ -520,9 +532,31 @@ impl GpuRenderer {
             spring_work: Vec::new(),
             joint_work: Vec::new(),
             joint_edge_work: Vec::new(),
+            bone_cache_eye: Vec3::ZERO,
+            bone_cache_opacity: -1.0,
+            spring_cache_opacity: -1.0,
+            joint_cache_opacity: -1.0,
+            spring_cache_align: false,
+            cache_had_anim: false,
         }
     }
 
+    /// 可視化バッファのキャッシュを無効化（モデル再読み込み時に呼ぶ）
+    pub fn invalidate_visualization_cache(&mut self) {
+        self.bone_cache_eye = Vec3::ZERO;
+        self.bone_cache_opacity = -1.0;
+        self.spring_cache_opacity = -1.0;
+        self.joint_cache_opacity = -1.0;
+        self.spring_cache_align = false;
+        self.cache_had_anim = false;
+        self.bone_vertex_count = 0;
+        self.spring_vertex_count = 0;
+        self.joint_vertex_count = 0;
+        self.joint_edge_vertex_count = 0;
+        self.normal_dirty = true;
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn create_pipeline_set(
         device: &wgpu::Device,
         shader: &wgpu::ShaderModule,
@@ -787,43 +821,51 @@ impl GpuRenderer {
         });
     }
 
-    /// オフスクリーンにモデルを描画し、結果テクスチャの egui TextureId を返す
-    #[allow(clippy::too_many_arguments)]
-    pub fn render_to_texture(
+    /// 可視化バッファ（ボーン・法線・剛体・ジョイント）の頂点生成と GPU アップロード
+    fn prepare_visualization_buffers(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        egui_renderer: &mut egui_wgpu::Renderer,
         model: &GpuModel,
         ir: &IrModel,
         params: &RenderParams,
-        cached_id: &mut Option<eframe::egui::TextureId>,
-    ) -> (eframe::egui::TextureId, ()) {
-        // オフスクリーンテクスチャの確保（サイズ変更または MSAA 切り替え時に再作成）
-        self.ensure_offscreen(device, params.width, params.height, params.display.msaa);
-        let offscreen = self.offscreen.as_ref().unwrap();
+    ) {
+        // アニメーション状態遷移を検出（Some→None でレストポーズに戻す必要がある）
+        let has_anim = params.animated_bone_globals.is_some();
+        let anim_just_cleared = self.cache_had_anim && !has_anim;
+        self.cache_had_anim = has_anim;
 
-        // ボーン頂点を毎フレーム更新（ビルボード）
+        // ボーン頂点を更新（変化時のみ）
         if params.display.show_bones && !ir.bones.is_empty() {
-            let pos_fn: fn(Vec3) -> Vec3 = if ir.source_format.is_vrm0() {
-                crate::convert::coord::gltf_pos_to_pmx_v0
-            } else {
-                crate::convert::coord::gltf_pos_to_pmx
-            };
-            generate_bone_vertices(&mut self.bone_work, ir, pos_fn, params.camera.eye(), params.display.bone_opacity, params.animated_bone_globals);
-            self.bone_vertex_count = self.bone_work.len() as u32;
-            let data = bytemuck::cast_slice(&self.bone_work);
-            if data.len() > self.bone_buf_capacity {
-                self.bone_buf = Some(device.create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("bone_vbuf"),
-                        contents: data,
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    },
-                ));
-                self.bone_buf_capacity = data.len();
-            } else if let Some(ref buf) = self.bone_buf {
-                queue.write_buffer(buf, 0, data);
+            let eye = params.camera.eye();
+            let bone_changed = self.bone_vertex_count == 0
+                || has_anim
+                || anim_just_cleared
+                || eye != self.bone_cache_eye
+                || params.display.bone_opacity != self.bone_cache_opacity;
+            if bone_changed {
+                self.bone_cache_eye = eye;
+                self.bone_cache_opacity = params.display.bone_opacity;
+                let pos_fn: fn(Vec3) -> Vec3 = if ir.source_format.is_vrm0() {
+                    crate::convert::coord::gltf_pos_to_pmx_v0
+                } else {
+                    crate::convert::coord::gltf_pos_to_pmx
+                };
+                generate_bone_vertices(&mut self.bone_work, ir, pos_fn, params.camera.eye(), params.display.bone_opacity, params.animated_bone_globals);
+                self.bone_vertex_count = self.bone_work.len() as u32;
+                let data = bytemuck::cast_slice(&self.bone_work);
+                if data.len() > self.bone_buf_capacity {
+                    self.bone_buf = Some(device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("bone_vbuf"),
+                            contents: data,
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        },
+                    ));
+                    self.bone_buf_capacity = data.len();
+                } else if let Some(ref buf) = self.bone_buf {
+                    queue.write_buffer(buf, 0, data);
+                }
             }
         }
 
@@ -864,60 +906,98 @@ impl GpuRenderer {
             self.spring_vertex_count = 0;
         }
         if params.display.show_spring_bones && (!ir.physics.rigid_bodies.is_empty() || !ir.physics.joints.is_empty()) {
-            generate_spring_bone_vertices(&mut self.spring_work, ir, params.display.spring_bone_opacity, params.display.align_rigid_rotation, params.animated_bone_globals, params.is_vrm0);
-            self.spring_vertex_count = self.spring_work.len() as u32;
-            let data = bytemuck::cast_slice(&self.spring_work);
-            if data.len() > self.spring_buf_capacity {
-                self.spring_buf = Some(device.create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("spring_vbuf"),
-                        contents: data,
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    },
-                ));
-                self.spring_buf_capacity = data.len();
-            } else if let Some(ref buf) = self.spring_buf {
-                queue.write_buffer(buf, 0, data);
+            let spring_changed = self.spring_vertex_count == 0
+                || has_anim
+                || anim_just_cleared
+                || params.display.spring_bone_opacity != self.spring_cache_opacity
+                || params.display.align_rigid_rotation != self.spring_cache_align;
+            if spring_changed {
+                self.spring_cache_opacity = params.display.spring_bone_opacity;
+                self.spring_cache_align = params.display.align_rigid_rotation;
+                generate_spring_bone_vertices(&mut self.spring_work, ir, params.display.spring_bone_opacity, params.display.align_rigid_rotation, params.animated_bone_globals, params.is_vrm0);
+                self.spring_vertex_count = self.spring_work.len() as u32;
+                let data = bytemuck::cast_slice(&self.spring_work);
+                if data.len() > self.spring_buf_capacity {
+                    self.spring_buf = Some(device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("spring_vbuf"),
+                            contents: data,
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        },
+                    ));
+                    self.spring_buf_capacity = data.len();
+                } else if let Some(ref buf) = self.spring_buf {
+                    queue.write_buffer(buf, 0, data);
+                }
             }
         }
 
         // ジョイント頂点を毎フレーム更新
         if !params.display.show_joints || ir.physics.joints.is_empty() {
             self.joint_vertex_count = 0;
+            self.joint_edge_vertex_count = 0;
         }
         if params.display.show_joints && !ir.physics.joints.is_empty() {
-            generate_joint_vertices(&mut self.joint_work, &mut self.joint_edge_work, ir, params.display.joint_opacity, params.animated_bone_globals, params.is_vrm0);
-            // 面バッファ（TriangleList）
-            self.joint_vertex_count = self.joint_work.len() as u32;
-            let data = bytemuck::cast_slice(&self.joint_work);
-            if data.len() > self.joint_buf_capacity {
-                self.joint_buf = Some(device.create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("joint_vbuf"),
-                        contents: data,
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    },
-                ));
-                self.joint_buf_capacity = data.len();
-            } else if let Some(ref buf) = self.joint_buf {
-                queue.write_buffer(buf, 0, data);
-            }
-            // エッジバッファ（LineList）
-            self.joint_edge_vertex_count = self.joint_edge_work.len() as u32;
-            let edge_data = bytemuck::cast_slice(&self.joint_edge_work);
-            if edge_data.len() > self.joint_edge_buf_capacity {
-                self.joint_edge_buf = Some(device.create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("joint_edge_vbuf"),
-                        contents: edge_data,
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    },
-                ));
-                self.joint_edge_buf_capacity = edge_data.len();
-            } else if let Some(ref buf) = self.joint_edge_buf {
-                queue.write_buffer(buf, 0, edge_data);
+            let joint_changed = self.joint_vertex_count == 0
+                || has_anim
+                || anim_just_cleared
+                || params.display.joint_opacity != self.joint_cache_opacity;
+            if joint_changed {
+                self.joint_cache_opacity = params.display.joint_opacity;
+                generate_joint_vertices(&mut self.joint_work, &mut self.joint_edge_work, ir, params.display.joint_opacity, params.animated_bone_globals, params.is_vrm0);
+                // 面バッファ（TriangleList）
+                self.joint_vertex_count = self.joint_work.len() as u32;
+                let data = bytemuck::cast_slice(&self.joint_work);
+                if data.len() > self.joint_buf_capacity {
+                    self.joint_buf = Some(device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("joint_vbuf"),
+                            contents: data,
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        },
+                    ));
+                    self.joint_buf_capacity = data.len();
+                } else if let Some(ref buf) = self.joint_buf {
+                    queue.write_buffer(buf, 0, data);
+                }
+                // エッジバッファ（LineList）
+                self.joint_edge_vertex_count = self.joint_edge_work.len() as u32;
+                let edge_data = bytemuck::cast_slice(&self.joint_edge_work);
+                if edge_data.len() > self.joint_edge_buf_capacity {
+                    self.joint_edge_buf = Some(device.create_buffer_init(
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("joint_edge_vbuf"),
+                            contents: edge_data,
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        },
+                    ));
+                    self.joint_edge_buf_capacity = edge_data.len();
+                } else if let Some(ref buf) = self.joint_edge_buf {
+                    queue.write_buffer(buf, 0, edge_data);
+                }
             }
         }
+    }
+
+    /// オフスクリーンにモデルを描画し、結果テクスチャの egui TextureId を返す
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_to_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        egui_renderer: &mut egui_wgpu::Renderer,
+        model: &GpuModel,
+        ir: &IrModel,
+        params: &RenderParams,
+        cached_id: &mut Option<eframe::egui::TextureId>,
+    ) -> (eframe::egui::TextureId, ()) {
+        // オフスクリーンテクスチャの確保（サイズ変更または MSAA 切り替え時に再作成）
+        self.ensure_offscreen(device, params.width, params.height, params.display.msaa);
+
+        // 可視化バッファの準備（ボーン・法線・剛体・ジョイント）
+        self.prepare_visualization_buffers(device, queue, model, ir, params);
+
+        let offscreen = self.offscreen.as_ref().expect("ensure_offscreen で初期化済み");
 
         // Update camera uniform
         let aspect = params.width as f32 / params.height as f32;
@@ -1004,7 +1084,7 @@ impl GpuRenderer {
                 }
 
                 if use_wireframe {
-                    pass.set_pipeline(ps.pipeline_wireframe.as_ref().unwrap());
+                    pass.set_pipeline(ps.pipeline_wireframe.as_ref().expect("wireframe パイプラインは supports_wireframe チェック済み"));
                 } else if draw.double_sided {
                     pass.set_pipeline(&ps.pipeline_no_cull);
                 } else {
@@ -1036,7 +1116,7 @@ impl GpuRenderer {
                 }
 
                 if use_wireframe {
-                    pass.set_pipeline(ps.pipeline_wireframe.as_ref().unwrap());
+                    pass.set_pipeline(ps.pipeline_wireframe.as_ref().expect("wireframe パイプラインは supports_wireframe チェック済み"));
                 } else if draw.double_sided {
                     pass.set_pipeline(&ps.pipeline_alpha_no_cull);
                 } else {
@@ -1060,7 +1140,7 @@ impl GpuRenderer {
 
             // パス3: Solid+Wire オーバーレイ（ソリッド描画の上にワイヤーを重ねる）
             if use_solid_wire {
-                let wire_pl = ps.pipeline_wire_overlay.as_ref().unwrap();
+                let wire_pl = ps.pipeline_wire_overlay.as_ref().expect("wire_overlay パイプラインは supports_wireframe チェック済み");
                 pass.set_pipeline(wire_pl);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
                 for (draw_idx, draw) in model.draws.iter().enumerate() {

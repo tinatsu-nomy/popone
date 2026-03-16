@@ -297,8 +297,8 @@ fn distribute_vertex_morphs(pmx: &PmxModel, meshes: &mut [IrMesh]) {
         for fi in face_offset..face_offset + face_count {
             let face = &pmx.faces[fi];
             for &global_idx in face {
-                if !vertex_map.contains_key(&global_idx) {
-                    vertex_map.insert(global_idx, next_local);
+                if let std::collections::hash_map::Entry::Vacant(e) = vertex_map.entry(global_idx) {
+                    e.insert(next_local);
                     next_local += 1;
                 }
             }
@@ -480,13 +480,9 @@ mod tests {
 
     #[test]
     fn test_pmx_to_ir_seed_san() {
-        let pmx_path = std::path::Path::new("E:/misc/nomy/vrm_view/tmp/Seed-san.pmx");
-        if !pmx_path.exists() {
-            eprintln!("テストPMXファイルが存在しません");
-            return;
-        }
+        let Some(pmx_path) = crate::test_util::try_test_file(crate::test_util::seed_san_pmx()) else { return; };
 
-        let pmx = crate::pmx::reader::read_pmx(pmx_path).expect("PMX読み込み失敗");
+        let pmx = crate::pmx::reader::read_pmx(&pmx_path).expect("PMX読み込み失敗");
         let pmx_dir = pmx_path.parent().unwrap();
         let ir = pmx_to_ir(&pmx, pmx_dir).expect("PMX→IrModel変換失敗");
 

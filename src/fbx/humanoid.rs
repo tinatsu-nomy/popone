@@ -26,7 +26,6 @@ impl RigType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
 pub enum HumanBone {
     Hips, Spine, Chest, UpperChest, Neck, Head,
     LeftShoulder, LeftUpperArm, LeftLowerArm, LeftHand,
@@ -78,7 +77,6 @@ impl HumanBone {
         }
     }
 
-    #[allow(dead_code)]
     pub fn as_vrm_name(&self) -> &str {
         match self {
             HumanBone::Hips => "hips",
@@ -175,8 +173,7 @@ pub fn detect_humanoid(bone_names: &[(usize, &str)]) -> HumanoidMapping {
         // Blender リグ: スペース/ドット/アンダースコアを正規化してマッチ
         let normalized = if rig_type == RigType::Blender {
             stripped
-                .replace(' ', "_")
-                .replace('.', "_")
+                .replace([' ', '.'], "_")
         } else {
             stripped
         };
