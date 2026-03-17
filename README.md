@@ -6,7 +6,7 @@ VRM / FBX / PMX / PMD / UnityPackage を 3D 表示します。
 
 ## ダウンロード
 
-最新リリース: **[popone_v0.2.2.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.2/popone_v0.2.2.exe)**
+最新リリース: **[popone-v0.2.3.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.3/popone-v0.2.3.exe)**
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
