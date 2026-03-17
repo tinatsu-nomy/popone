@@ -1,8 +1,10 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use eframe::egui;
 
 use super::app::{ConvertMessage, DisplaySettings, PendingOverlay, SidePanelTab, ViewerApp};
+use super::export_filter::build_filtered_ir;
 use super::gpu::{DrawMode, LightMode};
 
 /// 材質パネルからのテクスチャ割り当てリクエスト
@@ -508,8 +510,29 @@ pub fn execute_conversion(app: &mut ViewerApp) {
     }
     let loaded = app.loaded.as_ref().expect("loaded は has_model チェック済み");
 
-    // VRM/FBX 共通: ビューアの IrModel を直接使用（編集状態を反映）
-    let result = crate::convert_ir_to_pmx(&loaded.ir, &output_path, app.display.align_rigid_rotation);
+    // 可視材質フィルタリング
+    let filtered_ir;
+    let ir_ref = if app.export_visible_only {
+        let visible_mat_indices: HashSet<usize> = loaded.mat_cache.draw_indices.iter()
+            .filter(|(draw_idx, _)| {
+                app.material_visibility.get(*draw_idx).copied().unwrap_or(true)
+            })
+            .map(|(_, mat_idx)| *mat_idx)
+            .collect();
+
+        log::info!(
+            "表示材質のみ出力: {}/{} 材質を出力",
+            visible_mat_indices.len(),
+            loaded.ir.materials.len()
+        );
+        filtered_ir = build_filtered_ir(&loaded.ir, &visible_mat_indices);
+        &filtered_ir
+    } else {
+        &loaded.ir
+    };
+
+    // VRM/FBX 共通: IrModel を使用（編集状態を反映）
+    let result = crate::convert_ir_to_pmx(ir_ref, &output_path, app.display.align_rigid_rotation);
 
     if app.output_log {
         let debug_logs = viewer_log_path.as_ref()
@@ -517,7 +540,7 @@ pub fn execute_conversion(app: &mut ViewerApp) {
 
         write_convert_log(
             &log_path,
-            &loaded.ir,
+            ir_ref,
             result.as_ref(),
             debug_logs.as_deref(),
         );
@@ -1198,6 +1221,10 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             &mut app.display.align_rigid_rotation,
             "剛体回転をボーン方向に揃える",
         ).on_disabled_hover_text("物理設定がないか、PMX/PMD形式です");
+    });
+    ui.add_enabled_ui(has_model && !is_pmx_pmd, |ui| {
+        ui.checkbox(&mut app.export_visible_only, "表示材質のみ出力")
+            .on_hover_text("表示タブで非表示にした材質を出力から除外します");
     });
     ui.add_enabled_ui(!is_pmx_pmd, |ui| {
         ui.checkbox(&mut app.output_log, "ログ出力")

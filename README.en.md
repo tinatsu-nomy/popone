@@ -96,12 +96,13 @@ In the viewer, drag & drop files or use the "Open" button to load models.
 - **UI Restrictions** — PMX conversion button, normal smoothing, and custom normal clear are grayed out when PMX/PMD is loaded
 - **Comment Display** — PMX/PMD comments shown in model info panel
 
-### Model Append Improvements (v0.2.3)
+### v0.2.3 Improvements
 
+- **Visible-Only Material Export** — Option to exclude hidden materials from PMX output (default OFF). Consistently filters materials, meshes, textures, vertex morphs, and group morphs
 - **2-Pass Bone Merge** — Order-independent candidate collection + propagation loop for same-name bone unification. Fixes incorrect merge of descendants in different subtrees
 - **Pkg Texture Namespace** — Prevents texture name collisions when appending multiple UnityPackages (`{pkg_name}_pkg{seq}_{texture_name}` format). Also applied to auto-matched textures
 - **ASCII FBX Content Handling** — Content blocks preserved as strings, maintaining parser-layer completeness
-- **55 Tests** — Added bone merge, physics remap, morph vertex offset tests
+- **61 Tests** — Added bone merge, physics remap, morph vertex offset, export filter tests
 
 ### Code Quality & Performance (v0.2.2)
 
@@ -245,7 +246,7 @@ println!("Bones: {}, Vertices: {}", stats.bones, stats.vertices);
 cargo test
 ```
 
-55 tests (44 unit + 11 integration). Integration tests support environment variables for test data paths:
+61 tests (50 unit + 11 integration). Integration tests support environment variables for test data paths:
 
 ```bash
 # Test data root directory

@@ -345,6 +345,8 @@ pub struct ViewerApp {
     pub pmx_output_path: String,
     /// 材質ごとの表示ON/OFF
     pub material_visibility: Vec<bool>,
+    /// 表示材質のみPMX出力（デフォルト: false）
+    pub export_visible_only: bool,
     /// 材質フィルター文字列
     pub material_filter: String,
     /// ドラッグオーバー中フラグ
@@ -417,6 +419,7 @@ impl ViewerApp {
             morph_dirty: false,
             display: DisplaySettings::default(),
             material_visibility: Vec::new(),
+            export_visible_only: false,
             material_filter: String::new(),
             output_log: false,
             pmx_output_path: String::new(),
@@ -1169,6 +1172,7 @@ impl ViewerApp {
         self.morph_dirty = false;
         // 材質表示フラグ初期化（DrawCall数 = 材質数ではない場合があるのでdraws数に合わせる）
         self.material_visibility = vec![true; gpu_model.draws.len()];
+        self.export_visible_only = false;
         self.material_filter.clear();
         // カメラをモデルのバウンディングボックスにフィット
         let (bbox_min, bbox_max) = gpu_model.bbox();

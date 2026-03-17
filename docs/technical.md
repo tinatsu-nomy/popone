@@ -1,5 +1,7 @@
 # 技術詳細
 
+[English](technical.en.md)
+
 popone の内部実装に関する詳細ドキュメント。
 
 ## 座標変換
@@ -382,6 +384,68 @@ Content: {
 - **手動割当テクスチャ**: `pkg_textures` Vec への `extend` 時にプレフィックスを付与。`pkg_assignments` HashMap はプレフィックス付き名前をキーとして自然に一意化
 - **パスセパレータ回避**: プレフィックスに `/` を使わない（`IrTexture.filename` が PMX export のファイルパスに使われるため）
 
+## 表示材質のみ出力（v0.2.3）
+
+ビューアの PMX 変換時に、表示タブで非表示にした材質を出力から除外するオプション機能。`export_filter.rs` モジュールで実装。
+
+### 設計方針
+
+- **ビューア固有**: フィルタロジックは `viewer/export_filter.rs` に配置。コア変換ロジック（`pmx/build.rs`, `lib.rs`）には一切変更なし
+- **IrModel 手組み構築**: `IrModel`/`IrMesh`/`IrPhysics` に `Clone` がないため、フィルタ済み IR をフィールド単位で新規構築
+- **draw→material 変換**: `material_visibility` は DrawCall 単位（GPU 描画コール単位）で管理されているため、`mat_cache.draw_indices` を経由して `material_index` の `HashSet` に変換
+
+### 処理フロー（`build_filtered_ir`）
+
+```
+Phase 1: 材質リマップ（old_mat_idx → new_mat_idx の HashMap 構築）
+Phase 2: メッシュフィルタ + 頂点リマップテーブル構築
+         old_global_vtx_idx → new_global_vtx_idx（除外メッシュの頂点は None）
+Phase 3: モーフの有効性判定（再帰的収束ループ）
+         頂点モーフ: リマップ後に1エントリ以上残れば有効
+         グループモーフ: 子モーフが1つ以上有効なら有効（反復判定）
+Phase 4: morph_remap 構築 + モーフ構築（頂点/グループ両対応）
+Phase 5: テクスチャ pruning + texture_index リマップ
+Phase 6: IrModel 構築（ボーン・物理はそのままコピー）
+```
+
+### モーフの再帰的有効性判定
+
+頂点モーフの除外によりグループモーフの子が消失する場合がある。ネストしたグループモーフ（`outer → inner → vertex`）に対応するため、収束ループで判定:
+
+```rust
+// Phase 3: morph_alive 配列を収束するまで反復
+loop {
+    let mut changed = false;
+    for (i, morph) in ir.morphs.iter().enumerate() {
+        if morph_alive[i] { continue; }
+        if let IrMorphKind::Group(goffs) = &morph.kind {
+            if goffs.iter().any(|&(child, _)| morph_alive[child]) {
+                morph_alive[i] = true;
+                changed = true;
+            }
+        }
+    }
+    if !changed { break; }
+}
+```
+
+最悪 O(depth) 回で収束する（各反復で少なくとも 1 候補が確定するため）。
+
+### テクスチャ pruning
+
+フィルタ後の材質が参照する `texture_index` / `shade_texture_index` / `outline_width_texture_index` を収集し、使用されているテクスチャのみ残す。材質の各 index をリマップ。全材質非表示の場合はテクスチャも空にする。
+
+### 仕様
+
+| 条件 | 動作 |
+|------|------|
+| デフォルト | OFF（従来通り全材質出力） |
+| 全材質非表示 | 空 PMX を出力 + warning ログ |
+| 空になった頂点モーフ | 削除 + warning ログ |
+| 空になったグループモーフ | 削除 + warning ログ |
+| モデルロード時 | `export_visible_only` を `false` にリセット |
+| PMX/PMD ロード時 | UI でチェックボックスが無効化 |
+
 ## ソースファイル構成
 
 ```
@@ -440,6 +504,7 @@ src/
     ├── camera.rs        オービットカメラ
     ├── grid.rs          グリッド床
     ├── ui.rs            情報パネル・モーフスライダ・変換ボタン・PMX/PMD グレーアウト
+    ├── export_filter.rs 表示材質のみ出力フィルタ（IrModel → フィルタ済み IrModel）
     └── animation.rs     アニメーション再生・リターゲティング（VRMA/glTF/FBX 対応）
 ```
 
