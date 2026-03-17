@@ -88,31 +88,49 @@ impl IrModel {
 
         let other_bone_count = other.bones.len();
         // リマップテーブル: other 側の各ボーンが self 側のどのIndexに対応するか
-        let mut bone_remap: Vec<usize> = Vec::with_capacity(other_bone_count);
+        let mut bone_remap: Vec<usize> = vec![usize::MAX; other_bone_count];
         // other 側のどのボーンが新規追加されたか
-        let mut is_new_bone: Vec<bool> = Vec::with_capacity(other_bone_count);
+        let mut is_new_bone: Vec<bool> = vec![true; other_bone_count];
         let mut merged_count: usize = 0;
 
-        for (_other_idx, other_bone) in other.bones.iter().enumerate() {
+        // パス1: 同名+同親名の候補を暫定マーク（順序非依存）
+        // candidate[i] = Some(self_idx) なら統合候補
+        let mut candidate: Vec<Option<usize>> = vec![None; other_bone_count];
+        for (i, other_bone) in other.bones.iter().enumerate() {
             if let Some(&self_idx) = bone_name_to_self.get(other_bone.name.as_str()) {
-                // 同名ボーンが存在 → 親名も一致する場合のみ統合
                 let self_parent_name = self.bones[self_idx].parent
                     .map(|p| self.bones[p].name.as_str());
                 let other_parent_name = other_bone.parent
                     .map(|p| other.bones[p].name.as_str());
                 if self_parent_name == other_parent_name {
-                    bone_remap.push(self_idx);
-                    is_new_bone.push(false);
-                    merged_count += 1;
-                } else {
-                    // 親が異なる → 別ボーンとして追加
-                    bone_remap.push(usize::MAX);
-                    is_new_bone.push(true);
+                    candidate[i] = Some(self_idx);
                 }
-            } else {
-                // 新規ボーン → 仮のIndexを入れる（後の割り当てパスで正確な値に修正）
-                bone_remap.push(usize::MAX);
-                is_new_bone.push(true);
+            }
+        }
+
+        // パス2: 親の統合状態を伝播して最終決定（順序非依存）
+        // 候補ボーンの親が候補でない場合は統合を取り消す（異なる部分木の子孫が誤統合されるのを防ぐ）
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for i in 0..other_bone_count {
+                if candidate[i].is_none() { continue; }
+                if let Some(parent_idx) = other.bones[i].parent {
+                    // 親が候補でない → この子も統合不可
+                    if candidate[parent_idx].is_none() {
+                        candidate[i] = None;
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        // 候補を確定
+        for i in 0..other_bone_count {
+            if let Some(self_idx) = candidate[i] {
+                bone_remap[i] = self_idx;
+                is_new_bone[i] = false;
+                merged_count += 1;
             }
         }
 

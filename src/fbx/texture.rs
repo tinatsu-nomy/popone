@@ -49,7 +49,8 @@ pub fn extract_texture_for_material(
 
     let tex_name = tex_obj.name.clone();
 
-    // Try embedded Video content first
+    // Try embedded Video content first (binary FBX only)
+    // ASCII FBX の Content はテキスト表現のため画像デコードできない → 外部ファイルフォールバックに委ねる
     if let Some(video) = scene.video_for_texture(tex_obj.id) {
         if let Some(content) = video.node.child("Content") {
             if let Some(data) = content.properties.first().and_then(|p| p.as_binary()) {

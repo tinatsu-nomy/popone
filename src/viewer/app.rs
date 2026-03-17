@@ -2095,16 +2095,38 @@ impl ViewerApp {
                     .map(|l| l.ir.materials.len())
                     .unwrap_or(0);
                 let appended_before = self.loaded.as_ref().map(|l| l.appended_paths.len()).unwrap_or(0);
+                let tex_count_before = self.loaded.as_ref().map(|l| l.ir.textures.len()).unwrap_or(0);
                 self.finish_append_with_pkg_name(other_ir, source_path, pkg_model_name);
                 let appended_after = self.loaded.as_ref().map(|l| l.appended_paths.len()).unwrap_or(0);
                 // アペンド成功後のみpkgテクスチャを蓄積（ロールバック時はスキップ）
-                if appended_after > appended_before && !pkg_textures_to_add.is_empty() {
-                    if let Some(ref mut existing) = self.tex.pkg_textures {
-                        existing.extend(pkg_textures_to_add);
-                    } else {
-                        self.tex.pkg_textures = Some(pkg_textures_to_add);
+                if appended_after > appended_before {
+                    // 複数パッケージ間のテクスチャ名衝突を防止するためプレフィックス付与
+                    // ファイル名 + append連番で一意化（同名packageの別ディレクトリ追加にも対応）
+                    // パスセパレータを含まないよう `_` で結合（PMX export で IrTexture.filename に使われるため）
+                    let pkg_stem = source_path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("pkg");
+                    let pkg_prefix = format!("{}_pkg{}", pkg_stem, appended_after);
+
+                    // auto-matched テクスチャ（embed_textures_into_ir 経由で IrModel に入ったもの）にもプレフィックス付与
+                    if let Some(ref mut loaded) = self.loaded {
+                        for tex in loaded.ir.textures[tex_count_before..].iter_mut() {
+                            tex.filename = format!("{}_{}", pkg_prefix, tex.filename);
+                        }
                     }
-                    self.rebuild_pkg_thumb_cache();
+
+                    // 手動割当用の pkg_textures にもプレフィックス付与
+                    if !pkg_textures_to_add.is_empty() {
+                        for (name, _) in &mut pkg_textures_to_add {
+                            *name = format!("{}_{}", pkg_prefix, name);
+                        }
+                        if let Some(ref mut existing) = self.tex.pkg_textures {
+                            existing.extend(pkg_textures_to_add);
+                        } else {
+                            self.tex.pkg_textures = Some(pkg_textures_to_add);
+                        }
+                        self.rebuild_pkg_thumb_cache();
+                    }
                 }
                 // 未割当材質がある場合、手動割当ダイアログを開く（リロード中は抑制）
                 if !pkg_unmatched.is_empty() && self.tex.pkg_textures.is_some() && !self.suppress_tex_match {
@@ -2838,10 +2860,10 @@ impl eframe::App for ViewerApp {
                 }
 
                 // モデル読み込み済みの場合のみ「追加」ボタンを表示
-                if self.loaded.is_some() {
-                    if bar.button("追加").on_hover_text("モデルを追加読み込み（Shift+D&Dでも可）").clicked() {
-                        self.open_append_dialog();
-                    }
+                if self.loaded.is_some()
+                    && bar.button("追加").on_hover_text("モデルを追加読み込み（Shift+D&Dでも可）").clicked()
+                {
+                    self.open_append_dialog();
                 }
 
                 if bar.button("ログ").clicked() {

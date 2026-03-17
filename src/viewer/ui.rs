@@ -876,8 +876,8 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
         // DrawCall Index → グループIndex
         let mut draw_to_group: Vec<usize> = vec![0; num_draws];
         for (gi, (_, start, count)) in groups.iter().enumerate() {
-            for di in *start..(*start + *count).min(num_draws) {
-                draw_to_group[di] = gi;
+            for item in draw_to_group.iter_mut().take((*start + *count).min(num_draws)).skip(*start) {
+                *item = gi;
             }
         }
         // draw_info もクローン（CollapsingHeader クロージャ内で使うため）
@@ -896,7 +896,7 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
             if group_draws.is_empty() { continue; }
             let id = ui.id().with(("mat_group", gi));
             egui::CollapsingHeader::new(
-                egui::RichText::new(&*group_name)
+                egui::RichText::new(group_name)
                     .color(egui::Color32::from_rgb(0x60, 0xA0, 0xFF))
                     .strong()
             )

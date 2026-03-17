@@ -348,8 +348,8 @@ impl<'a> AsciiParser<'a> {
         let after_colon = line[colon_pos + 1..].trim();
 
         // 末尾の `{` を検出（同一行、または次行に `{` のみの場合）
-        let (value_part, has_block) = if after_colon.ends_with('{') {
-            (after_colon[..after_colon.len() - 1].trim(), true)
+        let (value_part, has_block) = if let Some(stripped) = after_colon.strip_suffix('{') {
+            (stripped.trim(), true)
         } else {
             // 次行が `{` のみの場合
             let next_is_brace = self.pos < self.lines.len()
@@ -387,21 +387,42 @@ impl<'a> AsciiParser<'a> {
         // 子ノード解析
         let mut children = Vec::new();
         if has_block {
-            loop {
-                self.skip_empty_and_comments();
-                if self.pos >= self.lines.len() { break; }
-                if self.lines[self.pos].trim() == "}" {
-                    self.pos += 1;
-                    break;
-                }
-                match self.parse_node()? {
-                    Some(child) => children.push(child),
-                    None => {
-                        // parse_node が None を返した = `}` を検出
-                        if self.pos < self.lines.len() && self.lines[self.pos].trim() == "}" {
-                            self.pos += 1;
-                        }
+            // Content ノード: ASCII FBX の埋め込みデータ（base64等）を特別処理
+            // 行指向パーサーでは通常の子ノードとして解析できないため、`}` まで生データとして収集し
+            // FbxProperty::String として保持する（上位層がデコード方法を決定できるよう）
+            if name == "Content" {
+                let mut raw_lines: Vec<&str> = Vec::new();
+                while self.pos < self.lines.len() {
+                    let l = self.lines[self.pos].trim();
+                    if l == "}" {
+                        self.pos += 1;
                         break;
+                    }
+                    raw_lines.push(l);
+                    self.pos += 1;
+                }
+                if !raw_lines.is_empty() {
+                    let joined = raw_lines.join("");
+                    properties = vec![FbxProperty::String(joined)];
+                    log::debug!("ASCII FBX: Content ブロック（{}行）を文字列として保持", raw_lines.len());
+                }
+            } else {
+                loop {
+                    self.skip_empty_and_comments();
+                    if self.pos >= self.lines.len() { break; }
+                    if self.lines[self.pos].trim() == "}" {
+                        self.pos += 1;
+                        break;
+                    }
+                    match self.parse_node()? {
+                        Some(child) => children.push(child),
+                        None => {
+                            // parse_node が None を返した = `}` を検出
+                            if self.pos < self.lines.len() && self.lines[self.pos].trim() == "}" {
+                                self.pos += 1;
+                            }
+                            break;
+                        }
                     }
                 }
             }
@@ -565,7 +586,7 @@ fn ascii_parse_scalar(s: &str) -> FbxProperty {
 }
 
 /// P ノードの properties[4+] を型ヒント (properties[1]) に基づいて修正
-fn ascii_fixup_p_node(properties: &mut Vec<FbxProperty>) {
+fn ascii_fixup_p_node(properties: &mut [FbxProperty]) {
     if properties.len() < 5 { return; }
     let type_hint = match &properties[1] {
         FbxProperty::String(s) => s.as_str(),

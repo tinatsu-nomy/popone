@@ -96,6 +96,13 @@ In the viewer, drag & drop files or use the "Open" button to load models.
 - **UI Restrictions** — PMX conversion button, normal smoothing, and custom normal clear are grayed out when PMX/PMD is loaded
 - **Comment Display** — PMX/PMD comments shown in model info panel
 
+### Model Append Improvements (v0.2.3)
+
+- **2-Pass Bone Merge** — Order-independent candidate collection + propagation loop for same-name bone unification. Fixes incorrect merge of descendants in different subtrees
+- **Pkg Texture Namespace** — Prevents texture name collisions when appending multiple UnityPackages (`{pkg_name}_pkg{seq}_{texture_name}` format). Also applied to auto-matched textures
+- **ASCII FBX Content Handling** — Content blocks preserved as strings, maintaining parser-layer completeness
+- **55 Tests** — Added bone merge, physics remap, morph vertex offset tests
+
 ### Code Quality & Performance (v0.2.2)
 
 - **Performance** — Eliminated per-frame vertex buffer allocation, HashMap O(1) bone lookup, GPU visualization dirty flags
@@ -105,7 +112,8 @@ In the viewer, drag & drop files or use the "Open" button to load models.
 
 ### FBX Support
 
-- Custom binary FBX parser (scene graph, coordinate system conversion, PreRotation, UnitScaleFactor)
+- Custom binary / ASCII FBX parser (scene graph, coordinate system conversion, PreRotation, UnitScaleFactor)
+- ASCII FBX: Content blocks (embedded textures) preserved as strings; external file fallback for texture recovery
 - Skin weights (up to 4 bones, normalized), blend shapes, UV mapping
 - Humanoid rig auto-detection (Mixamo / 3ds Max Biped / Maya HumanIK / VRoid / Blender)
 - Zero-normal auto-repair, embedded/external texture support
@@ -237,7 +245,7 @@ println!("Bones: {}, Vertices: {}", stats.bones, stats.vertices);
 cargo test
 ```
 
-51 tests (40 unit + 11 integration). Integration tests support environment variables for test data paths:
+55 tests (44 unit + 11 integration). Integration tests support environment variables for test data paths:
 
 ```bash
 # Test data root directory

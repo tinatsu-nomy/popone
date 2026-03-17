@@ -106,8 +106,14 @@ pub fn extract_ir_model_from_fbx_with_options(
             let source_tex_name = texture::extract_texture_name_for_material(&scene, mat_obj.id);
 
             // PMX 材質パラメータ
-            // Opacity=0 + TransparencyFactor=1 の冗長指定は Unity/Blender 等の既知パターン → 1.0 にフォールバック
-            let opacity = if props.opacity_both_zero { 1.0 } else { props.opacity.clamp(0.0, 1.0) };
+            // Opacity=0 + TransparencyFactor=1 の冗長指定は Unity/Blender FBX Exporter の既知パターン。
+            // テクスチャ有無に関係なく全材質にデフォルト値として出力されるため、無条件でフォールバック
+            let opacity = if props.opacity_both_zero {
+                log::debug!("材質 '{}': Opacity=0+TransparencyFactor=1 → 1.0 にフォールバック", mat_obj.name);
+                1.0
+            } else {
+                props.opacity.clamp(0.0, 1.0)
+            };
             let d = Vec3::new(diffuse[0], diffuse[1], diffuse[2]);
             let mut mat = IrMaterial {
                 name: mat_obj.name.clone(),
