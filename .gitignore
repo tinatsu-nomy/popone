@@ -1,3 +1,10 @@
 /target
 Cargo.lock
 *.log
+
+# ビルド生成物
+*.exe
+*.dll
+*.so
+*.dylib
+*.pdb
