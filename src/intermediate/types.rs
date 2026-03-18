@@ -33,6 +33,20 @@ impl SourceFormat {
     }
 }
 
+/// Aスタンス変換の結果
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AStanceResult {
+    /// 未適用（チェックボックスOFF、または非対応形式）
+    #[default]
+    NotRequested,
+    /// 適用成功（補正した腕の数: 通常2）
+    Applied(usize),
+    /// 既にAスタンスに近いためスキップ
+    AlreadyAStance,
+    /// 腕ボーンが見つからず変換失敗
+    NotFound,
+}
+
 /// 中間表現モデル
 #[derive(Debug, Default)]
 pub struct IrModel {
@@ -52,6 +66,8 @@ pub struct IrModel {
     pub rig_type: Option<String>,
     /// マッピングされたヒューマノイドボーン数
     pub humanoid_bone_count: usize,
+    /// Aスタンス変換の結果
+    pub astance_result: AStanceResult,
 }
 
 impl IrModel {
@@ -256,6 +272,22 @@ impl IrModel {
         self.humanoid_bone_count = self.bones.iter()
             .filter(|b| b.vrm_bone_name.is_some())
             .count();
+        // Aスタンス変換結果の統合
+        // NotRequested は透過、Applied は NotFound より優先（小物アペンド対策）
+        self.astance_result = match (self.astance_result, other.astance_result) {
+            // NotRequested は無視して相手の値を採用
+            (AStanceResult::NotRequested, other) => other,
+            (host, AStanceResult::NotRequested) => host,
+            // Applied 同士は合算
+            (AStanceResult::Applied(a), AStanceResult::Applied(b)) => AStanceResult::Applied(a + b),
+            // Applied + NotFound/AlreadyAStance → Applied を優先
+            // （メインモデルが変換済みなら、小物の NotFound は問題なし）
+            (AStanceResult::Applied(n), _) | (_, AStanceResult::Applied(n)) => AStanceResult::Applied(n),
+            // 両方 NotFound
+            (AStanceResult::NotFound, AStanceResult::NotFound) => AStanceResult::NotFound,
+            // AlreadyAStance + NotFound → AlreadyAStance を優先
+            (AStanceResult::AlreadyAStance, _) | (_, AStanceResult::AlreadyAStance) => AStanceResult::AlreadyAStance,
+        };
 
         (merged_count, new_bone_count)
     }

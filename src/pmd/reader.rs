@@ -20,9 +20,20 @@ fn read_vec3<R: Read>(r: &mut R) -> Result<Vec3> {
     Ok(Vec3::new(x, y, z))
 }
 
+/// バイト列から PMD を読み込む（オンメモリキャッシュ用）
+pub fn read_pmd_from_data(data: &[u8]) -> Result<PmdModel> {
+    let cursor = std::io::Cursor::new(data);
+    let mut r = std::io::BufReader::new(cursor);
+    read_pmd_inner(&mut r)
+}
+
 pub fn read_pmd(path: &std::path::Path) -> Result<PmdModel> {
     let file = std::fs::File::open(path)?;
     let mut r = std::io::BufReader::new(file);
+    read_pmd_inner(&mut r)
+}
+
+fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
 
     // ヘッダ: "Pmd" + version(float) + name(20) + comment(256)
     let mut magic = [0u8; 3];

@@ -384,6 +384,280 @@ Content: {
 - **手動割当テクスチャ**: `pkg_textures` Vec への `extend` 時にプレフィックスを付与。`pkg_assignments` HashMap はプレフィックス付き名前をキーとして自然に一意化
 - **パスセパレータ回避**: プレフィックスに `/` を使わない（`IrTexture.filename` が PMX export のファイルパスに使われるため）
 
+## アーカイブD&Dリロード対応（v0.2.4）
+
+### ReloadableSource enum
+
+モデルの読み込み元を追跡する enum。一時ファイルのリロード問題を解決する。
+
+| バリアント | 説明 |
+|-----------|------|
+| `File(PathBuf)` | 通常のファイルパス。リロード時はファイルを再読み込み |
+| `Snapshot { original_path, main_bytes: Arc<[u8]>, aux_files }` | 一時ファイルからのスナップショット。リロード時はメモリから復元 |
+
+### 一時パス検出
+
+`is_temp_path()` で `std::env::temp_dir()` 配下かどうかを2段階で判定:
+
+1. **canonicalize ベース**（ファイル存在時）: `canonicalize()` で正規化し、シンボリックリンクやドライブレター大小文字の差異を吸収
+2. **文字列ベースフォールバック**（ファイル消失後）: `to_string_lossy().to_lowercase()` で大小文字を正規化し、`MAIN_SEPARATOR` で区切り文字境界を保証して `starts_with` 比較（`TempBackup` 等の誤検出を防止）
+
+フォールバックは、zipアーカイブからの D&D 時に一時ファイルが即座に削除されるケースに対応するために必要。
+
+### 一時パスの即座ロード
+
+`process_drag_and_drop()` 内で `is_temp_path()` が true を返した場合、`pending_load`/`pending_append` を経由せず `load_file()`/`append_model()` を直接呼び出す。通常パスの2フレーム遅延（プログレスオーバーレイ表示用）の間に一時ファイルが消失する問題（`os error 3`）を回避する。
+
+### D&D 先読みキャッシュ（PreloadedData）
+
+`process_drag_and_drop()` で一時パスを検出した時点で、モデル本体と隣接ファイルのバイト列を `PreloadedData` にキャッシュし、以降のロードチェーン全体でディスクアクセスを排除する。
+
+```rust
+/// D&D temp ファイルの先読みデータ
+pub struct PreloadedData {
+    path: PathBuf,          // 元の一時ファイルパス
+    main_bytes: Arc<[u8]>,  // モデル本体のバイト列
+    aux_files: HashMap<PathBuf, Arc<[u8]>>,  // 隣接画像ファイル（相対パスキー）
+}
+```
+
+#### ヘルパーメソッド
+
+| メソッド | 説明 |
+|---------|------|
+| `read_or_preloaded(path)` | `preloaded.main_bytes` または `aux_files` にマッチすればキャッシュから返す。マッチしなければ `std::fs::read` にフォールバック |
+| `take_or_collect_aux(path)` | `preloaded.aux_files` にマッチすれば clone で返す。マッチしなければ `collect_image_files_recursive` でディスク収集 |
+
+#### データ受け渡しフロー
+
+```
+process_drag_and_drop:
+  1. std::fs::read(&model_path) → PreloadedData.main_bytes
+  2. collect_image_files_recursive() → PreloadedData.aux_files
+  3. self.preloaded = Some(PreloadedData { ... })
+  4. load_file() / append_model() を呼び出し
+  5. PendingFbxChoice 未設定なら self.preloaded = None でクリア
+
+FBX 選択ダイアログ経由:
+  load_file() → PendingFbxChoice { preloaded: self.preloaded.take() }
+  → execute_fbx_choice() → self.preloaded = choice.preloaded で復元
+  → try_load_fbx() → read_or_preloaded() でキャッシュ使用
+  → self.preloaded = None でクリア
+```
+
+#### 各形式での使用箇所
+
+| メソッド | main file | aux files |
+|---------|-----------|-----------|
+| `try_load_fbx` | `read_or_preloaded` | `take_or_collect_aux` → `ReloadableSource::Snapshot` |
+| `try_load_vrm` | `read_or_preloaded` | 埋め込み（外部参照なし） |
+| `try_load_pmx` | `read_or_preloaded` | `preloaded_aux` 優先 → `std::fs::read` フォールバック |
+| `try_load_pmd` | `read_or_preloaded` | `preloaded_aux` 優先 → `std::fs::read` フォールバック |
+| `try_load_unitypackage` | `read_or_preloaded` | アーカイブ内に含まれる |
+| `try_load_fbx_animation` | `read_or_preloaded` → `load_fbx_animation_from_data` | N/A |
+| `append_model` (FBX/PMX/PMD/VRM) | `read_or_preloaded` | N/A（IrModel 構築のみ） |
+
+### 補助ファイルキャッシュ
+
+| 形式 | aux_files の内容 |
+|------|----------------|
+| VRM / GLB | 空（テクスチャはバイナリ埋め込み） |
+| FBX | 隣接画像ファイルを再帰収集（サブディレクトリ構造保持） |
+| PMX | `pmx.textures` の各パスからテクスチャファイルを収集 |
+| PMD | テクスチャ + 同名 `.txt`（材質名テキスト） |
+
+FBX の外部テクスチャは `collect_image_files_recursive()` で親ディレクトリ以下を再帰走査し、`strip_prefix(base_dir)` で相対パスをキーに保持。リロード時は `create_dir_all` でサブディレクトリ構造を復元してから FBX パーサーに渡す。
+
+### TextureSource enum
+
+テクスチャ割り当ての読み込み元を追跡する。`TextureState.assignments` の値型。
+
+| バリアント | 説明 |
+|-----------|------|
+| `File(PathBuf)` | 通常のファイルパス |
+| `Cached { original_name, data: Arc<[u8]>, is_psd }` | 一時ファイルからのキャッシュ。`Arc<[u8]>` で clone コスト削減 |
+
+### reload_from_source
+
+`load_file()` の UI 分岐（FBX メッシュ+アニメ選択ダイアログ等）を回避し、`ReloadableSource` から直接 `try_load_*` を呼ぶ。`Result` を返し、失敗時は退避した状態を復元して早期リターン。
+
+### テクスチャD&Dプレビューキャッシュ
+
+ZIP 内テクスチャを D&D した際、一時ファイルが消失してもテクスチャ割り当てが正しく記録されるよう、`PendingTexPreview` にデータをキャッシュする。
+
+| フィールド | 型 | 説明 |
+|-----------|------|------|
+| `cached_data` | `Vec<u8>` | ファイル読み込み時にキャッシュしたバイトデータ |
+| `is_psd` | `bool` | 拡張子判定結果（読み込み時に確定） |
+| `was_temp` | `bool` | 一時パス判定結果（`is_temp_path` を `std::fs::read` **前**に評価して確定） |
+
+#### 処理フロー
+
+```
+open_texture_preview:
+  1. was_temp = is_temp_path(&path)    ← ファイル存在時に判定（canonicalize 前提）
+  2. data = std::fs::read(&path)       ← バイトデータ読み込み
+  3. upload_texture_from_bytes(&data)   ← GPU テクスチャ作成
+  4. PendingTexPreview { cached_data: data, is_psd, was_temp, ... }
+
+apply_tex_preview:
+  1. tex_data = preview.cached_data.clone()  ← キャッシュから取得（再読み込みなし）
+  2. is_psd = preview.is_psd                 ← キャッシュから取得
+  3. cached_data = if preview.was_temp { Some(...) } else { None }
+  4. TextureSource::Cached or File に分岐
+```
+
+**重要**: `is_temp_path` の評価は `std::fs::read` より前に行う。`canonicalize()` がファイル存在を前提とするため、読み込み後にファイルが消えると判定が失敗するレースを防ぐ。
+
+### UnityPackage アーカイブスナップショット
+
+ZIP 内 .unitypackage を D&D した際、アーカイブデータを `Arc<[u8]>` としてスナップショット保持する。
+
+#### 構造体フィールド
+
+| 構造体 | 追加フィールド |
+|--------|--------------|
+| `PendingUnityPackage` | `archive_snapshot: Option<Arc<[u8]>>` |
+| `PendingPkgModelLoad` | `archive_snapshot: Option<Arc<[u8]>>` |
+| `PendingFbxChoicePkg` | `archive_snapshot: Option<Arc<[u8]>>` |
+
+#### snapshot 生成フロー
+
+```
+try_load_unitypackage:
+  1. is_temp = is_temp_path(path)      ← std::fs::read 前に判定
+  2. archive_data = std::fs::read(path)
+  3. assets = extract_all_assets(&archive_data)
+  4. snapshot = if is_temp { Some(Arc::from(archive_data)) } else { None }
+  5. PendingPkgModelLoad / PendingUnityPackage に snapshot を格納
+```
+
+#### snapshot 伝播経路
+
+```
+try_load_unitypackage / try_load_unitypackage_for_append
+  → PendingUnityPackage / PendingPkgModelLoad に格納
+    → ui.rs show_fbx_select_dialog で PendingPkgModelLoad に引き継ぎ
+      → process_pending_tasks で load_fbx_from_assets / load_vrm_from_assets に渡す
+        → ReloadableSource::Snapshot を構築して finish_load に渡す
+          → LoadedModel.source に格納
+            → reload_current 時に reload_unitypackage(&source, ...) で Snapshot から復元
+```
+
+#### reload_unitypackage / reload_append_unitypackage の変更
+
+シグネチャを `path: &Path` から `source: &ReloadableSource` に変更。Snapshot バリアントの場合は `main_bytes.to_vec()` でアーカイブデータを復元し、File バリアントの場合は従来通り `std::fs::read` で読み込む。
+
+### .gltf の除外
+
+`.gltf` ファイルは外部バッファ参照（`.bin`・画像ファイル）を持つため、スナップショット化の対象外。`gltf::import_slice` では外部URI を解決できないため、通常の `load_glb(path)` パスを使用。
+
+## リロード時テクスチャ正規化（v0.2.4）
+
+### reload_unitypackage のテクスチャ復元
+
+UnityPackage リロード時に手動割当テクスチャを復元する際、正規パス（`assign_texture_source_to_material`）と同じ PSD→PNG 変換・MIME タイプ設定を適用する。
+
+| テクスチャ形式 | 処理 | ir_filename | mime_type |
+|-------------|------|-------------|-----------|
+| PSD | `psd_to_png()` で PNG に変換 | `{basename}.png` | `image/png` |
+| PNG | そのまま | 元のファイル名 | `image/png` |
+| TGA | そのまま | 元のファイル名 | `image/x-tga` |
+| BMP | そのまま | 元のファイル名 | `image/bmp` |
+| その他 | そのまま | 元のファイル名 | `image/jpeg` |
+
+PSD→PNG 変換失敗時は `continue` で当該材質への割当てをスキップ（通常パスの失敗時中断と一貫）。
+
+`name_to_ir: HashMap<String, usize>` キャッシュにより、同一テクスチャ名の重複 IrTexture 追加を防止。パッケージ内テクスチャ名は一意が保証されるため、`tex_name` 単独キーで十分。
+
+### assign_texture_source_to_material の IrTexture 重複排除
+
+手動テクスチャ割り当て時、`filename + data.len() + data` の完全一致で既存 IrTexture を検索し、存在すればインデックスを再利用する。
+
+```rust
+let tex_idx = loaded.ir.textures.iter()
+    .position(|t| t.filename == ir_filename
+        && t.data.len() == ir_data.len()
+        && t.data == ir_data)
+    .unwrap_or_else(|| { /* 新規追加 */ });
+```
+
+- `data.len()` を先にチェックすることで、サイズが異なるテクスチャは O(1) でスキップ
+- 外部ファイルシステムからの割り当てでは同名別内容が起こりうるため、`filename` 単独ではなく `data` も比較
+- pkg 復元パスでは `tex_name` キーのキャッシュで重複排除（パッケージ内テクスチャ名の一意性が保証されるため）
+
+## シェーダー対応PMX材質変換（v0.2.4）
+
+### select_toon()
+
+MToon の shade_color と diffuse の輝度比に基づいてトゥーンテクスチャを選択する。Rec. 709 の輝度係数 `(0.2126, 0.7152, 0.0722)` を使用。
+
+| shade/diffuse 輝度比 | トゥーン | 説明 |
+|---------------------|---------|------|
+| < 0.25 | Shared(0) = toon01 | 硬い影（shade << diffuse） |
+| 0.25–0.45 | Shared(1) = toon02 | やや硬い |
+| 0.45–0.65 | Shared(2) = toon03 | 中間 |
+| 0.65–0.85 | Shared(4) = toon05 | 柔らかめ |
+| ≥ 0.85 | Shared(6) = toon07 | 最も柔らかい（shade ≈ diffuse） |
+
+非 MToon は `Shared(0)` を維持（回帰防止）。shade_color が存在しない場合は `Shared(2)`（中間）。
+
+### MToon ambient/specular 補正
+
+変換段階（`convert/material.rs`）でのみ適用。抽出段階（`vrm/extract.rs`）はソース準拠の値を維持。
+
+| パラメータ | MToon | 非 MToon |
+|-----------|-------|---------|
+| ambient | `shade_color * 0.5`（shade_color 無しなら `diffuse * 0.4`） | 変更なし |
+| specular | `Vec3::ZERO` | 変更なし |
+| specular_power | `0.0` | 変更なし |
+
+## Aスタンス変換結果の管理（v0.2.4）
+
+### AStanceResult enum
+
+Aスタンス変換の結果を型安全に管理する enum。`IrModel.astance_result` に格納される。
+
+| バリアント | 説明 |
+|-----------|------|
+| `NotRequested` | 変換未要求（チェックボックスOFF、または非対応形式） |
+| `Applied(usize)` | 変換成功。引数は補正した腕の数（通常2） |
+| `AlreadyAStance` | 既にAスタンスに近いためスキップ |
+| `NotFound` | 腕ボーンが見つからず変換失敗 |
+
+### 判定ロジック
+
+`compute_astance_corrections()` が以下の優先度で結果を決定:
+
+1. **腕ボーン不在**: `has_arms` チェック（leftUpperArm/leftLowerArm または rightUpperArm/rightLowerArm のペアが 1 つも存在しない）→ `NotFound`
+2. **腕方向が異常**: 水平成分ゼロ（真上/真下向き）、回転軸計算不能 → `skipped_count` に加算
+3. **既にAスタンス**: 現在角度が 25° 超かつ下向き → `skipped_count` に加算
+4. **正常変換**: 30° 回転補正を適用 → `Applied(n)`
+5. **結果決定**: corrections > 0 → `Applied(n)`, skipped > 0 → `AlreadyAStance`, それ以外 → `NotFound`
+
+### IrModel::merge() での統合
+
+追加読み込み（アペンド）時に `IrModel::merge()` で `astance_result` を統合する:
+
+| ホスト | 追加 | 結果 | 理由 |
+|--------|------|------|------|
+| `NotRequested` | 任意 | 追加側の値 | ホストは未要求なので追加側に委任 |
+| `Applied(a)` | `Applied(b)` | `Applied(a+b)` | 合算 |
+| `Applied(n)` | `NotFound` | `Applied(n)` | メインモデルが変換済みなら小物の失敗は無視 |
+| `Applied(n)` | `AlreadyAStance` | `Applied(n)` | 変換済み優先 |
+| `AlreadyAStance` | `NotFound` | `AlreadyAStance` | AlreadyAStance 優先 |
+| `NotFound` | `NotFound` | `NotFound` | 両方失敗 |
+
+### ビューアでの警告表示
+
+PMX 変換成功時、`ir_ref.astance_result` を参照:
+
+- `NotFound` → `ConvertMessage::Warning`（赤文字オーバーレイ）: 「腕ボーンが見つからず変換できませんでした」
+- `AlreadyAStance` → `ConvertMessage::Success` に注記付加: 「既にAスタンスに近いためスキップしました」
+- `Applied(_)` / `NotRequested` → 通常の成功メッセージ
+
+`ConvertResult::Warning` は `Failure` と同じ赤文字で表示されるが、変換自体は成功している点で `Failure` と区別される。
+
 ## 表示材質のみ出力（v0.2.3）
 
 ビューアの PMX 変換時に、表示タブで非表示にした材質を出力から除外するオプション機能。`export_filter.rs` モジュールで実装。

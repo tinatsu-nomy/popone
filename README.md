@@ -6,7 +6,7 @@ VRM / FBX / PMX / PMD / UnityPackage を 3D 表示します。
 
 ## ダウンロード
 
-最新リリース: **[popone-v0.2.3.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.3/popone-v0.2.3.exe)**
+最新リリース: **[popone-v0.2.4.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.4/popone-v0.2.4.exe)**
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -95,6 +95,20 @@ popone.exe input.fbx
 - **VRMA アニメーション** — PMX 日本語ボーン名から VRM ヒューマノイド名への自動マッピングで VRMA アニメーション再生対応
 - **UI 制限** — PMX/PMD ロード時は PMX 変換ボタン・法線平滑化・カスタム法線クリアをグレーアウト
 - **コメント表示** — PMX/PMD のコメントをモデル情報パネルに表示
+
+### v0.2.4 改善
+
+- **アーカイブD&Dリロード対応** — zip/7z から D&D したファイルがOS一時ディレクトリに展開される問題に対応。モデル本体＋補助ファイル（テクスチャ・.txt）をオンメモリにスナップショット保持し、一時ファイル消失後もリロード可能に。VRM/FBX/PMX/PMD 全対応
+- **アーカイブD&D先読みキャッシュ** — D&D 検出時点でモデル本体＋隣接テクスチャのバイト列を `PreloadedData` に先読み。以降のロードチェーン全体でキャッシュを使用し、一時ファイル消失後も確実にロード。FBX 選択ダイアログ（`PendingFbxChoice`）を挟む経路でもデータを受け渡し。VRM/FBX/PMX/PMD/UnityPackage 全形式対応
+- **アーカイブD&D即座ロード** — zipアーカイブからの D&D 時、一時ファイルが2フレーム遅延の間に消失するエラーを修正。一時パスを検出した場合はプログレスオーバーレイを省略して即座にロード
+- **テクスチャD&Dキャッシュ** — ZIP 内テクスチャの D&D 時、プレビュー段階でバイトデータ・PSD 判定・一時パスフラグをキャッシュ。確定時のファイル再読み込みを排除し、一時ファイル消失後もテクスチャ割り当てが確実に記録される
+- **UnityPackage アーカイブスナップショット** — ZIP 内 .unitypackage の D&D 時、アーカイブデータを `Arc<[u8]>` でスナップショット保持。リロード・アペンド時に一時ファイルに依存せずメモリから復元可能に
+- **シェーダー対応PMX材質** — MToon の shade_color と diffuse の輝度比に基づくトゥーンテクスチャ自動選択（5段階）。MToon 材質の ambient を shade_color ベースに、specular をゼロに補正。非 MToon は従来動作を維持
+- **Aスタンス変換警告** — PMX 変換時、Aスタンス変換が有効だが腕ボーンが見つからない場合に赤文字オーバーレイで警告を表示。既にAスタンスに近い場合はスキップ通知を表示
+- **ConvertResult::Warning** — 変換成功だが注意事項がある場合の新しいメッセージ種別（赤文字表示、Failure とは区別）
+- **AStanceResult enum** — Aスタンス変換結果を型安全に管理（NotRequested / Applied / AlreadyAStance / NotFound）。IrModel::merge() での統合ロジック付き
+- **リロード時テクスチャ正規化** — UnityPackage リロード時の PSD→PNG 変換バイパスを修正。MIME タイプ設定も正規パスと統一
+- **IrTexture 重複排除** — テクスチャ割り当て時に filename + data で同一性を判定し、同一テクスチャの重複追加を防止
 
 ### v0.2.3 改善
 
@@ -246,7 +260,7 @@ println!("ボーン: {}, 頂点: {}", stats.bones, stats.vertices);
 cargo test
 ```
 
-61 テスト（ユニット 50 + 統合 11）。統合テストは環境変数でテストデータの配置を指定可能:
+59 テスト（ユニット 48 + 統合 11）。統合テストは環境変数でテストデータの配置を指定可能:
 
 ```bash
 # テストデータのルートディレクトリ

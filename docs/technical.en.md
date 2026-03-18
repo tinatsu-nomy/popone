@@ -384,6 +384,280 @@ e.g.: outfit_pkg1_body.png
 - **manually assigned textures**: Prefix is added when `extend`ing into the `pkg_textures` Vec. The `pkg_assignments` HashMap naturally achieves uniqueness by using prefixed names as keys
 - **path separator avoidance**: Do not use `/` in the prefix (since `IrTexture.filename` is used as PMX export file paths)
 
+## Archive D&D Reload Support (v0.2.4)
+
+### ReloadableSource enum
+
+An enum that tracks the model's loading source. Solves the temp file reload problem.
+
+| Variant | Description |
+|---------|-------------|
+| `File(PathBuf)` | Normal file path. Re-reads file on reload |
+| `Snapshot { original_path, main_bytes: Arc<[u8]>, aux_files }` | Snapshot from temp file. Restores from memory on reload |
+
+### Temp Path Detection
+
+`is_temp_path()` checks whether the path is under `std::env::temp_dir()` using a two-stage approach:
+
+1. **canonicalize-based** (when file exists): Normalizes via `canonicalize()`, absorbing symlink and drive letter case differences
+2. **String-based fallback** (after file deletion): Normalizes case via `to_string_lossy().to_lowercase()`, ensures path boundary via `MAIN_SEPARATOR` suffix before `starts_with` comparison (prevents false positives like `TempBackup`)
+
+The fallback is necessary to handle cases where temp files from zip archive D&D are immediately deleted.
+
+### Immediate Load for Temp Paths
+
+When `is_temp_path()` returns true in `process_drag_and_drop()`, `load_file()`/`append_model()` is called directly instead of going through `pending_load`/`pending_append`. This avoids the `os error 3` caused by temp files being deleted during the normal 2-frame delay (used for progress overlay display).
+
+### D&D Preload Cache (PreloadedData)
+
+When a temp path is detected in `process_drag_and_drop()`, the model body and adjacent file bytes are cached in `PreloadedData`, eliminating disk access throughout the entire load chain.
+
+```rust
+/// D&D temp file preload data
+pub struct PreloadedData {
+    path: PathBuf,          // Original temp file path
+    main_bytes: Arc<[u8]>,  // Model body bytes
+    aux_files: HashMap<PathBuf, Arc<[u8]>>,  // Adjacent image files (relative path keys)
+}
+```
+
+#### Helper Methods
+
+| Method | Description |
+|--------|-------------|
+| `read_or_preloaded(path)` | Returns from cache if `preloaded.main_bytes` or `aux_files` matches. Falls back to `std::fs::read` otherwise |
+| `take_or_collect_aux(path)` | Returns clone of `preloaded.aux_files` if matched. Falls back to `collect_image_files_recursive` for disk collection |
+
+#### Data Passing Flow
+
+```
+process_drag_and_drop:
+  1. std::fs::read(&model_path) → PreloadedData.main_bytes
+  2. collect_image_files_recursive() → PreloadedData.aux_files
+  3. self.preloaded = Some(PreloadedData { ... })
+  4. Call load_file() / append_model()
+  5. Clear self.preloaded = None if PendingFbxChoice is not set
+
+FBX selection dialog path:
+  load_file() → PendingFbxChoice { preloaded: self.preloaded.take() }
+  → execute_fbx_choice() → self.preloaded = choice.preloaded (restore)
+  → try_load_fbx() → read_or_preloaded() uses cache
+  → self.preloaded = None (clear)
+```
+
+#### Usage by Format
+
+| Method | main file | aux files |
+|--------|-----------|-----------|
+| `try_load_fbx` | `read_or_preloaded` | `take_or_collect_aux` → `ReloadableSource::Snapshot` |
+| `try_load_vrm` | `read_or_preloaded` | Embedded (no external refs) |
+| `try_load_pmx` | `read_or_preloaded` | `preloaded_aux` preferred → `std::fs::read` fallback |
+| `try_load_pmd` | `read_or_preloaded` | `preloaded_aux` preferred → `std::fs::read` fallback |
+| `try_load_unitypackage` | `read_or_preloaded` | Contained in archive |
+| `try_load_fbx_animation` | `read_or_preloaded` → `load_fbx_animation_from_data` | N/A |
+| `append_model` (FBX/PMX/PMD/VRM) | `read_or_preloaded` | N/A (IrModel construction only) |
+
+### Auxiliary File Cache
+
+| Format | aux_files Contents |
+|--------|-------------------|
+| VRM / GLB | Empty (textures embedded in binary) |
+| FBX | Recursively collected adjacent image files (preserving subdirectory structure) |
+| PMX | Texture files from `pmx.textures` paths |
+| PMD | Textures + same-name `.txt` (material name text) |
+
+FBX external textures are recursively scanned under the parent directory by `collect_image_files_recursive()`, with `strip_prefix(base_dir)` preserving relative paths as keys. On reload, subdirectory structure is restored via `create_dir_all` before passing to the FBX parser.
+
+### TextureSource enum
+
+Tracks the loading source of texture assignments. Value type for `TextureState.assignments`.
+
+| Variant | Description |
+|---------|-------------|
+| `File(PathBuf)` | Normal file path |
+| `Cached { original_name, data: Arc<[u8]>, is_psd }` | Cached from temp file. `Arc<[u8]>` reduces clone cost |
+
+### reload_from_source
+
+Bypasses `load_file()` UI branching (FBX mesh+animation selection dialog, etc.) and directly calls `try_load_*` from `ReloadableSource`. Returns `Result`; on failure, restores saved state and returns early.
+
+### Texture D&D Preview Cache
+
+When D&D'ing textures from ZIP archives, data is cached in `PendingTexPreview` to ensure texture assignments are correctly recorded even after temp files are deleted.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cached_data` | `Vec<u8>` | Byte data cached at file read time |
+| `is_psd` | `bool` | Extension detection result (determined at read time) |
+| `was_temp` | `bool` | Temp path detection result (`is_temp_path` evaluated **before** `std::fs::read`) |
+
+#### Processing Flow
+
+```
+open_texture_preview:
+  1. was_temp = is_temp_path(&path)    ← Determined while file exists (canonicalize prerequisite)
+  2. data = std::fs::read(&path)       ← Read byte data
+  3. upload_texture_from_bytes(&data)   ← Create GPU texture
+  4. PendingTexPreview { cached_data: data, is_psd, was_temp, ... }
+
+apply_tex_preview:
+  1. tex_data = preview.cached_data.clone()  ← From cache (no re-read)
+  2. is_psd = preview.is_psd                 ← From cache
+  3. cached_data = if preview.was_temp { Some(...) } else { None }
+  4. Branch to TextureSource::Cached or File
+```
+
+**Important**: `is_temp_path` evaluation must occur before `std::fs::read`. Since `canonicalize()` requires file existence, evaluating after read risks the file being deleted, causing the check to fail.
+
+### UnityPackage Archive Snapshot
+
+When D&D'ing .unitypackage from ZIP archives, archive data is snapshot-cached as `Arc<[u8]>`.
+
+#### Struct Fields
+
+| Struct | Added Field |
+|--------|------------|
+| `PendingUnityPackage` | `archive_snapshot: Option<Arc<[u8]>>` |
+| `PendingPkgModelLoad` | `archive_snapshot: Option<Arc<[u8]>>` |
+| `PendingFbxChoicePkg` | `archive_snapshot: Option<Arc<[u8]>>` |
+
+#### Snapshot Generation Flow
+
+```
+try_load_unitypackage:
+  1. is_temp = is_temp_path(path)      ← Evaluated before std::fs::read
+  2. archive_data = std::fs::read(path)
+  3. assets = extract_all_assets(&archive_data)
+  4. snapshot = if is_temp { Some(Arc::from(archive_data)) } else { None }
+  5. Store snapshot in PendingPkgModelLoad / PendingUnityPackage
+```
+
+#### Snapshot Propagation Path
+
+```
+try_load_unitypackage / try_load_unitypackage_for_append
+  → Stored in PendingUnityPackage / PendingPkgModelLoad
+    → Inherited in ui.rs show_fbx_select_dialog to PendingPkgModelLoad
+      → Passed to load_fbx_from_assets / load_vrm_from_assets in process_pending_tasks
+        → Builds ReloadableSource::Snapshot and passes to finish_load
+          → Stored in LoadedModel.source
+            → On reload_current, reload_unitypackage(&source, ...) restores from Snapshot
+```
+
+#### reload_unitypackage / reload_append_unitypackage Changes
+
+Signature changed from `path: &Path` to `source: &ReloadableSource`. For the Snapshot variant, archive data is restored via `main_bytes.to_vec()`. For the File variant, `std::fs::read` is used as before.
+
+### .gltf Exclusion
+
+`.gltf` files have external buffer references (`.bin`, image files), so they are excluded from snapshotting. `gltf::import_slice` cannot resolve external URIs, so the normal `load_glb(path)` path is used.
+
+## Reload Texture Normalization (v0.2.4)
+
+### reload_unitypackage Texture Restoration
+
+When restoring manually assigned textures during UnityPackage reload, the same PSD→PNG conversion and MIME type settings as the normal path (`assign_texture_source_to_material`) are applied.
+
+| Texture Format | Processing | ir_filename | mime_type |
+|---------------|-----------|-------------|-----------|
+| PSD | Convert to PNG via `psd_to_png()` | `{basename}.png` | `image/png` |
+| PNG | As-is | Original filename | `image/png` |
+| TGA | As-is | Original filename | `image/x-tga` |
+| BMP | As-is | Original filename | `image/bmp` |
+| Other | As-is | Original filename | `image/jpeg` |
+
+On PSD→PNG conversion failure, `continue` skips the material assignment (consistent with normal path failure behavior).
+
+`name_to_ir: HashMap<String, usize>` cache prevents duplicate IrTexture additions for the same texture name. Package texture names are guaranteed unique, so `tex_name` alone is sufficient as a key.
+
+### IrTexture Deduplication in assign_texture_source_to_material
+
+During manual texture assignment, existing IrTextures are searched by `filename + data.len() + data` exact match, reusing the index if found.
+
+```rust
+let tex_idx = loaded.ir.textures.iter()
+    .position(|t| t.filename == ir_filename
+        && t.data.len() == ir_data.len()
+        && t.data == ir_data)
+    .unwrap_or_else(|| { /* add new */ });
+```
+
+- `data.len()` is checked first so textures with different sizes are skipped in O(1)
+- External filesystem assignments can have same-name-different-content files, so `data` is also compared (not just `filename`)
+- The pkg restoration path uses `tex_name`-keyed cache for deduplication (package texture name uniqueness is guaranteed)
+
+## Shader-Aware PMX Material Conversion (v0.2.4)
+
+### select_toon()
+
+Selects toon texture based on shade_color/diffuse luminance ratio for MToon materials. Uses Rec. 709 luminance coefficients `(0.2126, 0.7152, 0.0722)`.
+
+| shade/diffuse Luminance Ratio | Toon | Description |
+|-------------------------------|------|-------------|
+| < 0.25 | Shared(0) = toon01 | Hard shadow (shade << diffuse) |
+| 0.25–0.45 | Shared(1) = toon02 | Moderately hard |
+| 0.45–0.65 | Shared(2) = toon03 | Medium |
+| 0.65–0.85 | Shared(4) = toon05 | Soft |
+| ≥ 0.85 | Shared(6) = toon07 | Softest (shade ≈ diffuse) |
+
+Non-MToon retains `Shared(0)` (regression prevention). When shade_color is absent, defaults to `Shared(2)` (medium).
+
+### MToon ambient/specular Correction
+
+Applied only at the conversion stage (`convert/material.rs`). The extraction stage (`vrm/extract.rs`) retains source-faithful values.
+
+| Parameter | MToon | Non-MToon |
+|-----------|-------|-----------|
+| ambient | `shade_color * 0.5` (or `diffuse * 0.4` if no shade_color) | Unchanged |
+| specular | `Vec3::ZERO` | Unchanged |
+| specular_power | `0.0` | Unchanged |
+
+## A-Stance Conversion Result Management (v0.2.4)
+
+### AStanceResult enum
+
+A type-safe enum for managing A-stance conversion results. Stored in `IrModel.astance_result`.
+
+| Variant | Description |
+|---------|-------------|
+| `NotRequested` | Conversion not requested (checkbox OFF, or unsupported format) |
+| `Applied(usize)` | Conversion successful. Argument is the number of corrected arms (normally 2) |
+| `AlreadyAStance` | Already close to A-stance, skipped |
+| `NotFound` | Arm bones not found, conversion failed |
+
+### Determination Logic
+
+`compute_astance_corrections()` determines the result with the following priority:
+
+1. **Arm bones absent**: `has_arms` check (no leftUpperArm/leftLowerArm or rightUpperArm/rightLowerArm pair exists) → `NotFound`
+2. **Abnormal arm direction**: Zero horizontal component (pointing straight up/down), rotation axis cannot be computed → increments `skipped_count`
+3. **Already A-stance**: Current angle exceeds 25° and pointing downward → increments `skipped_count`
+4. **Normal conversion**: Apply 30° rotation correction → `Applied(n)`
+5. **Result determination**: corrections > 0 → `Applied(n)`, skipped > 0 → `AlreadyAStance`, otherwise → `NotFound`
+
+### IrModel::merge() Integration
+
+During append loading, `IrModel::merge()` integrates `astance_result`:
+
+| Host | Appended | Result | Reason |
+|------|----------|--------|--------|
+| `NotRequested` | any | Appended value | Host did not request, delegate to appended |
+| `Applied(a)` | `Applied(b)` | `Applied(a+b)` | Sum |
+| `Applied(n)` | `NotFound` | `Applied(n)` | If main model was converted, ignore accessory failure |
+| `Applied(n)` | `AlreadyAStance` | `Applied(n)` | Converted takes priority |
+| `AlreadyAStance` | `NotFound` | `AlreadyAStance` | AlreadyAStance takes priority |
+| `NotFound` | `NotFound` | `NotFound` | Both failed |
+
+### Viewer Warning Display
+
+On PMX conversion success, `ir_ref.astance_result` is checked:
+
+- `NotFound` → `ConvertMessage::Warning` (red text overlay): "Arm bones not found, conversion failed"
+- `AlreadyAStance` → `ConvertMessage::Success` with note: "Already close to A-stance, skipped"
+- `Applied(_)` / `NotRequested` → Normal success message
+
+`ConvertResult::Warning` is displayed in red text like `Failure`, but is semantically distinct as the conversion itself succeeded.
+
 ## Visible Materials Only Export (v0.2.3)
 
 An optional feature that excludes materials hidden in the display tab from PMX conversion output in the viewer. Implemented in the `export_filter.rs` module.

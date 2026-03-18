@@ -1,7 +1,8 @@
 use anyhow::Result;
 use glam::{Mat4, Vec3, Vec4};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::convert::coord::PMX_SCALE;
 use crate::intermediate::types::*;
@@ -20,13 +21,22 @@ fn pmx_normal_to_gltf(n: Vec3) -> Vec3 {
 
 /// PMDモデルから IrModel を構築
 pub fn pmd_to_ir(pmd: &PmdModel, pmd_path: &Path) -> Result<IrModel> {
+    pmd_to_ir_with_aux(pmd, pmd_path, None)
+}
+
+/// オンメモリ補助ファイル付きで PMD → IrModel 変換
+pub fn pmd_to_ir_with_aux(
+    pmd: &PmdModel,
+    pmd_path: &Path,
+    aux_files: Option<&HashMap<PathBuf, Arc<[u8]>>>,
+) -> Result<IrModel> {
     let pmd_dir = pmd_path.parent().unwrap_or(Path::new("."));
     let bones = extract_bones(pmd);
-    let textures = extract_textures(pmd, pmd_dir);
+    let textures = extract_textures(pmd, pmd_dir, aux_files);
     let mut materials = extract_materials(pmd, &textures);
 
     // 材質名テキストファイルの読み込み
-    load_material_names(pmd_path, &mut materials);
+    load_material_names(pmd_path, aux_files, &mut materials);
 
     let (meshes, pmd_to_ir_vertex) = extract_meshes(pmd, &materials);
     let morphs = extract_morphs(pmd, &pmd_to_ir_vertex);
@@ -45,19 +55,37 @@ pub fn pmd_to_ir(pmd: &PmdModel, pmd_path: &Path) -> Result<IrModel> {
         source_format: SourceFormat::Pmd,
         rig_type: None,
         humanoid_bone_count: 0,
+        astance_result: AStanceResult::NotRequested,
     })
 }
 
 /// PMDファイルと同名の .txt から材質名を読み込む
 /// ファイルが存在し、行数が材質数と一致する場合のみ適用
-fn load_material_names(pmd_path: &Path, materials: &mut [IrMaterial]) {
+fn load_material_names(
+    pmd_path: &Path,
+    aux_files: Option<&HashMap<PathBuf, Arc<[u8]>>>,
+    materials: &mut [IrMaterial],
+) {
     let txt_path = pmd_path.with_extension("txt");
-    if !txt_path.exists() {
-        return;
-    }
-    let data = match std::fs::read(&txt_path) {
-        Ok(d) => d,
-        Err(_) => return,
+    let txt_filename = txt_path.file_name()
+        .map(|f| PathBuf::from(f))
+        .unwrap_or_default();
+
+    // aux_files があればそこから、なければファイルシステムから読む
+    let data = if let Some(aux) = aux_files {
+        if let Some(cached) = aux.get(&txt_filename) {
+            cached.to_vec()
+        } else {
+            return; // aux_files にもなければスキップ
+        }
+    } else {
+        if !txt_path.exists() {
+            return;
+        }
+        match std::fs::read(&txt_path) {
+            Ok(d) => d,
+            Err(_) => return,
+        }
     };
     // Shift_JIS デコード
     let (text, _, _) = encoding_rs::SHIFT_JIS.decode(&data);
@@ -140,7 +168,11 @@ fn extract_bones(pmd: &PmdModel) -> Vec<IrBone> {
     bones
 }
 
-fn extract_textures(pmd: &PmdModel, pmd_dir: &Path) -> Vec<IrTexture> {
+fn extract_textures(
+    pmd: &PmdModel,
+    pmd_dir: &Path,
+    aux_files: Option<&HashMap<PathBuf, Arc<[u8]>>>,
+) -> Vec<IrTexture> {
     // PMD材質からユニークなテクスチャパスを収集
     let mut tex_paths: Vec<String> = Vec::new();
     for mat in &pmd.materials {
@@ -164,30 +196,39 @@ fn extract_textures(pmd: &PmdModel, pmd_dir: &Path) -> Vec<IrTexture> {
                 .map(|f| f.to_string_lossy().to_string())
                 .unwrap_or_else(|| normalized.clone());
 
-            let (data, mime_type) = if full_path.exists() {
-                let data = std::fs::read(&full_path).unwrap_or_default();
-                let ext = full_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.to_lowercase())
-                    .unwrap_or_default();
-                let mime = match ext.as_str() {
-                    "png" => "image/png",
-                    "jpg" | "jpeg" => "image/jpeg",
-                    "bmp" => "image/bmp",
-                    "tga" => "image/tga",
-                    _ => "application/octet-stream",
-                };
-                (data, mime.to_string())
+            let ext = Path::new(&normalized)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .unwrap_or_default();
+            let mime = match ext.as_str() {
+                "png" => "image/png",
+                "jpg" | "jpeg" => "image/jpeg",
+                "bmp" => "image/bmp",
+                "tga" => "image/tga",
+                _ => "application/octet-stream",
+            };
+
+            // aux_files があればそこから、なければファイルシステムから読む
+            let data = if let Some(aux) = aux_files {
+                let key = PathBuf::from(&normalized);
+                if let Some(cached) = aux.get(&key) {
+                    cached.to_vec()
+                } else {
+                    log::warn!("aux_files にテクスチャが見つかりません: {:?}", key);
+                    Vec::new()
+                }
+            } else if full_path.exists() {
+                std::fs::read(&full_path).unwrap_or_default()
             } else {
                 log::warn!("テクスチャファイルが見つかりません: {:?}", full_path);
-                (Vec::new(), "application/octet-stream".to_string())
+                Vec::new()
             };
 
             IrTexture {
                 filename,
                 data,
-                mime_type,
+                mime_type: mime.to_string(),
             }
         })
         .collect()

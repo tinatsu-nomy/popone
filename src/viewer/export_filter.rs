@@ -25,6 +25,7 @@ pub fn build_filtered_ir(
             node_to_bone: ir.node_to_bone.clone(),
             rig_type: ir.rig_type.clone(),
             humanoid_bone_count: ir.humanoid_bone_count,
+            astance_result: ir.astance_result,
             ..Default::default()
         };
     }
@@ -216,6 +217,7 @@ pub fn build_filtered_ir(
         source_format: ir.source_format,
         rig_type: ir.rig_type.clone(),
         humanoid_bone_count: ir.humanoid_bone_count,
+        astance_result: ir.astance_result,
     }
 }
 

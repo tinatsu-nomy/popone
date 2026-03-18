@@ -192,6 +192,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             shown: false,
             append: pending.append,
             suppress_tex_match: false,
+            archive_snapshot: pending.archive_snapshot,
         });
     } else if cancelled || !open {
         app.pending_unity_pkg = None;
@@ -559,7 +560,24 @@ pub fn execute_conversion(app: &mut ViewerApp) {
             if app.output_log {
                 msg += &format!("\nログ: {}", log_path.display());
             }
-            app.convert_message = Some(ConvertMessage::success(msg));
+            // Aスタンス変換の結果に応じて警告を付加（IrModel の状態を直接参照）
+            use crate::intermediate::types::AStanceResult;
+            let has_warning = match ir_ref.astance_result {
+                AStanceResult::NotFound => {
+                    msg += "\n⚠ Aスタンス変換: 腕ボーンが見つからず変換できませんでした";
+                    true
+                }
+                AStanceResult::AlreadyAStance => {
+                    msg += "\n※ 既にAスタンスに近いためスキップしました";
+                    false
+                }
+                _ => false,
+            };
+            if has_warning {
+                app.convert_message = Some(ConvertMessage::warning(msg));
+            } else {
+                app.convert_message = Some(ConvertMessage::success(msg));
+            }
         }
         Err(e) => {
             app.convert_message = Some(ConvertMessage::failure(format!(
@@ -1018,8 +1036,13 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
                     }
                 }
                 let assigned_name = app.tex.assignments.get(&mat_idx)
-                    .and_then(|p| p.file_name())
-                    .map(|f| f.to_string_lossy().to_string());
+                    .map(|ts| {
+                        let name = ts.display_name();
+                        std::path::Path::new(&name)
+                            .file_name()
+                            .map(|f| f.to_string_lossy().to_string())
+                            .unwrap_or(name)
+                    });
                 let display_tex = assigned_name.as_deref()
                     .or_else(|| {
                         mat_src_tex.get(mat_idx)
@@ -1129,8 +1152,13 @@ fn show_tab_display(ui: &mut egui::Ui, app: &mut ViewerApp, tex_assign_request: 
                     }
                 }
                 let assigned_name = app.tex.assignments.get(&mat_idx)
-                    .and_then(|p| p.file_name())
-                    .map(|f| f.to_string_lossy().to_string());
+                    .map(|ts| {
+                        let name = ts.display_name();
+                        std::path::Path::new(&name)
+                            .file_name()
+                            .map(|f| f.to_string_lossy().to_string())
+                            .unwrap_or(name)
+                    });
                 let display_tex = assigned_name.as_deref()
                     .or_else(|| {
                         mat_src_tex.get(mat_idx)

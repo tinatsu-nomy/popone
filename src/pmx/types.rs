@@ -90,7 +90,7 @@ pub struct PmxMaterial {
     pub face_count: u32, // 面数×3
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PmxToonRef {
     Texture(i32),
     Shared(u8),

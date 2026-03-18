@@ -322,12 +322,14 @@ pub fn extract_ir_model_from_fbx_with_options(
     }
 
     // T→Aスタンス変換（オプション）
-    if normalize_pose {
+    let astance_result = if normalize_pose {
         let mut global_mats: Vec<Mat4> = ir_bones.iter().map(|b| b.global_mat).collect();
         crate::intermediate::pose::normalize_pose_to_astance_with_meshes(
             &mut ir_bones, &mut global_mats, &mut ir_meshes, &mut ir_morphs,
-        );
-    }
+        )
+    } else {
+        AStanceResult::NotRequested
+    };
 
     // モデル名
     let model_name = fbx_path
@@ -358,6 +360,7 @@ pub fn extract_ir_model_from_fbx_with_options(
         source_format: SourceFormat::Fbx,
         rig_type: Some(humanoid_mapping.rig_type.label().to_string()),
         humanoid_bone_count: humanoid_mapping.mapping.len(),
+        astance_result,
     })
 }
 

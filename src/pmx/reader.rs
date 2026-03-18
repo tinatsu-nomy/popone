@@ -701,6 +701,14 @@ pub fn read_pmx(path: &std::path::Path) -> Result<PmxModel> {
     pmx_reader.read_model()
 }
 
+/// バイト列から PMX を読み込む（オンメモリキャッシュ用）
+pub fn read_pmx_from_data(data: &[u8]) -> Result<PmxModel> {
+    let cursor = std::io::Cursor::new(data);
+    let reader = std::io::BufReader::new(cursor);
+    let mut pmx_reader = PmxReader::new(reader);
+    pmx_reader.read_model()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

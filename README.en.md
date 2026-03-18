@@ -6,7 +6,7 @@ A 3D viewer for VRM / FBX / PMX / PMD / UnityPackage files.
 
 ## Download
 
-Latest release: **[popone-v0.2.3.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.3/popone-v0.2.3.exe)**
+Latest release: **[popone-v0.2.4.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.4/popone-v0.2.4.exe)**
 
 All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -95,6 +95,20 @@ In the viewer, drag & drop files or use the "Open" button to load models.
 - **VRMA Animation** — Auto-mapping from PMX Japanese bone names to VRM humanoid names enables VRMA animation playback
 - **UI Restrictions** — PMX conversion button, normal smoothing, and custom normal clear are grayed out when PMX/PMD is loaded
 - **Comment Display** — PMX/PMD comments shown in model info panel
+
+### v0.2.4 Improvements
+
+- **Archive D&D Reload Support** — Handles files D&D'd from zip/7z that are extracted to OS temp directories. Model body + auxiliary files (textures, .txt) are snapshot-cached in memory, enabling reload even after temp files are deleted. Supports VRM/FBX/PMX/PMD
+- **Archive D&D Preload Cache** — At D&D detection time, model body + adjacent texture bytes are pre-read into `PreloadedData`. The entire load chain uses the cache, ensuring reliable loading even after temp file deletion. Data is passed through `PendingFbxChoice` for FBX selection dialog paths. Supports all formats: VRM/FBX/PMX/PMD/UnityPackage
+- **Archive D&D Immediate Load** — Fixed error where temp files from zip archives would be deleted during the 2-frame delay before loading. When a temp path is detected, the progress overlay is skipped and the file is loaded immediately
+- **Texture D&D Cache** — When D&D'ing textures from ZIP archives, byte data, PSD detection, and temp path flag are cached at preview stage. Eliminates file re-read on confirmation, ensuring texture assignments are reliably recorded even after temp file deletion
+- **UnityPackage Archive Snapshot** — When D&D'ing .unitypackage from ZIP archives, archive data is snapshot-cached as `Arc<[u8]>`. Enables reload/append from memory without depending on temp files
+- **Shader-Aware PMX Materials** — Automatic toon texture selection (5 levels) based on MToon shade_color/diffuse luminance ratio. MToon materials get shade_color-based ambient and zero specular. Non-MToon materials retain existing behavior
+- **A-Stance Conversion Warning** — Red text overlay warning when A-stance conversion is enabled but arm bones are not found during PMX conversion. Shows skip notification when already in A-stance
+- **ConvertResult::Warning** — New message type for successful conversions with caveats (red text, distinct from Failure)
+- **AStanceResult enum** — Type-safe management of A-stance conversion results (NotRequested / Applied / AlreadyAStance / NotFound). Includes merge logic for IrModel::merge()
+- **Reload Texture Normalization** — Fixed PSD→PNG conversion bypass during UnityPackage reload. MIME type settings now consistent with the normal assignment path
+- **IrTexture Deduplication** — Texture assignment now checks filename + data for identity, preventing duplicate IrTexture entries
 
 ### v0.2.3 Improvements
 
@@ -246,7 +260,7 @@ println!("Bones: {}, Vertices: {}", stats.bones, stats.vertices);
 cargo test
 ```
 
-61 tests (50 unit + 11 integration). Integration tests support environment variables for test data paths:
+59 tests (48 unit + 11 integration). Integration tests support environment variables for test data paths:
 
 ```bash
 # Test data root directory

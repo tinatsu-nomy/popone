@@ -55,7 +55,8 @@ pub fn extract_ir_model_with_options(
 
     // T→Aスタンス変換（オプション）
     if normalize_pose {
-        crate::intermediate::pose::normalize_pose_to_astance(&mut model.bones, &mut global_mats);
+        model.astance_result =
+            crate::intermediate::pose::normalize_pose_to_astance(&mut model.bones, &mut global_mats);
     }
 
     // モデル名・コメント

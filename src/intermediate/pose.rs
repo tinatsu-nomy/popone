@@ -2,13 +2,14 @@ use std::collections::HashSet;
 
 use glam::{Mat4, Vec3};
 
-use super::types::{IrBone, IrMesh, IrMorph, IrMorphKind};
+use super::types::{AStanceResult, IrBone, IrMesh, IrMorph, IrMorphKind};
 
 /// Tポーズ→Aスタンス変換（ボーンのみ）
 /// VRM用: メッシュはスキニング経由で global_mats から変形される
-pub fn normalize_pose_to_astance(bones: &mut [IrBone], global_mats: &mut [Mat4]) {
-    let corrections = compute_astance_corrections(bones, global_mats);
+pub fn normalize_pose_to_astance(bones: &mut [IrBone], global_mats: &mut [Mat4]) -> AStanceResult {
+    let (corrections, result) = compute_astance_corrections(bones, global_mats);
     apply_bone_corrections(bones, global_mats, &corrections);
+    result
 }
 
 /// Tポーズ→Aスタンス変換（ボーン＋メッシュ頂点＋モーフオフセット）
@@ -18,14 +19,15 @@ pub fn normalize_pose_to_astance_with_meshes(
     global_mats: &mut [Mat4],
     meshes: &mut [IrMesh],
     morphs: &mut [IrMorph],
-) {
-    let corrections = compute_astance_corrections(bones, global_mats);
+) -> AStanceResult {
+    let (corrections, result) = compute_astance_corrections(bones, global_mats);
     if corrections.is_empty() {
-        return;
+        return result;
     }
     apply_bone_corrections(bones, global_mats, &corrections);
     let vertex_rot3s = apply_mesh_corrections(bones, meshes, &corrections);
     apply_morph_corrections(morphs, &vertex_rot3s);
+    result
 }
 
 struct AStanceCorrection {
@@ -34,10 +36,11 @@ struct AStanceCorrection {
     rotation: glam::Quat,
 }
 
+/// 戻り値: (補正リスト, 結果ステータス)
 fn compute_astance_corrections(
     bones: &[IrBone],
     global_mats: &[Mat4],
-) -> Vec<AStanceCorrection> {
+) -> (Vec<AStanceCorrection>, AStanceResult) {
     const A_STANCE_ANGLE_DEG: f32 = 30.0;
 
     let find_bone = |vrm_name: &str| -> Option<usize> {
@@ -49,7 +52,16 @@ fn compute_astance_corrections(
         ("rightUpperArm", "rightLowerArm"),
     ];
 
-    arm_pairs
+    // 腕ボーンが存在するかチェック
+    let has_arms = arm_pairs.iter().any(|(upper, lower)| {
+        find_bone(upper).is_some() && find_bone(lower).is_some()
+    });
+    if !has_arms {
+        return (Vec::new(), AStanceResult::NotFound);
+    }
+
+    let mut skipped_count = 0usize;
+    let corrections: Vec<AStanceCorrection> = arm_pairs
         .iter()
         .filter_map(|(upper, lower)| {
             let ua_idx = find_bone(upper)?;
@@ -63,6 +75,8 @@ fn compute_astance_corrections(
 
             let horizontal = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
             if horizontal.length_squared() < 0.001 {
+                // 腕が真上/真下を向いている（変換不要）
+                skipped_count += 1;
                 return None;
             }
 
@@ -72,11 +86,14 @@ fn compute_astance_corrections(
                     "Aスタンス変換: {} は既にAスタンスに近い（{:.1}°）、スキップ",
                     upper, current_angle
                 );
+                skipped_count += 1;
                 return None;
             }
 
             let axis = Vec3::Y.cross(dir).normalize_or_zero();
             if axis.length_squared() < 0.001 {
+                // 回転軸が計算不能（変換不要）
+                skipped_count += 1;
                 return None;
             }
             let correction = glam::Quat::from_axis_angle(axis, A_STANCE_ANGLE_DEG.to_radians());
@@ -91,7 +108,16 @@ fn compute_astance_corrections(
                 rotation: correction,
             })
         })
-        .collect()
+        .collect();
+
+    let result = if !corrections.is_empty() {
+        AStanceResult::Applied(corrections.len())
+    } else if skipped_count > 0 {
+        AStanceResult::AlreadyAStance
+    } else {
+        AStanceResult::NotFound
+    };
+    (corrections, result)
 }
 
 fn apply_bone_corrections(
