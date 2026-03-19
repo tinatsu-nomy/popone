@@ -2,17 +2,19 @@
 
 [English](README.en.md)
 
-VRM / FBX / PMX / PMD / UnityPackage を 3D 表示します。
+VRM / FBX / PMX / PMD / UnityPackage / ZIP / 7z を 3D 表示します。
 
 ## ダウンロード
 
-最新リリース: **[popone-v0.2.4.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.4/popone-v0.2.4.exe)**
+最新リリース: **[popone-v0.2.5.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.5/popone-v0.2.5.exe)**
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
 ## 注意事項
 
 - 出力 PMX は PmxEditor 等での後段調整を想定しています。
+- GPU の最大テクスチャサイズ（通常 8192px）を超えるテクスチャはビューア表示時に自動縮小されます（PMX 出力には影響しません）。
+- アーカイブ（ZIP / 7z）および `.unitypackage` の展開サイズは合計 2GB が上限です。
 - 本ツールの使用により発生したいかなる問題についても、作者は一切の責任を負いません。
 
 ## ライセンス
@@ -38,8 +40,10 @@ VRM / FBX / PMX / PMD / UnityPackage を 3D 表示します。
 | encoding_rs | PMD Shift_JIS テキスト変換 |
 | flate2 | zlib 圧縮・展開 |
 | tar | .unitypackage (tar.gz) 展開 |
+| zip | ZIP アーカイブ展開 |
+| sevenz-rust2 | 7z アーカイブ展開 |
 | clap | CLI 引数パーサー |
-| anyhow | エラーハンドリング |
+| anyhow / thiserror | エラーハンドリング |
 | log / fern / chrono | ログ出力 |
 
 </details>
@@ -71,8 +75,10 @@ VRM / FBX / PMX / PMD / UnityPackage を 3D 表示します。
 | [encoding_rs](https://github.com/nickel-org/encoding_rs) | MIT OR Apache-2.0 |
 | [flate2](https://github.com/rust-lang/flate2-rs) | MIT OR Apache-2.0 |
 | [tar](https://github.com/alexcrichton/tar-rs) | MIT OR Apache-2.0 |
+| [zip](https://github.com/zip-rs/zip2) | MIT |
+| [sevenz-rust2](https://github.com/hasenbanck/sevenz-rust2) | Apache-2.0 |
 | [clap](https://github.com/clap-rs/clap) | MIT OR Apache-2.0 |
-| [anyhow](https://github.com/dtolnay/anyhow) | MIT OR Apache-2.0 |
+| [anyhow](https://github.com/dtolnay/anyhow) / [thiserror](https://github.com/dtolnay/thiserror) | MIT OR Apache-2.0 |
 | [log](https://github.com/rust-lang/log) / [fern](https://github.com/daboross/fern) / [chrono](https://github.com/chronotope/chrono) | MIT (fern) / MIT OR Apache-2.0 (others) |
 
 ### ビューア依存

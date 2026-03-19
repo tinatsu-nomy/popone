@@ -27,14 +27,23 @@ impl ExtractedAsset {
     }
 }
 
+/// 展開サイズ上限: 2GB（archive モジュールと同じ）
+const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 /// .unitypackage からすべてのアセットを展開
 pub fn extract_all_assets(archive_data: &[u8]) -> Result<Vec<ExtractedAsset>> {
+    extract_all_assets_with_limit(archive_data, MAX_TOTAL_BYTES)
+}
+
+/// .unitypackage からすべてのアセットを展開（サイズ上限指定）
+fn extract_all_assets_with_limit(archive_data: &[u8], max_bytes: u64) -> Result<Vec<ExtractedAsset>> {
     let decoder = GzDecoder::new(Cursor::new(archive_data));
     let mut archive = tar::Archive::new(decoder);
 
     // GUID → (pathname, asset_data) を収集
     let mut pathnames: HashMap<String, String> = HashMap::new();
     let mut assets: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut total_bytes: u64 = 0;
 
     for entry in archive.entries().context("tarエントリ読み込み失敗")? {
         let mut entry = entry.context("tarエントリ解析失敗")?;
@@ -54,8 +63,22 @@ pub fn extract_all_assets(archive_data: &[u8]) -> Result<Vec<ExtractedAsset>> {
                 pathnames.insert(guid, s.trim().to_string());
             }
             "asset" => {
+                let entry_size = entry.header().size().unwrap_or(0);
+                if total_bytes.saturating_add(entry_size) > max_bytes {
+                    bail!(
+                        ".unitypackage 展開サイズが上限 ({}MB) を超えました",
+                        max_bytes / (1024 * 1024)
+                    );
+                }
                 let mut data = Vec::new();
                 entry.read_to_end(&mut data).context("asset読み込み失敗")?;
+                total_bytes += data.len() as u64;
+                if total_bytes > max_bytes {
+                    bail!(
+                        ".unitypackage 展開サイズが上限 ({}MB) を超えました",
+                        max_bytes / (1024 * 1024)
+                    );
+                }
                 assets.insert(guid, data);
             }
             _ => {} // asset.meta, preview.png は無視

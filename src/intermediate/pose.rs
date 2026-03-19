@@ -60,7 +60,7 @@ fn compute_astance_corrections(
         return (Vec::new(), AStanceResult::NotFound);
     }
 
-    let mut skipped_count = 0usize;
+    let mut already_target_count = 0usize;
     let corrections: Vec<AStanceCorrection> = arm_pairs
         .iter()
         .filter_map(|(upper, lower)| {
@@ -75,8 +75,7 @@ fn compute_astance_corrections(
 
             let horizontal = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
             if horizontal.length_squared() < 0.001 {
-                // 腕が真上/真下を向いている（変換不要）
-                skipped_count += 1;
+                // 退化ケース（腕が真上/真下）— 補正不要だが「既にAスタンス」ではない
                 return None;
             }
 
@@ -86,14 +85,13 @@ fn compute_astance_corrections(
                     "Aスタンス変換: {} は既にAスタンスに近い（{:.1}°）、スキップ",
                     upper, current_angle
                 );
-                skipped_count += 1;
+                already_target_count += 1;
                 return None;
             }
 
             let axis = Vec3::Y.cross(dir).normalize_or_zero();
             if axis.length_squared() < 0.001 {
-                // 回転軸が計算不能（変換不要）
-                skipped_count += 1;
+                // 退化ケース（回転軸計算不能）— 補正不要だが「既にAスタンス」ではない
                 return None;
             }
             let correction = glam::Quat::from_axis_angle(axis, A_STANCE_ANGLE_DEG.to_radians());
@@ -112,7 +110,7 @@ fn compute_astance_corrections(
 
     let result = if !corrections.is_empty() {
         AStanceResult::Applied(corrections.len())
-    } else if skipped_count > 0 {
+    } else if already_target_count > 0 {
         AStanceResult::AlreadyAStance
     } else {
         AStanceResult::NotFound
@@ -245,39 +243,43 @@ fn apply_morph_corrections(
 
 /// Aスタンス→Tスタンス変換（ボーン＋メッシュ頂点＋モーフオフセット＋物理）
 /// PMX/PMD用: Aスタンスモデルを水平（T字）に変換
+#[must_use]
 pub fn normalize_pose_to_tstance_with_meshes(
     bones: &mut [IrBone],
     meshes: &mut [IrMesh],
     morphs: &mut [IrMorph],
-) {
-    let corrections = compute_tstance_corrections(bones);
+) -> AStanceResult {
+    let (corrections, result) = compute_tstance_corrections(bones);
     if corrections.is_empty() {
-        return;
+        return result;
     }
     // global_mats は bone.global_mat をそのまま使う（PMXではnode_index == bone_index）
     let mut global_mats: Vec<Mat4> = bones.iter().map(|b| b.global_mat).collect();
     apply_bone_corrections(bones, &mut global_mats, &corrections);
     let vertex_rot3s = apply_mesh_corrections(bones, meshes, &corrections);
     apply_morph_corrections(morphs, &vertex_rot3s);
+    result
 }
 
 /// Aスタンス→Tスタンス変換（物理含む全データ）
+#[must_use]
 pub fn normalize_pose_to_tstance_full(
     bones: &mut [IrBone],
     meshes: &mut [IrMesh],
     morphs: &mut [IrMorph],
     physics: &mut super::types::IrPhysics,
     pos_fn: fn(Vec3) -> Vec3,
-) {
-    let corrections = compute_tstance_corrections(bones);
+) -> AStanceResult {
+    let (corrections, result) = compute_tstance_corrections(bones);
     if corrections.is_empty() {
-        return;
+        return result;
     }
     let mut global_mats: Vec<Mat4> = bones.iter().map(|b| b.global_mat).collect();
     apply_bone_corrections(bones, &mut global_mats, &corrections);
     let vertex_rot3s = apply_mesh_corrections(bones, meshes, &corrections);
     apply_morph_corrections(morphs, &vertex_rot3s);
     apply_physics_corrections(bones, physics, &corrections, pos_fn);
+    result
 }
 
 /// 物理データ（剛体・ジョイント）にスタンス補正を適用
@@ -336,7 +338,7 @@ fn apply_physics_corrections(
 
 /// Aスタンス→Tスタンスの補正を計算
 /// vrm_bone_name がない場合はPMXボーン名（日本語）で検索
-fn compute_tstance_corrections(bones: &[IrBone]) -> Vec<AStanceCorrection> {
+fn compute_tstance_corrections(bones: &[IrBone]) -> (Vec<AStanceCorrection>, AStanceResult) {
     let find_bone = |names: &[&str]| -> Option<usize> {
         for name in names {
             // vrm_bone_name で検索
@@ -359,7 +361,16 @@ fn compute_tstance_corrections(bones: &[IrBone]) -> Vec<AStanceCorrection> {
         (&["rightUpperArm", "右腕"][..], &["rightLowerArm", "右ひじ"][..]),
     ];
 
-    arm_pairs
+    // 腕ボーンが存在するかチェック
+    let has_arms = arm_pairs.iter().any(|(upper_names, lower_names)| {
+        find_bone(upper_names).is_some() && find_bone(lower_names).is_some()
+    });
+    if !has_arms {
+        return (Vec::new(), AStanceResult::NotFound);
+    }
+
+    let mut already_target_count = 0usize;
+    let corrections: Vec<AStanceCorrection> = arm_pairs
         .iter()
         .filter_map(|(upper_names, lower_names)| {
             let ua_idx = find_bone(upper_names)?;
@@ -372,6 +383,7 @@ fn compute_tstance_corrections(bones: &[IrBone]) -> Vec<AStanceCorrection> {
             // 水平方向の成分
             let horizontal = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
             if horizontal.length_squared() < 0.001 {
+                // 退化ケース（腕が真上/真下）— 補正不要だが「既にTスタンス」ではない
                 return None;
             }
 
@@ -383,12 +395,14 @@ fn compute_tstance_corrections(bones: &[IrBone]) -> Vec<AStanceCorrection> {
                     bones[ua_idx].name,
                     current_angle.to_degrees()
                 );
+                already_target_count += 1;
                 return None;
             }
 
             // 腕を上に持ち上げて水平にする → 逆方向に回転
             let axis = Vec3::Y.cross(dir).normalize_or_zero();
             if axis.length_squared() < 0.001 {
+                // 退化ケース（回転軸計算不能）— 補正不要だが「既にTスタンス」ではない
                 return None;
             }
             // T→A では正の角度で下に曲げた。A→T では負の角度で持ち上げる
@@ -405,7 +419,16 @@ fn compute_tstance_corrections(bones: &[IrBone]) -> Vec<AStanceCorrection> {
                 rotation: correction,
             })
         })
-        .collect()
+        .collect();
+
+    let result = if !corrections.is_empty() {
+        AStanceResult::Applied(corrections.len())
+    } else if already_target_count > 0 {
+        AStanceResult::AlreadyAStance
+    } else {
+        AStanceResult::NotFound
+    };
+    (corrections, result)
 }
 
 fn collect_descendants_inclusive(bones: &[IrBone], root: usize) -> Vec<usize> {

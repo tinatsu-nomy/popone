@@ -11,6 +11,8 @@
 | PMX 2.0 / 2.1 (`.pmx`) | MikuMikuDance モデル形式。ビューア表示 + UVマップ出力 |
 | PMD (`.pmd`) | MikuMikuDance モデル形式。Shift_JIS 対応 |
 | UnityPackage (`.unitypackage`) | tar.gz アーカイブから VRM / FBX + テクスチャを自動抽出 |
+| ZIP (`.zip`) | アーカイブ内の VRM / FBX / PMX / PMD / UnityPackage を自動検出・展開 |
+| 7z (`.7z`) | アーカイブ内の VRM / FBX / PMX / PMD / UnityPackage を自動検出・展開 |
 
 ## クイックスタート
 
@@ -43,7 +45,7 @@ popone.exe input.fbx
 - **法線マップ表示** — 法線ベクトルを RGB カラーに変換して表示（デバッグ・確認用）
 - **法線ツール** — 法線平滑化、カスタム法線クリア、法線方向の可視化
 - **MSAA** — 4x アンチエイリアシング（ON/OFF 切替可能）
-- **UVマップ出力** — 材質レイヤー分けの PSD として出力（1024〜8192 解像度）。UV 境界をまたぐ三角形のラップ描画対応
+- **UVマップ出力** — 材質レイヤー分けの PSD として出力（1024〜8192 解像度）。UV 境界をまたぐ三角形のラップ描画対応。複数モデルマージ時はモデル別にレイヤーグループフォルダに格納
 
 <details>
 <summary>キーボードショートカット</summary>
@@ -79,42 +81,9 @@ popone.exe input.fbx
 - **UI 制限** — PMX/PMD ロード時は PMX 変換ボタン・法線平滑化・カスタム法線クリアをグレーアウト
 - **コメント表示** — PMX/PMD のコメントをモデル情報パネルに表示
 
-### v0.2.4 改善
+### 更新履歴
 
-- **アーカイブD&Dリロード対応** — zip/7z から D&D したファイルがOS一時ディレクトリに展開される問題に対応。モデル本体＋補助ファイル（テクスチャ・.txt）をオンメモリにスナップショット保持し、一時ファイル消失後もリロード可能に。VRM/FBX/PMX/PMD 全対応
-- **アーカイブD&D先読みキャッシュ** — D&D 検出時点でモデル本体＋隣接テクスチャのバイト列を `PreloadedData` に先読み。以降のロードチェーン全体でキャッシュを使用し、一時ファイル消失後も確実にロード。FBX 選択ダイアログ（`PendingFbxChoice`）を挟む経路でもデータを受け渡し。VRM/FBX/PMX/PMD/UnityPackage 全形式対応
-- **アーカイブD&D即座ロード** — zipアーカイブからの D&D 時、一時ファイルが2フレーム遅延の間に消失するエラーを修正。一時パスを検出した場合はプログレスオーバーレイを省略して即座にロード
-- **テクスチャD&Dキャッシュ** — ZIP 内テクスチャの D&D 時、プレビュー段階でバイトデータ・PSD 判定・一時パスフラグをキャッシュ。確定時のファイル再読み込みを排除し、一時ファイル消失後もテクスチャ割り当てが確実に記録される
-- **UnityPackage アーカイブスナップショット** — ZIP 内 .unitypackage の D&D 時、アーカイブデータを `Arc<[u8]>` でスナップショット保持。リロード・アペンド時に一時ファイルに依存せずメモリから復元可能に
-- **シェーダー対応PMX材質** — MToon の shade_color と diffuse の輝度比に基づくトゥーンテクスチャ自動選択（5段階）。MToon 材質の ambient を shade_color ベースに、specular をゼロに補正。非 MToon は従来動作を維持
-- **Aスタンス変換警告** — PMX 変換時、Aスタンス変換が有効だが腕ボーンが見つからない場合に赤文字オーバーレイで警告を表示。既にAスタンスに近い場合はスキップ通知を表示
-- **ConvertResult::Warning** — 変換成功だが注意事項がある場合の新しいメッセージ種別（赤文字表示、Failure とは区別）
-- **AStanceResult enum** — Aスタンス変換結果を型安全に管理（NotRequested / Applied / AlreadyAStance / NotFound）。IrModel::merge() での統合ロジック付き
-- **リロード時テクスチャ正規化** — UnityPackage リロード時の PSD→PNG 変換バイパスを修正。MIME タイプ設定も正規パスと統一
-- **IrTexture 重複排除** — テクスチャ割り当て時に filename + data で同一性を判定し、同一テクスチャの重複追加を防止
-
-### v0.2.3 改善
-
-- **表示材質のみ出力** — PMX 変換時に、表示タブで非表示にした材質を出力から除外するオプション（デフォルト OFF）。材質・メッシュ・テクスチャ・頂点モーフ・グループモーフを一貫してフィルタリング
-- **ボーンマージ 2パス方式** — 同名ボーン統合の親子判定を順序非依存の候補収集＋伝播ループに変更。異なる部分木の子孫が誤統合されるバグを修正
-- **pkg テクスチャ名前空間** — 複数 UnityPackage 追加時のテクスチャ名衝突を防止（`{パッケージ名}_pkg{連番}_{テクスチャ名}` 形式）。auto-matched テクスチャにも適用
-- **ASCII FBX Content 処理** — Content ブロックを文字列として保持し、パーサー層の完全性を維持
-- **テスト 61 件** — ボーンマージ・物理リマップ・モーフオフセット・エクスポートフィルタ等のテストを追加
-
-### コード品質・パフォーマンス改善（v0.2.2）
-
-- **パフォーマンス最適化** — アニメーション頂点バッファの毎フレーム alloc 除去、ボーン名探索の HashMap O(1) 化、GPU 可視化バッファの dirty flag 導入
-- **テスト拡充** — 10 テスト → 51 テスト。座標変換ラウンドトリップ、ボーン名マッピング、PMX 書き込み・読み込みラウンドトリップ、VRM→PMX E2E テスト
-- **Clippy 警告ゼロ** — `cargo clippy --all-targets --all-features -- -D warnings` 完全クリーン
-- **UX 改善** — D&D オーバーレイ 4 パターン化、操作ヒント 2 行分割、グレーアウト UI ツールチップ追加
-
-### FBX 対応
-
-- バイナリ / ASCII FBX の自前パーサー（シーングラフ・座標系自動変換・PreRotation・UnitScaleFactor）
-- ASCII FBX: Content ブロック（埋め込みテクスチャ）は文字列として保持し、外部ファイルフォールバックで復元
-- スキンウェイト（最大 4 ボーン正規化）、ブレンドシェイプ、UV マッピング
-- ヒューマノイドリグ自動検出（Mixamo / 3ds Max Biped / Maya HumanIK / VRoid / Blender）
-- 零法線の自動補完、埋め込み/外部テクスチャ対応
+バージョンごとの変更点は [更新履歴](CHANGELOG.md) を参照。
 
 ## おまけ
 
@@ -133,20 +102,22 @@ popone.exe input.fbx
 popone.exe input.vrm output.pmx
 popone.exe input.fbx output.pmx
 popone.exe input.unitypackage output.pmx
+popone.exe archive.zip output.pmx
+popone.exe archive.7z output.pmx --model-name "model.pmx"
 ```
 
 | 出力 | 説明 |
 |------|------|
 | PMX 2.0 (`.pmx`) | MikuMikuDance / PmxEditor 用。MMD 標準ボーン・IK・物理を自動挿入 |
 | テクスチャ PNG | `textures/` フォルダに出力 |
-| UVマップ PSD | 材質ごとにレイヤー分け（ビューアから出力） |
+| UVマップ PSD | 材質ごとにレイヤー分け、モデル別グループフォルダ付き（ビューアから出力） |
 
-- VRM 0.0 / 1.0 / FBX / UnityPackage を自動判定
+- VRM 0.0 / 1.0 / FBX / UnityPackage / ZIP / 7z を自動判定
 - MMD 標準ボーン自動挿入（全ての親・センター・グルーブ・腰・足IK・つま先IK）
 - 準標準ボーン挿入（腰キャンセル・足D・足先EX・腕捩り・手捩り・肩キャンセル）
 - VRM Expression → PMX モーフ変換
 - VRM SpringBone → PMX 剛体・ジョイント変換（重力・回転/移動制限・コライダー衝突マスク）
-- Aスタンス変換、剛体回転をボーン方向に揃えるオプション
+- Aスタンス変換（変換失敗・スキップ時はビューポートに常時警告表示）、剛体回転をボーン方向に揃えるオプション
 - MToon アウトライン → PMX エッジ反映
 - 表示枠の自動分類（Root / 表情 / 体(上) / 腕 / 指 / 足 / その他）
 - UV 正規化（0..1 範囲に補正）
@@ -155,6 +126,8 @@ popone.exe input.unitypackage output.pmx
 
 - **PMX/PMD は閲覧専用** — PMX 変換（再出力）は非対応。ビューア表示と UVマップ出力のみ
 - **法線マップ（ノーマルマップ）未適用** — VRM/FBX の normalTexture はシェーディングに反映されない（法線マップ表示モードで確認は可能）
+- **テクスチャサイズ制限** — GPU の `max_texture_dimension_2d`（一般的に 8192px）を超えるテクスチャは自動的に縮小される。画質が若干低下する場合がある。PMX 変換出力には影響しない（ビューア表示のみ）
+- **展開サイズ上限** — アーカイブ（ZIP / 7z）および `.unitypackage` の展開サイズは合計 2GB が上限。これを超えるファイルはエラーとなる
 - **Lat式初音ミク等** — MMD レンダリングに特化したモデルは一部サーフェイスが正しく表示されない場合がある
 - **PMX 2.1 SoftBody** — 読み飛ばし（未対応）
 
@@ -184,6 +157,8 @@ popone <入力> [出力.pmx] [オプション]
   --no-physics            物理変換をスキップ
   --normalize-pose        Aスタンス変換（Tポーズの腕を下げる）
   --align-rigid-rotation  剛体回転をボーン方向に揃える
+  --model-name <NAME>     アーカイブ内のモデルファイル名を指定（ZIP/7z用）
+  --list-models           アーカイブ内のモデル一覧を表示して終了（ZIP/7z用）
   --log-level <LEVEL>     ログレベル（error/warn/info/debug、デフォルト: info）
 ```
 
@@ -243,7 +218,7 @@ println!("ボーン: {}, 頂点: {}", stats.bones, stats.vertices);
 cargo test
 ```
 
-59 テスト（ユニット 48 + 統合 11）。統合テストは環境変数でテストデータの配置を指定可能:
+73 テスト（ユニット 50 + 統合 11）。統合テストは環境変数でテストデータの配置を指定可能:
 
 ```bash
 # テストデータのルートディレクトリ

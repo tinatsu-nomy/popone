@@ -7,6 +7,23 @@ use super::camera::OrbitCamera;
 use crate::intermediate::types::IrModel;
 use super::mesh::GpuModel;
 
+/// 材質用 BindGroupLayout を作成（共通定義、gpu.rs と mesh.rs で共有）
+pub fn create_material_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("material_bgl"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    })
+}
+
 /// テクスチャ用 BindGroupLayout を作成（共通定義）
 pub fn create_texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -398,19 +415,7 @@ impl GpuRenderer {
 
         let texture_bgl = create_texture_bind_group_layout(device);
 
-        let material_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("material_bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
+        let material_bgl = create_material_bind_group_layout(device);
 
         // Camera uniform buffer
         let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1219,18 +1224,24 @@ impl GpuRenderer {
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        // 前回のテクスチャを解放
-        if let Some(old_id) = cached_id.take() {
-            egui_renderer.free_texture(&old_id);
-        }
-
-        // egui にテクスチャを登録
-        let tex_id = egui_renderer.register_native_texture(
-            device,
-            &offscreen.color_view,
-            wgpu::FilterMode::Linear,
-        );
-        *cached_id = Some(tex_id);
+        // テクスチャ登録（初回は register、以降は update で再登録を回避）
+        let tex_id = if let Some(existing_id) = *cached_id {
+            egui_renderer.update_egui_texture_from_wgpu_texture(
+                device,
+                &offscreen.color_view,
+                wgpu::FilterMode::Linear,
+                existing_id,
+            );
+            existing_id
+        } else {
+            let id = egui_renderer.register_native_texture(
+                device,
+                &offscreen.color_view,
+                wgpu::FilterMode::Linear,
+            );
+            *cached_id = Some(id);
+            id
+        };
 
         (tex_id, ())
     }

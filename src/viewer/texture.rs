@@ -9,6 +9,7 @@ pub fn is_psd_filename(name: &str) -> bool {
 }
 
 /// RGBA データを GPU テクスチャにアップロード（共通処理）
+/// GPU の最大テクスチャサイズを超える場合は自動的に縮小する
 pub fn upload_rgba_to_gpu(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -17,11 +18,28 @@ pub fn upload_rgba_to_gpu(
     height: u32,
     label: Option<&str>,
 ) -> wgpu::TextureView {
+    let max_dim = device.limits().max_texture_dimension_2d;
+    let (upload_rgba, upload_w, upload_h) = if width > max_dim || height > max_dim {
+        log::warn!(
+            "テクスチャ {:?} ({}x{}) が GPU 制限 {} を超えています — 縮小します",
+            label, width, height, max_dim
+        );
+        let scale = (max_dim as f64 / width as f64).min(max_dim as f64 / height as f64);
+        let new_w = ((width as f64 * scale) as u32).max(1);
+        let new_h = ((height as f64 * scale) as u32).max(1);
+        let src = image::RgbaImage::from_raw(width, height, rgba.to_vec())
+            .expect("RgbaImage 構築失敗");
+        let resized = image::imageops::resize(&src, new_w, new_h, image::imageops::FilterType::Triangle);
+        (resized.into_raw(), new_w, new_h)
+    } else {
+        (rgba.to_vec(), width, height)
+    };
+
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label,
         size: wgpu::Extent3d {
-            width,
-            height,
+            width: upload_w,
+            height: upload_h,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -39,15 +57,15 @@ pub fn upload_rgba_to_gpu(
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        rgba,
+        &upload_rgba,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(4 * width),
+            bytes_per_row: Some(4 * upload_w),
             rows_per_image: None,
         },
         wgpu::Extent3d {
-            width,
-            height,
+            width: upload_w,
+            height: upload_h,
             depth_or_array_layers: 1,
         },
     );

@@ -384,6 +384,71 @@ Content: {
 - **手動割当テクスチャ**: `pkg_textures` Vec への `extend` 時にプレフィックスを付与。`pkg_assignments` HashMap はプレフィックス付き名前をキーとして自然に一意化
 - **パスセパレータ回避**: プレフィックスに `/` を使わない（`IrTexture.filename` が PMX export のファイルパスに使われるため）
 
+## アーカイブ直接ロード（v0.2.5）
+
+### archive モジュール
+
+ZIP / 7z アーカイブ内のモデルファイルを検出・展開する統一 API。
+
+#### 2段階 API
+
+| 関数 | ZIP | 7z | 説明 |
+|------|-----|-----|------|
+| `list_models` | メタデータのみ取得 | 対象拡張子を全展開（ストリーミング制約） | モデル一覧を返す |
+| `extract_model_bundle` | 選択ファイルのみ展開 | 既に展開済みのエントリを使用 | モデル + テクスチャ/aux_files を返す |
+
+7z は `sevenz-rust2` のストリーミング API の制約上、`list_models` 時点で対象拡張子のファイルを全展開してメモリに保持する（`MAX_TOTAL_BYTES = 2GB` 上限）。展開済みエントリは `ArchiveContents` 内に保持され、`extract_model_bundle` で再展開なく利用される。
+
+#### PMX/PMD テクスチャ参照解決
+
+PMX/PMD はモデルファイルをパースしてテクスチャ参照パス一覧を取得し、アーカイブ内の対応ファイルを照合:
+
+1. 完全一致
+2. Case-insensitive フォールバック
+3. PMD basename のみ照合
+
+マッチしたファイルはモデル親ディレクトリ基準の相対パスをキーとして `aux_files: HashMap<PathBuf, Arc<[u8]>>` に格納。
+
+#### セキュリティ
+
+- **パストラバーサル防御**: `normalize_archive_path` で `..` や絶対パスを拒否
+- **Shift_JIS ファイル名**: `name_raw()` → UTF-8 → Shift_JIS フォールバック（`enclosed_name()` は CP437 誤パースのため使用しない）
+- **zip bomb 対策**: ZIP は `take(limit)` でハード制限、7z はチャンク読み込みで実読込バイト数を検証（`saturating_add` でオーバーフロー安全）
+- **ZIP PMX/PMD 残予算**: 2回目の `extract_files` に `remaining = MAX_TOTAL_BYTES - model_size` を渡す
+
+### ビューア統合
+
+#### PendingArchive / PendingArchiveLoad
+
+`PendingUnityPackage` / `PendingPkgModelLoad` と同じ遅延ロードパターン:
+
+1. `try_load_archive` → `list_models` → モデル1個: `pending_archive_load`、複数: `pending_archive`（選択ダイアログ）
+2. `show_archive_select_dialog`（`ui.rs`）→ 選択 → `pending_archive_load`
+3. `update_progress_flags` → `shown = true`（オーバーレイ表示）
+4. 次フレーム → `load_model_from_archive` → `extract_model_bundle` → `build_ir_from_archive_bundle` → `finish_load`
+
+#### リロード
+
+`ReloadableSource::Archive` は `selected_entry_path` で同じモデルを再選択。`load_ir_from_archive_source` が `reload_from_source` と `append_model_from_source` の両方から呼ばれる共通関数。
+
+#### アーカイブ内 UnityPackage（二重展開）
+
+ZIP / 7z 内の `.unitypackage` を検出し、二重展開で内部の VRM / FBX を読み込む。
+
+1. `list_models` で `.unitypackage` を `ArchiveModelKind::UnityPackage` として検出
+2. `extract_model_bundle` で `.unitypackage` 本体のみ展開（sibling テクスチャは不要）
+3. `load_unitypackage_from_archive` → `extract_all_assets` で tar.gz を二重展開
+4. 内部モデル選択 → 既存の `PendingPkgModelLoad` フローへ接続
+5. `ReloadableSource::Archive { inner_kind: UnityPackage }` でソース情報を保持
+6. リロード時は `reload_archive_unitypackage` でアーカイブ再展開 → unitypackage 再抽出 → `selected_fbx_name` でモデル再選択
+
+展開サイズ上限: 外側アーカイブ（`MAX_TOTAL_BYTES = 2GB`）と内側 `.unitypackage`（同 2GB）の両方で防御。
+
+### CLI
+
+`--list-models`: アーカイブ内モデル一覧を表示して終了（output 不要）。
+`--model-name`: 完全一致 → 前方一致 → 部分一致の3段階で検索。各段階で一意のみ採用し、複数候補時はエラーメッセージに候補一覧を表示。
+
 ## アーカイブD&Dリロード対応（v0.2.4）
 
 ### ReloadableSource enum
@@ -394,6 +459,7 @@ Content: {
 |-----------|------|
 | `File(PathBuf)` | 通常のファイルパス。リロード時はファイルを再読み込み |
 | `Snapshot { original_path, main_bytes: Arc<[u8]>, aux_files }` | 一時ファイルからのスナップショット。リロード時はメモリから復元 |
+| `Archive { original_path, archive_bytes, selected_entry_path, inner_kind }` | アーカイブ内モデル。リロード時はアーカイブを再展開して同モデルを選択 |
 
 ### 一時パス検出
 
@@ -426,7 +492,7 @@ pub struct PreloadedData {
 | メソッド | 説明 |
 |---------|------|
 | `read_or_preloaded(path)` | `preloaded.main_bytes` または `aux_files` にマッチすればキャッシュから返す。マッチしなければ `std::fs::read` にフォールバック |
-| `take_or_collect_aux(path)` | `preloaded.aux_files` にマッチすれば clone で返す。マッチしなければ `collect_image_files_recursive` でディスク収集 |
+| `take_or_collect_aux(path)` | `preloaded.aux_files` にマッチすれば take で移動して返す。マッチしなければ `collect_image_files_recursive` でディスク収集 |
 
 #### データ受け渡しフロー
 
@@ -627,13 +693,17 @@ Aスタンス変換の結果を型安全に管理する enum。`IrModel.astance_
 
 ### 判定ロジック
 
-`compute_astance_corrections()` が以下の優先度で結果を決定:
+`compute_astance_corrections()` / `compute_tstance_corrections()` が以下の優先度で結果を決定:
 
 1. **腕ボーン不在**: `has_arms` チェック（leftUpperArm/leftLowerArm または rightUpperArm/rightLowerArm のペアが 1 つも存在しない）→ `NotFound`
-2. **腕方向が異常**: 水平成分ゼロ（真上/真下向き）、回転軸計算不能 → `skipped_count` に加算
-3. **既にAスタンス**: 現在角度が 25° 超かつ下向き → `skipped_count` に加算
-4. **正常変換**: 30° 回転補正を適用 → `Applied(n)`
-5. **結果決定**: corrections > 0 → `Applied(n)`, skipped > 0 → `AlreadyAStance`, それ以外 → `NotFound`
+2. **退化ケース**: 水平成分ゼロ（真上/真下向き）、回転軸計算不能 → カウントせずスキップ（「既に目標姿勢」とは区別）
+3. **既に目標姿勢**: Aスタンス変換では現在角度が 25° 超かつ下向き、Tスタンス変換では水平からの角度が 5° 未満 → `already_target_count` に加算
+4. **正常変換**: 回転補正を適用 → `Applied(n)`
+5. **結果決定**: corrections > 0 → `Applied(n)`, already_target_count > 0 → `AlreadyAStance`, それ以外 → `NotFound`
+
+### primary_astance_result（v0.2.5）
+
+`LoadedModel` に `primary_astance_result` フィールドを追加。メインモデル読み込み完了時（merge 前）に `ir.astance_result` をコピーして保持する。UI（ビューポート常時警告・PMX 出力警告）はこのフィールドを参照することで、追加読み込み（append/merge）後の `ir.astance_result` 汚染の影響を受けない。
 
 ### IrModel::merge() での統合
 
@@ -650,13 +720,78 @@ Aスタンス変換の結果を型安全に管理する enum。`IrModel.astance_
 
 ### ビューアでの警告表示
 
-PMX 変換成功時、`ir_ref.astance_result` を参照:
+#### 常時警告（ビューポート左下、v0.2.5）
+
+`normalize_pose` チェックボックス ON かつ `loaded.primary_astance_result` が `NotFound` または `AlreadyAStance` の場合、操作ヒントの上に常時テキストを表示:
+
+- `NotFound` → 赤文字 `⚠ {A/T}スタンス変換失敗: 腕ボーンが見つかりません`
+- `AlreadyAStance` → 黄文字 `※ 既に{A/T}スタンスに近いためスキップしました`
+- ラベルは `source_format.is_pmx_pmd()` で「Tスタンス」/「Aスタンス」を切替
+
+チェックボックス OFF 時は非表示。
+
+#### PMX 出力時警告
+
+PMX 変換成功時、`loaded.primary_astance_result` を参照:
 
 - `NotFound` → `ConvertMessage::Warning`（赤文字オーバーレイ）: 「腕ボーンが見つからず変換できませんでした」
-- `AlreadyAStance` → `ConvertMessage::Success` に注記付加: 「既にAスタンスに近いためスキップしました」
+- `AlreadyAStance` → `ConvertMessage::Success` に注記付加: 「既に{A/T}スタンスに近いためスキップしました」
 - `Applied(_)` / `NotRequested` → 通常の成功メッセージ
 
 `ConvertResult::Warning` は `Failure` と同じ赤文字で表示されるが、変換自体は成功している点で `Failure` と区別される。
+
+## UVマップ PSD レイヤーグループ化（v0.2.5）
+
+`convert/uvmap.rs` の PSD 出力で、複数モデルをマージした場合にモデル別のグループフォルダを生成する。
+
+### PSD グループフォルダの仕組み
+
+PSD ファイルのレイヤーグループは **lsct (Section Divider Setting)** リソースで実現する。レイヤー配列（下→上順）に以下のマーカーを挿入する:
+
+```
+[GroupEnd(lsct type=3)] → [Content レイヤー...] → [GroupStart(lsct type=1)]
+```
+
+- **GroupStart**: `lsct type=1`（open folder）、blend mode=`pass`（パススルー）、名前=グループ名
+- **GroupEnd**: `lsct type=3`（bounding section divider）、名前=`</Layer group>`
+- マーカーは矩形 0×0、4チャンネル各 data_length=2（compression ヘッダのみ）
+
+### データフロー
+
+```
+viewer/app.rs: MaterialGroup { name, material_range, draw_range }
+    ↓ (material_range のみ抽出)
+viewer/ui.rs: Vec<(String, Range<usize>)>
+    ↓
+convert/uvmap.rs: export_uv_map_grouped(ir, path, size, groups)
+    ↓ validate_groups → build_entries → write_psd_file
+PSD ファイル（レイヤーグループ付き）
+```
+
+### 入力検証 (`validate_groups`)
+
+- 範囲の逆順（`start > end`）を拒否
+- 材質数を超える範囲を拒否
+- 複数グループ間での材質重複を拒否
+
+### entries 構築 (`build_entries`)
+
+1. groups を `material_range.start` 昇順にソート（index 配列経由で元スライスの参照を保持）
+2. 各材質がどのグループに属するか逆引きマップを構築
+3. material index 降順で走査し、グループ境界で GroupEnd/GroupStart マーカーを挿入
+4. グループに属さない孤立材質はルート階層に出力
+
+### `MaterialGroup` 構造体（`viewer/app.rs`）
+
+```rust
+pub struct MaterialGroup {
+    pub name: String,
+    pub material_range: std::ops::Range<usize>,  // UV出力で使用
+    pub draw_range: std::ops::Range<usize>,       // UI材質一覧で使用
+}
+```
+
+`material_range` と `draw_range` を分離することで、DrawCall が 0 のモデルでも UV 出力でのグループ化が正しく動作する。
 
 ## 表示材質のみ出力（v0.2.3）
 
@@ -726,8 +861,12 @@ loop {
 src/
 ├── main.rs              エントリポイント（引数なし or 出力未指定→ビューア / 出力指定→CLI変換）
 ├── lib.rs               ライブラリ API
-├── error.rs             エラー型定義
+├── error.rs             エラー型定義（PoponeError enum、thiserror）
 ├── unitypackage.rs      .unitypackage (tar.gz) アセット展開（VRM / FBX 検出・抽出）
+├── archive/
+│   ├── mod.rs           ZIP / 7z 統一 API（list_models, extract_model_bundle）
+│   ├── zip_extract.rs   ZIP 展開（2パス: メタデータ一覧→選択展開）
+│   └── sevenz.rs        7z 展開（フィルタ付き全展開、チャンク読み込み上限付き）
 ├── vrm/
 │   ├── loader.rs        GLB 読み込み・拡張データ抽出（ファイル / バイト列両対応）
 │   ├── detect.rs        VRM バージョン自動判定
@@ -769,9 +908,9 @@ src/
 │   ├── morph.rs         Expression → モーフ名マップ
 │   ├── physics.rs       SpringBone → 剛体・ジョイント変換（V0/V1）
 │   ├── texture.rs       テクスチャ PNG 書き出し
-│   └── uvmap.rs         UVマップ PSD 出力（材質レイヤー分け、境界ラップ対応）
+│   └── uvmap.rs         UVマップ PSD 出力（材質レイヤー分け、境界ラップ、グループフォルダ対応）
 └── viewer/              ← feature = "viewer" 時のみコンパイル
-    ├── app.rs           eframe::App 状態管理（TextureState / AnimLibrary サブ構造体）
+    ├── app.rs           eframe::App 状態管理（TextureState / AnimLibrary / PendingState / ExportState サブ構造体）
     ├── gpu.rs           wgpu パイプライン・オフスクリーン描画・可視化バッファ dirty flag
     ├── mesh.rs          IrModel → GPU 頂点バッファ変換
     ├── texture.rs       テクスチャ GPU アップロード（MIME ヒント対応）
@@ -782,75 +921,16 @@ src/
     └── animation.rs     アニメーション再生・リターゲティング（VRMA/glTF/FBX 対応）
 ```
 
-## v0.2.2 内部改善
+## 更新履歴
 
-### ViewerApp サブ構造体化
-
-v0.2.2 で ViewerApp の 43 フィールドを 30 フィールドに削減:
-
-| サブ構造体 | フィールド | アクセス | 内容 |
-|-----------|----------|---------|------|
-| `TextureState` | `self.tex.*` | 9 フィールド | テクスチャ割り当て・パッケージテクスチャ・プレビュー・マッチング |
-| `AnimLibrary` | `self.anim.*` | 4 フィールド | アニメーション再生状態・ライブラリ・Muscle スケール |
-
-Rust の部分借用により `&mut self.tex` と `&self.anim` を同時に借用可能。
-
-### GPU 可視化バッファのキャッシュ戦略
-
-ボーン・物理・ジョイントの可視化頂点を dirty flag で管理:
-
-| 入力 | キャッシュキー | 再生成条件 |
-|------|-------------|----------|
-| ボーン頂点 | `camera.eye()`, `bone_opacity` | カメラ移動 / 不透明度変更 / アニメーション再生中 |
-| SpringBone 頂点 | `spring_bone_opacity`, `align_rigid_rotation` | 設定変更 / アニメーション再生中 |
-| ジョイント頂点 | `joint_opacity` | 設定変更 / アニメーション再生中 |
-
-全バッファ共通:
-- `vertex_count == 0` → 強制再生成（非表示→表示トグル復帰）
-- `cache_had_anim && !has_anim` → アニメーション解除時に1フレーム強制再生成
-
-### アニメーション頂点バッファ最適化
-
-`apply_bone_animation()` のホットパス改善:
-
-| 項目 | Before | After |
-|------|--------|-------|
-| 頂点バッファ | `base.to_vec()` 毎フレーム alloc | `reset_animated_to_base()` capacity 再利用 |
-| デルタ行列 | `Vec::with_capacity()` 毎フレーム | `work_deltas` フィールドで再利用 |
-| globals 計算 | `Vec` 新規生成 + clone | in-place 更新（`work_computed` フラグ再利用） |
-| モーフ適用 | `apply_morphs_to_buf(&self, &mut [Vertex])` | `apply_morphs_to_animated(&mut self)` 借用衝突回避 |
-
-### ボーン名探索 HashMap 化
-
-`insert_standard_bones()` 内の O(n) 線形探索を HashMap O(1) に:
-
-```rust
-// ボーン名 → インデックスの逆引き（重複名は最初の出現を保持）
-fn build_bone_map(bones: &[PmxBone]) -> HashMap<String, usize> {
-    let mut map = HashMap::with_capacity(bones.len());
-    for (i, b) in bones.iter().enumerate() {
-        map.entry(b.name.clone()).or_insert(i);
-    }
-    map
-}
-```
-
-ボーン配列の変更（挿入・移動）後に `bone_map = build_bone_map(&model.bones)` で再構築。
-
-### テストデータパス解決
-
-統合テストのファイルパスは環境変数で設定可能:
-
-| 優先度 | 解決元 | 例 |
-|--------|-------|-----|
-| 1 | ファイル個別環境変数 | `POPONE_TEST_VRM_SEED_SAN=/path/to/Seed-san.vrm` |
-| 2 | ルート環境変数 + 相対パス | `POPONE_TEST_DATA=/fixtures` → `/fixtures/vrm-spec/.../Seed-san.vrm` |
-| 3 | `CARGO_MANIFEST_DIR/..` | ローカル開発時のデフォルト |
+バージョンごとの改善・内部改善の詳細は [更新履歴](CHANGELOG.md) を参照。
 
 ## 制限事項
 
 - **PMX/PMD は閲覧専用** — PMX 変換（再出力）は非対応。ビューア表示と UV マップ出力のみ
 - **法線マップ（ノーマルマップ）未適用** — VRM/FBX の normalTexture はシェーディングに反映されない（法線マップ表示モードで確認は可能）
+- **テクスチャサイズ制限** — GPU の `max_texture_dimension_2d`（一般的に 8192px）を超えるテクスチャは `upload_rgba_to_gpu` で自動縮小される（`image::imageops::resize` による Triangle フィルタ）。PMX 変換出力には影響しない（ビューア表示のみ）
+- **展開サイズ上限** — アーカイブ（ZIP / 7z）および `.unitypackage` (tar.gz) の展開サイズは合計 2GB が上限（`MAX_TOTAL_BYTES`）。`.unitypackage` はヘッダサイズによる事前チェック + 実展開後の再チェックの二重防御
 - **Lat式初音ミク等** — MMD レンダリングに特化したモデルは一部サーフェイスが正しく表示されない場合がある
 - **PMX 2.1 SoftBody** — 読み飛ばし（未対応）
 

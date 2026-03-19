@@ -11,6 +11,8 @@
 | PMX 2.0 / 2.1 (`.pmx`) | MikuMikuDance model format. Viewer display + UV map export |
 | PMD (`.pmd`) | MikuMikuDance model format. Shift_JIS support |
 | UnityPackage (`.unitypackage`) | Extracts VRM / FBX + textures from tar.gz archive |
+| ZIP (`.zip`) | Auto-detects and extracts VRM / FBX / PMX / PMD / UnityPackage from archive |
+| 7z (`.7z`) | Auto-detects and extracts VRM / FBX / PMX / PMD / UnityPackage from archive |
 
 ## Quick Start
 
@@ -43,7 +45,7 @@ In the viewer, drag & drop files or use the "Open" button to load models.
 - **Normal Map View** — Visualize normal vectors as RGB colors (debug/inspection)
 - **Normal Tools** — Normal smoothing, custom normal clear, normal direction visualization
 - **MSAA** — 4x anti-aliasing (toggleable)
-- **UV Map Export** — PSD output with per-material layers (1024–8192 resolution). UV boundary wrap handling for triangles crossing 0/1 edges
+- **UV Map Export** — PSD output with per-material layers (1024–8192 resolution). UV boundary wrap handling for triangles crossing 0/1 edges. Groups layers into folders by model name when multiple models are merged
 
 <details>
 <summary>Keyboard Shortcuts</summary>
@@ -79,42 +81,9 @@ In the viewer, drag & drop files or use the "Open" button to load models.
 - **UI Restrictions** — PMX conversion button, normal smoothing, and custom normal clear are grayed out when PMX/PMD is loaded
 - **Comment Display** — PMX/PMD comments shown in model info panel
 
-### v0.2.4 Improvements
+### Changelog
 
-- **Archive D&D Reload Support** — Handles files D&D'd from zip/7z that are extracted to OS temp directories. Model body + auxiliary files (textures, .txt) are snapshot-cached in memory, enabling reload even after temp files are deleted. Supports VRM/FBX/PMX/PMD
-- **Archive D&D Preload Cache** — At D&D detection time, model body + adjacent texture bytes are pre-read into `PreloadedData`. The entire load chain uses the cache, ensuring reliable loading even after temp file deletion. Data is passed through `PendingFbxChoice` for FBX selection dialog paths. Supports all formats: VRM/FBX/PMX/PMD/UnityPackage
-- **Archive D&D Immediate Load** — Fixed error where temp files from zip archives would be deleted during the 2-frame delay before loading. When a temp path is detected, the progress overlay is skipped and the file is loaded immediately
-- **Texture D&D Cache** — When D&D'ing textures from ZIP archives, byte data, PSD detection, and temp path flag are cached at preview stage. Eliminates file re-read on confirmation, ensuring texture assignments are reliably recorded even after temp file deletion
-- **UnityPackage Archive Snapshot** — When D&D'ing .unitypackage from ZIP archives, archive data is snapshot-cached as `Arc<[u8]>`. Enables reload/append from memory without depending on temp files
-- **Shader-Aware PMX Materials** — Automatic toon texture selection (5 levels) based on MToon shade_color/diffuse luminance ratio. MToon materials get shade_color-based ambient and zero specular. Non-MToon materials retain existing behavior
-- **A-Stance Conversion Warning** — Red text overlay warning when A-stance conversion is enabled but arm bones are not found during PMX conversion. Shows skip notification when already in A-stance
-- **ConvertResult::Warning** — New message type for successful conversions with caveats (red text, distinct from Failure)
-- **AStanceResult enum** — Type-safe management of A-stance conversion results (NotRequested / Applied / AlreadyAStance / NotFound). Includes merge logic for IrModel::merge()
-- **Reload Texture Normalization** — Fixed PSD→PNG conversion bypass during UnityPackage reload. MIME type settings now consistent with the normal assignment path
-- **IrTexture Deduplication** — Texture assignment now checks filename + data for identity, preventing duplicate IrTexture entries
-
-### v0.2.3 Improvements
-
-- **Visible-Only Material Export** — Option to exclude hidden materials from PMX output (default OFF). Consistently filters materials, meshes, textures, vertex morphs, and group morphs
-- **2-Pass Bone Merge** — Order-independent candidate collection + propagation loop for same-name bone unification. Fixes incorrect merge of descendants in different subtrees
-- **Pkg Texture Namespace** — Prevents texture name collisions when appending multiple UnityPackages (`{pkg_name}_pkg{seq}_{texture_name}` format). Also applied to auto-matched textures
-- **ASCII FBX Content Handling** — Content blocks preserved as strings, maintaining parser-layer completeness
-- **61 Tests** — Added bone merge, physics remap, morph vertex offset, export filter tests
-
-### Code Quality & Performance (v0.2.2)
-
-- **Performance** — Eliminated per-frame vertex buffer allocation, HashMap O(1) bone lookup, GPU visualization dirty flags
-- **Tests** — 10 → 51 tests. Coordinate roundtrip, bone name mapping, PMX write/read roundtrip, VRM→PMX E2E
-- **Zero Clippy warnings** — `cargo clippy --all-targets --all-features -- -D warnings` fully clean
-- **UX** — 4-pattern D&D overlay, 2-line operation hints, disabled UI tooltips
-
-### FBX Support
-
-- Custom binary / ASCII FBX parser (scene graph, coordinate system conversion, PreRotation, UnitScaleFactor)
-- ASCII FBX: Content blocks (embedded textures) preserved as strings; external file fallback for texture recovery
-- Skin weights (up to 4 bones, normalized), blend shapes, UV mapping
-- Humanoid rig auto-detection (Mixamo / 3ds Max Biped / Maya HumanIK / VRoid / Blender)
-- Zero-normal auto-repair, embedded/external texture support
+See [Changelog](CHANGELOG.en.md) for version-by-version changes.
 
 ## Extras
 
@@ -133,20 +102,22 @@ Convert directly from the viewer, or via CLI.
 popone.exe input.vrm output.pmx
 popone.exe input.fbx output.pmx
 popone.exe input.unitypackage output.pmx
+popone.exe archive.zip output.pmx
+popone.exe archive.7z output.pmx --model-name "model.pmx"
 ```
 
 | Output | Description |
 |--------|-------------|
 | PMX 2.0 (`.pmx`) | For MikuMikuDance / PmxEditor. Auto-inserts MMD standard bones, IK, and physics |
 | Texture PNG | Output to `textures/` folder |
-| UV Map PSD | Per-material layers (from viewer) |
+| UV Map PSD | Per-material layers with model-based group folders (from viewer) |
 
-- Auto-detection of VRM 0.0 / 1.0 / FBX / UnityPackage
+- Auto-detection of VRM 0.0 / 1.0 / FBX / UnityPackage / ZIP / 7z
 - MMD standard bone insertion (master, center, groove, waist, leg IK, toe IK)
 - Semi-standard bones (waist cancel, leg D, toe EX, arm twist, wrist twist, shoulder cancel)
 - VRM Expression to PMX morph conversion
 - VRM SpringBone to PMX rigid body / joint conversion (gravity, rotation/movement limits, collider masks)
-- A-stance conversion, rigid body rotation alignment options
+- A-stance conversion (persistent viewport warning on failure/skip), rigid body rotation alignment options
 - MToon outline to PMX edge mapping
 - Auto-classified display frames (Root / Expression / Upper Body / Arms / Fingers / Legs / Other)
 - UV normalization (clamped to 0..1)
@@ -155,6 +126,8 @@ popone.exe input.unitypackage output.pmx
 
 - **PMX/PMD is view-only** — PMX conversion (re-export) is not supported. Viewer display and UV map export only
 - **Normal maps not applied** — VRM/FBX normalTexture is not reflected in shading (can be inspected via Normal Map View mode)
+- **Texture size limit** — Textures exceeding the GPU's `max_texture_dimension_2d` (typically 8192px) are automatically downscaled. This may result in slight quality loss. Does not affect PMX conversion output (viewer display only)
+- **Extraction size limit** — Archive (ZIP / 7z) and `.unitypackage` extraction is capped at 2GB total. Files exceeding this limit will produce an error
 - **Lat-style Hatsune Miku, etc.** — Models optimized for MMD-specific rendering may display some surfaces incorrectly
 - **PMX 2.1 SoftBody** — Skipped (not supported)
 
@@ -184,6 +157,8 @@ Options:
   --no-physics            Skip physics conversion
   --normalize-pose        A-stance conversion (lower T-pose arms)
   --align-rigid-rotation  Align rigid body rotation to bone direction
+  --model-name <NAME>     Specify model filename inside archive (for ZIP/7z)
+  --list-models           List models inside archive and exit (for ZIP/7z)
   --log-level <LEVEL>     Log level (error/warn/info/debug, default: info)
 ```
 
@@ -243,7 +218,7 @@ println!("Bones: {}, Vertices: {}", stats.bones, stats.vertices);
 cargo test
 ```
 
-59 tests (48 unit + 11 integration). Integration tests support environment variables for test data paths:
+73 tests (50 unit + 11 integration). Integration tests support environment variables for test data paths:
 
 ```bash
 # Test data root directory

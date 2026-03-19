@@ -7,12 +7,13 @@ pub mod convert;
 pub mod fbx;
 pub mod unity;
 pub mod unitypackage;
+pub mod archive;
 
 #[cfg(feature = "viewer")]
 pub mod viewer;
 
 use std::path::Path;
-use anyhow::Result;
+use error::Result;
 use serde::Serialize;
 
 #[derive(Serialize, Debug)]

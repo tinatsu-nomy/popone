@@ -307,19 +307,7 @@ fn build_gpu_model_inner(
         ..Default::default()
     });
 
-    let material_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("material_bgl_mesh"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
-    });
+    let material_bgl = gpu::create_material_bind_group_layout(device);
 
     // 各メッシュのグローバル頂点オフセット（メッシュ元順序）
     let mut mesh_global_offsets = Vec::with_capacity(ir.meshes.len());

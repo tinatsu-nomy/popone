@@ -2,17 +2,19 @@
 
 [日本語](README.md)
 
-A 3D viewer for VRM / FBX / PMX / PMD / UnityPackage files.
+A 3D viewer for VRM / FBX / PMX / PMD / UnityPackage / ZIP / 7z files.
 
 ## Download
 
-Latest release: **[popone-v0.2.4.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.4/popone-v0.2.4.exe)**
+Latest release: **[popone-v0.2.5.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.5/popone-v0.2.5.exe)**
 
 All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
 ## Disclaimer
 
 - The output PMX files are intended for further adjustment in tools like PmxEditor.
+- Textures exceeding the GPU's maximum texture size (typically 8192px) are automatically downscaled in the viewer (does not affect PMX output).
+- Archive (ZIP / 7z) and `.unitypackage` extraction is capped at 2GB total.
 - The author assumes no responsibility for any issues arising from the use of this tool.
 
 ## License
@@ -38,8 +40,10 @@ See [Usage](docs/usage.en.md) for details.
 | encoding_rs | PMD Shift_JIS text conversion |
 | flate2 | zlib compression/decompression |
 | tar | .unitypackage (tar.gz) extraction |
+| zip | ZIP archive extraction |
+| sevenz-rust2 | 7z archive extraction |
 | clap | CLI argument parser |
-| anyhow | Error handling |
+| anyhow / thiserror | Error handling |
 | log / fern / chrono | Logging |
 
 </details>
@@ -71,8 +75,10 @@ See [Usage](docs/usage.en.md) for details.
 | [encoding_rs](https://github.com/nickel-org/encoding_rs) | MIT OR Apache-2.0 |
 | [flate2](https://github.com/rust-lang/flate2-rs) | MIT OR Apache-2.0 |
 | [tar](https://github.com/alexcrichton/tar-rs) | MIT OR Apache-2.0 |
+| [zip](https://github.com/zip-rs/zip2) | MIT |
+| [sevenz-rust2](https://github.com/hasenbanck/sevenz-rust2) | Apache-2.0 |
 | [clap](https://github.com/clap-rs/clap) | MIT OR Apache-2.0 |
-| [anyhow](https://github.com/dtolnay/anyhow) | MIT OR Apache-2.0 |
+| [anyhow](https://github.com/dtolnay/anyhow) / [thiserror](https://github.com/dtolnay/thiserror) | MIT OR Apache-2.0 |
 | [log](https://github.com/rust-lang/log) / [fern](https://github.com/daboross/fern) / [chrono](https://github.com/chronotope/chrono) | MIT (fern) / MIT OR Apache-2.0 (others) |
 
 ### Viewer

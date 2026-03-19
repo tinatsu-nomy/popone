@@ -384,6 +384,71 @@ e.g.: outfit_pkg1_body.png
 - **manually assigned textures**: Prefix is added when `extend`ing into the `pkg_textures` Vec. The `pkg_assignments` HashMap naturally achieves uniqueness by using prefixed names as keys
 - **path separator avoidance**: Do not use `/` in the prefix (since `IrTexture.filename` is used as PMX export file paths)
 
+## Direct Archive Loading (v0.2.5)
+
+### archive Module
+
+A unified API for detecting and extracting model files from ZIP / 7z archives.
+
+#### 2-Stage API
+
+| Function | ZIP | 7z | Description |
+|----------|-----|-----|-------------|
+| `list_models` | Metadata only | Full extraction of target extensions (streaming constraint) | Returns model list |
+| `extract_model_bundle` | Extracts selected files only | Uses already-extracted entries | Returns model + textures/aux_files |
+
+Due to `sevenz-rust2`'s streaming API constraint, 7z extracts all files with target extensions into memory at `list_models` time (`MAX_TOTAL_BYTES = 2GB` limit). Extracted entries are held in `ArchiveContents` and reused by `extract_model_bundle` without re-extraction.
+
+#### PMX/PMD Texture Reference Resolution
+
+For PMX/PMD, the model file is parsed to obtain texture reference paths, then matched against archive contents:
+
+1. Exact match
+2. Case-insensitive fallback
+3. PMD basename-only match
+
+Matched files are stored in `aux_files: HashMap<PathBuf, Arc<[u8]>>` with model parent directory-relative paths as keys.
+
+#### Security
+
+- **Path traversal defense**: `normalize_archive_path` rejects `..` and absolute paths
+- **Shift_JIS filenames**: `name_raw()` → UTF-8 → Shift_JIS fallback (`enclosed_name()` not used due to CP437 misparse)
+- **Zip bomb protection**: ZIP uses `take(limit)` for hard limits, 7z uses chunked reading to verify actual bytes read (`saturating_add` for overflow safety)
+- **ZIP PMX/PMD budget**: Second `extract_files` call receives `remaining = MAX_TOTAL_BYTES - model_size`
+
+### Viewer Integration
+
+#### PendingArchive / PendingArchiveLoad
+
+Same deferred loading pattern as `PendingUnityPackage` / `PendingPkgModelLoad`:
+
+1. `try_load_archive` → `list_models` → 1 model: `pending_archive_load`, multiple: `pending_archive` (selection dialog)
+2. `show_archive_select_dialog` (`ui.rs`) → selection → `pending_archive_load`
+3. `update_progress_flags` → `shown = true` (overlay display)
+4. Next frame → `load_model_from_archive` → `extract_model_bundle` → `build_ir_from_archive_bundle` → `finish_load`
+
+#### Reload
+
+`ReloadableSource::Archive` re-selects the same model via `selected_entry_path`. `load_ir_from_archive_source` is the shared function called from both `reload_from_source` and `append_model_from_source`.
+
+#### Nested UnityPackage in Archives (Double Extraction)
+
+Detects `.unitypackage` files inside ZIP / 7z and double-extracts to load inner VRM / FBX models.
+
+1. `list_models` detects `.unitypackage` as `ArchiveModelKind::UnityPackage`
+2. `extract_model_bundle` extracts only the `.unitypackage` body (sibling textures are not needed)
+3. `load_unitypackage_from_archive` → `extract_all_assets` for tar.gz double extraction
+4. Inner model selection → connects to existing `PendingPkgModelLoad` flow
+5. `ReloadableSource::Archive { inner_kind: UnityPackage }` preserves source info
+6. On reload, `reload_archive_unitypackage` re-extracts archive → re-extracts unitypackage → re-selects model via `selected_fbx_name`
+
+Extraction size limit: Both the outer archive (`MAX_TOTAL_BYTES = 2GB`) and inner `.unitypackage` (same 2GB) are protected.
+
+### CLI
+
+`--list-models`: Lists models inside the archive and exits (no output required).
+`--model-name`: 3-stage search (exact → prefix → substring match). Only unique matches are accepted at each stage; multiple candidates trigger an error with candidate list.
+
 ## Archive D&D Reload Support (v0.2.4)
 
 ### ReloadableSource enum
@@ -394,6 +459,7 @@ An enum that tracks the model's loading source. Solves the temp file reload prob
 |---------|-------------|
 | `File(PathBuf)` | Normal file path. Re-reads file on reload |
 | `Snapshot { original_path, main_bytes: Arc<[u8]>, aux_files }` | Snapshot from temp file. Restores from memory on reload |
+| `Archive { original_path, archive_bytes, selected_entry_path, inner_kind }` | Model inside archive. Re-extracts archive and re-selects same model on reload |
 
 ### Temp Path Detection
 
@@ -426,7 +492,7 @@ pub struct PreloadedData {
 | Method | Description |
 |--------|-------------|
 | `read_or_preloaded(path)` | Returns from cache if `preloaded.main_bytes` or `aux_files` matches. Falls back to `std::fs::read` otherwise |
-| `take_or_collect_aux(path)` | Returns clone of `preloaded.aux_files` if matched. Falls back to `collect_image_files_recursive` for disk collection |
+| `take_or_collect_aux(path)` | Moves `preloaded.aux_files` via take if matched. Falls back to `collect_image_files_recursive` for disk collection |
 
 #### Data Passing Flow
 
@@ -627,13 +693,17 @@ A type-safe enum for managing A-stance conversion results. Stored in `IrModel.as
 
 ### Determination Logic
 
-`compute_astance_corrections()` determines the result with the following priority:
+`compute_astance_corrections()` / `compute_tstance_corrections()` determine the result with the following priority:
 
 1. **Arm bones absent**: `has_arms` check (no leftUpperArm/leftLowerArm or rightUpperArm/rightLowerArm pair exists) → `NotFound`
-2. **Abnormal arm direction**: Zero horizontal component (pointing straight up/down), rotation axis cannot be computed → increments `skipped_count`
-3. **Already A-stance**: Current angle exceeds 25° and pointing downward → increments `skipped_count`
-4. **Normal conversion**: Apply 30° rotation correction → `Applied(n)`
-5. **Result determination**: corrections > 0 → `Applied(n)`, skipped > 0 → `AlreadyAStance`, otherwise → `NotFound`
+2. **Degenerate case**: Zero horizontal component (pointing straight up/down), rotation axis cannot be computed → skipped without counting (distinguished from "already in target pose")
+3. **Already in target pose**: For A-stance, current angle exceeds 25° and pointing downward; for T-stance, angle from horizontal is less than 5° → increments `already_target_count`
+4. **Normal conversion**: Apply rotation correction → `Applied(n)`
+5. **Result determination**: corrections > 0 → `Applied(n)`, already_target_count > 0 → `AlreadyAStance`, otherwise → `NotFound`
+
+### primary_astance_result (v0.2.5)
+
+Added `primary_astance_result` field to `LoadedModel`. Copies `ir.astance_result` at main model load completion (before merge). UI (viewport persistent warning and PMX export warning) references this field, making it immune to `ir.astance_result` contamination from append/merge operations.
 
 ### IrModel::merge() Integration
 
@@ -650,13 +720,78 @@ During append loading, `IrModel::merge()` integrates `astance_result`:
 
 ### Viewer Warning Display
 
-On PMX conversion success, `ir_ref.astance_result` is checked:
+#### Persistent Warning (Viewport bottom-left, v0.2.5)
+
+When the `normalize_pose` checkbox is ON and `loaded.primary_astance_result` is `NotFound` or `AlreadyAStance`, persistent text is displayed above the operation hints:
+
+- `NotFound` → Red text: `⚠ {A/T}-stance conversion failed: arm bones not found`
+- `AlreadyAStance` → Yellow text: `※ Already close to {A/T}-stance, skipped`
+- Label switches between "T-stance" / "A-stance" based on `source_format.is_pmx_pmd()`
+
+Hidden when checkbox is OFF.
+
+#### PMX Export Warning
+
+On PMX conversion success, `loaded.primary_astance_result` is checked:
 
 - `NotFound` → `ConvertMessage::Warning` (red text overlay): "Arm bones not found, conversion failed"
-- `AlreadyAStance` → `ConvertMessage::Success` with note: "Already close to A-stance, skipped"
+- `AlreadyAStance` → `ConvertMessage::Success` with note: "Already close to {A/T}-stance, skipped"
 - `Applied(_)` / `NotRequested` → Normal success message
 
 `ConvertResult::Warning` is displayed in red text like `Failure`, but is semantically distinct as the conversion itself succeeded.
+
+## UV Map PSD Layer Grouping (v0.2.5)
+
+The PSD output in `convert/uvmap.rs` generates model-based group folders when multiple models are merged.
+
+### PSD Group Folder Mechanism
+
+PSD layer groups are implemented using the **lsct (Section Divider Setting)** resource. The following markers are inserted into the layer array (bottom-to-top order):
+
+```
+[GroupEnd(lsct type=3)] → [Content layers...] → [GroupStart(lsct type=1)]
+```
+
+- **GroupStart**: `lsct type=1` (open folder), blend mode=`pass` (pass-through), name=group name
+- **GroupEnd**: `lsct type=3` (bounding section divider), name=`</Layer group>`
+- Markers have 0×0 rect, 4 channels with data_length=2 (compression header only)
+
+### Data Flow
+
+```
+viewer/app.rs: MaterialGroup { name, material_range, draw_range }
+    ↓ (extract material_range only)
+viewer/ui.rs: Vec<(String, Range<usize>)>
+    ↓
+convert/uvmap.rs: export_uv_map_grouped(ir, path, size, groups)
+    ↓ validate_groups → build_entries → write_psd_file
+PSD file (with layer groups)
+```
+
+### Input Validation (`validate_groups`)
+
+- Rejects reversed ranges (`start > end`)
+- Rejects ranges exceeding material count
+- Rejects overlapping materials across groups
+
+### Entry Construction (`build_entries`)
+
+1. Sort groups by `material_range.start` ascending (via index array to preserve references to original slice)
+2. Build reverse lookup map: material index → sorted group index
+3. Iterate material indices in descending order, inserting GroupEnd/GroupStart markers at group boundaries
+4. Orphan materials (not in any group) appear at root level
+
+### `MaterialGroup` Struct (`viewer/app.rs`)
+
+```rust
+pub struct MaterialGroup {
+    pub name: String,
+    pub material_range: std::ops::Range<usize>,  // Used for UV export
+    pub draw_range: std::ops::Range<usize>,       // Used for UI material list
+}
+```
+
+Separating `material_range` and `draw_range` ensures UV grouping works correctly even for models with zero draw calls.
 
 ## Visible Materials Only Export (v0.2.3)
 
@@ -726,8 +861,12 @@ Collect `texture_index` / `shade_texture_index` / `outline_width_texture_index` 
 src/
 ├── main.rs              Entry point (no args or no output specified → viewer / output specified → CLI conversion)
 ├── lib.rs               Library API
-├── error.rs             Error type definitions
+├── error.rs             Error type definitions (PoponeError enum, thiserror)
 ├── unitypackage.rs      .unitypackage (tar.gz) asset extraction (VRM / FBX detection and extraction)
+├── archive/
+│   ├── mod.rs           ZIP / 7z unified API (list_models, extract_model_bundle)
+│   ├── zip_extract.rs   ZIP extraction (2-pass: metadata listing → selective extraction)
+│   └── sevenz.rs        7z extraction (filtered full extraction, chunked read with size limit)
 ├── vrm/
 │   ├── loader.rs        GLB loading / extension data extraction (file and byte array support)
 │   ├── detect.rs        VRM version auto-detection
@@ -769,9 +908,9 @@ src/
 │   ├── morph.rs         Expression → morph name map
 │   ├── physics.rs       SpringBone → rigid body / joint conversion (V0/V1)
 │   ├── texture.rs       Texture PNG output
-│   └── uvmap.rs         UV map PSD output (material layer separation, boundary wrap support)
+│   └── uvmap.rs         UV map PSD output (material layers, boundary wrap, group folders)
 └── viewer/              ← Compiled only when feature = "viewer"
-    ├── app.rs           eframe::App state management (TextureState / AnimLibrary sub-structs)
+    ├── app.rs           eframe::App state management (TextureState / AnimLibrary / PendingState / ExportState sub-structs)
     ├── gpu.rs           wgpu pipeline / offscreen rendering / visualization buffer dirty flag
     ├── mesh.rs          IrModel → GPU vertex buffer conversion
     ├── texture.rs       Texture GPU upload (MIME hint support)
@@ -782,75 +921,16 @@ src/
     └── animation.rs     Animation playback / retargeting (VRMA/glTF/FBX support)
 ```
 
-## v0.2.2 Internal Improvements
+## Changelog
 
-### ViewerApp Sub-Struct Refactoring
-
-In v0.2.2, ViewerApp's 43 fields were reduced to 30:
-
-| Sub-struct | Field | Access | Contents |
-|------------|-------|--------|----------|
-| `TextureState` | `self.tex.*` | 9 fields | Texture assignment, package textures, preview, matching |
-| `AnimLibrary` | `self.anim.*` | 4 fields | Animation playback state, library, Muscle scale |
-
-Rust's partial borrowing allows simultaneous borrowing of `&mut self.tex` and `&self.anim`.
-
-### GPU Visualization Buffer Cache Strategy
-
-Bone, physics, and joint visualization vertices are managed with dirty flags:
-
-| Input | Cache Key | Regeneration Condition |
-|-------|-----------|----------------------|
-| Bone vertices | `camera.eye()`, `bone_opacity` | Camera movement / opacity change / animation playing |
-| SpringBone vertices | `spring_bone_opacity`, `align_rigid_rotation` | Settings change / animation playing |
-| Joint vertices | `joint_opacity` | Settings change / animation playing |
-
-Common to all buffers:
-- `vertex_count == 0` → forced regeneration (recovery from hidden → visible toggle)
-- `cache_had_anim && !has_anim` → forced 1-frame regeneration when animation is released
-
-### Animation Vertex Buffer Optimization
-
-Hot path improvement for `apply_bone_animation()`:
-
-| Item | Before | After |
-|------|--------|-------|
-| Vertex buffer | `base.to_vec()` per-frame alloc | `reset_animated_to_base()` capacity reuse |
-| Delta matrices | `Vec::with_capacity()` per-frame | Reuse `work_deltas` field |
-| Globals computation | New `Vec` + clone | In-place update (`work_computed` flag reuse) |
-| Morph application | `apply_morphs_to_buf(&self, &mut [Vertex])` | `apply_morphs_to_animated(&mut self)` borrow conflict avoidance |
-
-### Bone Name Lookup HashMap Conversion
-
-O(n) linear search in `insert_standard_bones()` converted to HashMap O(1):
-
-```rust
-// Reverse lookup of bone name → index (keep first occurrence for duplicate names)
-fn build_bone_map(bones: &[PmxBone]) -> HashMap<String, usize> {
-    let mut map = HashMap::with_capacity(bones.len());
-    for (i, b) in bones.iter().enumerate() {
-        map.entry(b.name.clone()).or_insert(i);
-    }
-    map
-}
-```
-
-Rebuild with `bone_map = build_bone_map(&model.bones)` after bone array changes (insertion/movement).
-
-### Test Data Path Resolution
-
-Integration test file paths can be configured via environment variables:
-
-| Priority | Source | Example |
-|----------|--------|---------|
-| 1 | Per-file environment variable | `POPONE_TEST_VRM_SEED_SAN=/path/to/Seed-san.vrm` |
-| 2 | Root environment variable + relative path | `POPONE_TEST_DATA=/fixtures` → `/fixtures/vrm-spec/.../Seed-san.vrm` |
-| 3 | `CARGO_MANIFEST_DIR/..` | Default for local development |
+For detailed per-version improvements and internal changes, see the [Changelog](CHANGELOG.en.md).
 
 ## Limitations
 
 - **PMX/PMD is view-only** — PMX conversion (re-export) is not supported. Only viewer display and UV map output
 - **Normal maps not applied** — VRM/FBX normalTexture is not reflected in shading (can be viewed in normal map display mode)
+- **Texture size limit** — Textures exceeding the GPU's `max_texture_dimension_2d` (typically 8192px) are automatically downscaled in `upload_rgba_to_gpu` (using `image::imageops::resize` with Triangle filter). Does not affect PMX conversion output (viewer display only)
+- **Extraction size limit** — Archive (ZIP / 7z) and `.unitypackage` (tar.gz) extraction is capped at 2GB total (`MAX_TOTAL_BYTES`). `.unitypackage` uses dual protection: header size pre-check + actual bytes post-check
 - **Lat-style Hatsune Miku etc.** — Models specialized for MMD rendering may not display some surfaces correctly
 - **PMX 2.1 SoftBody** — Skipped (not supported)
 
