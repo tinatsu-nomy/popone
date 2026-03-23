@@ -13,6 +13,7 @@ pub mod vrm;
 pub mod viewer;
 
 use error::Result;
+use pmx::build::PmxBuildOptions;
 use serde::Serialize;
 use std::path::Path;
 
@@ -28,80 +29,80 @@ pub struct ConvertStats {
     pub morphs: usize,
 }
 
+/// VRM → PMX 変換オプション
+#[derive(Debug, Clone, Default)]
+pub struct VrmConvertOptions {
+    /// 物理（剛体・ジョイント）を出力しない
+    pub no_physics: bool,
+    /// 剛体回転をボーン方向に揃える
+    pub align_rigid_rotation: bool,
+    /// Aスタンスへ正規化
+    pub normalize_pose: bool,
+    /// 標準ボーン挿入をスキップ（元のボーン構造を維持）
+    pub raw_structure: bool,
+}
+
 pub fn convert_vrm_to_pmx(
     input_path: &Path,
     output_path: &Path,
-    no_physics: bool,
-) -> Result<ConvertStats> {
-    convert_vrm_to_pmx_with_options(input_path, output_path, no_physics, false)
-}
-
-pub fn convert_vrm_to_pmx_with_options(
-    input_path: &Path,
-    output_path: &Path,
-    no_physics: bool,
-    align_rigid_rotation: bool,
-) -> Result<ConvertStats> {
-    convert_vrm_to_pmx_full(
-        input_path,
-        output_path,
-        no_physics,
-        align_rigid_rotation,
-        false,
-    )
-}
-
-pub fn convert_vrm_to_pmx_full(
-    input_path: &Path,
-    output_path: &Path,
-    no_physics: bool,
-    align_rigid_rotation: bool,
-    normalize_pose: bool,
+    options: &VrmConvertOptions,
 ) -> Result<ConvertStats> {
     let glb = vrm::loader::load_glb(input_path)?;
     let version = vrm::detect::detect_version(&glb.document);
     let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
 
-    let mut ir = vrm::extract::extract_ir_model_with_options(
+    let ir = vrm::extract::extract_ir_model_with_options(
         &glb.document,
         &glb.buffers,
         &glb.images,
         &glb.vrm_extension,
         &version,
         &all_extensions,
-        normalize_pose,
+        options.normalize_pose,
     )?;
-
-    if no_physics {
-        ir.physics = intermediate::types::IrPhysics::default();
-    }
 
     let output_dir = output_path.parent().unwrap_or(Path::new("."));
     let tex_dir = output_dir.join("textures");
     convert::texture::write_all_textures(&ir.textures, &glb.images, &tex_dir)?;
 
-    let pmx_model = pmx::build::build_pmx_model_with_options(&ir, align_rigid_rotation)?;
+    let build_options = PmxBuildOptions {
+        align_rigid_rotation: options.align_rigid_rotation,
+        no_physics: options.no_physics,
+        raw_structure: options.raw_structure,
+        ..Default::default()
+    };
+    let pmx_model = pmx::build::build_pmx_model_with_options(&ir, &build_options)?;
     write_pmx_and_stats(&pmx_model, output_path, &tex_dir)
 }
 
 /// FBX → PMX 変換
-pub fn convert_fbx_to_pmx(input_path: &Path, output_path: &Path) -> Result<ConvertStats> {
+pub fn convert_fbx_to_pmx(
+    input_path: &Path,
+    output_path: &Path,
+    options: &VrmConvertOptions,
+) -> Result<ConvertStats> {
     let data = std::fs::read(input_path)?;
     let ir = fbx::extract::extract_ir_model_from_fbx(&data, Some(input_path))?;
-    convert_ir_to_pmx(&ir, output_path, false)
+    let build_options = PmxBuildOptions {
+        align_rigid_rotation: options.align_rigid_rotation,
+        no_physics: options.no_physics,
+        raw_structure: options.raw_structure,
+        ..Default::default()
+    };
+    convert_ir_to_pmx(&ir, output_path, &build_options)
 }
 
 /// IrModel から直接 PMX 変換（ビューアで編集済みの IrModel を使用）
 pub fn convert_ir_to_pmx(
     ir: &intermediate::types::IrModel,
     output_path: &Path,
-    align_rigid_rotation: bool,
+    options: &PmxBuildOptions,
 ) -> Result<ConvertStats> {
     let output_dir = output_path.parent().unwrap_or(Path::new("."));
     let tex_dir = output_dir.join("textures");
     convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)?;
 
-    let pmx_model = pmx::build::build_pmx_model_with_options(ir, align_rigid_rotation)?;
+    let pmx_model = pmx::build::build_pmx_model_with_options(ir, options)?;
     write_pmx_and_stats(&pmx_model, output_path, &tex_dir)
 }
 
@@ -135,15 +136,15 @@ fn write_pmx_and_stats(
 pub fn convert_to_pmx(
     input_path: &Path,
     output_path: &Path,
-    no_physics: bool,
+    options: &VrmConvertOptions,
 ) -> Result<ConvertStats> {
     let ext = input_path
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase());
     match ext.as_deref() {
-        Some("fbx") => convert_fbx_to_pmx(input_path, output_path),
-        _ => convert_vrm_to_pmx(input_path, output_path, no_physics),
+        Some("fbx") => convert_fbx_to_pmx(input_path, output_path, options),
+        _ => convert_vrm_to_pmx(input_path, output_path, options),
     }
 }
 
@@ -229,7 +230,9 @@ mod tests {
         let output = std::env::temp_dir().join("popone_test_e2e.pmx");
 
         // VRM → PMX 変換
-        let stats = crate::convert_vrm_to_pmx(&input, &output, false).expect("VRM→PMX変換失敗");
+        let stats =
+            crate::convert_vrm_to_pmx(&input, &output, &crate::VrmConvertOptions::default())
+                .expect("VRM→PMX変換失敗");
 
         // 統計値の確認
         assert!(stats.bones > 100, "ボーン数が少なすぎる: {}", stats.bones);

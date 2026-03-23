@@ -630,6 +630,10 @@ pub struct ExportState {
     pub export_visible_only: bool,
     /// UVマップ出力解像度
     pub uv_map_size: u32,
+    /// 物理（剛体・ジョイント）なしで出力
+    pub no_physics: bool,
+    /// 元のボーン構造のまま出力（標準ボーン挿入スキップ）
+    pub raw_structure: bool,
 }
 
 impl Default for ExportState {
@@ -639,6 +643,8 @@ impl Default for ExportState {
             pmx_output_path: String::new(),
             export_visible_only: false,
             uv_map_size: crate::convert::uvmap::DEFAULT_UV_SIZE,
+            no_physics: false,
+            raw_structure: false,
         }
     }
 }

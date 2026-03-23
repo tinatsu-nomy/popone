@@ -1,3 +1,118 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [Technical Details](#technical-details)
+  - [Coordinate Transformation](#coordinate-transformation)
+    - [PMX/PMD → IrModel Reverse Conversion](#pmxpmd-%E2%86%92-irmodel-reverse-conversion)
+  - [Bone Display](#bone-display)
+    - [Shape Determination (Priority Order)](#shape-determination-priority-order)
+    - [IK-Affected Bones](#ik-affected-bones)
+    - [Drawing Direction](#drawing-direction)
+    - [Rendering Pipeline](#rendering-pipeline)
+    - [IrBone Fields](#irbone-fields)
+  - [MMD Standard Bone Insertion](#mmd-standard-bone-insertion)
+    - [Base Bones](#base-bones)
+    - [IK Bones](#ik-bones)
+    - [Semi-Standard Bones](#semi-standard-bones)
+    - [insert_standard_bones Step Details](#insert_standard_bones-step-details)
+    - [PmxBuildOptions](#pmxbuildoptions)
+  - [PMX Grant Animation](#pmx-grant-animation)
+    - [D-bones Mechanism](#d-bones-mechanism)
+    - [Processing Flow](#processing-flow)
+    - [IrGrant Data Structure](#irgrant-data-structure)
+  - [PMX/PMD Loading](#pmxpmd-loading)
+    - [PMX Reader](#pmx-reader)
+    - [PMD Reader](#pmd-reader)
+    - [IrModel Conversion](#irmodel-conversion)
+    - [T-Stance Conversion](#t-stance-conversion)
+    - [Rigid Body Rotation](#rigid-body-rotation)
+    - [Texture Loading](#texture-loading)
+  - [MMD Rendering](#mmd-rendering)
+    - [Architecture](#architecture)
+    - [MMD Shaders](#mmd-shaders)
+    - [Pipeline Configuration](#pipeline-configuration)
+    - [Color Space](#color-space)
+    - [Shared Toon Textures](#shared-toon-textures)
+  - [Viewer Display Styles](#viewer-display-styles)
+    - [Bone Display](#bone-display-1)
+    - [Rigid Body Display](#rigid-body-display)
+    - [Joint Display (PMX/PMD only)](#joint-display-pmxpmd-only)
+    - [Normal Map Display](#normal-map-display)
+    - [Render Order](#render-order)
+  - [Camera & Lighting](#camera--lighting)
+    - [Camera](#camera)
+    - [Fit Calculation (compute_fit)](#fit-calculation-compute_fit)
+    - [Lighting](#lighting)
+    - [MMD Ambient Separation](#mmd-ambient-separation)
+  - [Log Output](#log-output)
+    - [Overall Log Structure](#overall-log-structure)
+  - [Animation Playback](#animation-playback)
+    - [Supported Formats](#supported-formats)
+    - [Animation Playback for PMX/PMD](#animation-playback-for-pmxpmd)
+    - [Humanoid Retargeting](#humanoid-retargeting)
+    - [FBX Animation Coordinate Transformation](#fbx-animation-coordinate-transformation)
+    - [Unity .anim Muscle Conversion (Hidden Feature)](#unity-anim-muscle-conversion-hidden-feature)
+    - [Loop Modes](#loop-modes)
+  - [Model Append Loading](#model-append-loading)
+    - [Bone Merge 2-Pass Method](#bone-merge-2-pass-method)
+    - [ASCII FBX Content Block Processing](#ascii-fbx-content-block-processing)
+    - [pkg Texture Namespace](#pkg-texture-namespace)
+  - [Direct Archive Loading](#direct-archive-loading)
+    - [archive Module](#archive-module)
+    - [Viewer Integration](#viewer-integration)
+    - [CLI](#cli)
+  - [Archive D&D Reload Support](#archive-dd-reload-support)
+    - [ReloadableSource enum](#reloadablesource-enum)
+    - [Temp Path Detection](#temp-path-detection)
+    - [Immediate Load for Temp Paths](#immediate-load-for-temp-paths)
+    - [D&D Preload Cache (PreloadedData)](#dd-preload-cache-preloadeddata)
+    - [Auxiliary File Cache](#auxiliary-file-cache)
+    - [TextureSource enum](#texturesource-enum)
+    - [reload_from_source](#reload_from_source)
+    - [Texture D&D Preview Cache](#texture-dd-preview-cache)
+    - [UnityPackage Archive Snapshot](#unitypackage-archive-snapshot)
+    - [.gltf Exclusion](#gltf-exclusion)
+  - [Reload Texture Normalization](#reload-texture-normalization)
+    - [reload_unitypackage Texture Restoration](#reload_unitypackage-texture-restoration)
+    - [IrTexture Deduplication in assign_texture_source_to_material](#irtexture-deduplication-in-assign_texture_source_to_material)
+  - [Shader-Aware PMX Material Conversion](#shader-aware-pmx-material-conversion)
+    - [select_toon()](#select_toon)
+    - [MToon ambient/specular Correction](#mtoon-ambientspecular-correction)
+  - [A-Stance Conversion Result Management](#a-stance-conversion-result-management)
+    - [AStanceResult enum](#astanceresult-enum)
+    - [Determination Logic](#determination-logic)
+    - [primary_astance_result](#primary_astance_result)
+    - [IrModel::merge() Integration](#irmodelmerge-integration)
+    - [Viewer Warning Display](#viewer-warning-display)
+  - [UV Map PSD Layer Grouping](#uv-map-psd-layer-grouping)
+    - [PSD Group Folder Mechanism](#psd-group-folder-mechanism)
+    - [Data Flow](#data-flow)
+    - [Input Validation (`validate_groups`)](#input-validation-validate_groups)
+    - [Entry Construction (`build_entries`)](#entry-construction-build_entries)
+    - [`MaterialGroup` Struct (`viewer/app.rs`)](#materialgroup-struct-viewerapprs)
+  - [Visible Materials Only Export](#visible-materials-only-export)
+    - [Design Principles](#design-principles)
+    - [Processing Flow (`build_filtered_ir`)](#processing-flow-build_filtered_ir)
+    - [Recursive Morph Validity Check](#recursive-morph-validity-check)
+    - [Texture Pruning](#texture-pruning)
+    - [Specification](#specification)
+  - [Architecture](#architecture-1)
+  - [Source File Structure](#source-file-structure)
+  - [Library API](#library-api)
+  - [Tests](#tests)
+  - [Changelog](#changelog)
+  - [Limitations](#limitations)
+  - [References](#references)
+    - [Key Points of the VRM Specification](#key-points-of-the-vrm-specification)
+    - [Key Points of the PMX Specification](#key-points-of-the-pmx-specification)
+    - [Key Points of the PMD Specification](#key-points-of-the-pmd-specification)
+  - [WGSL Shader Architecture](#wgsl-shader-architecture)
+    - [Common Macros](#common-macros)
+    - [Shader Constants](#shader-constants)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 [日本語](technical.md)
 
 # Technical Details
@@ -145,6 +260,33 @@ Standard bone insertion consists of 18 steps. Each step is logged with a `[stepN
 
 After these steps, `fix_duplicate_names` (duplicate bone name resolution) and `sort_bones_topological` (deform order sorting) are executed to finalize the bone array.
 
+### PmxBuildOptions
+
+PMX model build options are managed by the `PmxBuildOptions` struct.
+
+| Field | CLI | Description |
+|-------|-----|-------------|
+| `align_rigid_rotation` | `--align-rigid-rotation` | Align rigid body rotation to bone direction |
+| `no_physics` | `--no-physics` | Skip rigid body and joint output |
+| `raw_structure` | `--raw-structure` | Skip standard bone insertion and keep original bone names |
+
+When `raw_structure` is enabled, `insert_standard_bones()` is completely skipped. `fix_duplicate_names` and `sort_bones_topological` are always executed. Bone names use `IrBone.original_name` (VRM: glTF node name, FBX: FBX node name) directly in PMX output.
+
+When `raw_structure` is enabled, `IrBone.grant` is converted to `PmxGrant` with corresponding `BONE_FLAG_ROTATION_GRANT` / `BONE_FLAG_MOVE_GRANT` / `BONE_FLAG_LOCAL_GRANT` flags. Additionally, `is_translatable` (`BONE_FLAG_TRANSLATABLE`), `is_axis_fixed` (`BONE_FLAG_AXIS_FIXED`), and `is_visible` (`BONE_FLAG_VISIBLE`) are faithfully reflected from `IrBone` values. This preserves bone flags and grant data during PMX → IrModel → PMX round-trips.
+
+#### VrmConvertOptions
+
+The public API for VRM → PMX conversion manages options via the `VrmConvertOptions` struct.
+
+| Field | Description |
+|-------|-------------|
+| `no_physics` | Skip physics (rigid bodies & joints) output |
+| `align_rigid_rotation` | Align rigid body rotation to bone direction |
+| `normalize_pose` | Normalize to A-stance |
+| `raw_structure` | Skip standard bone insertion (preserve original bone structure) |
+
+`VrmConvertOptions` is internally converted to `PmxBuildOptions`. `convert_ir_to_pmx` (for the viewer) accepts `PmxBuildOptions` directly.
+
 ## PMX Grant Animation
 
 Processes rotation grants (`BONE_FLAG_ROTATION_GRANT`) and move grants (`BONE_FLAG_MOVE_GRANT`) during animation playback.
@@ -182,7 +324,7 @@ Lower body
 | `is_move` | `bool` | Move grant flag |
 | `is_local` | `bool` | Local grant flag |
 
-## PMX/PMD Loading (v0.2.1)
+## PMX/PMD Loading
 
 ### PMX Reader
 
@@ -206,6 +348,10 @@ Lower body
 - Vertex index mapping: When splitting meshes, build a mapping table from PMX/PMD global vertices → IrModel sequential numbers, and convert morph vertex indices
 - Bone name mapping: `pmx_name_to_vrm_bone()` provides reverse lookup from PMX Japanese bone name → VRM humanoid name (for VRMA animation playback)
 - **Important**: `"センター"` → `"hips"` mapping (PMX center (センター) corresponds to VRM hips, not the lower body)
+- **Morph index remapping**: PMX includes bone/material/UV morphs, but IrModel only retains vertex and group morphs. Since skipping morphs shifts indices, `extract_morphs` performs a 2-pass conversion:
+  1. Build PMX morph index → IrModel morph index mapping table (skipped morphs map to `None`)
+  2. Remap group morph sub-morph references to remapped indices. References to skipped morphs are excluded
+- **Group morph recursion depth limit**: The viewer's `apply_gpu_morph_recursive` recursively expands group morphs. To prevent infinite recursion → stack overflow from circular or self-referencing models, expansion is capped at max depth 16
 
 ### T-Stance Conversion
 
@@ -236,7 +382,7 @@ The viewer renders rigid bodies and joints in PMX space. `rb.position` and `join
 - MIME hint: Infer MIME type from extension and explicitly specify via `image::load_from_memory_with_format` (TGA has no magic number so auto-detection fails). `.sph/.spa` treated as `image/bmp`
 - UnityPackage textures: `embed_textures_into_ir` derives MIME type from file extension via `mime_for_ext`. Without MIME hints, TGA/BMP auto-detection fails and falls back to magenta
 
-## MMD Rendering (v0.2.6)
+## MMD Rendering
 
 MMD rendering mode that auto-enables on PMX/PMD load.
 
@@ -573,7 +719,7 @@ When specifying a JSON file output by DumpHumanoidParams.cs, model-specific preQ
 | A-B Repeat | Repeat a user-specified section |
 | PingPong | Play back and forth |
 
-## Model Append Loading (v0.2.3)
+## Model Append Loading
 
 ### Bone Merge 2-Pass Method
 
@@ -632,7 +778,7 @@ e.g.: outfit_pkg1_body.png
 - **manually assigned textures**: Prefix is added when `extend`ing into the `pkg_textures` Vec. The `pkg_assignments` HashMap naturally achieves uniqueness by using prefixed names as keys
 - **path separator avoidance**: Do not use `/` in the prefix (since `IrTexture.filename` is used as PMX export file paths)
 
-## Direct Archive Loading (v0.2.5)
+## Direct Archive Loading
 
 ### archive Module
 
@@ -697,7 +843,7 @@ Extraction size limit: Both the outer archive (`MAX_TOTAL_BYTES = 2GB`) and inne
 `--list-models`: Lists models inside the archive and exits (no output required).
 `--model-name`: 3-stage search (exact → prefix → substring match). Only unique matches are accepted at each stage; multiple candidates trigger an error with candidate list.
 
-## Archive D&D Reload Support (v0.2.4)
+## Archive D&D Reload Support
 
 ### ReloadableSource enum
 
@@ -866,7 +1012,7 @@ Signature changed from `path: &Path` to `source: &ReloadableSource`. For the Sna
 
 `.gltf` files have external buffer references (`.bin`, image files), so they are excluded from snapshotting. `gltf::import_slice` cannot resolve external URIs, so the normal `load_glb(path)` path is used.
 
-## Reload Texture Normalization (v0.2.4)
+## Reload Texture Normalization
 
 ### reload_unitypackage Texture Restoration
 
@@ -900,7 +1046,7 @@ let tex_idx = loaded.ir.textures.iter()
 - External filesystem assignments can have same-name-different-content files, so `data` is also compared (not just `filename`)
 - The pkg restoration path uses `tex_name`-keyed cache for deduplication (package texture name uniqueness is guaranteed)
 
-## Shader-Aware PMX Material Conversion (v0.2.4)
+## Shader-Aware PMX Material Conversion
 
 ### select_toon()
 
@@ -926,7 +1072,7 @@ Applied only at the conversion stage (`convert/material.rs`). The extraction sta
 | specular | `Vec3::ZERO` | Unchanged |
 | specular_power | `0.0` | Unchanged |
 
-## A-Stance Conversion Result Management (v0.2.4)
+## A-Stance Conversion Result Management
 
 ### AStanceResult enum
 
@@ -949,7 +1095,7 @@ A type-safe enum for managing A-stance conversion results. Stored in `IrModel.as
 4. **Normal conversion**: Apply rotation correction → `Applied(n)`
 5. **Result determination**: corrections > 0 → `Applied(n)`, already_target_count > 0 → `AlreadyAStance`, otherwise → `NotFound`
 
-### primary_astance_result (v0.2.5)
+### primary_astance_result
 
 Added `primary_astance_result` field to `LoadedModel`. Copies `ir.astance_result` at main model load completion (before merge). UI (viewport persistent warning and PMX export warning) references this field, making it immune to `ir.astance_result` contamination from append/merge operations.
 
@@ -988,7 +1134,7 @@ On PMX conversion success, `loaded.primary_astance_result` is checked:
 
 `ConvertResult::Warning` is displayed in red text like `Failure`, but is semantically distinct as the conversion itself succeeded.
 
-## UV Map PSD Layer Grouping (v0.2.5)
+## UV Map PSD Layer Grouping
 
 The PSD output in `convert/uvmap.rs` generates model-based group folders when multiple models are merged.
 
@@ -1041,7 +1187,7 @@ pub struct MaterialGroup {
 
 Separating `material_range` and `draw_range` ensures UV grouping works correctly even for models with zero draw calls.
 
-## Visible Materials Only Export (v0.2.3)
+## Visible Materials Only Export
 
 An optional feature that excludes materials hidden in the display tab from PMX conversion output in the viewer. Implemented in the `export_filter.rs` module.
 
@@ -1102,6 +1248,10 @@ Collect `texture_index` / `shade_texture_index` / `outline_width_texture_index` 
 | Emptied group morph | Deleted + warning log |
 | On model load | Reset `export_visible_only` to `false` |
 | On PMX/PMD load | Checkbox disabled in UI |
+
+## Architecture
+
+![Architecture](architecture.svg)
 
 ## Source File Structure
 
@@ -1167,6 +1317,48 @@ src/
     ├── ui.rs            Info panel / morph sliders / conversion button / PMX/PMD grayed out
     ├── export_filter.rs Visible materials only export filter (IrModel → filtered IrModel)
     └── animation.rs     Animation playback / retargeting (VRMA/glTF/FBX support)
+```
+
+## Library API
+
+`popone` can also be used as a library:
+
+```rust
+use popone::{convert_vrm_to_pmx, convert_fbx_to_pmx};
+use std::path::Path;
+
+// VRM to PMX
+let stats = convert_vrm_to_pmx(
+    Path::new("input.vrm"),
+    Path::new("output.pmx"),
+    false, // no_physics
+)?;
+
+// FBX to PMX
+let stats = convert_fbx_to_pmx(
+    Path::new("input.fbx"),
+    Path::new("output.pmx"),
+)?;
+
+println!("Bones: {}, Vertices: {}", stats.bones, stats.vertices);
+```
+
+## Tests
+
+```bash
+cargo test
+```
+
+85 tests. Integration tests support environment variables for test data paths:
+
+```bash
+# Test data root directory
+export POPONE_TEST_DATA=/path/to/test-fixtures
+
+# Or specify individual files
+export POPONE_TEST_VRM_SEED_SAN=/path/to/Seed-san.vrm
+export POPONE_TEST_PMX_SEED_SAN=/path/to/Seed-san.pmx
+export POPONE_TEST_PMD_MIKU_V2=/path/to/初音ミクVer2.pmd
 ```
 
 ## Changelog

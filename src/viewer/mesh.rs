@@ -231,6 +231,20 @@ impl GpuModel {
         weight: f32,
         vertices: &mut [Vertex],
     ) {
+        let mut visited = vec![false; gpu_morphs.len()];
+        Self::apply_gpu_morph_recursive(gpu_morphs, morph_idx, weight, vertices, &mut visited);
+    }
+
+    fn apply_gpu_morph_recursive(
+        gpu_morphs: &[GpuMorphEntry],
+        morph_idx: usize,
+        weight: f32,
+        vertices: &mut [Vertex],
+        visited: &mut [bool],
+    ) {
+        if visited[morph_idx] {
+            return; // 循環参照を検出 — スキップ
+        }
         match &gpu_morphs[morph_idx] {
             GpuMorphEntry::Vertex(voffs) => {
                 for &(gpu_vi, offset) in voffs {
@@ -243,13 +257,26 @@ impl GpuModel {
                 }
             }
             GpuMorphEntry::Group(goffs) => {
+                visited[morph_idx] = true;
                 for &(sub_idx, sub_weight) in goffs {
                     let effective = weight * sub_weight;
-                    if effective.abs() < 1e-6 || sub_idx >= gpu_morphs.len() {
+                    if effective.abs() < 1e-6 {
                         continue;
                     }
-                    Self::apply_gpu_morph_to(gpu_morphs, sub_idx, effective, vertices);
+                    if sub_idx >= gpu_morphs.len() {
+                        log::warn!(
+                            "グループモーフ[{}]: サブインデックス {} が範囲外 (len={})",
+                            morph_idx,
+                            sub_idx,
+                            gpu_morphs.len()
+                        );
+                        continue;
+                    }
+                    Self::apply_gpu_morph_recursive(
+                        gpu_morphs, sub_idx, effective, vertices, visited,
+                    );
                 }
+                visited[morph_idx] = false;
             }
         }
     }

@@ -488,6 +488,7 @@ fn convert_bones(
         ir_bones.push(IrBone {
             name,
             name_en,
+            original_name: bone.name.clone(),
             vrm_bone_name: vrm_name,
             position: Vec3::from(pos),
             global_mat: convert_mat4(bone.world_transform, coord_fn),

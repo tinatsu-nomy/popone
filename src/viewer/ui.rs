@@ -337,24 +337,13 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                 ui.label(format!("パッケージ内テクスチャ: {}個", tex_names.len()));
                 ui.checkbox(&mut app.tex.link_same_name, "同名連動");
             });
-            // テクスチャ名フィルタ（ComboBox内の選択肢を絞り込み）
-            if let Some(ref mut pending) = app.tex.pending_match {
-                ui.horizontal(|ui| {
-                    ui.label("検索:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut pending.tex_filter)
-                            .desired_width(ui.available_width())
-                            .hint_text("テクスチャ名で絞り込み…"),
-                    );
-                });
-            }
             ui.separator();
 
-            let tex_filter_lower = app
+            let mut tex_filter = app
                 .tex
                 .pending_match
                 .as_ref()
-                .map(|p| p.tex_filter.to_lowercase())
+                .map(|p| p.tex_filter.clone())
                 .unwrap_or_default();
 
             egui::ScrollArea::vertical()
@@ -390,44 +379,82 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                                         .and_then(|idx| tex_names.get(idx))
                                         .copied()
                                         .unwrap_or("(なし)");
-                                    egui::ComboBox::from_id_salt(format!("tex_match_{i}"))
-                                        .selected_text(current_label)
-                                        .width(180.0)
-                                        .show_ui(ui, |ui| {
-                                            ui.selectable_value(
+                                    let popup_id = ui.id().with(("tex_match_popup", i));
+                                    let btn = ui.add_sized(
+                                        [188.0, 20.0],
+                                        egui::Button::new(
+                                            egui::RichText::new(format!("⏷ {current_label}"))
+                                                .color(ui.visuals().text_color()),
+                                        )
+                                        .frame(true),
+                                    );
+                                    if btn.clicked() {
+                                        ui.memory_mut(|m| m.toggle_popup(popup_id));
+                                    }
+                                    egui::popup_below_widget(
+                                        ui,
+                                        popup_id,
+                                        &btn,
+                                        egui::PopupCloseBehavior::CloseOnClickOutside,
+                                        |ui| {
+                                            ui.set_min_width(240.0);
+                                            if ui.selectable_value(
                                                 &mut new_selections[i],
                                                 None,
                                                 "(なし)",
-                                            )
-                                            .clicked();
-                                            for (ti, name) in tex_names.iter().enumerate() {
-                                                if !tex_filter_lower.is_empty()
-                                                    && !name
-                                                        .to_lowercase()
-                                                        .contains(&tex_filter_lower)
-                                                {
-                                                    continue;
-                                                }
-                                                ui.horizontal(|ui| {
-                                                    if let Some(Some(tex_id)) = thumb_ids.get(ti) {
-                                                        ui.image(egui::load::SizedTexture::new(
-                                                            *tex_id,
-                                                            [24.0, 24.0],
-                                                        ));
-                                                    }
-                                                    ui.selectable_value(
-                                                        &mut new_selections[i],
-                                                        Some(ti),
-                                                        *name,
-                                                    );
-                                                });
+                                            ).clicked() {
+                                                ui.memory_mut(|m| m.toggle_popup(popup_id));
+                                                tex_filter.clear();
                                             }
-                                        });
+                                            ui.separator();
+                                            ui.add(
+                                                egui::TextEdit::singleline(&mut tex_filter)
+                                                    .desired_width(ui.available_width())
+                                                    .hint_text("テクスチャ名で絞り込み…"),
+                                            );
+                                            let tex_filter_lower = tex_filter.to_lowercase();
+                                            egui::ScrollArea::vertical()
+                                                .max_height(300.0)
+                                                .show(ui, |ui| {
+                                                    for (ti, name) in tex_names.iter().enumerate() {
+                                                        if !tex_filter_lower.is_empty()
+                                                            && !name
+                                                                .to_lowercase()
+                                                                .contains(&tex_filter_lower)
+                                                        {
+                                                            continue;
+                                                        }
+                                                        let clicked = ui.horizontal(|ui| {
+                                                            if let Some(Some(tex_id)) = thumb_ids.get(ti) {
+                                                                ui.image(egui::load::SizedTexture::new(
+                                                                    *tex_id,
+                                                                    [24.0, 24.0],
+                                                                ));
+                                                            }
+                                                            ui.selectable_value(
+                                                                &mut new_selections[i],
+                                                                Some(ti),
+                                                                *name,
+                                                            ).clicked()
+                                                        }).inner;
+                                                        if clicked {
+                                                            ui.memory_mut(|m| m.toggle_popup(popup_id));
+                                                            tex_filter.clear();
+                                                        }
+                                                    }
+                                                });
+                                        },
+                                    );
                                 });
                                 ui.end_row();
                             }
                         });
                 });
+
+            // フィルタ値を書き戻し
+            if let Some(ref mut pending) = app.tex.pending_match {
+                pending.tex_filter = tex_filter;
+            }
 
             ui.separator();
             ui.horizontal(|ui| {
@@ -692,8 +719,22 @@ pub fn execute_conversion(app: &mut ViewerApp) {
         &loaded.ir
     };
 
-    // VRM/FBX 共通: IrModel を使用（編集状態を反映）
-    let result = crate::convert_ir_to_pmx(ir_ref, &output_path, app.display.align_rigid_rotation);
+    // PMX/PMD 形式では no_physics/raw_structure は無効（UI もグレーアウト）
+    let is_pmx_pmd = ir_ref.source_format.is_pmx_pmd();
+    let options = crate::pmx::build::PmxBuildOptions {
+        align_rigid_rotation: app.display.align_rigid_rotation,
+        no_physics: if is_pmx_pmd {
+            false
+        } else {
+            app.export.no_physics
+        },
+        raw_structure: if is_pmx_pmd {
+            false
+        } else {
+            app.export.raw_structure
+        },
+    };
+    let result = crate::convert_ir_to_pmx(ir_ref, &output_path, &options);
 
     if app.export.output_log {
         let debug_logs = viewer_log_path
@@ -1510,6 +1551,16 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             "剛体回転をボーン方向に揃える",
         )
         .on_disabled_hover_text("物理設定がないか、PMX/PMD形式です");
+    });
+    ui.add_enabled_ui(has_physics && !is_pmx_pmd, |ui| {
+        ui.checkbox(&mut app.export.no_physics, "物理なしで出力")
+            .on_hover_text("剛体・ジョイントを出力しません")
+            .on_disabled_hover_text("物理設定がないか、PMX/PMD形式です");
+    });
+    ui.add_enabled_ui(has_model && !is_pmx_pmd, |ui| {
+        ui.checkbox(&mut app.export.raw_structure, "元のボーン構造で出力")
+            .on_hover_text("標準ボーン（IK・捩り等）の挿入をスキップします")
+            .on_disabled_hover_text("PMX/PMD形式では使用できません");
     });
     ui.add_enabled_ui(has_model && !is_pmx_pmd, |ui| {
         ui.checkbox(&mut app.export.export_visible_only, "表示材質のみ出力")

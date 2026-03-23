@@ -58,6 +58,10 @@ struct Args {
     /// アーカイブ内のモデル一覧を表示して終了
     #[arg(long)]
     list_models: bool,
+
+    /// 標準ボーン挿入をスキップ（元のボーン構造を維持）
+    #[arg(long)]
+    raw_structure: bool,
 }
 
 /// ロガーセットアップ。
@@ -322,7 +326,7 @@ fn run_main(mut args: Args) -> Result<()> {
 
     // 中間表現抽出（VRM / FBX / unitypackage 分岐）
     // VRM の場合は glb を保持してテクスチャ書き出しに再利用（二重読み込み回避）
-    let (mut ir, glb_for_tex) = match ext.as_str() {
+    let (ir, glb_for_tex) = match ext.as_str() {
         "fbx" => {
             let data = std::fs::read(&input)
                 .with_context(|| format!("FBXファイル読み込み失敗: {}", input.display()))?;
@@ -375,11 +379,6 @@ fn run_main(mut args: Args) -> Result<()> {
         }
     };
 
-    if args.no_physics {
-        ir.physics = intermediate::types::IrPhysics::default();
-        log::info!("物理変換をスキップ（--no-physics）");
-    }
-
     if args.dump {
         dump_ir(&ir);
         return Ok(());
@@ -399,7 +398,12 @@ fn run_main(mut args: Args) -> Result<()> {
     }
 
     // PMXモデル構築
-    let pmx_model = pmx::build::build_pmx_model_with_options(&ir, args.align_rigid_rotation)
+    let build_options = pmx::build::PmxBuildOptions {
+        align_rigid_rotation: args.align_rigid_rotation,
+        no_physics: args.no_physics,
+        raw_structure: args.raw_structure,
+    };
+    let pmx_model = pmx::build::build_pmx_model_with_options(&ir, &build_options)
         .context("PMXモデル構築失敗")?;
 
     // PMX書き出し
@@ -531,7 +535,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
 
     // 種別で分岐して中間表現を構築
     use popone::archive::ArchiveModelKind;
-    let mut ir = match bundle.kind {
+    let ir = match bundle.kind {
         ArchiveModelKind::Pmx => {
             let pmx_model = popone::pmx::reader::read_pmx_from_data(&bundle.model.data)
                 .context("PMX読み込み失敗")?;
@@ -605,11 +609,6 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         }
     };
 
-    if args.no_physics {
-        ir.physics = intermediate::types::IrPhysics::default();
-        log::info!("物理変換をスキップ（--no-physics）");
-    }
-
     if args.dump {
         dump_ir(&ir);
         return Ok(());
@@ -622,7 +621,12 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         .context("テクスチャ書き出し失敗")?;
 
     // PMXモデル構築 & 書き出し
-    let pmx_model = pmx::build::build_pmx_model_with_options(&ir, args.align_rigid_rotation)
+    let build_options = pmx::build::PmxBuildOptions {
+        align_rigid_rotation: args.align_rigid_rotation,
+        no_physics: args.no_physics,
+        raw_structure: args.raw_structure,
+    };
+    let pmx_model = pmx::build::build_pmx_model_with_options(&ir, &build_options)
         .context("PMXモデル構築失敗")?;
     let output_file = std::fs::File::create(output)
         .with_context(|| format!("出力ファイル作成失敗: {}", output.display()))?;
@@ -679,11 +683,22 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
         log::info!("ビューアモード: {}", path.display());
     }
 
+    let png = include_bytes!("../assets/popone_icon.png");
+    let img = image::load_from_memory(png).context("アイコン画像の読み込み失敗")?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let icon = eframe::egui::IconData {
+        rgba: rgba.into_raw(),
+        width: w,
+        height: h,
+    };
+
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
             .with_title(format!("Model Viewer v{}", env!("CARGO_PKG_VERSION")))
-            .with_drag_and_drop(true),
+            .with_drag_and_drop(true)
+            .with_icon(icon),
         renderer: eframe::Renderer::Wgpu,
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
             wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(

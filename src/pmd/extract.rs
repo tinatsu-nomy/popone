@@ -5,18 +5,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::types::*;
-use crate::convert::coord::PMX_SCALE;
+use crate::convert::coord::{
+    pmx_normal_to_gltf as pmx_normal_to_gltf_full, pmx_pos_to_gltf as pmx_pos_to_gltf_full,
+};
 use crate::intermediate::types::*;
 
-/// PMD 座標 → glTF 座標（PMXと同じ座標系: 左手系Y-up）
+/// PMD 座標 → glTF 座標（PMXと同じ座標系: 左手系Y-up、is_vrm0=false）
 #[inline]
 fn pmx_pos_to_gltf(v: Vec3) -> Vec3 {
-    Vec3::new(v.x / PMX_SCALE, v.y / PMX_SCALE, -v.z / PMX_SCALE)
+    pmx_pos_to_gltf_full(v, false)
 }
 
+/// PMD 法線 → glTF 法線（is_vrm0=false）
 #[inline]
 fn pmx_normal_to_gltf(n: Vec3) -> Vec3 {
-    Vec3::new(n.x, n.y, -n.z)
+    pmx_normal_to_gltf_full(n, false)
 }
 
 /// PMDモデルから IrModel を構築
@@ -144,6 +147,7 @@ fn extract_bones(pmd: &PmdModel) -> Vec<IrBone> {
             IrBone {
                 name: b.name.clone(),
                 name_en,
+                original_name: b.name.clone(),
                 vrm_bone_name,
                 position: pmx_pos_to_gltf(b.position),
                 global_mat: Mat4::IDENTITY,
@@ -490,7 +494,8 @@ fn extract_meshes(pmd: &PmdModel, _materials: &[IrMaterial]) -> (Vec<IrMesh>, Ha
                         uv: v.uv,
                         weights: w_arr,
                         weight_count: w_cnt,
-                        edge_scale: if v.edge_flag == 1 { 1.0 } else { 0.0 },
+                        // PMD 頂点: edge_flag=0 はエッジ有効、1 はエッジ無効（材質の edge_flag とは逆）
+                        edge_scale: if v.edge_flag == 0 { 1.0 } else { 0.0 },
                     });
                     new_idx
                 };

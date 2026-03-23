@@ -314,6 +314,8 @@ impl IrModel {
 pub struct IrBone {
     pub name: String,
     pub name_en: String,
+    /// ソースファイルでの元のボーン名（FBX: ノード名、VRM: glTFノード名）
+    pub original_name: String,
     /// VRMヒューマノイドボーン名（例: "hips", "spine"）
     pub vrm_bone_name: Option<String>,
     /// グローバル位置（glTF座標系）
@@ -595,6 +597,7 @@ mod tests {
         IrBone {
             name: name.to_string(),
             name_en: String::new(),
+            original_name: name.to_string(),
             vrm_bone_name: None,
             position: Vec3::ZERO,
             global_mat: Mat4::IDENTITY,

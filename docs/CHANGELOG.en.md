@@ -1,6 +1,67 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [Changelog](#changelog)
+  - [v0.2.7](#v027)
+    - [New Features](#new-features)
+    - [Bug Fixes](#bug-fixes)
+    - [Improvements](#improvements)
+    - [Code Quality](#code-quality)
+  - [v0.2.6](#v026)
+    - [Bug Fixes](#bug-fixes-1)
+    - [New Features](#new-features-1)
+    - [Improvements](#improvements-1)
+    - [Code Quality & Performance](#code-quality--performance)
+  - [v0.2.5](#v025)
+    - [Improvements](#improvements-2)
+    - [Code Quality & Performance](#code-quality--performance-1)
+  - [v0.2.4](#v024)
+    - [Improvements](#improvements-3)
+  - [v0.2.3](#v023)
+    - [Improvements](#improvements-4)
+  - [v0.2.2](#v022)
+    - [Code Quality & Performance](#code-quality--performance-2)
+  - [FBX Support](#fbx-support)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # Changelog
 
 [日本語](CHANGELOG.md)
+
+## v0.2.7
+
+### New Features
+
+- **PMX Export Options** — Added the following options to the viewer export tab and CLI. Introduced `PmxBuildOptions` struct to unify build-time options
+  - **No-physics export** (`--no-physics`): Exclude rigid bodies and joints from output. In the viewer, physics visualization is preserved while only skipping at export time
+  - **Raw structure export** (`--raw-structure`): Skip MMD standard bone insertion (master, center, groove, waist, IK, twist, etc.) and output original VRM/FBX bone names as-is in PMX. Added `original_name` field to `IrBone` to preserve FBX original node names (before humanoid detection renames to PMX names)
+- **App Icon** — Display icon in both the window title bar and the exe file
+- **Grid Y-Axis Line** — Added green Y-axis (up direction) guide line to the grid floor
+
+### Bug Fixes
+
+- **PMD Vertex edge_flag Fix** — Fixed PMD vertex `edge_flag` interpretation
+- **PMX Group Morph Index Remapping Fix** — Fixed incorrect deformation when PMX group morphs referenced sub-morphs whose indices shifted due to bone/material/UV morphs being skipped during PMX → IrModel conversion. Now builds an index remapping table and correctly excludes skipped morphs from group morph references
+- **Viewer Stack Overflow Fix** — Fixed stack overflow on Windows where the default 1MB stack was insufficient for the deep eframe/winit/wgpu callback chain. Stack size is now set to 8MB via `/STACK:8388608` linker flag in `build.rs` when the viewer feature is enabled. Also added recursion depth limit (max 16) to group morph expansion to prevent infinite recursion from circular references
+
+### Improvements
+
+- **Texture Manual Assignment Search Filter Relocation** — Moved the search filter in the texture manual assignment dialog (for archives like UnityPackage / ZIP) from the top of the dialog into each texture dropdown. Opening a dropdown now shows "(none)" → search filter → texture list, matching the behavior of the material panel texture assignment popup
+
+### Code Quality
+
+- **Public API Consolidation** — Merged the 3-level `convert_vrm_to_pmx` wrapper chain into a single function with `VrmConvertOptions` struct. Prevents function proliferation when adding new options
+- **Unified `no_physics` Application** — Removed direct `ir.physics` clearing in `main.rs`, consolidated control through `PmxBuildOptions`
+- **Group Morph Cycle Detection** — Replaced depth-only guard with visited bitset (backtracking) for O(N) cycle detection in recursive group morph expansion
+- **Grant Data Preservation in `raw_structure`** — When exporting with raw bone structure, PMX grant (rotation/move grant), translatable, axis-fixed, and visibility flags are now correctly restored from IrBone. Prevents data loss in PMX → PMX round-trips
+- **Cross-compilation Support in build.rs** — Restricted `winres` to `[target.'cfg(windows)'.build-dependencies]`. Stack size linker flags now branch between MSVC (`/STACK`) and GNU (`-Wl,--stack`)
+- **Coordinate Function Deduplication** — Consolidated `pmx_pos_to_gltf` / `pmx_normal_to_gltf` into `convert/coord.rs`, eliminating duplicate definitions in `pmd/extract.rs` and `pmx/extract.rs`
+- **Icon PNG Optimization** — Reduced window icon PNG from 512×512 (99KB) to 64×64 (4KB)
+- **Error Handling Improvement** — Changed icon loading from `expect` (panic) to `?` operator (error propagation)
+- **Group Morph Warning Logs** — Report skipped sub-morphs during PMX loading and out-of-range sub-indices in viewer via `log::warn`
+- **Convergence Loop Safety** — Added morph count upper bound guard to the group morph liveness loop in export filter
 
 ## v0.2.6
 

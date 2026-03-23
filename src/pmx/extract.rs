@@ -4,20 +4,22 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::convert::coord::PMX_SCALE;
+use crate::convert::coord::{
+    pmx_normal_to_gltf as pmx_normal_to_gltf_full, pmx_pos_to_gltf as pmx_pos_to_gltf_full,
+};
 use crate::intermediate::types::*;
 use crate::pmx::types::*;
 
-/// PMX 座標 → glTF 座標（VRM 1.0 変換の逆）
+/// PMX 座標 → glTF 座標（VRM 1.0 変換の逆、PMXは常に is_vrm0=false）
 #[inline]
 fn pmx_pos_to_gltf(v: Vec3) -> Vec3 {
-    Vec3::new(v.x / PMX_SCALE, v.y / PMX_SCALE, -v.z / PMX_SCALE)
+    pmx_pos_to_gltf_full(v, false)
 }
 
-/// PMX 法線 → glTF 法線
+/// PMX 法線 → glTF 法線（PMXは常に is_vrm0=false）
 #[inline]
 fn pmx_normal_to_gltf(n: Vec3) -> Vec3 {
-    Vec3::new(n.x, n.y, -n.z)
+    pmx_normal_to_gltf_full(n, false)
 }
 
 /// PMX モデルから IrModel を構築する
@@ -93,6 +95,7 @@ fn extract_bones(pmx: &PmxModel) -> Vec<IrBone> {
             IrBone {
                 name: b.name.clone(),
                 name_en: b.name_en.clone(),
+                original_name: b.name.clone(),
                 vrm_bone_name,
                 position: pmx_pos_to_gltf(b.position),
                 global_mat: Mat4::IDENTITY,
@@ -458,9 +461,29 @@ fn distribute_vertex_morphs(pmx: &PmxModel, meshes: &mut [IrMesh]) {
     }
 }
 
-/// モーフ抽出: 頂点モーフ → IrMorph
+/// モーフ抽出: 頂点モーフ・グループモーフ → IrMorph
 /// pmx_to_ir_vertex: PMXグローバル頂点Index → IrModel通し番号
+///
+/// ボーン/材質/UV モーフはスキップされるため、グループモーフ内の
+/// サブモーフ参照インデックスを IrModel 上のインデックスにリマッピングする。
 fn extract_morphs(pmx: &PmxModel, pmx_to_ir_vertex: &HashMap<u32, usize>) -> Vec<IrMorph> {
+    // Pass 1: PMX インデックス → IrModel インデックスのマッピングを構築
+    // スキップされるモーフは None になる
+    let mut pmx_to_ir_morph: Vec<Option<usize>> = Vec::with_capacity(pmx.morphs.len());
+    let mut ir_idx = 0usize;
+    for m in &pmx.morphs {
+        match &m.offsets {
+            PmxMorphOffsets::Vertex(_) | PmxMorphOffsets::Group(_) => {
+                pmx_to_ir_morph.push(Some(ir_idx));
+                ir_idx += 1;
+            }
+            _ => {
+                pmx_to_ir_morph.push(None);
+            }
+        }
+    }
+
+    // Pass 2: モーフを変換（リマッピング済みインデックスを使用）
     pmx.morphs
         .iter()
         .filter_map(|m| {
@@ -481,7 +504,19 @@ fn extract_morphs(pmx: &PmxModel, pmx_to_ir_vertex: &HashMap<u32, usize>) -> Vec
                 PmxMorphOffsets::Group(offsets) => {
                     let entries: Vec<(usize, f32)> = offsets
                         .iter()
-                        .map(|off| (off.morph_index as usize, off.weight))
+                        .filter_map(|off| {
+                            let pmx_idx = off.morph_index as usize;
+                            match pmx_to_ir_morph.get(pmx_idx).copied().flatten() {
+                                Some(ir_idx) => Some((ir_idx, off.weight)),
+                                None => {
+                                    log::warn!(
+                                        "グループモーフ: サブモーフ[{}]は非対応モーフ種別のためスキップ",
+                                        pmx_idx
+                                    );
+                                    None
+                                }
+                            }
+                        })
                         .collect();
                     IrMorphKind::Group(entries)
                 }

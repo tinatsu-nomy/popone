@@ -501,9 +501,11 @@ fn extract_bones(document: &gltf::Document, typed: &VrmTyped) -> Result<BoneExtr
         let pos = global_mat.transform_point3(Vec3::ZERO);
         let vrm_name = humanoid_map.get(&idx).cloned();
 
+        let node_name = node.name().unwrap_or(&format!("bone_{}", idx)).to_string();
         bones.push(IrBone {
-            name: node.name().unwrap_or(&format!("bone_{}", idx)).to_string(),
-            name_en: node.name().unwrap_or(&format!("bone_{}", idx)).to_string(),
+            name: node_name.clone(),
+            name_en: node_name.clone(),
+            original_name: node_name,
             vrm_bone_name: vrm_name,
             position: pos,
             global_mat,

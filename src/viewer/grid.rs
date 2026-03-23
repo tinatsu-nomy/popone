@@ -39,6 +39,17 @@ pub fn build_grid_vertices() -> (Vec<GridVertex>, u32) {
         z += step;
     }
 
+    // Y軸（緑っぽい）
+    let axis_color_y = [0.3, 0.6, 0.3, 1.0];
+    verts.push(GridVertex {
+        position: [0.0, 0.0, 0.0],
+        color: axis_color_y,
+    });
+    verts.push(GridVertex {
+        position: [0.0, extent, 0.0],
+        color: axis_color_y,
+    });
+
     let count = verts.len() as u32;
     (verts, count)
 }

@@ -1,6 +1,6 @@
 [package]
 name = "popone"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2021"
 license = "0BSD"
 
@@ -37,6 +37,9 @@ eframe   = { version = "0.31", optional = true, default-features = false, featur
 rfd      = { version = "0.15", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 pollster = { version = "0.4", optional = true }
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
 
 [features]
 default = []

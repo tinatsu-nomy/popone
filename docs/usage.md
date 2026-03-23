@@ -119,6 +119,7 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - VRM Expression → PMX モーフ変換
 - VRM SpringBone → PMX 剛体・ジョイント変換（重力・回転/移動制限・コライダー衝突マスク）
 - Aスタンス変換 / Tスタンス変換（FBX用、変換失敗・スキップ時はビューポートに常時警告表示）、剛体回転をボーン方向に揃えるオプション
+- 物理なしで出力（剛体・ジョイント省略）、元のボーン構造で出力（標準ボーン挿入スキップ＋元のボーン名維持）
 - MToon アウトライン → PMX エッジ反映
 - 表示枠の自動分類（Root / 表情 / 体(上) / 腕 / 指 / 足 / その他）
 - UV 正規化（0..1 範囲に補正）
@@ -160,6 +161,7 @@ popone <入力> [出力.pmx] [オプション]
   --normalize-pose        Aスタンス変換（Tポーズの腕を下げる）
   --normalize-to-tstance  Tスタンス変換（Aスタンスの腕を水平にする、FBX用）
   --align-rigid-rotation  剛体回転をボーン方向に揃える
+  --raw-structure         元のボーン構造で出力（標準ボーン挿入スキップ＋元のボーン名維持）
   --model-name <NAME>     アーカイブ内のモデルファイル名を指定（ZIP/7z用）
   --list-models           アーカイブ内のモデル一覧を表示して終了（ZIP/7z用）
   --log-level <LEVEL>     ログレベル（error/warn/info/debug、デフォルト: info）
@@ -185,50 +187,3 @@ Seed-san.vrm（VRM 1.0）:
 | 剛体 | 36 |
 | ジョイント | 19 |
 
-## アーキテクチャ
-
-![アーキテクチャ](architecture.svg)
-
-詳細なソースファイル構成・座標変換・ボーン挿入ステップについては [技術詳細](technical.md) を参照。
-
-## ライブラリ API
-
-`popone` はライブラリとしても使用可能:
-
-```rust
-use popone::{convert_vrm_to_pmx, convert_fbx_to_pmx};
-use std::path::Path;
-
-// VRM → PMX
-let stats = convert_vrm_to_pmx(
-    Path::new("input.vrm"),
-    Path::new("output.pmx"),
-    false, // no_physics
-)?;
-
-// FBX → PMX
-let stats = convert_fbx_to_pmx(
-    Path::new("input.fbx"),
-    Path::new("output.pmx"),
-)?;
-
-println!("ボーン: {}, 頂点: {}", stats.bones, stats.vertices);
-```
-
-## テスト
-
-```bash
-cargo test
-```
-
-85 テスト。統合テストは環境変数でテストデータの配置を指定可能:
-
-```bash
-# テストデータのルートディレクトリ
-export POPONE_TEST_DATA=/path/to/test-fixtures
-
-# または個別ファイルを直接指定
-export POPONE_TEST_VRM_SEED_SAN=/path/to/Seed-san.vrm
-export POPONE_TEST_PMX_SEED_SAN=/path/to/Seed-san.pmx
-export POPONE_TEST_PMD_MIKU_V2=/path/to/初音ミクVer2.pmd
-```

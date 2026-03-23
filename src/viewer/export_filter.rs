@@ -103,7 +103,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
     }
 
     // グループモーフの有効性を収束するまで反復判定（ネスト対応）
-    loop {
+    for iteration in 0..ir.morphs.len().max(1) {
         let mut changed = false;
         for (i, morph) in ir.morphs.iter().enumerate() {
             if morph_alive[i] {
@@ -121,6 +121,9 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
         }
         if !changed {
             break;
+        }
+        if iteration == ir.morphs.len().saturating_sub(1) {
+            log::warn!("グループモーフの収束ループが上限に到達");
         }
     }
 
@@ -262,6 +265,7 @@ mod tests {
         IrBone {
             name: name.to_string(),
             name_en: String::new(),
+            original_name: name.to_string(),
             vrm_bone_name: None,
             position: Vec3::ZERO,
             global_mat: Mat4::IDENTITY,

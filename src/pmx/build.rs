@@ -33,12 +33,23 @@ pub fn idx_size(n: usize) -> u8 {
     }
 }
 
+/// PMXモデル構築オプション
+#[derive(Debug, Clone, Default)]
+pub struct PmxBuildOptions {
+    /// 剛体回転をボーン方向に揃える
+    pub align_rigid_rotation: bool,
+    /// 物理（剛体・ジョイント）を出力しない
+    pub no_physics: bool,
+    /// 標準ボーン挿入をスキップ（元のボーン構造を維持）
+    pub raw_structure: bool,
+}
+
 pub fn build_pmx_model(ir: &IrModel) -> Result<PmxModel> {
-    build_pmx_model_with_options(ir, false)
+    build_pmx_model_with_options(ir, &PmxBuildOptions::default())
 }
 
 #[allow(clippy::field_reassign_with_default)]
-pub fn build_pmx_model_with_options(ir: &IrModel, align_rigid_rotation: bool) -> Result<PmxModel> {
+pub fn build_pmx_model_with_options(ir: &IrModel, options: &PmxBuildOptions) -> Result<PmxModel> {
     log::info!("=== PMXモデル構築開始 ===");
     log::info!("モデル名: {}", ir.name);
     log::info!("ソース形式: {}", ir.source_format.label());
@@ -123,7 +134,7 @@ pub fn build_pmx_model_with_options(ir: &IrModel, align_rigid_rotation: bool) ->
     );
 
     // ボーン変換
-    model.bones = build_bones(ir);
+    model.bones = build_bones(ir, options.raw_structure);
 
     // 頂点・面 統合
     let (vertices, faces, mat_face_counts) =
@@ -152,11 +163,19 @@ pub fn build_pmx_model_with_options(ir: &IrModel, align_rigid_rotation: bool) ->
     model.morphs = build_morphs(ir, ir.source_format.is_vrm0());
 
     // 剛体・ジョイント
-    model.rigid_bodies = build_rigid_bodies(ir, align_rigid_rotation);
-    model.joints = build_joints(ir);
+    if options.no_physics {
+        log::info!("物理出力をスキップ（no_physics）");
+    } else {
+        model.rigid_bodies = build_rigid_bodies(ir, options.align_rigid_rotation);
+        model.joints = build_joints(ir);
+    }
 
     // 全データ揃った後に標準ボーン挿入（頂点・剛体・既存ボーンのindex調整もここで）
-    insert_standard_bones(&mut model)?;
+    if options.raw_structure {
+        log::info!("標準ボーン挿入をスキップ（raw_structure）");
+    } else {
+        insert_standard_bones(&mut model)?;
+    }
 
     // 重複ボーン名を解決（NameDupliBones 対策）
     fix_duplicate_names(&mut model.bones);
@@ -1480,7 +1499,7 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
     Ok(())
 }
 
-fn build_bones(ir: &IrModel) -> Vec<PmxBone> {
+fn build_bones(ir: &IrModel, raw_structure: bool) -> Vec<PmxBone> {
     let mut pmx_bones = Vec::with_capacity(ir.bones.len());
     let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if ir.source_format.is_vrm0() {
         gltf_pos_to_pmx_v0
@@ -1491,8 +1510,10 @@ fn build_bones(ir: &IrModel) -> Vec<PmxBone> {
     for bone in ir.bones.iter() {
         let pmx_pos = pos_fn(bone.position);
 
-        // VRM骨名 → PMX日本語名
-        let (jp_name, en_name) = if let Some(vrm_name) = &bone.vrm_bone_name {
+        // VRM骨名 → PMX日本語名（raw_structure 時は元のボーン名を維持）
+        let (jp_name, en_name) = if raw_structure {
+            (bone.original_name.clone(), bone.original_name.clone())
+        } else if let Some(vrm_name) = &bone.vrm_bone_name {
             if let Some((jp, en)) = vrm_bone_to_pmx_name(vrm_name) {
                 (jp.to_string(), en.to_string())
             } else {
@@ -1512,13 +1533,49 @@ fn build_bones(ir: &IrModel) -> Vec<PmxBone> {
         };
 
         // フラグ
-        let mut flags = BONE_FLAG_ROTATABLE | BONE_FLAG_VISIBLE | BONE_FLAG_OPERABLE;
+        let mut flags = BONE_FLAG_ROTATABLE | BONE_FLAG_OPERABLE;
         if !bone.children.is_empty() {
             flags |= BONE_FLAG_TAIL_IS_BONE;
         }
         if bone.is_physics {
             flags |= BONE_FLAG_PHYS_AFTER;
         }
+
+        // raw_structure 時は元のフラグを忠実に反映
+        if raw_structure {
+            if bone.is_translatable {
+                flags |= BONE_FLAG_TRANSLATABLE;
+            }
+            if bone.is_visible {
+                flags |= BONE_FLAG_VISIBLE;
+            }
+            if bone.is_axis_fixed {
+                flags |= BONE_FLAG_AXIS_FIXED;
+            }
+        } else {
+            flags |= BONE_FLAG_VISIBLE;
+        }
+
+        // 付与データ変換（raw_structure 時のみ）
+        let grant = if raw_structure {
+            bone.grant.as_ref().map(|g| {
+                if g.is_rotation {
+                    flags |= BONE_FLAG_ROTATION_GRANT;
+                }
+                if g.is_move {
+                    flags |= BONE_FLAG_MOVE_GRANT;
+                }
+                if g.is_local {
+                    flags |= BONE_FLAG_LOCAL_GRANT;
+                }
+                PmxGrant {
+                    parent_index: g.parent_index as i32,
+                    ratio: g.ratio,
+                }
+            })
+        } else {
+            None
+        };
 
         pmx_bones.push(PmxBone {
             name: jp_name,
@@ -1529,7 +1586,7 @@ fn build_bones(ir: &IrModel) -> Vec<PmxBone> {
             flags,
             tail,
             ik: None,
-            grant: None,
+            grant,
         });
     }
 

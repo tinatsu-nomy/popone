@@ -119,6 +119,7 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - VRM Expression to PMX morph conversion
 - VRM SpringBone to PMX rigid body / joint conversion (gravity, rotation/movement limits, collider masks)
 - A-stance conversion / T-stance conversion (for FBX, persistent viewport warning on failure/skip), rigid body rotation alignment options
+- No-physics export (skip rigid bodies/joints), raw structure export (skip standard bone insertion + keep original bone names)
 - MToon outline to PMX edge mapping
 - Auto-classified display frames (Root / Expression / Upper Body / Arms / Fingers / Legs / Other)
 - UV normalization (clamped to 0..1)
@@ -160,6 +161,7 @@ Options:
   --normalize-pose        A-stance conversion (lower T-pose arms)
   --normalize-to-tstance  T-stance conversion (raise A-stance arms to horizontal, for FBX)
   --align-rigid-rotation  Align rigid body rotation to bone direction
+  --raw-structure         Export with original bone structure (skip standard bone insertion + keep original bone names)
   --model-name <NAME>     Specify model filename inside archive (for ZIP/7z)
   --list-models           List models inside archive and exit (for ZIP/7z)
   --log-level <LEVEL>     Log level (error/warn/info/debug, default: info)
@@ -185,50 +187,3 @@ Seed-san.vrm (VRM 1.0):
 | Rigid Bodies | 36 |
 | Joints | 19 |
 
-## Architecture
-
-![Architecture](architecture.svg)
-
-For detailed source structure, coordinate transforms, and bone insertion steps, see [Technical Details](technical.en.md).
-
-## Library API
-
-`popone` can also be used as a library:
-
-```rust
-use popone::{convert_vrm_to_pmx, convert_fbx_to_pmx};
-use std::path::Path;
-
-// VRM to PMX
-let stats = convert_vrm_to_pmx(
-    Path::new("input.vrm"),
-    Path::new("output.pmx"),
-    false, // no_physics
-)?;
-
-// FBX to PMX
-let stats = convert_fbx_to_pmx(
-    Path::new("input.fbx"),
-    Path::new("output.pmx"),
-)?;
-
-println!("Bones: {}, Vertices: {}", stats.bones, stats.vertices);
-```
-
-## Tests
-
-```bash
-cargo test
-```
-
-85 tests. Integration tests support environment variables for test data paths:
-
-```bash
-# Test data root directory
-export POPONE_TEST_DATA=/path/to/test-fixtures
-
-# Or specify individual files
-export POPONE_TEST_VRM_SEED_SAN=/path/to/Seed-san.vrm
-export POPONE_TEST_PMX_SEED_SAN=/path/to/Seed-san.pmx
-export POPONE_TEST_PMD_MIKU_V2=/path/to/初音ミクVer2.pmd
-```

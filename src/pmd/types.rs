@@ -44,7 +44,7 @@ pub struct PmdVertex {
     pub bone1: u16,
     pub bone2: u16,
     pub weight: u8,    // bone1のウェイト (0〜100)
-    pub edge_flag: u8, // 1:エッジあり 0:エッジなし
+    pub edge_flag: u8, // 0:エッジあり 1:エッジなし（※材質の edge_flag とは逆の意味）
 }
 
 /// PMD材質 (70byte固定)
