@@ -118,11 +118,7 @@ fn extract_vec3_array(prop: &FbxProperty) -> Option<Vec<[f32; 3]>> {
                 .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
                 .collect(),
         ),
-        FbxProperty::F32Array(v) => Some(
-            v.chunks_exact(3)
-                .map(|c| [c[0], c[1], c[2]])
-                .collect(),
-        ),
+        FbxProperty::F32Array(v) => Some(v.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()),
         _ => None,
     }
 }

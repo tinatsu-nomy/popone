@@ -102,10 +102,7 @@ fn load_vrm_skeleton(vrm_path: &Path) -> anyhow::Result<SkeletonData> {
 }
 
 /// 階層を辿ってグローバル行列を計算
-fn compute_globals(
-    skel: &SkeletonData,
-    local_rotations: &HashMap<usize, Quat>,
-) -> Vec<Mat4> {
+fn compute_globals(skel: &SkeletonData, local_rotations: &HashMap<usize, Quat>) -> Vec<Mat4> {
     let bone_count = skel.bone_parents.len();
     let mut globals = vec![Mat4::IDENTITY; bone_count];
     let mut computed = vec![false; bone_count];
@@ -168,15 +165,12 @@ fn main() {
         .filter_level(log::LevelFilter::Info)
         .try_init();
 
-    let vrm_path = Path::new(
-        r"E:\misc\nomy\vrm_view\tmp\KizunaAI_KAMATTE\KizunaAI_KAMATTE.vrm",
-    );
+    let vrm_path = Path::new(r"E:\misc\nomy\vrm_view\tmp\KizunaAI_KAMATTE\KizunaAI_KAMATTE.vrm");
     let anim_path = Path::new(
         r"E:\misc\nomy\vrm_view\tmp\unitypackage\KizunaAI_KAMATTE_VRM&Motion\Assets\KizunaAI\KizunaAI_KAMATTE\Motion\KizunaAI_KAMATTE_Kamacho_Motion.anim",
     );
-    let vrma_path = Path::new(
-        r"E:\misc\nomy\vrm_view\tmp\vrma\KizunaAI_KAMATTE_Kamacho_Motion.vrma",
-    );
+    let vrma_path =
+        Path::new(r"E:\misc\nomy\vrm_view\tmp\vrma\KizunaAI_KAMATTE_Kamacho_Motion.vrma");
 
     // --- VRM モデル読み込み ---
     println!("=== VRM モデル読み込み ===");
@@ -263,8 +257,7 @@ fn main() {
                         let l_model = skel.rest_local_rotations[bone_idx];
                         let w_model = skel.rest_global_rotations[bone_idx];
 
-                        let normalized =
-                            w_canon * l_canon.inverse() * anim_rot * w_canon.inverse();
+                        let normalized = w_canon * l_canon.inverse() * anim_rot * w_canon.inverse();
                         l_model * w_model.inverse() * normalized * w_model
                     } else {
                         anim_rot
@@ -293,8 +286,7 @@ fn main() {
                         let l_model = skel.rest_local_rotations[bone_idx];
                         let w_model = skel.rest_global_rotations[bone_idx];
 
-                        let normalized =
-                            w_vrma * l_vrma.inverse() * anim_rot * w_vrma.inverse();
+                        let normalized = w_vrma * l_vrma.inverse() * anim_rot * w_vrma.inverse();
                         l_model * w_model.inverse() * normalized * w_model
                     } else {
                         anim_rot
@@ -333,10 +325,8 @@ fn main() {
 
     for bone_name in anim_bone_names.intersection(&vrma_bone_names) {
         if let Some(&bone_idx) = skel.bone_name_to_idx.get(*bone_name) {
-            let (_, anim_global_rot, _) =
-                anim_globals[bone_idx].to_scale_rotation_translation();
-            let (_, vrma_global_rot, _) =
-                vrma_globals[bone_idx].to_scale_rotation_translation();
+            let (_, anim_global_rot, _) = anim_globals[bone_idx].to_scale_rotation_translation();
+            let (_, vrma_global_rot, _) = vrma_globals[bone_idx].to_scale_rotation_translation();
 
             let anim_raw = anim_raw_deltas
                 .get(&bone_idx)
@@ -368,7 +358,10 @@ fn main() {
 
     // --- 出力 ---
     println!("\n=== 最終グローバル回転比較 (t={:.1}) ===", t);
-    println!("  .anim: is_additive={} → retarget with canonical bone rests", anim.is_additive);
+    println!(
+        "  .anim: is_additive={} → retarget with canonical bone rests",
+        anim.is_additive
+    );
     println!("  VRMA:  Humanoid retarget → local = L_model * W_model^-1 * normalized * W_model");
     println!("  差が大きい順にソート");
     println!();
@@ -477,10 +470,16 @@ fn main() {
     // --- VRMA レストポーズ ---
     println!("\n=== VRMA レストポーズ（上腕・前腕・手・指のみ） ===");
     let arm_finger_bones = [
-        "leftUpperArm", "leftLowerArm", "leftHand",
-        "rightUpperArm", "rightLowerArm", "rightHand",
-        "leftIndexProximal", "leftIndexIntermediate",
-        "rightIndexProximal", "rightIndexIntermediate",
+        "leftUpperArm",
+        "leftLowerArm",
+        "leftHand",
+        "rightUpperArm",
+        "rightLowerArm",
+        "rightHand",
+        "leftIndexProximal",
+        "leftIndexIntermediate",
+        "rightIndexProximal",
+        "rightIndexIntermediate",
     ];
     for name in &arm_finger_bones {
         if let Some(rest) = vrma.bone_rests.get(*name) {
@@ -553,24 +552,15 @@ fn main() {
     let small_diff: Vec<&BoneResult> = results.iter().filter(|r| r.diff_deg <= 1.0).collect();
 
     println!("  共通ボーン数: {}", results.len());
-    println!(
-        "  大きな差 (>5°): {} ボーン",
-        large_diff.len()
-    );
+    println!("  大きな差 (>5°): {} ボーン", large_diff.len());
     for r in &large_diff {
         println!("    - {} ({:.1}°)", r.name, r.diff_deg);
     }
-    println!(
-        "  中程度の差 (1-5°): {} ボーン",
-        medium_diff.len()
-    );
+    println!("  中程度の差 (1-5°): {} ボーン", medium_diff.len());
     for r in &medium_diff {
         println!("    - {} ({:.1}°)", r.name, r.diff_deg);
     }
-    println!(
-        "  小さな差 (<1°): {} ボーン",
-        small_diff.len()
-    );
+    println!("  小さな差 (<1°): {} ボーン", small_diff.len());
 
     if !results.is_empty() {
         let avg_diff: f32 = results.iter().map(|r| r.diff_deg).sum::<f32>() / results.len() as f32;

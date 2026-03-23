@@ -26,8 +26,8 @@ pub fn load_glb(path: &Path) -> Result<GlbData> {
 
 /// バイト列から GLB/VRM を読み込む（unitypackage 内 VRM 用）
 pub fn load_glb_from_data(data: &[u8]) -> Result<GlbData> {
-    let (document, buffers, images) = gltf::import_slice(data)
-        .context("GLBデータの読み込みに失敗")?;
+    let (document, buffers, images) =
+        gltf::import_slice(data).context("GLBデータの読み込みに失敗")?;
 
     let vrm_extension = extract_vrm_extension(&document)?;
 
@@ -74,7 +74,9 @@ pub fn get_raw_extensions(document: &gltf::Document) -> Value {
 mod tests {
     #[test]
     fn test_load_seed_san_vrm() {
-        let Some(sample) = crate::test_util::try_test_file(crate::test_util::seed_san_vrm()) else { return; };
+        let Some(sample) = crate::test_util::try_test_file(crate::test_util::seed_san_vrm()) else {
+            return;
+        };
 
         // GLBとして読み込み
         let glb = super::load_glb(&sample).expect("VRM読み込み失敗");
@@ -104,7 +106,11 @@ mod tests {
             crate::intermediate::types::SourceFormat::Vrm1,
             "ソース形式が Vrm1 であるべき"
         );
-        assert!(ir.bones.len() > 100, "ボーン数が少なすぎる: {}", ir.bones.len());
+        assert!(
+            ir.bones.len() > 100,
+            "ボーン数が少なすぎる: {}",
+            ir.bones.len()
+        );
         assert!(!ir.meshes.is_empty(), "メッシュが空");
         assert!(!ir.materials.is_empty(), "材質が空");
         assert!(!ir.textures.is_empty(), "テクスチャが空");

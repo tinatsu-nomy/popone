@@ -54,13 +54,14 @@ impl<W: Write> PmxWriter<W> {
             let utf16: Vec<u16> = text.encode_utf16().collect();
             let mut bytes = Vec::with_capacity(utf16.len() * 2);
             for c in utf16 {
-                bytes.push((c & 0xFF) as u8);
-                bytes.push((c >> 8) as u8);
+                bytes.extend_from_slice(&c.to_le_bytes());
             }
             bytes
         } else {
-            // UTF8
-            text.as_bytes().to_vec()
+            // UTF8 — 直接書き出し（コピー不要）
+            self.writer.write_i32::<LittleEndian>(text.len() as i32)?;
+            self.writer.write_all(text.as_bytes())?;
+            return Ok(());
         };
 
         self.writer.write_i32::<LittleEndian>(bytes.len() as i32)?;
@@ -146,7 +147,8 @@ impl<W: Write> PmxWriter<W> {
     }
 
     fn write_vertices(&mut self, vertices: &[PmxVertex]) -> Result<()> {
-        self.writer.write_i32::<LittleEndian>(vertices.len() as i32)?;
+        self.writer
+            .write_i32::<LittleEndian>(vertices.len() as i32)?;
         for v in vertices {
             self.write_vec3(v.position)?;
             self.write_vec3(v.normal)?;
@@ -158,7 +160,11 @@ impl<W: Write> PmxWriter<W> {
                     self.writer.write_u8(0)?;
                     self.write_bone_index(*bone)?;
                 }
-                PmxWeightType::Bdef2 { bone1, bone2, weight1 } => {
+                PmxWeightType::Bdef2 {
+                    bone1,
+                    bone2,
+                    weight1,
+                } => {
                     self.writer.write_u8(1)?;
                     self.write_bone_index(*bone1)?;
                     self.write_bone_index(*bone2)?;
@@ -182,7 +188,8 @@ impl<W: Write> PmxWriter<W> {
 
     fn write_faces(&mut self, faces: &[[u32; 3]]) -> Result<()> {
         // 面数は頂点参照数（面数×3）
-        self.writer.write_i32::<LittleEndian>((faces.len() * 3) as i32)?;
+        self.writer
+            .write_i32::<LittleEndian>((faces.len() * 3) as i32)?;
         for face in faces {
             for &idx in face {
                 self.write_vertex_index(idx)?;
@@ -192,7 +199,8 @@ impl<W: Write> PmxWriter<W> {
     }
 
     fn write_textures(&mut self, textures: &[String]) -> Result<()> {
-        self.writer.write_i32::<LittleEndian>(textures.len() as i32)?;
+        self.writer
+            .write_i32::<LittleEndian>(textures.len() as i32)?;
         for tex in textures {
             self.write_text(tex)?;
         }
@@ -200,7 +208,8 @@ impl<W: Write> PmxWriter<W> {
     }
 
     fn write_materials(&mut self, materials: &[PmxMaterial]) -> Result<()> {
-        self.writer.write_i32::<LittleEndian>(materials.len() as i32)?;
+        self.writer
+            .write_i32::<LittleEndian>(materials.len() as i32)?;
         for mat in materials {
             self.write_text(&mat.name)?;
             self.write_text(&mat.name_en)?;
@@ -232,7 +241,8 @@ impl<W: Write> PmxWriter<W> {
             }
 
             self.write_text(&mat.memo)?;
-            self.writer.write_i32::<LittleEndian>(mat.face_count as i32)?;
+            self.writer
+                .write_i32::<LittleEndian>(mat.face_count as i32)?;
         }
         Ok(())
     }
@@ -263,7 +273,8 @@ impl<W: Write> PmxWriter<W> {
             if bone.flags & (BONE_FLAG_ROTATION_GRANT | BONE_FLAG_MOVE_GRANT) != 0 {
                 let grant = bone.grant.as_ref();
                 self.write_bone_index(grant.map(|g| g.parent_index).unwrap_or(-1))?;
-                self.writer.write_f32::<LittleEndian>(grant.map(|g| g.ratio).unwrap_or(1.0))?;
+                self.writer
+                    .write_f32::<LittleEndian>(grant.map(|g| g.ratio).unwrap_or(1.0))?;
             }
 
             // IK
@@ -271,7 +282,8 @@ impl<W: Write> PmxWriter<W> {
                 self.write_bone_index(ik.target_bone)?;
                 self.writer.write_i32::<LittleEndian>(ik.loop_count)?;
                 self.writer.write_f32::<LittleEndian>(ik.limit_angle)?;
-                self.writer.write_i32::<LittleEndian>(ik.links.len() as i32)?;
+                self.writer
+                    .write_i32::<LittleEndian>(ik.links.len() as i32)?;
                 for link in &ik.links {
                     self.write_bone_index(link.bone_index)?;
                     self.writer.write_u8(link.angle_limit as u8)?;
@@ -295,21 +307,24 @@ impl<W: Write> PmxWriter<W> {
 
             match &morph.offsets {
                 PmxMorphOffsets::Vertex(offsets) => {
-                    self.writer.write_i32::<LittleEndian>(offsets.len() as i32)?;
+                    self.writer
+                        .write_i32::<LittleEndian>(offsets.len() as i32)?;
                     for off in offsets {
                         self.write_vertex_index(off.vertex_index)?;
                         self.write_vec3(off.offset)?;
                     }
                 }
                 PmxMorphOffsets::Group(offsets) => {
-                    self.writer.write_i32::<LittleEndian>(offsets.len() as i32)?;
+                    self.writer
+                        .write_i32::<LittleEndian>(offsets.len() as i32)?;
                     for off in offsets {
                         self.write_morph_index(off.morph_index)?;
                         self.writer.write_f32::<LittleEndian>(off.weight)?;
                     }
                 }
                 PmxMorphOffsets::Bone(offsets) => {
-                    self.writer.write_i32::<LittleEndian>(offsets.len() as i32)?;
+                    self.writer
+                        .write_i32::<LittleEndian>(offsets.len() as i32)?;
                     for off in offsets {
                         self.write_bone_index(off.bone_index)?;
                         self.write_vec3(off.translation)?;
@@ -320,7 +335,8 @@ impl<W: Write> PmxWriter<W> {
                     }
                 }
                 PmxMorphOffsets::Material(offsets) => {
-                    self.writer.write_i32::<LittleEndian>(offsets.len() as i32)?;
+                    self.writer
+                        .write_i32::<LittleEndian>(offsets.len() as i32)?;
                     for off in offsets {
                         self.write_material_index(off.material_index)?;
                         self.writer.write_u8(off.offset_mode)?;
@@ -336,7 +352,8 @@ impl<W: Write> PmxWriter<W> {
                     }
                 }
                 PmxMorphOffsets::Uv(offsets) => {
-                    self.writer.write_i32::<LittleEndian>(offsets.len() as i32)?;
+                    self.writer
+                        .write_i32::<LittleEndian>(offsets.len() as i32)?;
                     for off in offsets {
                         self.write_vertex_index(off.vertex_index)?;
                         self.write_vec4(off.offset)?;
@@ -353,7 +370,8 @@ impl<W: Write> PmxWriter<W> {
             self.write_text(&frame.name)?;
             self.write_text(&frame.name_en)?;
             self.writer.write_u8(frame.is_special)?;
-            self.writer.write_i32::<LittleEndian>(frame.elements.len() as i32)?;
+            self.writer
+                .write_i32::<LittleEndian>(frame.elements.len() as i32)?;
             for elem in &frame.elements {
                 match elem {
                     DisplayFrameElement::Bone(idx) => {
@@ -377,14 +395,16 @@ impl<W: Write> PmxWriter<W> {
             self.write_text(&body.name_en)?;
             self.write_bone_index(body.bone_index)?;
             self.writer.write_u8(body.group)?;
-            self.writer.write_u16::<LittleEndian>(body.no_collision_mask)?;
+            self.writer
+                .write_u16::<LittleEndian>(body.no_collision_mask)?;
             self.writer.write_u8(body.shape)?;
             self.write_vec3(body.size)?;
             self.write_vec3(body.position)?;
             self.write_vec3(body.rotation)?;
             self.writer.write_f32::<LittleEndian>(body.mass)?;
             self.writer.write_f32::<LittleEndian>(body.linear_damping)?;
-            self.writer.write_f32::<LittleEndian>(body.angular_damping)?;
+            self.writer
+                .write_f32::<LittleEndian>(body.angular_damping)?;
             self.writer.write_f32::<LittleEndian>(body.restitution)?;
             self.writer.write_f32::<LittleEndian>(body.friction)?;
             self.writer.write_u8(body.physics_mode)?;
@@ -419,7 +439,9 @@ mod tests {
 
     #[test]
     fn test_pmx_write_read_roundtrip() {
-        let Some(sample) = crate::test_util::try_test_file(crate::test_util::seed_san_pmx()) else { return; };
+        let Some(sample) = crate::test_util::try_test_file(crate::test_util::seed_san_pmx()) else {
+            return;
+        };
         let original = crate::pmx::reader::read_pmx(&sample).expect("PMX読み込み失敗");
 
         let temp_path = std::env::temp_dir().join("popone_test_roundtrip.pmx");
@@ -435,12 +457,36 @@ mod tests {
 
         // 基本プロパティの一致確認
         assert_eq!(original.bones.len(), reloaded.bones.len(), "ボーン数不一致");
-        assert_eq!(original.vertices.len(), reloaded.vertices.len(), "頂点数不一致");
-        assert_eq!(original.materials.len(), reloaded.materials.len(), "材質数不一致");
-        assert_eq!(original.morphs.len(), reloaded.morphs.len(), "モーフ数不一致");
-        assert_eq!(original.textures.len(), reloaded.textures.len(), "テクスチャ数不一致");
-        assert_eq!(original.rigid_bodies.len(), reloaded.rigid_bodies.len(), "剛体数不一致");
-        assert_eq!(original.joints.len(), reloaded.joints.len(), "ジョイント数不一致");
+        assert_eq!(
+            original.vertices.len(),
+            reloaded.vertices.len(),
+            "頂点数不一致"
+        );
+        assert_eq!(
+            original.materials.len(),
+            reloaded.materials.len(),
+            "材質数不一致"
+        );
+        assert_eq!(
+            original.morphs.len(),
+            reloaded.morphs.len(),
+            "モーフ数不一致"
+        );
+        assert_eq!(
+            original.textures.len(),
+            reloaded.textures.len(),
+            "テクスチャ数不一致"
+        );
+        assert_eq!(
+            original.rigid_bodies.len(),
+            reloaded.rigid_bodies.len(),
+            "剛体数不一致"
+        );
+        assert_eq!(
+            original.joints.len(),
+            reloaded.joints.len(),
+            "ジョイント数不一致"
+        );
 
         // ボーン名の一致
         for (i, (a, b)) in original.bones.iter().zip(reloaded.bones.iter()).enumerate() {

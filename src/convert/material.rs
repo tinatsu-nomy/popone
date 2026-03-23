@@ -25,18 +25,22 @@ fn select_toon(ir: &IrMaterial) -> PmxToonRef {
         _ if ratio < 0.45 => PmxToonRef::Shared(1), // toon02
         _ if ratio < 0.65 => PmxToonRef::Shared(2), // toon03: 中間
         _ if ratio < 0.85 => PmxToonRef::Shared(4), // toon05: 柔らかめ
-        _                 => PmxToonRef::Shared(6), // toon07: 最も柔らかい（shade ≈ diffuse）
+        _ => PmxToonRef::Shared(6),                 // toon07: 最も柔らかい（shade ≈ diffuse）
     }
 }
 
 pub fn ir_material_to_pmx(ir: &IrMaterial, texture_index: Option<i32>) -> PmxMaterial {
     let draw_flags: u8 = {
         let mut f = 0u8;
-        if ir.is_double_sided { f |= 0x01; }
+        if ir.is_double_sided {
+            f |= 0x01;
+        }
         f |= 0x02; // 地面影
         f |= 0x04; // セルフシャドウマップへの描画
         f |= 0x08; // セルフシャドウの描画
-        if ir.edge_size > 0.0 { f |= 0x10; } // エッジ描画
+        if ir.edge_size > 0.0 {
+            f |= 0x10;
+        } // エッジ描画
         f
     };
 
@@ -92,6 +96,7 @@ mod tests {
             shade_texture_index: None,
             outline_width_texture_index: None,
             source_texture_name: None,
+            ..Default::default()
         }
     }
 
@@ -123,7 +128,11 @@ mod tests {
     fn test_edge_flag_when_edge_size_positive() {
         let ir = make_test_material();
         let pmx = ir_material_to_pmx(&ir, None);
-        assert_ne!(pmx.draw_flags & 0x10, 0, "edge_size > 0 ならエッジフラグが立つ");
+        assert_ne!(
+            pmx.draw_flags & 0x10,
+            0,
+            "edge_size > 0 ならエッジフラグが立つ"
+        );
     }
 
     #[test]
@@ -131,7 +140,11 @@ mod tests {
         let mut ir = make_test_material();
         ir.edge_size = 0.0;
         let pmx = ir_material_to_pmx(&ir, None);
-        assert_eq!(pmx.draw_flags & 0x10, 0, "edge_size == 0 ならエッジフラグなし");
+        assert_eq!(
+            pmx.draw_flags & 0x10,
+            0,
+            "edge_size == 0 ならエッジフラグなし"
+        );
     }
 
     #[test]
@@ -139,7 +152,10 @@ mod tests {
         let mut ir = make_test_material();
         ir.edge_size = 5.0;
         let pmx = ir_material_to_pmx(&ir, None);
-        assert!((pmx.edge_size - 1.0).abs() < 1e-6, "edge_size は最大 1.0 にクランプ");
+        assert!(
+            (pmx.edge_size - 1.0).abs() < 1e-6,
+            "edge_size は最大 1.0 にクランプ"
+        );
     }
 
     #[test]
@@ -207,7 +223,11 @@ mod tests {
         // shade_color無し → toon03（中間）
         assert_eq!(pmx.toon_ref, PmxToonRef::Shared(2));
         // ambient は diffuse ベース
-        let expected_amb = glam::Vec3::new(mat.diffuse.x * 0.4, mat.diffuse.y * 0.4, mat.diffuse.z * 0.4);
+        let expected_amb = glam::Vec3::new(
+            mat.diffuse.x * 0.4,
+            mat.diffuse.y * 0.4,
+            mat.diffuse.z * 0.4,
+        );
         assert!((pmx.ambient - expected_amb).length() < 1e-5);
     }
 }

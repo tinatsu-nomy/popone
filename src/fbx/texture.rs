@@ -1,5 +1,5 @@
-use std::path::Path;
 use super::scene::FbxScene;
+use std::path::Path;
 
 pub struct TextureData {
     pub name: String,
@@ -30,7 +30,7 @@ fn extract_basename_from_texture(tex_obj: &super::scene::FbxObject) -> Option<St
             if let Some(filename) = node.properties.first().and_then(|p| p.as_string()) {
                 let normalized = filename.replace('\\', "/");
                 if let Some(basename) = Path::new(&normalized).file_name() {
-                    return Some(basename.to_string_lossy().to_string());
+                    return Some(basename.to_string_lossy().into_owned());
                 }
             }
         }
@@ -82,9 +82,7 @@ pub fn extract_texture_for_material(
     if let Some(abs_node) = tex_obj.node.child("FileName") {
         if let Some(filename) = abs_node.properties.first().and_then(|p| p.as_string()) {
             let normalized = filename.replace('\\', "/");
-            let basename = Path::new(&normalized)
-                .file_name()
-                .unwrap_or_default();
+            let basename = Path::new(&normalized).file_name().unwrap_or_default();
             let path = fbx_dir.join(basename);
             if let Ok(data) = std::fs::read(&path) {
                 if let Some(tex) = decode_image_data(&data, &tex_name) {
@@ -101,8 +99,7 @@ pub fn extract_texture_for_material(
 pub fn extract_texture_name_for_material(scene: &FbxScene, mat_id: i64) -> Option<String> {
     let textures = scene.textures_for_material(mat_id);
     let tex_obj = find_diffuse_texture(&textures)?;
-    extract_basename_from_texture(tex_obj)
-        .or_else(|| Some(tex_obj.name.clone()))
+    extract_basename_from_texture(tex_obj).or_else(|| Some(tex_obj.name.clone()))
 }
 
 fn decode_image_data(data: &[u8], name: &str) -> Option<TextureData> {

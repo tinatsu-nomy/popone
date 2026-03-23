@@ -64,67 +64,67 @@ pub fn pmx_name_to_vrm_bone(pmx_name: &str) -> Option<&'static str> {
 /// VRMボーン名 → (PMX日本語名, PMX英語名)
 pub fn vrm_bone_to_pmx_name(vrm_name: &str) -> Option<(&'static str, &'static str)> {
     Some(match vrm_name {
-        "hips"                    => ("下半身", "lower body"),
-        "spine"                   => ("上半身", "upper body"),
-        "chest"                   => ("上半身2", "upper body2"),
-        "upperChest"              => ("上半身3", "upper body3"),
-        "neck"                    => ("首", "neck"),
-        "head"                    => ("頭", "head"),
-        "leftEye"                 => ("左目", "eye_L"),
-        "rightEye"                => ("右目", "eye_R"),
-        "jaw"                     => ("顎", "jaw"),
+        "hips" => ("下半身", "lower body"),
+        "spine" => ("上半身", "upper body"),
+        "chest" => ("上半身2", "upper body2"),
+        "upperChest" => ("上半身3", "upper body3"),
+        "neck" => ("首", "neck"),
+        "head" => ("頭", "head"),
+        "leftEye" => ("左目", "eye_L"),
+        "rightEye" => ("右目", "eye_R"),
+        "jaw" => ("顎", "jaw"),
         // 左腕
-        "leftShoulder"            => ("左肩", "shoulder_L"),
-        "leftUpperArm"            => ("左腕", "arm_L"),
-        "leftLowerArm"            => ("左ひじ", "elbow_L"),
-        "leftHand"                => ("左手首", "wrist_L"),
+        "leftShoulder" => ("左肩", "shoulder_L"),
+        "leftUpperArm" => ("左腕", "arm_L"),
+        "leftLowerArm" => ("左ひじ", "elbow_L"),
+        "leftHand" => ("左手首", "wrist_L"),
         // 右腕
-        "rightShoulder"           => ("右肩", "shoulder_R"),
-        "rightUpperArm"           => ("右腕", "arm_R"),
-        "rightLowerArm"           => ("右ひじ", "elbow_R"),
-        "rightHand"               => ("右手首", "wrist_R"),
+        "rightShoulder" => ("右肩", "shoulder_R"),
+        "rightUpperArm" => ("右腕", "arm_R"),
+        "rightLowerArm" => ("右ひじ", "elbow_R"),
+        "rightHand" => ("右手首", "wrist_R"),
         // 左足
-        "leftUpperLeg"            => ("左足", "leg_L"),
-        "leftLowerLeg"            => ("左ひざ", "knee_L"),
-        "leftFoot"                => ("左足首", "ankle_L"),
-        "leftToes"                => ("左つま先", "toe_L"),
+        "leftUpperLeg" => ("左足", "leg_L"),
+        "leftLowerLeg" => ("左ひざ", "knee_L"),
+        "leftFoot" => ("左足首", "ankle_L"),
+        "leftToes" => ("左つま先", "toe_L"),
         // 右足
-        "rightUpperLeg"           => ("右足", "leg_R"),
-        "rightLowerLeg"           => ("右ひざ", "knee_R"),
-        "rightFoot"               => ("右足首", "ankle_R"),
-        "rightToes"               => ("右つま先", "toe_R"),
+        "rightUpperLeg" => ("右足", "leg_R"),
+        "rightLowerLeg" => ("右ひざ", "knee_R"),
+        "rightFoot" => ("右足首", "ankle_R"),
+        "rightToes" => ("右つま先", "toe_R"),
         // 左手指
-        "leftThumbMetacarpal"     => ("左親指０", "thumb0_L"),
-        "leftThumbProximal"       => ("左親指１", "thumb1_L"),
-        "leftThumbDistal"         => ("左親指２", "thumb2_L"),
-        "leftIndexProximal"       => ("左人差指１", "index1_L"),
-        "leftIndexIntermediate"   => ("左人差指２", "index2_L"),
-        "leftIndexDistal"         => ("左人差指３", "index3_L"),
-        "leftMiddleProximal"      => ("左中指１", "middle1_L"),
-        "leftMiddleIntermediate"  => ("左中指２", "middle2_L"),
-        "leftMiddleDistal"        => ("左中指３", "middle3_L"),
-        "leftRingProximal"        => ("左薬指１", "ring1_L"),
-        "leftRingIntermediate"    => ("左薬指２", "ring2_L"),
-        "leftRingDistal"          => ("左薬指３", "ring3_L"),
-        "leftLittleProximal"      => ("左小指１", "little1_L"),
-        "leftLittleIntermediate"  => ("左小指２", "little2_L"),
-        "leftLittleDistal"        => ("左小指３", "little3_L"),
+        "leftThumbMetacarpal" => ("左親指０", "thumb0_L"),
+        "leftThumbProximal" => ("左親指１", "thumb1_L"),
+        "leftThumbDistal" => ("左親指２", "thumb2_L"),
+        "leftIndexProximal" => ("左人差指１", "index1_L"),
+        "leftIndexIntermediate" => ("左人差指２", "index2_L"),
+        "leftIndexDistal" => ("左人差指３", "index3_L"),
+        "leftMiddleProximal" => ("左中指１", "middle1_L"),
+        "leftMiddleIntermediate" => ("左中指２", "middle2_L"),
+        "leftMiddleDistal" => ("左中指３", "middle3_L"),
+        "leftRingProximal" => ("左薬指１", "ring1_L"),
+        "leftRingIntermediate" => ("左薬指２", "ring2_L"),
+        "leftRingDistal" => ("左薬指３", "ring3_L"),
+        "leftLittleProximal" => ("左小指１", "little1_L"),
+        "leftLittleIntermediate" => ("左小指２", "little2_L"),
+        "leftLittleDistal" => ("左小指３", "little3_L"),
         // 右手指
-        "rightThumbMetacarpal"    => ("右親指０", "thumb0_R"),
-        "rightThumbProximal"      => ("右親指１", "thumb1_R"),
-        "rightThumbDistal"        => ("右親指２", "thumb2_R"),
-        "rightIndexProximal"      => ("右人差指１", "index1_R"),
-        "rightIndexIntermediate"  => ("右人差指２", "index2_R"),
-        "rightIndexDistal"        => ("右人差指３", "index3_R"),
-        "rightMiddleProximal"     => ("右中指１", "middle1_R"),
+        "rightThumbMetacarpal" => ("右親指０", "thumb0_R"),
+        "rightThumbProximal" => ("右親指１", "thumb1_R"),
+        "rightThumbDistal" => ("右親指２", "thumb2_R"),
+        "rightIndexProximal" => ("右人差指１", "index1_R"),
+        "rightIndexIntermediate" => ("右人差指２", "index2_R"),
+        "rightIndexDistal" => ("右人差指３", "index3_R"),
+        "rightMiddleProximal" => ("右中指１", "middle1_R"),
         "rightMiddleIntermediate" => ("右中指２", "middle2_R"),
-        "rightMiddleDistal"       => ("右中指３", "middle3_R"),
-        "rightRingProximal"       => ("右薬指１", "ring1_R"),
-        "rightRingIntermediate"   => ("右薬指２", "ring2_R"),
-        "rightRingDistal"         => ("右薬指３", "ring3_R"),
-        "rightLittleProximal"     => ("右小指１", "little1_R"),
+        "rightMiddleDistal" => ("右中指３", "middle3_R"),
+        "rightRingProximal" => ("右薬指１", "ring1_R"),
+        "rightRingIntermediate" => ("右薬指２", "ring2_R"),
+        "rightRingDistal" => ("右薬指３", "ring3_R"),
+        "rightLittleProximal" => ("右小指１", "little1_R"),
         "rightLittleIntermediate" => ("右小指２", "little2_R"),
-        "rightLittleDistal"       => ("右小指３", "little3_R"),
+        "rightLittleDistal" => ("右小指３", "little3_R"),
         _ => return None,
     })
 }
@@ -138,8 +138,14 @@ mod tests {
         // 基本ボーンの変換が正しいか
         assert_eq!(vrm_bone_to_pmx_name("hips"), Some(("下半身", "lower body")));
         assert_eq!(vrm_bone_to_pmx_name("head"), Some(("頭", "head")));
-        assert_eq!(vrm_bone_to_pmx_name("leftHand"), Some(("左手首", "wrist_L")));
-        assert_eq!(vrm_bone_to_pmx_name("rightFoot"), Some(("右足首", "ankle_R")));
+        assert_eq!(
+            vrm_bone_to_pmx_name("leftHand"),
+            Some(("左手首", "wrist_L"))
+        );
+        assert_eq!(
+            vrm_bone_to_pmx_name("rightFoot"),
+            Some(("右足首", "ankle_R"))
+        );
     }
 
     #[test]
@@ -168,16 +174,34 @@ mod tests {
         // VRM → PMX → VRM ラウンドトリップ
         // 注: "hips" は順方向="下半身"、逆方向="センター"→"hips" で不整合のため除外
         let vrm_names = [
-            "spine", "chest", "neck", "head",
-            "leftShoulder", "leftUpperArm", "leftLowerArm", "leftHand",
-            "rightShoulder", "rightUpperArm", "rightLowerArm", "rightHand",
-            "leftUpperLeg", "leftLowerLeg", "leftFoot", "leftToes",
-            "rightUpperLeg", "rightLowerLeg", "rightFoot", "rightToes",
+            "spine",
+            "chest",
+            "neck",
+            "head",
+            "leftShoulder",
+            "leftUpperArm",
+            "leftLowerArm",
+            "leftHand",
+            "rightShoulder",
+            "rightUpperArm",
+            "rightLowerArm",
+            "rightHand",
+            "leftUpperLeg",
+            "leftLowerLeg",
+            "leftFoot",
+            "leftToes",
+            "rightUpperLeg",
+            "rightLowerLeg",
+            "rightFoot",
+            "rightToes",
         ];
         for &vrm_name in &vrm_names {
             let (pmx_jp, _) = vrm_bone_to_pmx_name(vrm_name).unwrap();
             let back = pmx_name_to_vrm_bone(pmx_jp).unwrap();
-            assert_eq!(back, vrm_name, "Roundtrip failed for {vrm_name} → {pmx_jp} → {back}");
+            assert_eq!(
+                back, vrm_name,
+                "Roundtrip failed for {vrm_name} → {pmx_jp} → {back}"
+            );
         }
         // "hips" は特殊: 順方向 "下半身"、逆方向 "センター" → "hips"
         assert_eq!(pmx_name_to_vrm_bone("センター"), Some("hips"));

@@ -76,14 +76,18 @@ pub struct PreloadedData {
 #[derive(Clone)]
 pub enum TextureSource {
     File(PathBuf),
-    Cached { original_name: String, data: Arc<[u8]>, is_psd: bool },
+    Cached {
+        original_name: String,
+        data: Arc<[u8]>,
+        is_psd: bool,
+    },
 }
 
 impl TextureSource {
     /// 表示用名前を返す
     pub fn display_name(&self) -> String {
         match self {
-            TextureSource::File(p) => p.to_string_lossy().to_string(),
+            TextureSource::File(p) => p.to_string_lossy().into_owned(),
             TextureSource::Cached { original_name, .. } => original_name.clone(),
         }
     }
@@ -93,7 +97,9 @@ impl TextureSource {
 fn is_temp_path(path: &Path) -> bool {
     // canonicalize ベース（ファイル存在時）
     if let (Ok(temp), Ok(target)) = (std::env::temp_dir().canonicalize(), path.canonicalize()) {
-        if target.starts_with(&temp) { return true; }
+        if target.starts_with(&temp) {
+            return true;
+        }
     }
     // フォールバック: 文字列ベース（ファイル消失後でも機能）
     let path_str = path.to_string_lossy().to_lowercase();
@@ -107,15 +113,24 @@ fn is_temp_path(path: &Path) -> bool {
 
 /// FBX 外部テクスチャ用: 指定ディレクトリ以下の画像ファイルを再帰的に収集する
 /// キーは base_dir からの相対パス（サブディレクトリ構造を保持）
-fn collect_image_files_recursive(base_dir: &Path, current_dir: &Path, out: &mut HashMap<PathBuf, Arc<[u8]>>) {
-    let Ok(entries) = std::fs::read_dir(current_dir) else { return };
+fn collect_image_files_recursive(
+    base_dir: &Path,
+    current_dir: &Path,
+    out: &mut HashMap<PathBuf, Arc<[u8]>>,
+) {
+    let Ok(entries) = std::fs::read_dir(current_dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let ep = entry.path();
         if ep.is_dir() {
             collect_image_files_recursive(base_dir, &ep, out);
         } else if let Some(ext) = ep.extension().and_then(|e| e.to_str()) {
             let ext_low = ext.to_lowercase();
-            if matches!(ext_low.as_str(), "png" | "jpg" | "jpeg" | "tga" | "bmp" | "tif" | "tiff" | "dds") {
+            if matches!(
+                ext_low.as_str(),
+                "png" | "jpg" | "jpeg" | "tga" | "bmp" | "tif" | "tiff" | "dds"
+            ) {
                 if let Ok(img_data) = std::fs::read(&ep) {
                     if let Ok(rel) = ep.strip_prefix(base_dir) {
                         out.insert(rel.to_path_buf(), Arc::from(img_data.into_boxed_slice()));
@@ -130,7 +145,19 @@ fn collect_image_files_recursive(base_dir: &Path, current_dir: &Path, out: &mut 
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tga", "bmp", "psd"];
 
 /// D&D 対応モデル/アニメーション拡張子
-const MODEL_EXTENSIONS: &[&str] = &["vrm", "fbx", "pmx", "pmd", "unitypackage", "vrma", "glb", "gltf", "anim", "zip", "7z"];
+const MODEL_EXTENSIONS: &[&str] = &[
+    "vrm",
+    "fbx",
+    "pmx",
+    "pmd",
+    "unitypackage",
+    "vrma",
+    "glb",
+    "gltf",
+    "anim",
+    "zip",
+    "7z",
+];
 
 /// UI 表示用にキャッシュされた材質情報（借用制約回避 + 毎フレーム clone 回避）
 pub struct CachedMaterialInfo {
@@ -169,7 +196,11 @@ impl CachedStats {
             ir.bones.len(),
             ir.morphs.len(),
         );
-        Self { total_vertices, total_faces, status_text }
+        Self {
+            total_vertices,
+            total_faces,
+            status_text,
+        }
     }
 }
 
@@ -221,7 +252,10 @@ pub struct ConvertMessage {
 
 impl ConvertMessage {
     pub fn new(result: ConvertResult) -> Self {
-        Self { result, shown_at: std::time::Instant::now() }
+        Self {
+            result,
+            shown_at: std::time::Instant::now(),
+        }
     }
 
     pub fn success(msg: impl Into<String>) -> Self {
@@ -256,6 +290,20 @@ pub enum FbxLoadMode {
 pub enum PkgModelType {
     Fbx,
     Vrm,
+}
+
+/// unitypackage アセット群から VRM/FBX モデルリストを構築
+fn build_pkg_model_list(
+    assets: &[crate::unitypackage::ExtractedAsset],
+) -> Vec<(usize, String, PkgModelType)> {
+    let mut list = Vec::new();
+    for (idx, name) in crate::unitypackage::find_vrm_list(assets) {
+        list.push((idx, name, PkgModelType::Vrm));
+    }
+    for (idx, name) in crate::unitypackage::find_fbx_list(assets) {
+        list.push((idx, name, PkgModelType::Fbx));
+    }
+    list
 }
 
 pub struct PendingUnityPackage {
@@ -383,13 +431,19 @@ pub struct DisplaySettings {
     pub normal_length: f32,
     /// 法線マップ表示（法線ベクトル→RGB）
     pub show_normal_map: bool,
+    /// MMD レンダリングモード
+    pub mmd_mode: bool,
+    /// MMD エッジ描画
+    pub mmd_edge_enabled: bool,
+    /// MMD エッジ太さ全体スケール (0.1〜3.0)
+    pub mmd_edge_thickness: f32,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
         Self {
             light_intensity: 0.7,
-            ambient_intensity: 0.45,
+            ambient_intensity: 0.5,
             bg_brightness: 0.19,
             show_grid: true,
             show_bones: false,
@@ -407,6 +461,9 @@ impl Default for DisplaySettings {
             show_normals: false,
             normal_length: 0.1,
             show_normal_map: false,
+            mmd_mode: false,
+            mmd_edge_enabled: true,
+            mmd_edge_thickness: 1.0,
         }
     }
 }
@@ -497,7 +554,11 @@ pub struct AnimLibrary {
     /// VRMA アニメーション再生状態
     pub state: Option<AnimationState>,
     /// 読み込み済みVRMAライブラリ（名前, パス, アニメーションデータ）
-    pub library: Vec<(String, PathBuf, Arc<crate::intermediate::animation::VrmaAnimation>)>,
+    pub library: Vec<(
+        String,
+        PathBuf,
+        Arc<crate::intermediate::animation::VrmaAnimation>,
+    )>,
     /// 現在アクティブなVRMAのインデックス
     pub active_index: Option<usize>,
     /// Unity .anim Muscle 角度スケール
@@ -537,6 +598,8 @@ pub struct PendingState {
     pub rebuild: Option<PendingOverlay>,
     /// モデル再読み込み遅延実行
     pub reload: Option<PendingOverlay>,
+    /// ビューポートサイズ確定後の refit（初回ロード時）
+    pub refit: bool,
 }
 
 impl Default for PendingState {
@@ -552,6 +615,7 @@ impl Default for PendingState {
             convert: None,
             rebuild: None,
             reload: None,
+            refit: false,
         }
     }
 }
@@ -605,6 +669,10 @@ pub struct ViewerApp {
     render_state: egui_wgpu::RenderState,
     /// Tポーズ→Aスタンス変換（トグル時に再読み込み）
     pub normalize_pose: bool,
+    /// Aスタンス→Tスタンス変換（FBX用、トグル時に再読み込み）
+    pub normalize_to_tstance: bool,
+    /// ビューポートの幅（フィット計算用）
+    pub last_viewport_width: f32,
     /// ビューポートの高さ（フィット計算用）
     pub last_viewport_height: f32,
     /// テクスチャ割り当て状態
@@ -659,6 +727,8 @@ impl ViewerApp {
             viewport_texture_id: None,
             render_state,
             normalize_pose: false,
+            normalize_to_tstance: false,
+            last_viewport_width: 1280.0,
             last_viewport_height: 720.0,
             tex: TextureState::default(),
             pending: PendingState::default(),
@@ -678,8 +748,7 @@ impl ViewerApp {
 
     fn setup_japanese_font(ctx: &egui::Context) {
         // Noto Sans JP（OFL ライセンス）をバイナリに組み込み
-        const NOTO_SANS_JP: &[u8] =
-            include_bytes!("../../assets/NotoSansJP-Regular.ttf");
+        const NOTO_SANS_JP: &[u8] = include_bytes!("../../assets/NotoSansJP-Regular.ttf");
 
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
@@ -774,7 +843,10 @@ impl ViewerApp {
             // ファイルを1回だけ読み込んで、メッシュとアニメーションの有無を判定
             let data = match self.read_or_preloaded(&path) {
                 Ok(d) => d,
-                Err(_) => { self.load_file_as_model(path); return; }
+                Err(_) => {
+                    self.load_file_as_model(path);
+                    return;
+                }
             };
             let has_mesh = crate::fbx::extract::fbx_has_mesh(&data);
             let has_anim = crate::fbx::animation::load_fbx_animation_from_data(&data)
@@ -853,7 +925,13 @@ impl ViewerApp {
 
     /// FBX読み込み方法選択ダイアログの結果を実行
     pub fn execute_fbx_choice(&mut self, choice: PendingFbxChoice) {
-        let PendingFbxChoice { path, load_model, load_animation, pkg_context, preloaded } = choice;
+        let PendingFbxChoice {
+            path,
+            load_model,
+            load_animation,
+            pkg_context,
+            preloaded,
+        } = choice;
         self.preloaded = preloaded;
 
         let mode = match (load_model, load_animation) {
@@ -876,38 +954,46 @@ impl ViewerApp {
             } else {
                 None
             };
-            match self.load_fbx_from_assets(pkg.assets, pkg.fbx_index, &pkg.source_path, mode, source_override) {
+            match self.load_fbx_from_assets(
+                pkg.assets,
+                pkg.fbx_index,
+                &pkg.source_path,
+                mode,
+                source_override,
+            ) {
                 Ok(()) => {
                     log::info!("読み込み成功: {}", pkg.source_path.display());
                     self.convert_message = None;
                 }
                 Err(e) => {
                     log::error!("読み込み失敗: {e}");
-                    self.convert_message = Some(ConvertMessage::failure(format!("ファイルを読み込めませんでした。\n詳細: {e}")));
+                    self.convert_message = Some(ConvertMessage::failure(format!(
+                        "ファイルを読み込めませんでした。\n詳細: {e}"
+                    )));
                 }
             }
         } else {
             // ファイル直接
             match mode {
-                FbxLoadMode::Both | FbxLoadMode::ModelOnly => {
-                    match self.try_load_fbx(&path) {
-                        Ok(()) => {
-                            log::info!("FBXモデル読み込み成功: {}", path.display());
-                            self.convert_message = None;
-                            self.anim.state = None;
-                            self.anim.library.clear();
-                            self.anim.active_index = None;
+                FbxLoadMode::Both | FbxLoadMode::ModelOnly => match self.try_load_fbx(&path) {
+                    Ok(()) => {
+                        log::info!("FBXモデル読み込み成功: {}", path.display());
+                        self.convert_message = None;
+                        self.anim.state = None;
+                        self.anim.library.clear();
+                        self.anim.active_index = None;
 
-                            if mode == FbxLoadMode::Both {
-                                self.try_load_fbx_animation(&path);
-                            }
-                        }
-                        Err(e) => {
-                            log::error!("読み込み失敗: {e}");
-                            self.convert_message = Some(ConvertMessage::failure(format!("ファイルを読み込めませんでした。\n詳細: {e}")));
+                        if mode == FbxLoadMode::Both {
+                            self.try_load_fbx_animation(&path);
                         }
                     }
-                }
+                    Err(e) => {
+                        log::error!("読み込み失敗: {e}");
+                        self.convert_message = Some(ConvertMessage::failure(format!(
+                            "ファイルを読み込めませんでした。\n詳細: {e}"
+                        )));
+                    }
+                },
                 FbxLoadMode::AnimationOnly => {
                     self.try_load_fbx_animation(&path);
                 }
@@ -919,42 +1005,41 @@ impl ViewerApp {
     fn try_load_fbx(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         let data = self.read_or_preloaded(path)?;
         let ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-            &data, Some(path), self.normalize_pose,
+            &data,
+            Some(path),
+            self.normalize_pose,
+            self.normalize_to_tstance,
         )?;
-        let source = if is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path) {
-            let aux = self.take_or_collect_aux(path);
-            ReloadableSource::Snapshot {
-                original_path: path.to_path_buf(),
-                main_bytes: data,
-                aux_files: aux,
-            }
-        } else {
-            ReloadableSource::File(path.to_path_buf())
-        };
+        let source =
+            if is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path) {
+                let aux = self.take_or_collect_aux(path);
+                ReloadableSource::Snapshot {
+                    original_path: path.to_path_buf(),
+                    main_bytes: data,
+                    aux_files: aux,
+                }
+            } else {
+                ReloadableSource::File(path.to_path_buf())
+            };
         self.finish_load(ir, source)
     }
 
     fn try_load_unitypackage(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         // ファイル消失前に一時パス判定を確定（canonicalize がファイル存在を前提とするため）
-        let is_temp = is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path);
-        let archive_data = self.read_or_preloaded(path)?.to_vec();
+        let is_temp =
+            is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path);
+        let archive_data: Arc<[u8]> = self.read_or_preloaded(path)?;
         let assets = crate::unitypackage::extract_all_assets(&archive_data)?;
 
         // 一時ファイルの場合はアーカイブデータをスナップショット
         let snapshot = if is_temp {
-            Some(Arc::from(archive_data.into_boxed_slice()))
+            Some(Arc::clone(&archive_data))
         } else {
             None
         };
 
         // FBX と VRM を統合したモデルリストを構築
-        let mut model_list: Vec<(usize, String, PkgModelType)> = Vec::new();
-        for (idx, name) in crate::unitypackage::find_vrm_list(&assets) {
-            model_list.push((idx, name, PkgModelType::Vrm));
-        }
-        for (idx, name) in crate::unitypackage::find_fbx_list(&assets) {
-            model_list.push((idx, name, PkgModelType::Fbx));
-        }
+        let model_list = build_pkg_model_list(&assets);
 
         if model_list.is_empty() {
             anyhow::bail!(".unitypackage 内に VRM / FBX ファイルが見つかりません");
@@ -964,14 +1049,22 @@ impl ViewerApp {
             // モデルが1つだけ → プログレス表示後に遅延ロード
             let (idx, _, model_type) = model_list[0];
             self.pending.pkg_load = Some(PendingPkgModelLoad {
-                assets, fbx_index: idx, model_type, source_path: path.to_path_buf(),
-                shown: false, append: false, suppress_tex_match: false,
+                assets,
+                fbx_index: idx,
+                model_type,
+                source_path: path.to_path_buf(),
+                shown: false,
+                append: false,
+                suppress_tex_match: false,
                 archive_snapshot: snapshot,
                 nested_archive_source: None,
             });
         } else {
             // 複数 → 選択ダイアログを表示
-            log::info!(".unitypackage 内に {} 個のモデルが見つかりました:", model_list.len());
+            log::info!(
+                ".unitypackage 内に {} 個のモデルが見つかりました:",
+                model_list.len()
+            );
             for (_, name, mtype) in &model_list {
                 log::info!("  {:?}: {}", mtype, name);
             }
@@ -990,24 +1083,19 @@ impl ViewerApp {
     /// unitypackage をアペンドモードで読み込み
     fn try_load_unitypackage_for_append(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         // ファイル消失前に一時パス判定を確定（canonicalize がファイル存在を前提とするため）
-        let is_temp = is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path);
-        let archive_data = self.read_or_preloaded(path)?.to_vec();
+        let is_temp =
+            is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path);
+        let archive_data: Arc<[u8]> = self.read_or_preloaded(path)?;
         let assets = crate::unitypackage::extract_all_assets(&archive_data)?;
 
         // 一時ファイルの場合はアーカイブデータをスナップショット
         let snapshot = if is_temp {
-            Some(Arc::from(archive_data.into_boxed_slice()))
+            Some(Arc::clone(&archive_data))
         } else {
             None
         };
 
-        let mut model_list: Vec<(usize, String, PkgModelType)> = Vec::new();
-        for (idx, name) in crate::unitypackage::find_vrm_list(&assets) {
-            model_list.push((idx, name, PkgModelType::Vrm));
-        }
-        for (idx, name) in crate::unitypackage::find_fbx_list(&assets) {
-            model_list.push((idx, name, PkgModelType::Fbx));
-        }
+        let model_list = build_pkg_model_list(&assets);
 
         if model_list.is_empty() {
             anyhow::bail!(".unitypackage 内に VRM / FBX ファイルが見つかりません");
@@ -1016,8 +1104,13 @@ impl ViewerApp {
         if model_list.len() == 1 {
             let (idx, _, model_type) = model_list[0];
             self.pending.pkg_load = Some(PendingPkgModelLoad {
-                assets, fbx_index: idx, model_type, source_path: path.to_path_buf(),
-                shown: false, append: true, suppress_tex_match: self.suppress_tex_match,
+                assets,
+                fbx_index: idx,
+                model_type,
+                source_path: path.to_path_buf(),
+                shown: false,
+                append: true,
+                suppress_tex_match: self.suppress_tex_match,
                 archive_snapshot: snapshot,
                 nested_archive_source: None,
             });
@@ -1044,11 +1137,17 @@ impl ViewerApp {
         self.try_load_archive_impl(path, true)
     }
 
-    fn try_load_archive_impl(&mut self, path: &std::path::Path, append: bool) -> anyhow::Result<()> {
-        let is_temp = is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path);
+    fn try_load_archive_impl(
+        &mut self,
+        path: &std::path::Path,
+        append: bool,
+    ) -> anyhow::Result<()> {
+        let is_temp =
+            is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path);
         let archive_data: Arc<[u8]> = self.read_or_preloaded(path)?;
 
-        let ext = path.extension()
+        let ext = path
+            .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
@@ -1075,7 +1174,10 @@ impl ViewerApp {
             });
         } else {
             // 複数 → 選択ダイアログ
-            log::info!("アーカイブ内に {} 個のモデルが見つかりました:", contents.models.len());
+            log::info!(
+                "アーカイブ内に {} 個のモデルが見つかりました:",
+                contents.models.len()
+            );
             for (_, p, _, kind) in &contents.models {
                 log::info!("  [{}] {}", kind.label(), p.display());
             }
@@ -1097,7 +1199,10 @@ impl ViewerApp {
         let kind = pending.contents.models[pending.model_index].3;
 
         let bundle = crate::archive::extract_model_bundle(
-            &pending.archive_data, pending.format, pending.contents, pending.model_index,
+            &pending.archive_data,
+            pending.format,
+            pending.contents,
+            pending.model_index,
         )?;
 
         // UnityPackage: 二重展開 → 既存の unitypackage フローへ接続
@@ -1116,8 +1221,12 @@ impl ViewerApp {
 
         let source = ReloadableSource::Archive {
             original_path: pending.source_path,
-            archive_bytes: if pending.is_temp { Some(pending.archive_data) } else { None },
-            selected_entry_path: model_path.to_string_lossy().to_string(),
+            archive_bytes: if pending.is_temp {
+                Some(pending.archive_data)
+            } else {
+                None
+            },
+            selected_entry_path: model_path.to_string_lossy().into_owned(),
             inner_kind: kind,
         };
 
@@ -1142,25 +1251,23 @@ impl ViewerApp {
         let assets = crate::unitypackage::extract_all_assets(&pkg_data)?;
 
         // VRM / FBX を検出
-        let mut model_list: Vec<(usize, String, PkgModelType)> = Vec::new();
-        for (idx, name) in crate::unitypackage::find_vrm_list(&assets) {
-            model_list.push((idx, name, PkgModelType::Vrm));
-        }
-        for (idx, name) in crate::unitypackage::find_fbx_list(&assets) {
-            model_list.push((idx, name, PkgModelType::Fbx));
-        }
+        let model_list = build_pkg_model_list(&assets);
         if model_list.is_empty() {
             anyhow::bail!(".unitypackage 内に VRM / FBX ファイルが見つかりません");
         }
 
         // アーカイブスナップショット（一時ファイルの場合のみ保持）
-        let archive_snapshot = if is_temp { Some(Arc::clone(&archive_data)) } else { None };
+        let archive_snapshot = if is_temp {
+            Some(Arc::clone(&archive_data))
+        } else {
+            None
+        };
 
         // リロード時に Archive 経由で二重展開するための情報
         let nested_archive_source = Some(ReloadableSource::Archive {
             original_path: source_path.clone(),
             archive_bytes: if is_temp { Some(archive_data) } else { None },
-            selected_entry_path: entry_path.to_string_lossy().to_string(),
+            selected_entry_path: entry_path.to_string_lossy().into_owned(),
             inner_kind: crate::archive::ArchiveModelKind::UnityPackage,
         });
 
@@ -1179,9 +1286,15 @@ impl ViewerApp {
                 nested_archive_source,
             });
         } else {
-            log::info!("アーカイブ内 .unitypackage: {} 個のモデルが見つかりました:", model_list.len());
+            log::info!(
+                "アーカイブ内 .unitypackage: {} 個のモデルが見つかりました:",
+                model_list.len()
+            );
             for (_, name, mt) in &model_list {
-                let label = match mt { PkgModelType::Vrm => "VRM", PkgModelType::Fbx => "FBX" };
+                let label = match mt {
+                    PkgModelType::Vrm => "VRM",
+                    PkgModelType::Fbx => "FBX",
+                };
                 log::info!("  [{}] {}", label, name);
             }
             self.pending.unity_pkg = Some(PendingUnityPackage {
@@ -1207,11 +1320,16 @@ impl ViewerApp {
             ArchiveModelKind::Pmx => {
                 let pmx_model = crate::pmx::reader::read_pmx_from_data(&bundle.model.data)?;
                 let mut ir = crate::pmx::extract::pmx_to_ir_with_aux(
-                    &pmx_model, std::path::Path::new("."), Some(&bundle.aux_files),
+                    &pmx_model,
+                    std::path::Path::new("."),
+                    Some(&bundle.aux_files),
                 )?;
                 if self.normalize_pose {
                     ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                        &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
+                        &mut ir.bones,
+                        &mut ir.meshes,
+                        &mut ir.morphs,
+                        &mut ir.physics,
                         crate::convert::coord::gltf_pos_to_pmx,
                     );
                 }
@@ -1220,11 +1338,16 @@ impl ViewerApp {
             ArchiveModelKind::Pmd => {
                 let pmd_model = crate::pmd::reader::read_pmd_from_data(&bundle.model.data)?;
                 let mut ir = crate::pmd::extract::pmd_to_ir_with_aux(
-                    &pmd_model, &bundle.model.path, Some(&bundle.aux_files),
+                    &pmd_model,
+                    &bundle.model.path,
+                    Some(&bundle.aux_files),
                 )?;
                 if self.normalize_pose {
                     ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                        &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
+                        &mut ir.bones,
+                        &mut ir.meshes,
+                        &mut ir.morphs,
+                        &mut ir.physics,
                         crate::convert::coord::gltf_pos_to_pmx,
                     );
                 }
@@ -1232,7 +1355,10 @@ impl ViewerApp {
             }
             ArchiveModelKind::Fbx => {
                 let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-                    &bundle.model.data, Some(source_path), self.normalize_pose,
+                    &bundle.model.data,
+                    Some(source_path),
+                    self.normalize_pose,
+                    self.normalize_to_tstance,
                 )?;
                 crate::unitypackage::embed_textures_into_ir(&mut ir, &bundle.textures);
                 Ok(ir)
@@ -1242,8 +1368,12 @@ impl ViewerApp {
                 let version = vrm::detect::detect_version(&glb.document);
                 let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
                 let ir = vrm::extract::extract_ir_model_with_options(
-                    &glb.document, &glb.buffers, &glb.images,
-                    &glb.vrm_extension, &version, &all_extensions,
+                    &glb.document,
+                    &glb.buffers,
+                    &glb.images,
+                    &glb.vrm_extension,
+                    &version,
+                    &all_extensions,
                     self.normalize_pose,
                 )?;
                 Ok(ir)
@@ -1263,29 +1393,34 @@ impl ViewerApp {
         selected_entry_path: &str,
         inner_kind: crate::archive::ArchiveModelKind,
     ) -> anyhow::Result<IrModel> {
-        let data: Vec<u8> = if let Some(snap) = archive_bytes {
-            snap.to_vec()
+        let owned;
+        let data: &[u8] = if let Some(snap) = archive_bytes {
+            snap
         } else {
-            std::fs::read(original_path)?
+            owned = std::fs::read(original_path)?;
+            &owned
         };
 
-        let ext = original_path.extension()
+        let ext = original_path
+            .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
         let format = crate::archive::archive_format_from_ext(&ext)
             .ok_or_else(|| anyhow::anyhow!("未対応のアーカイブ形式: {ext}"))?;
 
-        let contents = crate::archive::list_models(&data, format)?;
+        let contents = crate::archive::list_models(data, format)?;
 
         // selected_entry_path で同じモデルを再選択
-        let model_index = contents.models.iter()
+        let model_index = contents
+            .models
+            .iter()
             .position(|(_, p, _, _)| p.to_string_lossy() == selected_entry_path)
-            .ok_or_else(|| anyhow::anyhow!(
-                "アーカイブ内に以前のモデルが見つかりません: {selected_entry_path}"
-            ))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("アーカイブ内に以前のモデルが見つかりません: {selected_entry_path}")
+            })?;
 
-        let bundle = crate::archive::extract_model_bundle(&data, format, contents, model_index)?;
+        let bundle = crate::archive::extract_model_bundle(data, format, contents, model_index)?;
         let _ = inner_kind; // bundle.kind を使用
         self.build_ir_from_archive_bundle(&bundle, original_path)
     }
@@ -1296,28 +1431,33 @@ impl ViewerApp {
         archive_bytes: Option<&Arc<[u8]>>,
         selected_entry_path: &str,
     ) -> anyhow::Result<Vec<u8>> {
-        let data: Vec<u8> = if let Some(snap) = archive_bytes {
-            snap.to_vec()
+        let owned;
+        let data: &[u8] = if let Some(snap) = archive_bytes {
+            snap
         } else {
-            std::fs::read(original_path)?
+            owned = std::fs::read(original_path)?;
+            &owned
         };
 
-        let ext = original_path.extension()
+        let ext = original_path
+            .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
         let format = crate::archive::archive_format_from_ext(&ext)
             .ok_or_else(|| anyhow::anyhow!("未対応のアーカイブ形式: {ext}"))?;
 
-        let contents = crate::archive::list_models(&data, format)?;
+        let contents = crate::archive::list_models(data, format)?;
 
-        let model_index = contents.models.iter()
+        let model_index = contents
+            .models
+            .iter()
             .position(|(_, p, _, _)| p.to_string_lossy() == selected_entry_path)
-            .ok_or_else(|| anyhow::anyhow!(
-                "アーカイブ内に以前のモデルが見つかりません: {selected_entry_path}"
-            ))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("アーカイブ内に以前のモデルが見つかりません: {selected_entry_path}")
+            })?;
 
-        let bundle = crate::archive::extract_model_bundle(&data, format, contents, model_index)?;
+        let bundle = crate::archive::extract_model_bundle(data, format, contents, model_index)?;
         Ok(bundle.model.data)
     }
 
@@ -1328,37 +1468,48 @@ impl ViewerApp {
         pkg_model_name: Option<&str>,
         saved_pkg_tex_assignments: &HashMap<usize, String>,
     ) {
-        let archive_data = match source {
-            ReloadableSource::Snapshot { main_bytes, .. } => main_bytes.to_vec(),
+        // Arc 参照で済むケースではコピーを避け、所有権が必要なパスのみ Vec を確保
+        use std::borrow::Cow;
+        let archive_data: Cow<'_, [u8]> = match source {
+            ReloadableSource::Snapshot { main_bytes, .. } => Cow::Borrowed(main_bytes),
             ReloadableSource::File(path) => match std::fs::read(path) {
-                Ok(d) => d,
+                Ok(d) => Cow::Owned(d),
                 Err(e) => {
                     log::error!("unitypackage 再読み込み失敗: {e}");
                     return;
                 }
             },
-            ReloadableSource::Archive { original_path, archive_bytes, selected_entry_path, inner_kind } => {
+            ReloadableSource::Archive {
+                original_path,
+                archive_bytes,
+                selected_entry_path,
+                inner_kind,
+            } => {
                 if *inner_kind == crate::archive::ArchiveModelKind::UnityPackage {
                     // アーカイブ内 .unitypackage: 二重展開
-                    match Self::extract_pkg_from_archive(original_path, archive_bytes.as_ref(), selected_entry_path) {
-                        Ok(data) => data,
+                    match Self::extract_pkg_from_archive(
+                        original_path,
+                        archive_bytes.as_ref(),
+                        selected_entry_path,
+                    ) {
+                        Ok(data) => Cow::Owned(data),
                         Err(e) => {
                             log::error!("アーカイブ内unitypackage展開失敗: {e}");
                             return;
                         }
                     }
                 } else if let Some(snap) = archive_bytes {
-                    snap.to_vec()
+                    Cow::Borrowed(snap.as_ref())
                 } else {
                     match std::fs::read(original_path) {
-                        Ok(d) => d,
+                        Ok(d) => Cow::Owned(d),
                         Err(e) => {
                             log::error!("unitypackage 再読み込み失敗: {e}");
                             return;
                         }
                     }
                 }
-            },
+            }
         };
         let path = source.display_path();
         let assets = match crate::unitypackage::extract_all_assets(&archive_data) {
@@ -1397,7 +1548,9 @@ impl ViewerApp {
         };
 
         // マージ前の材質オフセットを記録
-        let mat_offset = self.loaded.as_ref()
+        let mat_offset = self
+            .loaded
+            .as_ref()
             .map(|l| l.ir.materials.len())
             .unwrap_or(0);
 
@@ -1415,14 +1568,21 @@ impl ViewerApp {
             // 割り当て対象を先に収集（借用解放のため）
             let assignments_to_restore: Vec<(usize, String, Vec<u8>)> = {
                 let pkg_src = self.tex.pkg_textures.as_deref().unwrap_or(&[]);
-                let name_to_data: HashMap<&str, &[u8]> = pkg_src.iter()
+                let name_to_data: HashMap<&str, &[u8]> = pkg_src
+                    .iter()
                     .map(|(name, data)| (name.as_str(), data.as_slice()))
                     .collect();
-                let mat_count = self.loaded.as_ref().map(|l| l.ir.materials.len()).unwrap_or(0);
-                saved_pkg_tex_assignments.iter()
+                let mat_count = self
+                    .loaded
+                    .as_ref()
+                    .map(|l| l.ir.materials.len())
+                    .unwrap_or(0);
+                saved_pkg_tex_assignments
+                    .iter()
                     .filter(|(idx, _)| **idx >= mat_offset && **idx < mat_count)
                     .filter_map(|(idx, tex_name)| {
-                        name_to_data.get(tex_name.as_str())
+                        name_to_data
+                            .get(tex_name.as_str())
                             .map(|data| (*idx, tex_name.clone(), data.to_vec()))
                     })
                     .collect()
@@ -1445,7 +1605,11 @@ impl ViewerApp {
     ) -> anyhow::Result<()> {
         let (fbx_data, fbx_name, textures) =
             crate::unitypackage::take_fbx_and_textures(assets, fbx_index)?;
-        log::info!("unitypackage内FBX: {} テクスチャ: {}個", fbx_name, textures.len());
+        log::info!(
+            "unitypackage内FBX: {} テクスチャ: {}個",
+            fbx_name,
+            textures.len()
+        );
         self.selected_fbx_name = Some(fbx_name.clone());
 
         let load_model = matches!(mode, FbxLoadMode::ModelOnly | FbxLoadMode::Both);
@@ -1453,7 +1617,10 @@ impl ViewerApp {
 
         if load_model {
             let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-                &fbx_data, Some(source_path), self.normalize_pose,
+                &fbx_data,
+                Some(source_path),
+                self.normalize_pose,
+                self.normalize_to_tstance,
             )?;
 
             let unmatched = crate::unitypackage::embed_textures_into_ir(&mut ir, &textures);
@@ -1464,7 +1631,8 @@ impl ViewerApp {
                 self.rebuild_pkg_thumb_cache();
             }
 
-            let source = source_override.unwrap_or_else(|| ReloadableSource::File(source_path.to_path_buf()));
+            let source = source_override
+                .unwrap_or_else(|| ReloadableSource::File(source_path.to_path_buf()));
             self.finish_load(ir, source)?;
 
             // モデル読み込み時はアニメーションをクリア
@@ -1473,7 +1641,8 @@ impl ViewerApp {
             self.anim.active_index = None;
 
             // 未割当材質がある場合、手動割当ダイアログを開く（リロード中は抑制）
-            if !unmatched.is_empty() && self.tex.pkg_textures.is_some() && !self.suppress_tex_match {
+            if !unmatched.is_empty() && self.tex.pkg_textures.is_some() && !self.suppress_tex_match
+            {
                 let count = unmatched.len();
                 self.tex.pending_match = Some(PendingTexMatch {
                     mat_indices: unmatched,
@@ -1494,9 +1663,13 @@ impl ViewerApp {
                     let anim = std::sync::Arc::new(anim);
                     if let Some(ref loaded) = self.loaded {
                         let state = super::animation::AnimationState::new(
-                            std::sync::Arc::clone(&anim), &loaded.ir, &loaded.gpu_model,
+                            std::sync::Arc::clone(&anim),
+                            &loaded.ir,
+                            &loaded.gpu_model,
                         );
-                        self.anim.library.push((display_name, source_path.to_path_buf(), anim));
+                        self.anim
+                            .library
+                            .push((display_name, source_path.to_path_buf(), anim));
                         self.anim.active_index = Some(self.anim.library.len() - 1);
                         self.anim.state = Some(state);
                     }
@@ -1516,7 +1689,11 @@ impl ViewerApp {
         source_override: Option<ReloadableSource>,
     ) -> anyhow::Result<()> {
         let (vrm_data, vrm_name) = crate::unitypackage::take_vrm(assets, vrm_index)?;
-        log::info!("unitypackage内VRM: {} ({}KB)", vrm_name, vrm_data.len() / 1024);
+        log::info!(
+            "unitypackage内VRM: {} ({}KB)",
+            vrm_name,
+            vrm_data.len() / 1024
+        );
         self.selected_fbx_name = Some(vrm_name.clone());
 
         let glb = vrm::loader::load_glb_from_data(&vrm_data)?;
@@ -1536,13 +1713,33 @@ impl ViewerApp {
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
         let gpu_model = super::mesh::build_gpu_model(
-            &ir, &glb.images, device, queue,
-            self.display.smooth_normals, self.display.clear_custom_normals,
+            &ir,
+            &glb.images,
+            device,
+            queue,
+            self.display.smooth_normals,
+            self.display.clear_custom_normals,
         )?;
 
         Self::encode_ir_textures_as_png(&mut ir, &glb.images);
-        let source = source_override.unwrap_or_else(|| ReloadableSource::File(source_path.to_path_buf()));
+        let source =
+            source_override.unwrap_or_else(|| ReloadableSource::File(source_path.to_path_buf()));
         self.finish_load_with_gpu(ir, gpu_model, source)
+    }
+
+    /// 拡張子に基づいてアニメーションファイルを読み込む
+    pub fn load_animation_file(&mut self, path: &std::path::Path) {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        match ext.as_str() {
+            "glb" | "gltf" => self.try_load_gltf_animation(path),
+            "fbx" => self.try_load_fbx_animation(path),
+            "anim" => self.try_load_unity_animation(path),
+            _ => self.try_load_vrma(path),
+        }
     }
 
     pub fn try_load_vrma(&mut self, path: &std::path::Path) {
@@ -1556,14 +1753,23 @@ impl ViewerApp {
         match vrm::animation::load_vrma(path) {
             Ok(anim) => {
                 let anim = Arc::new(anim);
-                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 let loaded = self.loaded.as_ref().expect("loaded は is_some 分岐内");
                 let state = AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
                 log::info!("VRMA読み込み成功: {}", path.display());
 
                 // ライブラリに追加（重複パスは上書き）
                 let path_buf = path.to_path_buf();
-                if let Some(idx) = self.anim.library.iter().position(|(_, p, _)| p == &path_buf) {
+                if let Some(idx) = self
+                    .anim
+                    .library
+                    .iter()
+                    .position(|(_, p, _)| p == &path_buf)
+                {
                     self.anim.library[idx] = (name.clone(), path_buf, anim);
                     self.anim.active_index = Some(idx);
                 } else {
@@ -1572,15 +1778,15 @@ impl ViewerApp {
                 }
 
                 self.anim.state = Some(state);
-                self.convert_message = Some(ConvertMessage::success(
-                    format!("VRMA読み込み成功: {}", name),
-                ));
+                self.convert_message = Some(ConvertMessage::success(format!(
+                    "VRMA読み込み成功: {}",
+                    name
+                )));
             }
             Err(e) => {
                 log::error!("VRMA読み込み失敗: {e}");
-                self.convert_message = Some(ConvertMessage::failure(
-                    format!("VRMA読み込み失敗: {e}"),
-                ));
+                self.convert_message =
+                    Some(ConvertMessage::failure(format!("VRMA読み込み失敗: {e}")));
             }
         }
     }
@@ -1602,7 +1808,11 @@ impl ViewerApp {
             Ok(anims) => {
                 let loaded = self.loaded.as_ref().expect("loaded は is_some 分岐内");
                 let path_buf = path.to_path_buf();
-                let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let file_name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
 
                 for anim in anims {
                     let display_name = if anim.name == "animation" {
@@ -1611,24 +1821,28 @@ impl ViewerApp {
                         format!("{} ({})", file_name, anim.name)
                     };
                     let anim = Arc::new(anim);
-                    let state = AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
+                    let state =
+                        AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
 
                     // ライブラリに追加
-                    self.anim.library.push((display_name.clone(), path_buf.clone(), anim));
+                    self.anim
+                        .library
+                        .push((display_name.clone(), path_buf.clone(), anim));
                     self.anim.active_index = Some(self.anim.library.len() - 1);
                     self.anim.state = Some(state);
                 }
 
                 log::info!("FBXアニメーション読み込み成功: {}", path.display());
-                self.convert_message = Some(ConvertMessage::success(
-                    format!("FBXアニメーション読み込み成功: {}", file_name),
-                ));
+                self.convert_message = Some(ConvertMessage::success(format!(
+                    "FBXアニメーション読み込み成功: {}",
+                    file_name
+                )));
             }
             Err(e) => {
                 log::error!("FBXアニメーション読み込み失敗: {e}");
-                self.convert_message = Some(ConvertMessage::failure(
-                    format!("FBXアニメーション読み込み失敗: {e}"),
-                ));
+                self.convert_message = Some(ConvertMessage::failure(format!(
+                    "FBXアニメーション読み込み失敗: {e}"
+                )));
             }
         }
     }
@@ -1646,7 +1860,11 @@ impl ViewerApp {
             Ok(anim) => {
                 let loaded = self.loaded.as_ref().expect("loaded は is_some 分岐内");
                 let path_buf = path.to_path_buf();
-                let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let file_name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 let display_name = format!("{} ({})", file_name, anim.name);
                 let anim = Arc::new(anim);
                 let state = AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
@@ -1656,15 +1874,16 @@ impl ViewerApp {
                 self.anim.state = Some(state);
 
                 log::info!("Unity .anim読み込み成功: {}", path.display());
-                self.convert_message = Some(ConvertMessage::success(
-                    format!("Unity .anim読み込み成功: {}", file_name),
-                ));
+                self.convert_message = Some(ConvertMessage::success(format!(
+                    "Unity .anim読み込み成功: {}",
+                    file_name
+                )));
             }
             Err(e) => {
                 log::error!("Unity .anim読み込み失敗: {e}");
-                self.convert_message = Some(ConvertMessage::failure(
-                    format!("Unity .anim読み込み失敗: {e}"),
-                ));
+                self.convert_message = Some(ConvertMessage::failure(format!(
+                    "Unity .anim読み込み失敗: {e}"
+                )));
             }
         }
     }
@@ -1682,7 +1901,11 @@ impl ViewerApp {
             Ok(anims) => {
                 let loaded = self.loaded.as_ref().expect("loaded は is_some 分岐内");
                 let path_buf = path.to_path_buf();
-                let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let file_name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
 
                 for anim in anims {
                     let display_name = if anim.name == "animation" {
@@ -1691,24 +1914,28 @@ impl ViewerApp {
                         format!("{} ({})", file_name, anim.name)
                     };
                     let anim = Arc::new(anim);
-                    let state = AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
+                    let state =
+                        AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
 
                     // ライブラリに追加
-                    self.anim.library.push((display_name.clone(), path_buf.clone(), anim));
+                    self.anim
+                        .library
+                        .push((display_name.clone(), path_buf.clone(), anim));
                     self.anim.active_index = Some(self.anim.library.len() - 1);
                     self.anim.state = Some(state);
                 }
 
                 log::info!("glTFアニメーション読み込み成功: {}", path.display());
-                self.convert_message = Some(ConvertMessage::success(
-                    format!("アニメーション読み込み成功: {}", file_name),
-                ));
+                self.convert_message = Some(ConvertMessage::success(format!(
+                    "アニメーション読み込み成功: {}",
+                    file_name
+                )));
             }
             Err(e) => {
                 log::error!("glTFアニメーション読み込み失敗: {e}");
-                self.convert_message = Some(ConvertMessage::failure(
-                    format!("アニメーション読み込み失敗: {e}"),
-                ));
+                self.convert_message = Some(ConvertMessage::failure(format!(
+                    "アニメーション読み込み失敗: {e}"
+                )));
             }
         }
     }
@@ -1725,14 +1952,18 @@ impl ViewerApp {
     }
 
     fn try_load_pmx(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
-        let source = if is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path) {
-            let main_data = self.read_or_preloaded(path)?.to_vec();
+        let source = if is_temp_path(path)
+            || self.preloaded.as_ref().is_some_and(|pl| pl.path == path)
+        {
+            let main_data: Arc<[u8]> = self.read_or_preloaded(path)?;
             let pmx_model = crate::pmx::reader::read_pmx_from_data(&main_data)?;
             let pmx_dir = path.parent().unwrap_or(Path::new("."));
 
             // 補助ファイル（テクスチャ）を収集: preloaded.aux_files を優先
             let mut aux = HashMap::new();
-            let preloaded_aux = self.preloaded.as_ref()
+            let preloaded_aux = self
+                .preloaded
+                .as_ref()
                 .filter(|pl| pl.path == path)
                 .map(|pl| &pl.aux_files);
             for tex_path in &pmx_model.textures {
@@ -1752,14 +1983,17 @@ impl ViewerApp {
             let mut ir = crate::pmx::extract::pmx_to_ir_with_aux(&pmx_model, pmx_dir, Some(&aux))?;
             if self.normalize_pose {
                 ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                    &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
+                    &mut ir.bones,
+                    &mut ir.meshes,
+                    &mut ir.morphs,
+                    &mut ir.physics,
                     crate::convert::coord::gltf_pos_to_pmx,
                 );
             }
 
             let source = ReloadableSource::Snapshot {
                 original_path: path.to_path_buf(),
-                main_bytes: main_data.into(),
+                main_bytes: main_data,
                 aux_files: aux,
             };
             return self.finish_load(ir, source);
@@ -1773,7 +2007,10 @@ impl ViewerApp {
 
         if self.normalize_pose {
             ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
+                &mut ir.bones,
+                &mut ir.meshes,
+                &mut ir.morphs,
+                &mut ir.physics,
                 crate::convert::coord::gltf_pos_to_pmx,
             );
         }
@@ -1782,69 +2019,85 @@ impl ViewerApp {
     }
 
     fn try_load_pmd(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
-        let source = if is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path) {
-            let main_data = self.read_or_preloaded(path)?.to_vec();
-            let pmd_model = crate::pmd::reader::read_pmd_from_data(&main_data)?;
-            let pmd_dir = path.parent().unwrap_or(Path::new("."));
+        let source =
+            if is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path) {
+                let main_data: Arc<[u8]> = self.read_or_preloaded(path)?;
+                let pmd_model = crate::pmd::reader::read_pmd_from_data(&main_data)?;
+                let pmd_dir = path.parent().unwrap_or(Path::new("."));
 
-            // 補助ファイル（テクスチャ + .txt）を収集: preloaded.aux_files を優先
-            let mut aux = HashMap::new();
-            let preloaded_aux = self.preloaded.as_ref()
-                .filter(|pl| pl.path == path)
-                .map(|pl| &pl.aux_files);
-            // テクスチャ
-            for mat in &pmd_model.materials {
-                if mat.texture_name.is_empty() { continue; }
-                let main_tex = mat.texture_name.split('*').next().unwrap_or("");
-                if main_tex.is_empty() { continue; }
-                let normalized = main_tex.replace('\\', "/");
-                let key = PathBuf::from(&normalized);
-                if aux.contains_key(&key) { continue; }
-                // preloaded aux_files からの取得を優先
-                if let Some(data) = preloaded_aux.and_then(|a| a.get(&key)) {
-                    aux.insert(key, Arc::clone(data));
-                } else {
-                    let full_path = pmd_dir.join(&normalized);
-                    if let Ok(data) = std::fs::read(&full_path) {
-                        aux.insert(key, Arc::from(data.into_boxed_slice()));
+                // 補助ファイル（テクスチャ + .txt）を収集: preloaded.aux_files を優先
+                let mut aux = HashMap::new();
+                let preloaded_aux = self
+                    .preloaded
+                    .as_ref()
+                    .filter(|pl| pl.path == path)
+                    .map(|pl| &pl.aux_files);
+                // テクスチャ
+                for mat in &pmd_model.materials {
+                    if mat.texture_name.is_empty() {
+                        continue;
+                    }
+                    let main_tex = mat.texture_name.split('*').next().unwrap_or("");
+                    if main_tex.is_empty() {
+                        continue;
+                    }
+                    let normalized = main_tex.replace('\\', "/");
+                    let key = PathBuf::from(&normalized);
+                    if aux.contains_key(&key) {
+                        continue;
+                    }
+                    // preloaded aux_files からの取得を優先
+                    if let Some(data) = preloaded_aux.and_then(|a| a.get(&key)) {
+                        aux.insert(key, Arc::clone(data));
+                    } else {
+                        let full_path = pmd_dir.join(&normalized);
+                        if let Ok(data) = std::fs::read(&full_path) {
+                            aux.insert(key, Arc::from(data.into_boxed_slice()));
+                        }
                     }
                 }
-            }
-            // .txt ファイル
-            let txt_path = path.with_extension("txt");
-            let txt_name = txt_path.file_name()
-                .map(|f| PathBuf::from(f))
-                .unwrap_or_default();
-            if let Some(data) = preloaded_aux.and_then(|a| a.get(&txt_name)) {
-                aux.insert(txt_name, Arc::clone(data));
-            } else if let Ok(data) = std::fs::read(&txt_path) {
-                aux.insert(txt_name, Arc::from(data.into_boxed_slice()));
-            }
+                // .txt ファイル
+                let txt_path = path.with_extension("txt");
+                let txt_name = txt_path
+                    .file_name()
+                    .map(|f| PathBuf::from(f))
+                    .unwrap_or_default();
+                if let Some(data) = preloaded_aux.and_then(|a| a.get(&txt_name)) {
+                    aux.insert(txt_name, Arc::clone(data));
+                } else if let Ok(data) = std::fs::read(&txt_path) {
+                    aux.insert(txt_name, Arc::from(data.into_boxed_slice()));
+                }
 
-            let mut ir = crate::pmd::extract::pmd_to_ir_with_aux(&pmd_model, path, Some(&aux))?;
-            if self.normalize_pose {
-                ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                    &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
-                    crate::convert::coord::gltf_pos_to_pmx,
-                );
-            }
+                let mut ir = crate::pmd::extract::pmd_to_ir_with_aux(&pmd_model, path, Some(&aux))?;
+                if self.normalize_pose {
+                    ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
+                        &mut ir.bones,
+                        &mut ir.meshes,
+                        &mut ir.morphs,
+                        &mut ir.physics,
+                        crate::convert::coord::gltf_pos_to_pmx,
+                    );
+                }
 
-            let source = ReloadableSource::Snapshot {
-                original_path: path.to_path_buf(),
-                main_bytes: main_data.into(),
-                aux_files: aux,
+                let source = ReloadableSource::Snapshot {
+                    original_path: path.to_path_buf(),
+                    main_bytes: main_data,
+                    aux_files: aux,
+                };
+                return self.finish_load(ir, source);
+            } else {
+                ReloadableSource::File(path.to_path_buf())
             };
-            return self.finish_load(ir, source);
-        } else {
-            ReloadableSource::File(path.to_path_buf())
-        };
 
         let pmd_model = crate::pmd::reader::read_pmd(path)?;
         let mut ir = crate::pmd::extract::pmd_to_ir(&pmd_model, path)?;
 
         if self.normalize_pose {
             ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
+                &mut ir.bones,
+                &mut ir.meshes,
+                &mut ir.morphs,
+                &mut ir.physics,
                 crate::convert::coord::gltf_pos_to_pmx,
             );
         }
@@ -1854,9 +2107,16 @@ impl ViewerApp {
 
     fn try_load_vrm(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         // .gltf は外部バッファ参照を持つためスナップショット化しない（.glb/.vrm のみ対象）
-        let ext_lower = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-        let source = if (is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path)) && ext_lower != "gltf" {
-            let data = self.read_or_preloaded(path)?.to_vec();
+        let ext_lower = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let source = if (is_temp_path(path)
+            || self.preloaded.as_ref().is_some_and(|pl| pl.path == path))
+            && ext_lower != "gltf"
+        {
+            let data: Arc<[u8]> = self.read_or_preloaded(path)?;
             let glb = vrm::loader::load_glb_from_data(&data)?;
             let version = vrm::detect::detect_version(&glb.document);
             let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
@@ -1873,12 +2133,19 @@ impl ViewerApp {
 
             let device = &self.render_state.device;
             let queue = &self.render_state.queue;
-            let gpu_model = super::mesh::build_gpu_model(&ir, &glb.images, device, queue, self.display.smooth_normals, self.display.clear_custom_normals)?;
+            let gpu_model = super::mesh::build_gpu_model(
+                &ir,
+                &glb.images,
+                device,
+                queue,
+                self.display.smooth_normals,
+                self.display.clear_custom_normals,
+            )?;
             Self::encode_ir_textures_as_png(&mut ir, &glb.images);
 
             let source = ReloadableSource::Snapshot {
                 original_path: path.to_path_buf(),
-                main_bytes: data.into(),
+                main_bytes: data,
                 aux_files: HashMap::new(),
             };
             return self.finish_load_with_gpu(ir, gpu_model, source);
@@ -1902,7 +2169,14 @@ impl ViewerApp {
 
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
-        let gpu_model = super::mesh::build_gpu_model(&ir, &glb.images, device, queue, self.display.smooth_normals, self.display.clear_custom_normals)?;
+        let gpu_model = super::mesh::build_gpu_model(
+            &ir,
+            &glb.images,
+            device,
+            queue,
+            self.display.smooth_normals,
+            self.display.clear_custom_normals,
+        )?;
 
         // IrTexture を PNG エンコード済みに変換（convert_ir_to_pmx で統一的に使えるように）
         Self::encode_ir_textures_as_png(&mut ir, &glb.images);
@@ -1915,11 +2189,22 @@ impl ViewerApp {
         let queue = &self.render_state.queue;
 
         // GPU リソース構築（IrTexture から直接アップロード）
-        let gpu_model = super::mesh::build_gpu_model_from_ir(&ir, device, queue, self.display.smooth_normals, self.display.clear_custom_normals)?;
+        let gpu_model = super::mesh::build_gpu_model_from_ir(
+            &ir,
+            device,
+            queue,
+            self.display.smooth_normals,
+            self.display.clear_custom_normals,
+        )?;
         self.finish_load_with_gpu(ir, gpu_model, source)
     }
 
-    fn finish_load_with_gpu(&mut self, ir: IrModel, gpu_model: super::mesh::GpuModel, source: ReloadableSource) -> anyhow::Result<()> {
+    fn finish_load_with_gpu(
+        &mut self,
+        ir: IrModel,
+        mut gpu_model: super::mesh::GpuModel,
+        source: ReloadableSource,
+    ) -> anyhow::Result<()> {
         // レンダラー初期化（まだなければ）または可視化キャッシュ無効化
         if self.renderer.is_none() {
             let device = &self.render_state.device;
@@ -1927,6 +2212,20 @@ impl ViewerApp {
             self.renderer = Some(GpuRenderer::new(device, queue, gpu_model.has_alpha));
         } else if let Some(ref mut renderer) = self.renderer {
             renderer.invalidate_visualization_cache();
+        }
+
+        // MMD リソース構築
+        self.prepare_mmd_for_model(&mut gpu_model, &ir);
+
+        // PMX/PMD 単体ロード時は mmd_mode を自動 ON
+        let has_mmd_draw = gpu_model
+            .draws
+            .iter()
+            .any(|d| d.render_style == super::mesh::RenderStyle::Mmd);
+        if has_mmd_draw {
+            self.display.mmd_mode = true;
+        } else {
+            self.display.mmd_mode = false;
         }
 
         // テクスチャ割り当て履歴クリア（別モデル読み込み時）
@@ -1951,11 +2250,18 @@ impl ViewerApp {
         self.material_filter.clear();
         // カメラをモデルのバウンディングボックスにフィット
         let (bbox_min, bbox_max) = gpu_model.bbox();
-        self.camera.reset_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_height);
+        self.camera.reset_to_bbox_with_margin(
+            bbox_min,
+            bbox_max,
+            self.last_viewport_width,
+            self.last_viewport_height,
+        );
+        // ビューポートサイズ確定後に refit（初回ロード時はサイズが未確定の場合がある）
+        self.pending.refit = true;
 
         // デフォルト出力パス: 入力VRMと同じ場所に .pmx
         let path = source.display_path();
-        self.export.pmx_output_path = path.with_extension("pmx").to_string_lossy().to_string();
+        self.export.pmx_output_path = path.with_extension("pmx").to_string_lossy().into_owned();
 
         // キャッシュ構築
         let mat_cache = Self::build_mat_cache(&ir, &gpu_model);
@@ -1996,6 +2302,18 @@ impl ViewerApp {
     }
 
     /// smooth_normals 切り替え時に GPU モデルを再構築
+    /// MMD リソースを GpuModel に構築
+    fn prepare_mmd_for_model(
+        &self,
+        gpu_model: &mut super::mesh::GpuModel,
+        ir: &crate::intermediate::types::IrModel,
+    ) {
+        if let Some(ref renderer) = self.renderer {
+            let device = &self.render_state.device;
+            renderer.prepare_mmd_resources(device, gpu_model, ir);
+        }
+    }
+
     pub fn rebuild_gpu_model(&mut self) {
         let Some(loaded) = &self.loaded else { return };
         let device = &self.render_state.device;
@@ -2003,8 +2321,13 @@ impl ViewerApp {
         let smooth = self.display.smooth_normals;
         let clear_normals = self.display.clear_custom_normals;
 
-        match super::mesh::build_gpu_model_from_ir(&loaded.ir, device, queue, smooth, clear_normals) {
-            Ok(new_model) => {
+        match super::mesh::build_gpu_model_from_ir(&loaded.ir, device, queue, smooth, clear_normals)
+        {
+            Ok(mut new_model) => {
+                // MMD リソース構築
+                if let Some(ref renderer) = self.renderer {
+                    renderer.prepare_mmd_resources(device, &mut new_model, &loaded.ir);
+                }
                 let mat_cache = Self::build_mat_cache(&loaded.ir, &new_model);
                 self.material_visibility = vec![true; new_model.draws.len()];
                 if let Some(loaded) = &mut self.loaded {
@@ -2038,35 +2361,50 @@ impl ViewerApp {
 
     /// 材質情報キャッシュを構築
     fn build_mat_cache(ir: &IrModel, gpu_model: &GpuModel) -> CachedMaterialInfo {
-        let draw_indices: Vec<(usize, usize)> = gpu_model.draws.iter()
+        let draw_indices: Vec<(usize, usize)> = gpu_model
+            .draws
+            .iter()
             .enumerate()
             .map(|(i, d)| (i, d.material_index))
             .collect();
         let names: Vec<String> = ir.materials.iter().map(|m| m.name.clone()).collect();
-        let tex_indices: Vec<Option<usize>> = ir.materials.iter().map(|m| m.texture_index).collect();
-        let source_tex_names: Vec<Option<String>> = ir.materials.iter()
-            .map(|m| m.source_texture_name.clone()).collect();
-        let tex_set_count = ir.materials.iter().filter(|m| m.texture_index.is_some()).count();
+        let tex_indices: Vec<Option<usize>> =
+            ir.materials.iter().map(|m| m.texture_index).collect();
+        let source_tex_names: Vec<Option<String>> = ir
+            .materials
+            .iter()
+            .map(|m| m.source_texture_name.clone())
+            .collect();
+        let tex_set_count = ir
+            .materials
+            .iter()
+            .filter(|m| m.texture_index.is_some())
+            .count();
         let tex_total = ir.materials.len();
         let tex_status_text = format!("Tex:{}/{}", tex_set_count, tex_total);
-        CachedMaterialInfo { draw_indices, names, tex_indices, source_tex_names, tex_set_count, tex_status_text }
+        CachedMaterialInfo {
+            draw_indices,
+            names,
+            tex_indices,
+            source_tex_names,
+            tex_set_count,
+            tex_status_text,
+        }
     }
 
     /// 材質キャッシュを更新（テクスチャ割り当て後）
     fn update_mat_cache(&mut self) {
-        if let Some(ref loaded) = self.loaded {
-            let cache = Self::build_mat_cache(&loaded.ir, &loaded.gpu_model);
-            // loaded を再借用して書き込み
-            if let Some(ref mut loaded) = self.loaded {
-                loaded.mat_cache = cache;
-            }
+        if let Some(ref mut loaded) = self.loaded {
+            loaded.mat_cache = Self::build_mat_cache(&loaded.ir, &loaded.gpu_model);
         }
     }
 
     /// pkg_textures のサムネイルを GPU にアップロードしてキャッシュ
     pub fn rebuild_pkg_thumb_cache(&mut self) {
         self.clear_pkg_thumb_cache();
-        let Some(ref pkg) = self.tex.pkg_textures else { return };
+        let Some(ref pkg) = self.tex.pkg_textures else {
+            return;
+        };
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
         let mut renderer = self.render_state.renderer.write();
@@ -2076,8 +2414,13 @@ impl ViewerApp {
             let is_psd = super::texture::is_psd_filename(name);
             match super::texture::create_thumbnail_rgba(data, is_psd, THUMB_SIZE) {
                 Ok(rgba) => {
-                    let view = super::texture::upload_rgba_to_gpu(
-                        device, queue, &rgba, THUMB_SIZE, THUMB_SIZE, Some("pkg_thumb"),
+                    let (view, _) = super::texture::upload_rgba_to_gpu(
+                        device,
+                        queue,
+                        &rgba,
+                        THUMB_SIZE,
+                        THUMB_SIZE,
+                        Some("pkg_thumb"),
                     );
                     let tex_id = renderer.register_native_texture(
                         device,
@@ -2116,12 +2459,13 @@ impl ViewerApp {
                     return;
                 }
             };
-            let ext_lower = path.extension()
+            let ext_lower = path
+                .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_lowercase();
             TextureSource::Cached {
-                original_name: path.to_string_lossy().to_string(),
+                original_name: path.to_string_lossy().into_owned(),
                 data: Arc::from(tex_data.into_boxed_slice()),
                 is_psd: ext_lower == "psd",
             }
@@ -2132,7 +2476,11 @@ impl ViewerApp {
     }
 
     /// 指定材質に TextureSource を割り当て
-    pub fn assign_texture_source_to_material(&mut self, material_index: usize, tex_source: &TextureSource) {
+    pub fn assign_texture_source_to_material(
+        &mut self,
+        material_index: usize,
+        tex_source: &TextureSource,
+    ) {
         // テクスチャデータを取得
         let (tex_data, is_psd, display_name) = match tex_source {
             TextureSource::File(path) => {
@@ -2146,15 +2494,22 @@ impl ViewerApp {
                         return;
                     }
                 };
-                let ext_lower = path.extension()
+                let ext_lower = path
+                    .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("")
                     .to_lowercase();
-                (data, ext_lower == "psd", path.to_string_lossy().to_string())
+                (
+                    data,
+                    ext_lower == "psd",
+                    path.to_string_lossy().into_owned(),
+                )
             }
-            TextureSource::Cached { original_name, data, is_psd } => {
-                (data.to_vec(), *is_psd, original_name.clone())
-            }
+            TextureSource::Cached {
+                original_name,
+                data,
+                is_psd,
+            } => (data.to_vec(), *is_psd, original_name.clone()),
         };
 
         let ext_lower = if is_psd {
@@ -2172,19 +2527,22 @@ impl ViewerApp {
         let queue = &self.render_state.queue;
 
         // GPU テクスチャをアップロード（読み込み済みバイト列を使用）
-        let texture_view = match super::texture::upload_texture_from_bytes(&tex_data, is_psd, device, queue) {
-            Ok(view) => view,
-            Err(e) => {
-                log::error!("テクスチャ読み込み失敗: {e}");
-                self.convert_message = Some(ConvertMessage::failure(format!(
-                    "テクスチャ読み込み失敗: {e}"
-                )));
-                return;
-            }
-        };
+        let (texture_view, _texture_view_unorm) =
+            match super::texture::upload_texture_from_bytes(&tex_data, is_psd, device, queue) {
+                Ok(views) => views,
+                Err(e) => {
+                    log::error!("テクスチャ読み込み失敗: {e}");
+                    self.convert_message = Some(ConvertMessage::failure(format!(
+                        "テクスチャ読み込み失敗: {e}"
+                    )));
+                    return;
+                }
+            };
 
         // IrModel にテクスチャを追加・材質を更新
-        let Some(ref mut loaded) = self.loaded else { return };
+        let Some(ref mut loaded) = self.loaded else {
+            return;
+        };
 
         let basename = Path::new(&display_name)
             .file_stem()
@@ -2195,12 +2553,15 @@ impl ViewerApp {
         // PSD の場合は PNG に変換して保存
         let (ir_data, ir_filename, ir_mime) = if is_psd {
             match Self::psd_to_png(&tex_data) {
-                Ok(png_data) => (png_data, format!("{}.png", basename), "image/png".to_string()),
+                Ok(png_data) => (
+                    png_data,
+                    format!("{}.png", basename),
+                    "image/png".to_string(),
+                ),
                 Err(e) => {
                     log::error!("PSD→PNG変換失敗: {e}");
-                    self.convert_message = Some(ConvertMessage::failure(format!(
-                        "PSD→PNG変換失敗: {e}"
-                    )));
+                    self.convert_message =
+                        Some(ConvertMessage::failure(format!("PSD→PNG変換失敗: {e}")));
                     return;
                 }
             }
@@ -2210,24 +2571,27 @@ impl ViewerApp {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let mime = match ext_lower.as_str() {
-                "png" => "image/png",
-                "tga" => "image/x-tga",
-                "bmp" => "image/bmp",
-                _ => "image/jpeg",
-            };
+            let mime = crate::intermediate::types::mime_for_ext(&ext_lower);
             (tex_data, filename, mime.to_string())
         };
 
-        let tex_idx = loaded.ir.textures.iter()
-            .position(|t| t.filename == ir_filename && t.data.len() == ir_data.len() && t.data == ir_data)
+        let tex_idx = loaded
+            .ir
+            .textures
+            .iter()
+            .position(|t| {
+                t.filename == ir_filename && t.data.len() == ir_data.len() && t.data == ir_data
+            })
             .unwrap_or_else(|| {
                 let idx = loaded.ir.textures.len();
-                loaded.ir.textures.push(crate::intermediate::types::IrTexture {
-                    filename: ir_filename,
-                    data: ir_data,
-                    mime_type: ir_mime,
-                });
+                loaded
+                    .ir
+                    .textures
+                    .push(crate::intermediate::types::IrTexture {
+                        filename: ir_filename,
+                        data: ir_data,
+                        mime_type: ir_mime,
+                    });
                 idx
             });
         let mat = &mut loaded.ir.materials[material_index];
@@ -2239,7 +2603,13 @@ impl ViewerApp {
             Some(ref r) => (r.texture_bgl(), r.sampler()),
             None => return,
         };
-        loaded.gpu_model.assign_texture_to_material(material_index, &texture_view, device, texture_bgl, sampler);
+        loaded.gpu_model.assign_texture_to_material(
+            material_index,
+            &texture_view,
+            device,
+            texture_bgl,
+            sampler,
+        );
 
         log::info!(
             "テクスチャ割り当て: 材質[{}] '{}' ← {}",
@@ -2249,19 +2619,31 @@ impl ViewerApp {
         );
 
         // 割り当て履歴を記録（reload_current 時の復元用）
-        self.tex.assignments.insert(material_index, tex_source.clone());
+        self.tex
+            .assignments
+            .insert(material_index, tex_source.clone());
 
         // 同一材質名への連動割り当て
         if self.tex.link_same_name {
             let target_name = loaded.ir.materials[material_index].name.clone();
-            let siblings: Vec<usize> = loaded.ir.materials.iter().enumerate()
+            let siblings: Vec<usize> = loaded
+                .ir
+                .materials
+                .iter()
+                .enumerate()
                 .filter(|(i, m)| *i != material_index && m.name == target_name)
                 .map(|(i, _)| i)
                 .collect();
             for sib_idx in siblings {
                 loaded.ir.materials[sib_idx].texture_index = Some(tex_idx);
                 loaded.ir.materials[sib_idx].apply_textured_defaults();
-                loaded.gpu_model.assign_texture_to_material(sib_idx, &texture_view, device, texture_bgl, sampler);
+                loaded.gpu_model.assign_texture_to_material(
+                    sib_idx,
+                    &texture_view,
+                    device,
+                    texture_bgl,
+                    sampler,
+                );
                 self.tex.assignments.insert(sib_idx, tex_source.clone());
                 log::info!("  連動割り当て: 材質[{}] '{}'", sib_idx, target_name);
             }
@@ -2272,24 +2654,32 @@ impl ViewerApp {
     }
 
     /// パッケージ内テクスチャデータを材質に割り当て（バイト列から直接）
-    pub fn assign_texture_data_to_material(&mut self, material_index: usize, tex_name: &str, tex_data: &[u8]) {
+    pub fn assign_texture_data_to_material(
+        &mut self,
+        material_index: usize,
+        tex_name: &str,
+        tex_data: &[u8],
+    ) {
         let is_psd = super::texture::is_psd_filename(tex_name);
 
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
 
-        let texture_view = match super::texture::upload_texture_from_bytes(tex_data, is_psd, device, queue) {
-            Ok(view) => view,
-            Err(e) => {
-                log::error!("テクスチャデコード失敗: {e}");
-                self.convert_message = Some(ConvertMessage::failure(format!(
-                    "テクスチャデコード失敗: {e}"
-                )));
-                return;
-            }
-        };
+        let (texture_view, _texture_view_unorm) =
+            match super::texture::upload_texture_from_bytes(tex_data, is_psd, device, queue) {
+                Ok(views) => views,
+                Err(e) => {
+                    log::error!("テクスチャデコード失敗: {e}");
+                    self.convert_message = Some(ConvertMessage::failure(format!(
+                        "テクスチャデコード失敗: {e}"
+                    )));
+                    return;
+                }
+            };
 
-        let Some(ref mut loaded) = self.loaded else { return };
+        let Some(ref mut loaded) = self.loaded else {
+            return;
+        };
 
         // IrModel にテクスチャを追加
         let basename = std::path::Path::new(tex_name)
@@ -2299,7 +2689,11 @@ impl ViewerApp {
             .to_string();
         let (ir_data, ir_filename, ir_mime) = if is_psd {
             match Self::psd_to_png(tex_data) {
-                Ok(png_data) => (png_data, format!("{}.png", basename), "image/png".to_string()),
+                Ok(png_data) => (
+                    png_data,
+                    format!("{}.png", basename),
+                    "image/png".to_string(),
+                ),
                 Err(e) => {
                     log::warn!("PSD→PNG変換失敗 (IrTexture用): {e}");
                     (tex_data.to_vec(), tex_name.to_string(), String::new())
@@ -2310,11 +2704,14 @@ impl ViewerApp {
         };
 
         let tex_idx = loaded.ir.textures.len();
-        loaded.ir.textures.push(crate::intermediate::types::IrTexture {
-            filename: ir_filename,
-            data: ir_data,
-            mime_type: ir_mime,
-        });
+        loaded
+            .ir
+            .textures
+            .push(crate::intermediate::types::IrTexture {
+                filename: ir_filename,
+                data: ir_data,
+                mime_type: ir_mime,
+            });
         let mat = &mut loaded.ir.materials[material_index];
         mat.texture_index = Some(tex_idx);
         mat.apply_textured_defaults();
@@ -2324,9 +2721,16 @@ impl ViewerApp {
             Some(ref r) => (r.texture_bgl(), r.sampler()),
             None => return,
         };
-        loaded.gpu_model.assign_texture_to_material(material_index, &texture_view, device, texture_bgl, sampler);
+        loaded.gpu_model.assign_texture_to_material(
+            material_index,
+            &texture_view,
+            device,
+            texture_bgl,
+            sampler,
+        );
 
-        log::info!("パッケージテクスチャ割り当て: 材質[{}] '{}' ← {}",
+        log::info!(
+            "パッケージテクスチャ割り当て: 材質[{}] '{}' ← {}",
             material_index,
             loaded.ir.materials[material_index].name,
             tex_name,
@@ -2335,14 +2739,24 @@ impl ViewerApp {
         // 同一材質名への連動割り当て
         if self.tex.link_same_name {
             let target_name = loaded.ir.materials[material_index].name.clone();
-            let siblings: Vec<usize> = loaded.ir.materials.iter().enumerate()
+            let siblings: Vec<usize> = loaded
+                .ir
+                .materials
+                .iter()
+                .enumerate()
                 .filter(|(i, m)| *i != material_index && m.name == target_name)
                 .map(|(i, _)| i)
                 .collect();
             for sib_idx in siblings {
                 loaded.ir.materials[sib_idx].texture_index = Some(tex_idx);
                 loaded.ir.materials[sib_idx].apply_textured_defaults();
-                loaded.gpu_model.assign_texture_to_material(sib_idx, &texture_view, device, texture_bgl, sampler);
+                loaded.gpu_model.assign_texture_to_material(
+                    sib_idx,
+                    &texture_view,
+                    device,
+                    texture_bgl,
+                    sampler,
+                );
                 log::info!("  連動割り当て: 材質[{}] '{}'", sib_idx, target_name);
             }
         }
@@ -2377,7 +2791,9 @@ impl ViewerApp {
                     {
                         tex.data = png_data;
                         if !tex.filename.ends_with(".png") {
-                            tex.filename = tex.filename.replace(".jpg", ".png")
+                            tex.filename = tex
+                                .filename
+                                .replace(".jpg", ".png")
                                 .replace(".jpeg", ".png");
                             if !tex.filename.ends_with(".png") {
                                 tex.filename.push_str(".png");
@@ -2398,7 +2814,8 @@ impl ViewerApp {
         {
             let encoder = image::codecs::png::PngEncoder::new(&mut png_data);
             use image::ImageEncoder;
-            encoder.write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
+            encoder
+                .write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
                 .map_err(|e| anyhow::anyhow!("PNG エンコード失敗: {}", e))?;
         }
         Ok(png_data)
@@ -2407,7 +2824,9 @@ impl ViewerApp {
     /// 現在読み込み中のVRMを再読み込みする（オプション変更時）
     /// カメラ・モーフ・材質表示などの状態は保持する
     pub fn reload_current(&mut self) {
-        let Some(ref loaded) = self.loaded else { return };
+        let Some(ref loaded) = self.loaded else {
+            return;
+        };
         // リロード中はテクスチャ選択ダイアログを抑制
         self.suppress_tex_match = true;
         let source = loaded.source.clone();
@@ -2426,20 +2845,24 @@ impl ViewerApp {
         // unitypackage の場合は再展開せず FBX として再読み込み
         let ext = source.extension_lower();
         let result = match &source {
-            ReloadableSource::Archive { inner_kind, original_path, archive_bytes, selected_entry_path }
-                if *inner_kind == crate::archive::ArchiveModelKind::UnityPackage =>
-            {
-                self.reload_archive_unitypackage(
-                    original_path, archive_bytes.as_ref(), selected_entry_path, &source,
-                    &saved_pkg_textures, &saved_pkg_tex_assignments,
-                )
-            }
+            ReloadableSource::Archive {
+                inner_kind,
+                original_path,
+                archive_bytes,
+                selected_entry_path,
+            } if *inner_kind == crate::archive::ArchiveModelKind::UnityPackage => self
+                .reload_archive_unitypackage(
+                    original_path,
+                    archive_bytes.as_ref(),
+                    selected_entry_path,
+                    &source,
+                    &saved_pkg_textures,
+                    &saved_pkg_tex_assignments,
+                ),
             _ if ext == "unitypackage" => {
                 self.reload_unitypackage(&source, &saved_pkg_textures, &saved_pkg_tex_assignments)
             }
-            _ => {
-                self.reload_from_source(&source)
-            }
+            _ => self.reload_from_source(&source),
         };
 
         // リロード時はテクスチャ選択ダイアログを抑制（後で割り当てを復元するため不要）
@@ -2448,9 +2871,7 @@ impl ViewerApp {
         // リロード失敗時は状態変更をスキップして早期リターン
         if let Err(e) = result {
             log::error!("再読み込み失敗: {e}");
-            self.convert_message = Some(ConvertMessage::failure(
-                format!("再読み込み失敗: {e}")
-            ));
+            self.convert_message = Some(ConvertMessage::failure(format!("再読み込み失敗: {e}")));
             // 退避した状態を復元
             self.camera = saved_camera;
             if let Some(pkg) = saved_pkg_textures {
@@ -2491,7 +2912,10 @@ impl ViewerApp {
                             );
                         }
                         _ => {
-                            self.append_model_from_source(&appended.source, appended.pkg_model_name.as_deref());
+                            self.append_model_from_source(
+                                &appended.source,
+                                appended.pkg_model_name.as_deref(),
+                            );
                         }
                     }
                 }
@@ -2500,7 +2924,10 @@ impl ViewerApp {
                 self.tex.pending_match = None;
                 // アペンド失敗のエラーメッセージは保持、成功メッセージのみクリア
                 if let Some(ref msg) = self.convert_message {
-                    if matches!(msg.result, ConvertResult::Success(_) | ConvertResult::Warning(_)) {
+                    if matches!(
+                        msg.result,
+                        ConvertResult::Success(_) | ConvertResult::Warning(_)
+                    ) {
                         self.convert_message = None;
                     }
                 }
@@ -2528,7 +2955,11 @@ impl ViewerApp {
         let saved_link = self.tex.link_same_name;
         self.tex.link_same_name = false;
         self.tex.assignments = HashMap::new();
-        let current_mat_count = self.loaded.as_ref().map(|l| l.ir.materials.len()).unwrap_or(0);
+        let current_mat_count = self
+            .loaded
+            .as_ref()
+            .map(|l| l.ir.materials.len())
+            .unwrap_or(0);
         for (mat_idx, tex_src) in &saved_tex_assignments {
             if *mat_idx < current_mat_count {
                 self.assign_texture_source_to_material(*mat_idx, tex_src);
@@ -2553,7 +2984,8 @@ impl ViewerApp {
         let result: anyhow::Result<()> = (|| {
             match &source_clone {
                 ReloadableSource::File(path) => {
-                    let ext = path.extension()
+                    let ext = path
+                        .extension()
                         .and_then(|e| e.to_str())
                         .unwrap_or("")
                         .to_lowercase();
@@ -2564,8 +2996,13 @@ impl ViewerApp {
                         _ => self.try_load_vrm(path),
                     }
                 }
-                ReloadableSource::Snapshot { original_path, main_bytes, aux_files } => {
-                    let ext = original_path.extension()
+                ReloadableSource::Snapshot {
+                    original_path,
+                    main_bytes,
+                    aux_files,
+                } => {
+                    let ext = original_path
+                        .extension()
                         .and_then(|e| e.to_str())
                         .unwrap_or("")
                         .to_lowercase();
@@ -2586,12 +3023,17 @@ impl ViewerApp {
                             } else {
                                 None
                             };
-                            let fbx_path = temp_dir.as_ref()
+                            let fbx_path = temp_dir
+                                .as_ref()
                                 .map(|d| d.join(original_path.file_name().unwrap_or_default()))
                                 .unwrap_or_else(|| original_path.clone());
-                            let result = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-                                main_bytes, Some(&fbx_path), self.normalize_pose,
-                            );
+                            let result =
+                                crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                                    main_bytes,
+                                    Some(&fbx_path),
+                                    self.normalize_pose,
+                                    self.normalize_to_tstance,
+                                );
                             // 一時ファイルをクリーンアップ（成功・失敗問わず）
                             if let Some(dir) = &temp_dir {
                                 let _ = std::fs::remove_dir_all(dir);
@@ -2602,23 +3044,39 @@ impl ViewerApp {
                         "pmx" => {
                             let pmx_model = crate::pmx::reader::read_pmx_from_data(main_bytes)?;
                             let pmx_dir = original_path.parent().unwrap_or(Path::new("."));
-                            let mut ir = crate::pmx::extract::pmx_to_ir_with_aux(&pmx_model, pmx_dir, Some(aux_files))?;
+                            let mut ir = crate::pmx::extract::pmx_to_ir_with_aux(
+                                &pmx_model,
+                                pmx_dir,
+                                Some(aux_files),
+                            )?;
                             if self.normalize_pose {
-                                ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                                    &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
-                                    crate::convert::coord::gltf_pos_to_pmx,
-                                );
+                                ir.astance_result =
+                                    crate::intermediate::pose::normalize_pose_to_tstance_full(
+                                        &mut ir.bones,
+                                        &mut ir.meshes,
+                                        &mut ir.morphs,
+                                        &mut ir.physics,
+                                        crate::convert::coord::gltf_pos_to_pmx,
+                                    );
                             }
                             self.finish_load(ir, source_clone.clone())
                         }
                         "pmd" => {
                             let pmd_model = crate::pmd::reader::read_pmd_from_data(main_bytes)?;
-                            let mut ir = crate::pmd::extract::pmd_to_ir_with_aux(&pmd_model, original_path, Some(aux_files))?;
+                            let mut ir = crate::pmd::extract::pmd_to_ir_with_aux(
+                                &pmd_model,
+                                original_path,
+                                Some(aux_files),
+                            )?;
                             if self.normalize_pose {
-                                ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                                    &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
-                                    crate::convert::coord::gltf_pos_to_pmx,
-                                );
+                                ir.astance_result =
+                                    crate::intermediate::pose::normalize_pose_to_tstance_full(
+                                        &mut ir.bones,
+                                        &mut ir.meshes,
+                                        &mut ir.morphs,
+                                        &mut ir.physics,
+                                        crate::convert::coord::gltf_pos_to_pmx,
+                                    );
                             }
                             self.finish_load(ir, source_clone.clone())
                         }
@@ -2628,33 +3086,53 @@ impl ViewerApp {
                             let version = vrm::detect::detect_version(&glb.document);
                             let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
                             let mut ir = vrm::extract::extract_ir_model_with_options(
-                                &glb.document, &glb.buffers, &glb.images,
-                                &glb.vrm_extension, &version, &all_extensions,
+                                &glb.document,
+                                &glb.buffers,
+                                &glb.images,
+                                &glb.vrm_extension,
+                                &version,
+                                &all_extensions,
                                 self.normalize_pose,
                             )?;
                             let device = &self.render_state.device;
                             let queue = &self.render_state.queue;
                             let gpu_model = super::mesh::build_gpu_model(
-                                &ir, &glb.images, device, queue,
-                                self.display.smooth_normals, self.display.clear_custom_normals,
+                                &ir,
+                                &glb.images,
+                                device,
+                                queue,
+                                self.display.smooth_normals,
+                                self.display.clear_custom_normals,
                             )?;
                             Self::encode_ir_textures_as_png(&mut ir, &glb.images);
                             self.finish_load_with_gpu(ir, gpu_model, source_clone.clone())
                         }
                     }
                 }
-                ReloadableSource::Archive { original_path, archive_bytes, selected_entry_path, inner_kind } => {
+                ReloadableSource::Archive {
+                    original_path,
+                    archive_bytes,
+                    selected_entry_path,
+                    inner_kind,
+                } => {
                     if *inner_kind == crate::archive::ArchiveModelKind::UnityPackage {
                         // アーカイブ内 .unitypackage: 二重展開してリロード
                         // （reload_current 経由では saved_pkg_textures/assignments が渡されるため、
                         //   ここでは空デフォルトを使用）
                         return self.reload_archive_unitypackage(
-                            original_path, archive_bytes.as_ref(), selected_entry_path, &source_clone,
-                            &None, &HashMap::new(),
+                            original_path,
+                            archive_bytes.as_ref(),
+                            selected_entry_path,
+                            &source_clone,
+                            &None,
+                            &HashMap::new(),
                         );
                     }
                     let ir = self.load_ir_from_archive_source(
-                        original_path, archive_bytes.as_ref(), selected_entry_path, *inner_kind,
+                        original_path,
+                        archive_bytes.as_ref(),
+                        selected_entry_path,
+                        *inner_kind,
                     )?;
                     self.finish_load(ir, source_clone.clone())
                 }
@@ -2662,15 +3140,17 @@ impl ViewerApp {
         })();
         if let Err(ref e) = result {
             log::error!("reload_from_source 失敗: {e}");
-            self.convert_message = Some(ConvertMessage::failure(format!(
-                "再読み込み失敗: {e}"
-            )));
+            self.convert_message = Some(ConvertMessage::failure(format!("再読み込み失敗: {e}")));
         }
         result
     }
 
     /// ReloadableSource から追加モデルを読み込み（リロード時用）
-    fn append_model_from_source(&mut self, source: &ReloadableSource, pkg_model_name: Option<&str>) {
+    fn append_model_from_source(
+        &mut self,
+        source: &ReloadableSource,
+        pkg_model_name: Option<&str>,
+    ) {
         // アーカイブ内 .unitypackage は専用パスで処理
         if let ReloadableSource::Archive { inner_kind, .. } = source {
             if *inner_kind == crate::archive::ArchiveModelKind::UnityPackage {
@@ -2683,23 +3163,31 @@ impl ViewerApp {
         let ir_result: anyhow::Result<IrModel> = (|| -> anyhow::Result<IrModel> {
             match &source_clone {
                 ReloadableSource::File(path) => {
-                    let ext = path.extension()
+                    let ext = path
+                        .extension()
                         .and_then(|e| e.to_str())
                         .unwrap_or("")
                         .to_lowercase();
                     match ext.as_str() {
                         "fbx" => crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-                            &std::fs::read(path)?, Some(path), self.normalize_pose,
+                            &std::fs::read(path)?,
+                            Some(path),
+                            self.normalize_pose,
+                            self.normalize_to_tstance,
                         ),
                         "pmx" => {
                             let pmx_model = crate::pmx::reader::read_pmx(path)?;
                             let pmx_dir = path.parent().unwrap_or(Path::new("."));
                             let mut ir = crate::pmx::extract::pmx_to_ir(&pmx_model, pmx_dir)?;
                             if self.normalize_pose {
-                                ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                                    &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
-                                    crate::convert::coord::gltf_pos_to_pmx,
-                                );
+                                ir.astance_result =
+                                    crate::intermediate::pose::normalize_pose_to_tstance_full(
+                                        &mut ir.bones,
+                                        &mut ir.meshes,
+                                        &mut ir.morphs,
+                                        &mut ir.physics,
+                                        crate::convert::coord::gltf_pos_to_pmx,
+                                    );
                             }
                             Ok(ir)
                         }
@@ -2707,18 +3195,27 @@ impl ViewerApp {
                             let pmd_model = crate::pmd::reader::read_pmd(path)?;
                             let mut ir = crate::pmd::extract::pmd_to_ir(&pmd_model, path)?;
                             if self.normalize_pose {
-                                ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                                    &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
-                                    crate::convert::coord::gltf_pos_to_pmx,
-                                );
+                                ir.astance_result =
+                                    crate::intermediate::pose::normalize_pose_to_tstance_full(
+                                        &mut ir.bones,
+                                        &mut ir.meshes,
+                                        &mut ir.morphs,
+                                        &mut ir.physics,
+                                        crate::convert::coord::gltf_pos_to_pmx,
+                                    );
                             }
                             Ok(ir)
                         }
                         _ => self.load_vrm_as_ir(path),
                     }
                 }
-                ReloadableSource::Snapshot { original_path, main_bytes, aux_files } => {
-                    let ext = original_path.extension()
+                ReloadableSource::Snapshot {
+                    original_path,
+                    main_bytes,
+                    aux_files,
+                } => {
+                    let ext = original_path
+                        .extension()
                         .and_then(|e| e.to_str())
                         .unwrap_or("")
                         .to_lowercase();
@@ -2739,12 +3236,17 @@ impl ViewerApp {
                             } else {
                                 None
                             };
-                            let fbx_path = temp_dir.as_ref()
+                            let fbx_path = temp_dir
+                                .as_ref()
                                 .map(|d| d.join(original_path.file_name().unwrap_or_default()))
                                 .unwrap_or_else(|| original_path.clone());
-                            let result = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-                                main_bytes, Some(&fbx_path), self.normalize_pose,
-                            );
+                            let result =
+                                crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                                    main_bytes,
+                                    Some(&fbx_path),
+                                    self.normalize_pose,
+                                    self.normalize_to_tstance,
+                                );
                             if let Some(dir) = &temp_dir {
                                 let _ = std::fs::remove_dir_all(dir);
                             }
@@ -2753,23 +3255,39 @@ impl ViewerApp {
                         "pmx" => {
                             let pmx_model = crate::pmx::reader::read_pmx_from_data(main_bytes)?;
                             let pmx_dir = original_path.parent().unwrap_or(Path::new("."));
-                            let mut ir = crate::pmx::extract::pmx_to_ir_with_aux(&pmx_model, pmx_dir, Some(aux_files))?;
+                            let mut ir = crate::pmx::extract::pmx_to_ir_with_aux(
+                                &pmx_model,
+                                pmx_dir,
+                                Some(aux_files),
+                            )?;
                             if self.normalize_pose {
-                                ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                                    &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
-                                    crate::convert::coord::gltf_pos_to_pmx,
-                                );
+                                ir.astance_result =
+                                    crate::intermediate::pose::normalize_pose_to_tstance_full(
+                                        &mut ir.bones,
+                                        &mut ir.meshes,
+                                        &mut ir.morphs,
+                                        &mut ir.physics,
+                                        crate::convert::coord::gltf_pos_to_pmx,
+                                    );
                             }
                             Ok(ir)
                         }
                         "pmd" => {
                             let pmd_model = crate::pmd::reader::read_pmd_from_data(main_bytes)?;
-                            let mut ir = crate::pmd::extract::pmd_to_ir_with_aux(&pmd_model, original_path, Some(aux_files))?;
+                            let mut ir = crate::pmd::extract::pmd_to_ir_with_aux(
+                                &pmd_model,
+                                original_path,
+                                Some(aux_files),
+                            )?;
                             if self.normalize_pose {
-                                ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                                    &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
-                                    crate::convert::coord::gltf_pos_to_pmx,
-                                );
+                                ir.astance_result =
+                                    crate::intermediate::pose::normalize_pose_to_tstance_full(
+                                        &mut ir.bones,
+                                        &mut ir.meshes,
+                                        &mut ir.morphs,
+                                        &mut ir.physics,
+                                        crate::convert::coord::gltf_pos_to_pmx,
+                                    );
                             }
                             Ok(ir)
                         }
@@ -2778,8 +3296,12 @@ impl ViewerApp {
                             let version = vrm::detect::detect_version(&glb.document);
                             let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
                             let mut ir = vrm::extract::extract_ir_model_with_options(
-                                &glb.document, &glb.buffers, &glb.images,
-                                &glb.vrm_extension, &version, &all_extensions,
+                                &glb.document,
+                                &glb.buffers,
+                                &glb.images,
+                                &glb.vrm_extension,
+                                &version,
+                                &all_extensions,
                                 self.normalize_pose,
                             )?;
                             Self::encode_ir_textures_as_png(&mut ir, &glb.images);
@@ -2787,10 +3309,18 @@ impl ViewerApp {
                         }
                     }
                 }
-                ReloadableSource::Archive { original_path, archive_bytes, selected_entry_path, inner_kind } => {
+                ReloadableSource::Archive {
+                    original_path,
+                    archive_bytes,
+                    selected_entry_path,
+                    inner_kind,
+                } => {
                     // UnityPackage は早期に処理済み（ここに到達しない）
                     self.load_ir_from_archive_source(
-                        original_path, archive_bytes.as_ref(), selected_entry_path, *inner_kind,
+                        original_path,
+                        archive_bytes.as_ref(),
+                        selected_entry_path,
+                        *inner_kind,
                     )
                 }
             }
@@ -2802,11 +3332,19 @@ impl ViewerApp {
                     let host_fmt = loaded.ir.source_format;
                     let other_fmt = other_ir.source_format;
                     if host_fmt.is_vrm0() != other_fmt.is_vrm0() {
-                        log::warn!("座標系の異なるモデルの追加: {} + {}", host_fmt.label(), other_fmt.label());
+                        log::warn!(
+                            "座標系の異なるモデルの追加: {} + {}",
+                            host_fmt.label(),
+                            other_fmt.label()
+                        );
                         return;
                     }
                 }
-                self.finish_append_with_source(other_ir, source.clone(), pkg_model_name.map(|s| s.to_string()));
+                self.finish_append_with_source(
+                    other_ir,
+                    source.clone(),
+                    pkg_model_name.map(|s| s.to_string()),
+                );
             }
             Err(e) => {
                 log::error!("追加モデル再読み込み失敗: {e}");
@@ -2821,20 +3359,26 @@ impl ViewerApp {
         saved_pkg_textures: &Option<Vec<(String, Vec<u8>)>>,
         saved_pkg_tex_assignments: &HashMap<usize, String>,
     ) -> anyhow::Result<()> {
-        let (archive_data, snapshot) = match source {
+        // Arc 参照で済むケースではコピーを避け、所有権が必要なパスのみ Vec を確保
+        use std::borrow::Cow;
+        let (archive_data, snapshot): (Cow<'_, [u8]>, Option<Arc<[u8]>>) = match source {
             ReloadableSource::Snapshot { main_bytes, .. } => {
-                (main_bytes.to_vec(), Some(Arc::clone(main_bytes)))
+                (Cow::Borrowed(main_bytes), Some(Arc::clone(main_bytes)))
             }
             ReloadableSource::File(path) => {
                 let data = std::fs::read(path)?;
-                (data, None)
+                (Cow::Owned(data), None)
             }
-            ReloadableSource::Archive { original_path, archive_bytes, .. } => {
+            ReloadableSource::Archive {
+                original_path,
+                archive_bytes,
+                ..
+            } => {
                 if let Some(snap) = archive_bytes {
-                    (snap.to_vec(), Some(Arc::clone(snap)))
+                    (Cow::Borrowed(snap), Some(Arc::clone(snap)))
                 } else {
                     let data = std::fs::read(original_path)?;
-                    (data, None)
+                    (Cow::Owned(data), None)
                 }
             }
         };
@@ -2843,7 +3387,10 @@ impl ViewerApp {
 
         // 現在のモデルが VRM の場合は VRM として再読み込み
         let is_vrm = self.loaded.as_ref().is_some_and(|l| {
-            !matches!(l.ir.source_format, crate::intermediate::types::SourceFormat::Fbx)
+            !matches!(
+                l.ir.source_format,
+                crate::intermediate::types::SourceFormat::Fbx
+            )
         });
 
         if is_vrm {
@@ -2852,7 +3399,8 @@ impl ViewerApp {
                 anyhow::bail!(".unitypackage 内に VRM ファイルが見つかりません");
             }
             let vrm_idx = if let Some(ref prev_name) = self.selected_fbx_name {
-                vrm_list.iter()
+                vrm_list
+                    .iter()
                     .find(|(_, name)| name == prev_name)
                     .map(|(idx, _)| *idx)
                     .unwrap_or(vrm_list[0].0)
@@ -2874,7 +3422,8 @@ impl ViewerApp {
 
         // 前回と同じ FBX を選択（ファイル名で照合、見つからなければ最初のもの）
         let fbx_idx = if let Some(ref prev_name) = self.selected_fbx_name {
-            fbx_list.iter()
+            fbx_list
+                .iter()
                 .find(|(_, name)| name == prev_name)
                 .map(|(idx, _)| *idx)
                 .unwrap_or(fbx_list[0].0)
@@ -2884,10 +3433,17 @@ impl ViewerApp {
 
         let (fbx_data, fbx_name, textures) =
             crate::unitypackage::take_fbx_and_textures(assets, fbx_idx)?;
-        log::info!("unitypackage再読み込み: {} テクスチャ: {}個", fbx_name, textures.len());
+        log::info!(
+            "unitypackage再読み込み: {} テクスチャ: {}個",
+            fbx_name,
+            textures.len()
+        );
 
         let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-            &fbx_data, Some(path), self.normalize_pose,
+            &fbx_data,
+            Some(path),
+            self.normalize_pose,
+            self.normalize_to_tstance,
         )?;
 
         // テクスチャ埋め込み
@@ -2901,18 +3457,23 @@ impl ViewerApp {
         crate::unitypackage::embed_textures_into_ir(&mut ir, tex_source);
 
         // 手動割当の復元（GPU構築前にIrModelに適用）
-        let pkg_src = if !textures.is_empty() { &textures } else {
+        let pkg_src = if !textures.is_empty() {
+            &textures
+        } else {
             saved_pkg_textures.as_deref().unwrap_or(&[])
         };
         if !saved_pkg_tex_assignments.is_empty() && !pkg_src.is_empty() {
             // テクスチャ名 → pkgデータの逆引きマップ
-            let name_to_data: HashMap<&str, &[u8]> = pkg_src.iter()
+            let name_to_data: HashMap<&str, &[u8]> = pkg_src
+                .iter()
                 .map(|(name, data)| (name.as_str(), data.as_slice()))
                 .collect();
             // 同一テクスチャ名は1回だけIrTextureに追加
             let mut name_to_ir: HashMap<String, usize> = HashMap::new();
             for (mat_idx, tex_name) in saved_pkg_tex_assignments {
-                if *mat_idx >= ir.materials.len() { continue; }
+                if *mat_idx >= ir.materials.len() {
+                    continue;
+                }
                 let ir_idx = if let Some(&cached) = name_to_ir.get(tex_name) {
                     cached
                 } else if let Some(data) = name_to_data.get(tex_name.as_str()) {
@@ -2924,7 +3485,11 @@ impl ViewerApp {
                         .to_string();
                     let (ir_data, ir_filename, ir_mime) = if is_psd {
                         match Self::psd_to_png(data) {
-                            Ok(png_data) => (png_data, format!("{}.png", basename), "image/png".to_string()),
+                            Ok(png_data) => (
+                                png_data,
+                                format!("{}.png", basename),
+                                "image/png".to_string(),
+                            ),
                             Err(e) => {
                                 log::warn!("PSD→PNG変換失敗 (pkg復元): {e}");
                                 continue;
@@ -2936,12 +3501,7 @@ impl ViewerApp {
                             .and_then(|e| e.to_str())
                             .unwrap_or("")
                             .to_lowercase();
-                        let mime = match ext.as_str() {
-                            "png" => "image/png",
-                            "tga" => "image/x-tga",
-                            "bmp" => "image/bmp",
-                            _ => "image/jpeg",
-                        }.to_string();
+                        let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                         (data.to_vec(), tex_name.clone(), mime)
                     };
                     let idx = ir.textures.len();
@@ -2957,8 +3517,12 @@ impl ViewerApp {
                 };
                 ir.materials[*mat_idx].texture_index = Some(ir_idx);
                 ir.materials[*mat_idx].apply_textured_defaults();
-                log::info!("テクスチャ復元: 材質[{}] '{}' ← '{}'",
-                    mat_idx, ir.materials[*mat_idx].name, tex_name);
+                log::info!(
+                    "テクスチャ復元: 材質[{}] '{}' ← '{}'",
+                    mat_idx,
+                    ir.materials[*mat_idx].name,
+                    tex_name
+                );
             }
         }
 
@@ -2993,30 +3557,35 @@ impl ViewerApp {
         saved_pkg_textures: &Option<Vec<(String, Vec<u8>)>>,
         saved_pkg_tex_assignments: &HashMap<usize, String>,
     ) -> anyhow::Result<()> {
-        // アーカイブデータを取得
-        let data: Vec<u8> = if let Some(snap) = archive_bytes {
-            snap.to_vec()
+        // アーカイブデータを取得（Arc 参照で済むケースではコピーを避ける）
+        let owned;
+        let data: &[u8] = if let Some(snap) = archive_bytes {
+            snap
         } else {
-            std::fs::read(original_path)?
+            owned = std::fs::read(original_path)?;
+            &owned
         };
 
-        let ext = original_path.extension()
+        let ext = original_path
+            .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
         let format = crate::archive::archive_format_from_ext(&ext)
             .ok_or_else(|| anyhow::anyhow!("未対応のアーカイブ形式: {ext}"))?;
 
-        let contents = crate::archive::list_models(&data, format)?;
+        let contents = crate::archive::list_models(data, format)?;
 
         // selected_entry_path で unitypackage エントリを特定
-        let model_index = contents.models.iter()
+        let model_index = contents
+            .models
+            .iter()
             .position(|(_, p, _, _)| p.to_string_lossy() == selected_entry_path)
-            .ok_or_else(|| anyhow::anyhow!(
-                "アーカイブ内に以前のモデルが見つかりません: {selected_entry_path}"
-            ))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("アーカイブ内に以前のモデルが見つかりません: {selected_entry_path}")
+            })?;
 
-        let bundle = crate::archive::extract_model_bundle(&data, format, contents, model_index)?;
+        let bundle = crate::archive::extract_model_bundle(data, format, contents, model_index)?;
 
         // .unitypackage を二重展開
         let pkg_data = bundle.model.data;
@@ -3024,7 +3593,10 @@ impl ViewerApp {
 
         // 現在のモデルが VRM の場合は VRM として再読み込み
         let is_vrm = self.loaded.as_ref().is_some_and(|l| {
-            !matches!(l.ir.source_format, crate::intermediate::types::SourceFormat::Fbx)
+            !matches!(
+                l.ir.source_format,
+                crate::intermediate::types::SourceFormat::Fbx
+            )
         });
 
         if is_vrm {
@@ -3033,14 +3605,20 @@ impl ViewerApp {
                 anyhow::bail!(".unitypackage 内に VRM ファイルが見つかりません");
             }
             let vrm_idx = if let Some(ref prev_name) = self.selected_fbx_name {
-                vrm_list.iter()
+                vrm_list
+                    .iter()
                     .find(|(_, name)| name == prev_name)
                     .map(|(idx, _)| *idx)
                     .unwrap_or(vrm_list[0].0)
             } else {
                 vrm_list[0].0
             };
-            return self.load_vrm_from_assets(assets, vrm_idx, original_path, Some(archive_source.clone()));
+            return self.load_vrm_from_assets(
+                assets,
+                vrm_idx,
+                original_path,
+                Some(archive_source.clone()),
+            );
         }
 
         let fbx_list = crate::unitypackage::find_fbx_list(&assets);
@@ -3049,7 +3627,8 @@ impl ViewerApp {
         }
 
         let fbx_idx = if let Some(ref prev_name) = self.selected_fbx_name {
-            fbx_list.iter()
+            fbx_list
+                .iter()
                 .find(|(_, name)| name == prev_name)
                 .map(|(idx, _)| *idx)
                 .unwrap_or(fbx_list[0].0)
@@ -3059,10 +3638,17 @@ impl ViewerApp {
 
         let (fbx_data, fbx_name, textures) =
             crate::unitypackage::take_fbx_and_textures(assets, fbx_idx)?;
-        log::info!("アーカイブ内unitypackage再読み込み: {} テクスチャ: {}個", fbx_name, textures.len());
+        log::info!(
+            "アーカイブ内unitypackage再読み込み: {} テクスチャ: {}個",
+            fbx_name,
+            textures.len()
+        );
 
         let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-            &fbx_data, Some(original_path), self.normalize_pose,
+            &fbx_data,
+            Some(original_path),
+            self.normalize_pose,
+            self.normalize_to_tstance,
         )?;
 
         // テクスチャ埋め込み（reload_unitypackage と同等のフォールバック付き）
@@ -3076,16 +3662,21 @@ impl ViewerApp {
         crate::unitypackage::embed_textures_into_ir(&mut ir, tex_source);
 
         // 手動割当の復元（GPU構築前にIrModelに適用）
-        let pkg_src = if !textures.is_empty() { &textures } else {
+        let pkg_src = if !textures.is_empty() {
+            &textures
+        } else {
             saved_pkg_textures.as_deref().unwrap_or(&[])
         };
         if !saved_pkg_tex_assignments.is_empty() && !pkg_src.is_empty() {
-            let name_to_data: HashMap<&str, &[u8]> = pkg_src.iter()
+            let name_to_data: HashMap<&str, &[u8]> = pkg_src
+                .iter()
                 .map(|(name, data)| (name.as_str(), data.as_slice()))
                 .collect();
             let mut name_to_ir: HashMap<String, usize> = HashMap::new();
             for (mat_idx, tex_name) in saved_pkg_tex_assignments {
-                if *mat_idx >= ir.materials.len() { continue; }
+                if *mat_idx >= ir.materials.len() {
+                    continue;
+                }
                 let ir_idx = if let Some(&cached) = name_to_ir.get(tex_name) {
                     cached
                 } else if let Some(data) = name_to_data.get(tex_name.as_str()) {
@@ -3097,7 +3688,11 @@ impl ViewerApp {
                         .to_string();
                     let (ir_data, ir_filename, ir_mime) = if is_psd {
                         match Self::psd_to_png(data) {
-                            Ok(png_data) => (png_data, format!("{}.png", basename), "image/png".to_string()),
+                            Ok(png_data) => (
+                                png_data,
+                                format!("{}.png", basename),
+                                "image/png".to_string(),
+                            ),
                             Err(e) => {
                                 log::warn!("PSD→PNG変換失敗 (pkg復元): {e}");
                                 continue;
@@ -3109,12 +3704,7 @@ impl ViewerApp {
                             .and_then(|e| e.to_str())
                             .unwrap_or("")
                             .to_lowercase();
-                        let mime = match ext.as_str() {
-                            "png" => "image/png",
-                            "tga" => "image/x-tga",
-                            "bmp" => "image/bmp",
-                            _ => "image/jpeg",
-                        }.to_string();
+                        let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                         (data.to_vec(), tex_name.clone(), mime)
                     };
                     let idx = ir.textures.len();
@@ -3130,8 +3720,12 @@ impl ViewerApp {
                 };
                 ir.materials[*mat_idx].texture_index = Some(ir_idx);
                 ir.materials[*mat_idx].apply_textured_defaults();
-                log::info!("テクスチャ復元: 材質[{}] '{}' ← '{}'",
-                    mat_idx, ir.materials[*mat_idx].name, tex_name);
+                log::info!(
+                    "テクスチャ復元: 材質[{}] '{}' ← '{}'",
+                    mat_idx,
+                    ir.materials[*mat_idx].name,
+                    tex_name
+                );
             }
         }
 
@@ -3148,7 +3742,8 @@ impl ViewerApp {
 
     /// 1枚のテクスチャをプレビューダイアログで開く
     fn open_texture_preview(&mut self, path: PathBuf) {
-        let ext = path.extension()
+        let ext = path
+            .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
@@ -3158,19 +3753,20 @@ impl ViewerApp {
         let data = match std::fs::read(&path) {
             Ok(d) => d,
             Err(e) => {
-                self.convert_message = Some(ConvertMessage::failure(
-                    format!("テクスチャ読み込み失敗: {e}")
-                ));
+                self.convert_message = Some(ConvertMessage::failure(format!(
+                    "テクスチャ読み込み失敗: {e}"
+                )));
                 return;
             }
         };
         match super::texture::upload_texture_from_bytes(
-            &data, is_psd,
-            &self.render_state.device, &self.render_state.queue,
+            &data,
+            is_psd,
+            &self.render_state.device,
+            &self.render_state.queue,
         ) {
-            Ok(texture_view) => {
-                let num_mats = self.loaded.as_ref()
-                    .map_or(0, |l| l.ir.materials.len());
+            Ok((texture_view, _texture_view_unorm)) => {
+                let num_mats = self.loaded.as_ref().map_or(0, |l| l.ir.materials.len());
                 let preview_tex_id = {
                     let mut renderer = self.render_state.renderer.write();
                     Some(renderer.register_native_texture(
@@ -3192,17 +3788,22 @@ impl ViewerApp {
                 });
             }
             Err(e) => {
-                self.convert_message = Some(ConvertMessage::failure(
-                    format!("テクスチャ読み込み失敗: {e}")
-                ));
+                self.convert_message = Some(ConvertMessage::failure(format!(
+                    "テクスチャ読み込み失敗: {e}"
+                )));
             }
         }
     }
 
     /// 複数テクスチャの自動割り当て（ファイル名と材質名のマッチング）
     fn auto_assign_textures(&mut self, image_files: Vec<PathBuf>) {
-        let Some(ref loaded) = self.loaded else { return };
-        let mat_names: Vec<String> = loaded.ir.materials.iter()
+        let Some(ref loaded) = self.loaded else {
+            return;
+        };
+        let mat_names: Vec<String> = loaded
+            .ir
+            .materials
+            .iter()
             .map(|m| m.name.to_lowercase())
             .collect();
 
@@ -3212,7 +3813,8 @@ impl ViewerApp {
         // ファイル名 → マッチする材質インデックスを収集
         let mut assignments: Vec<(PathBuf, Vec<usize>)> = Vec::new();
         for path in &image_files {
-            let stem = path.file_stem()
+            let stem = path
+                .file_stem()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_lowercase();
@@ -3220,13 +3822,19 @@ impl ViewerApp {
                 continue;
             }
             // 材質名にファイル名（拡張子なし）を含む材質を検索
-            let matched: Vec<usize> = mat_names.iter()
+            let matched: Vec<usize> = mat_names
+                .iter()
                 .enumerate()
                 .filter(|(_, name)| name.contains(&stem) || stem.contains(name.as_str()))
                 .map(|(i, _)| i)
                 .collect();
             if matched.is_empty() {
-                unmatched.push(path.file_name().unwrap_or_default().to_string_lossy().to_string());
+                unmatched.push(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                );
             } else {
                 assignments.push((path.clone(), matched));
             }
@@ -3248,16 +3856,29 @@ impl ViewerApp {
         if assigned > 0 {
             self.convert_message = Some(ConvertMessage::success(msg));
         } else {
-            self.convert_message = Some(ConvertMessage::failure(
-                format!("マッチする材質が見つかりませんでした\nファイル: {}", unmatched.join(", "))
-            ));
+            self.convert_message = Some(ConvertMessage::failure(format!(
+                "マッチする材質が見つかりませんでした\nファイル: {}",
+                unmatched.join(", ")
+            )));
         }
     }
 
     fn open_file_dialog(&mut self) {
         let mut dialog = rfd::FileDialog::new()
             .set_title("3Dモデル / VRMAアニメーションを開く")
-            .add_filter("対応形式", &["vrm", "fbx", "pmx", "pmd", "unitypackage", "vrma", "zip", "7z"])
+            .add_filter(
+                "対応形式",
+                &[
+                    "vrm",
+                    "fbx",
+                    "pmx",
+                    "pmd",
+                    "unitypackage",
+                    "vrma",
+                    "zip",
+                    "7z",
+                ],
+            )
             .add_filter("VRM (.vrm)", &["vrm"])
             .add_filter("FBX (.fbx)", &["fbx"])
             .add_filter("PMX (.pmx)", &["pmx"])
@@ -3280,7 +3901,10 @@ impl ViewerApp {
     fn open_append_dialog(&mut self) {
         let mut dialog = rfd::FileDialog::new()
             .set_title("モデルを追加読み込み")
-            .add_filter("3Dモデル", &["vrm", "fbx", "pmx", "pmd", "unitypackage", "zip", "7z"])
+            .add_filter(
+                "3Dモデル",
+                &["vrm", "fbx", "pmx", "pmd", "unitypackage", "zip", "7z"],
+            )
             .add_filter("VRM (.vrm)", &["vrm"])
             .add_filter("FBX (.fbx)", &["fbx"])
             .add_filter("PMX (.pmx)", &["pmx"])
@@ -3300,7 +3924,8 @@ impl ViewerApp {
 
     /// モデルを既存モデルに追加（マージ）
     fn append_model(&mut self, path: PathBuf) {
-        let ext = path.extension()
+        let ext = path
+            .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
@@ -3311,9 +3936,9 @@ impl ViewerApp {
                 Ok(()) => {}
                 Err(e) => {
                     log::error!("追加読み込み失敗(pkg): {e}");
-                    self.convert_message = Some(ConvertMessage::failure(
-                        format!("追加読み込みに失敗しました。\n詳細: {e}")
-                    ));
+                    self.convert_message = Some(ConvertMessage::failure(format!(
+                        "追加読み込みに失敗しました。\n詳細: {e}"
+                    )));
                 }
             }
             return;
@@ -3323,9 +3948,9 @@ impl ViewerApp {
                 Ok(()) => {}
                 Err(e) => {
                     log::error!("追加読み込み失敗(archive): {e}");
-                    self.convert_message = Some(ConvertMessage::failure(
-                        format!("追加読み込みに失敗しました。\n詳細: {e}")
-                    ));
+                    self.convert_message = Some(ConvertMessage::failure(format!(
+                        "追加読み込みに失敗しました。\n詳細: {e}"
+                    )));
                 }
             }
             return;
@@ -3337,7 +3962,10 @@ impl ViewerApp {
                 "fbx" => {
                     let data = self.read_or_preloaded(&path)?;
                     crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-                        &data, Some(&path), self.normalize_pose,
+                        &data,
+                        Some(&path),
+                        self.normalize_pose,
+                        self.normalize_to_tstance,
                     )
                 }
                 "pmx" => {
@@ -3350,10 +3978,14 @@ impl ViewerApp {
                     let pmx_dir = path.parent().unwrap_or(std::path::Path::new("."));
                     let mut ir = crate::pmx::extract::pmx_to_ir(&pmx_model, pmx_dir)?;
                     if self.normalize_pose {
-                        ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                            &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
-                            crate::convert::coord::gltf_pos_to_pmx,
-                        );
+                        ir.astance_result =
+                            crate::intermediate::pose::normalize_pose_to_tstance_full(
+                                &mut ir.bones,
+                                &mut ir.meshes,
+                                &mut ir.morphs,
+                                &mut ir.physics,
+                                crate::convert::coord::gltf_pos_to_pmx,
+                            );
                     }
                     Ok(ir)
                 }
@@ -3366,10 +3998,14 @@ impl ViewerApp {
                     };
                     let mut ir = crate::pmd::extract::pmd_to_ir(&pmd_model, &path)?;
                     if self.normalize_pose {
-                        ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                            &mut ir.bones, &mut ir.meshes, &mut ir.morphs, &mut ir.physics,
-                            crate::convert::coord::gltf_pos_to_pmx,
-                        );
+                        ir.astance_result =
+                            crate::intermediate::pose::normalize_pose_to_tstance_full(
+                                &mut ir.bones,
+                                &mut ir.meshes,
+                                &mut ir.morphs,
+                                &mut ir.physics,
+                                crate::convert::coord::gltf_pos_to_pmx,
+                            );
                     }
                     Ok(ir)
                 }
@@ -3390,11 +4026,13 @@ impl ViewerApp {
                     if host_fmt.is_vrm0() != other_fmt.is_vrm0() {
                         log::warn!(
                             "座標系の異なるモデルの追加: {} + {}",
-                            host_fmt.label(), other_fmt.label()
+                            host_fmt.label(),
+                            other_fmt.label()
                         );
                         self.convert_message = Some(ConvertMessage::failure(format!(
                             "座標系が異なるモデルは追加できません。\nホスト: {}, 追加: {}",
-                            host_fmt.label(), other_fmt.label()
+                            host_fmt.label(),
+                            other_fmt.label()
                         )));
                         return;
                     }
@@ -3406,7 +4044,11 @@ impl ViewerApp {
                         Err(_) => {
                             // ファイルが既に消えている場合、Fileで記録（リロード時は失敗する）
                             log::warn!("一時ファイル再読み込み失敗: {}", path.display());
-                            self.finish_append_with_source(other_ir, ReloadableSource::File(path.clone()), None);
+                            self.finish_append_with_source(
+                                other_ir,
+                                ReloadableSource::File(path.clone()),
+                                None,
+                            );
                             return;
                         }
                     };
@@ -3423,7 +4065,10 @@ impl ViewerApp {
                                 let normalized = tex_path.replace('\\', "/");
                                 let full = pmx_dir.join(&normalized);
                                 if let Ok(data) = std::fs::read(&full) {
-                                    aux.insert(PathBuf::from(&normalized), Arc::from(data.into_boxed_slice()));
+                                    aux.insert(
+                                        PathBuf::from(&normalized),
+                                        Arc::from(data.into_boxed_slice()),
+                                    );
                                 }
                             }
                         }
@@ -3432,9 +4077,13 @@ impl ViewerApp {
                         // テクスチャ
                         if let Ok(pmd_model) = crate::pmd::reader::read_pmd_from_data(&main_data) {
                             for mat in &pmd_model.materials {
-                                if mat.texture_name.is_empty() { continue; }
+                                if mat.texture_name.is_empty() {
+                                    continue;
+                                }
                                 let main_tex = mat.texture_name.split('*').next().unwrap_or("");
-                                if main_tex.is_empty() { continue; }
+                                if main_tex.is_empty() {
+                                    continue;
+                                }
                                 let normalized = main_tex.replace('\\', "/");
                                 let key = PathBuf::from(&normalized);
                                 if !aux.contains_key(&key) {
@@ -3447,7 +4096,10 @@ impl ViewerApp {
                         // .txt
                         let txt_path = path.with_extension("txt");
                         if let Ok(data) = std::fs::read(&txt_path) {
-                            let txt_name = txt_path.file_name().map(|f| PathBuf::from(f)).unwrap_or_default();
+                            let txt_name = txt_path
+                                .file_name()
+                                .map(|f| PathBuf::from(f))
+                                .unwrap_or_default();
                             aux.insert(txt_name, Arc::from(data.into_boxed_slice()));
                         }
                     }
@@ -3463,9 +4115,9 @@ impl ViewerApp {
             }
             Err(e) => {
                 log::error!("追加読み込み失敗: {e}");
-                self.convert_message = Some(ConvertMessage::failure(
-                    format!("追加読み込みに失敗しました。\n詳細: {e}")
-                ));
+                self.convert_message = Some(ConvertMessage::failure(format!(
+                    "追加読み込みに失敗しました。\n詳細: {e}"
+                )));
             }
         }
     }
@@ -3506,6 +4158,7 @@ impl ViewerApp {
         source_override: Option<ReloadableSource>,
     ) {
         let normalize = self.normalize_pose;
+        let normalize_tstance = self.normalize_to_tstance;
         // 未マッチ材質（マージ前のローカルIndex）
         let mut pkg_unmatched: Vec<usize> = Vec::new();
         // pkg内モデル名（リロード時の照合用）
@@ -3517,31 +4170,44 @@ impl ViewerApp {
                 PkgModelType::Fbx => {
                     let (fbx_data, fbx_name, textures) =
                         crate::unitypackage::take_fbx_and_textures(assets, model_index)?;
-                    log::info!("追加(pkg内FBX): {} テクスチャ: {}個", fbx_name, textures.len());
+                    log::info!(
+                        "追加(pkg内FBX): {} テクスチャ: {}個",
+                        fbx_name,
+                        textures.len()
+                    );
                     pkg_model_name = Some(fbx_name.clone());
                     let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-                        &fbx_data, Some(source_path), normalize,
+                        &fbx_data,
+                        Some(source_path),
+                        normalize,
+                        normalize_tstance,
                     )?;
                     // pkg内テクスチャを IrModel に埋め込み
                     let unmatched = crate::unitypackage::embed_textures_into_ir(&mut ir, &textures);
-                    log::info!("追加(pkg): {}材質マッチ, 未割当: {}",
-                        ir.materials.len() - unmatched.len(), unmatched.len());
+                    log::info!(
+                        "追加(pkg): {}材質マッチ, 未割当: {}",
+                        ir.materials.len() - unmatched.len(),
+                        unmatched.len()
+                    );
                     pkg_unmatched = unmatched;
                     // テクスチャは成功後に蓄積するため、ここでは保持のみ
                     pkg_textures_to_add = textures;
                     Ok(ir)
                 }
                 PkgModelType::Vrm => {
-                    let (vrm_data, vrm_name) =
-                        crate::unitypackage::take_vrm(assets, model_index)?;
+                    let (vrm_data, vrm_name) = crate::unitypackage::take_vrm(assets, model_index)?;
                     log::info!("追加(pkg内VRM): {}", vrm_name);
                     pkg_model_name = Some(vrm_name.clone());
                     let glb = vrm::loader::load_glb_from_data(&vrm_data)?;
                     let version = vrm::detect::detect_version(&glb.document);
                     let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
                     let mut ir = vrm::extract::extract_ir_model_with_options(
-                        &glb.document, &glb.buffers, &glb.images,
-                        &glb.vrm_extension, &version, &all_extensions,
+                        &glb.document,
+                        &glb.buffers,
+                        &glb.images,
+                        &glb.vrm_extension,
+                        &version,
+                        &all_extensions,
                         normalize,
                     )?;
                     Self::encode_ir_textures_as_png(&mut ir, &glb.images);
@@ -3553,22 +4219,39 @@ impl ViewerApp {
         match ir_result {
             Ok(other_ir) => {
                 // マージ前の材質数を記録（未マッチIndexのオフセット用）
-                let mat_offset = self.loaded.as_ref()
+                let mat_offset = self
+                    .loaded
+                    .as_ref()
                     .map(|l| l.ir.materials.len())
                     .unwrap_or(0);
-                let appended_before = self.loaded.as_ref().map(|l| l.appended_models.len()).unwrap_or(0);
-                let tex_count_before = self.loaded.as_ref().map(|l| l.ir.textures.len()).unwrap_or(0);
+                let appended_before = self
+                    .loaded
+                    .as_ref()
+                    .map(|l| l.appended_models.len())
+                    .unwrap_or(0);
+                let tex_count_before = self
+                    .loaded
+                    .as_ref()
+                    .map(|l| l.ir.textures.len())
+                    .unwrap_or(0);
                 match source_override {
-                    Some(source) => self.finish_append_with_source(other_ir, source, pkg_model_name),
+                    Some(source) => {
+                        self.finish_append_with_source(other_ir, source, pkg_model_name)
+                    }
                     None => self.finish_append_with_pkg_name(other_ir, source_path, pkg_model_name),
                 }
-                let appended_after = self.loaded.as_ref().map(|l| l.appended_models.len()).unwrap_or(0);
+                let appended_after = self
+                    .loaded
+                    .as_ref()
+                    .map(|l| l.appended_models.len())
+                    .unwrap_or(0);
                 // アペンド成功後のみpkgテクスチャを蓄積（ロールバック時はスキップ）
                 if appended_after > appended_before {
                     // 複数パッケージ間のテクスチャ名衝突を防止するためプレフィックス付与
                     // ファイル名 + append連番で一意化（同名packageの別ディレクトリ追加にも対応）
                     // パスセパレータを含まないよう `_` で結合（PMX export で IrTexture.filename に使われるため）
-                    let pkg_stem = source_path.file_stem()
+                    let pkg_stem = source_path
+                        .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("pkg");
                     let pkg_prefix = format!("{}_pkg{}", pkg_stem, appended_after);
@@ -3594,11 +4277,13 @@ impl ViewerApp {
                     }
                 }
                 // 未割当材質がある場合、手動割当ダイアログを開く（リロード中は抑制）
-                if !pkg_unmatched.is_empty() && self.tex.pkg_textures.is_some() && !self.suppress_tex_match {
+                if !pkg_unmatched.is_empty()
+                    && self.tex.pkg_textures.is_some()
+                    && !self.suppress_tex_match
+                {
                     // ローカルIndexにマージ後の材質オフセットを加算
-                    let global_unmatched: Vec<usize> = pkg_unmatched.iter()
-                        .map(|&i| i + mat_offset)
-                        .collect();
+                    let global_unmatched: Vec<usize> =
+                        pkg_unmatched.iter().map(|&i| i + mat_offset).collect();
                     let count = global_unmatched.len();
                     self.tex.pending_match = Some(PendingTexMatch {
                         mat_indices: global_unmatched,
@@ -3609,9 +4294,9 @@ impl ViewerApp {
             }
             Err(e) => {
                 log::error!("追加読み込み失敗(pkg): {e}");
-                self.convert_message = Some(ConvertMessage::failure(
-                    format!("追加読み込みに失敗しました。\n詳細: {e}")
-                ));
+                self.convert_message = Some(ConvertMessage::failure(format!(
+                    "追加読み込みに失敗しました。\n詳細: {e}"
+                )));
             }
         }
     }
@@ -3619,19 +4304,47 @@ impl ViewerApp {
     /// 追加モデルの IrModel を既存モデルにマージしてGPU再構築
     #[allow(dead_code)]
     fn finish_append(&mut self, other_ir: crate::intermediate::types::IrModel, path: &Path) {
-        self.finish_append_ext(other_ir, ReloadableSource::File(path.to_path_buf()), false, None);
+        self.finish_append_ext(
+            other_ir,
+            ReloadableSource::File(path.to_path_buf()),
+            false,
+            None,
+        );
     }
 
-    fn finish_append_with_pkg_name(&mut self, other_ir: crate::intermediate::types::IrModel, path: &Path, pkg_model_name: Option<String>) {
-        self.finish_append_ext(other_ir, ReloadableSource::File(path.to_path_buf()), false, pkg_model_name);
+    fn finish_append_with_pkg_name(
+        &mut self,
+        other_ir: crate::intermediate::types::IrModel,
+        path: &Path,
+        pkg_model_name: Option<String>,
+    ) {
+        self.finish_append_ext(
+            other_ir,
+            ReloadableSource::File(path.to_path_buf()),
+            false,
+            pkg_model_name,
+        );
     }
 
-    fn finish_append_with_source(&mut self, other_ir: crate::intermediate::types::IrModel, source: ReloadableSource, pkg_model_name: Option<String>) {
+    fn finish_append_with_source(
+        &mut self,
+        other_ir: crate::intermediate::types::IrModel,
+        source: ReloadableSource,
+        pkg_model_name: Option<String>,
+    ) {
         self.finish_append_ext(other_ir, source, false, pkg_model_name);
     }
 
-    fn finish_append_ext(&mut self, other_ir: crate::intermediate::types::IrModel, source: ReloadableSource, silent: bool, pkg_model_name: Option<String>) {
-        let Some(ref mut loaded) = self.loaded else { return };
+    fn finish_append_ext(
+        &mut self,
+        other_ir: crate::intermediate::types::IrModel,
+        source: ReloadableSource,
+        silent: bool,
+        pkg_model_name: Option<String>,
+    ) {
+        let Some(ref mut loaded) = self.loaded else {
+            return;
+        };
 
         let added_name = other_ir.name.clone();
         let added_bones = other_ir.bones.len();
@@ -3650,7 +4363,10 @@ impl ViewerApp {
         let saved_node_to_bone = loaded.ir.node_to_bone.clone();
         let saved_humanoid_count = loaded.ir.humanoid_bone_count;
         // 既存ボーンの children と vrm_bone_name を退避（merge で変更されるため）
-        let saved_bone_meta: Vec<(Vec<usize>, Option<String>)> = loaded.ir.bones.iter()
+        let saved_bone_meta: Vec<(Vec<usize>, Option<String>)> = loaded
+            .ir
+            .bones
+            .iter()
             .map(|b| (b.children.clone(), b.vrm_bone_name.clone()))
             .collect();
 
@@ -3661,10 +4377,17 @@ impl ViewerApp {
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
         match super::mesh::build_gpu_model_from_ir(
-            &loaded.ir, device, queue,
-            self.display.smooth_normals, self.display.clear_custom_normals,
+            &loaded.ir,
+            device,
+            queue,
+            self.display.smooth_normals,
+            self.display.clear_custom_normals,
         ) {
-            Ok(gpu_model) => {
+            Ok(mut gpu_model) => {
+                // MMD リソース構築
+                if let Some(ref renderer) = self.renderer {
+                    renderer.prepare_mmd_resources(device, &mut gpu_model, &loaded.ir);
+                }
                 // ビューポートテクスチャ解放
                 if let Some(tex_id) = self.viewport_texture_id.take() {
                     let mut renderer = self.render_state.renderer.write();
@@ -3681,7 +4404,9 @@ impl ViewerApp {
                 loaded.mat_cache = Self::build_mat_cache(&loaded.ir, &gpu_model);
                 loaded.stats_cache = CachedStats::new(&loaded.ir);
                 // 材質グループを更新（追加モデル分を記録）
-                let prev_draw_end: usize = loaded.material_groups.iter()
+                let prev_draw_end: usize = loaded
+                    .material_groups
+                    .iter()
                     .map(|g| g.draw_range.end)
                     .max()
                     .unwrap_or(0);
@@ -3724,15 +4449,23 @@ impl ViewerApp {
                 }
                 log::info!(
                     "追加読み込み成功: {} (ボーン:{} → 統合:{}/新規:{}, メッシュ:{}, 材質:{})",
-                    added_name, added_bones, merged_bones, new_bones, added_meshes, added_materials,
+                    added_name,
+                    added_bones,
+                    merged_bones,
+                    new_bones,
+                    added_meshes,
+                    added_materials,
                 );
                 if !silent {
-                    self.convert_message = Some(ConvertMessage::success(
-                        format!(
-                            "追加読み込み完了: {}\nボーン:{} (統合:{} + 新規:{}), メッシュ:{}, 材質:{}",
-                            added_name, added_bones, merged_bones, new_bones, added_meshes, added_materials,
-                        )
-                    ));
+                    self.convert_message = Some(ConvertMessage::success(format!(
+                        "追加読み込み完了: {}\nボーン:{} (統合:{} + 新規:{}), メッシュ:{}, 材質:{}",
+                        added_name,
+                        added_bones,
+                        merged_bones,
+                        new_bones,
+                        added_meshes,
+                        added_materials,
+                    )));
                 }
             }
             Err(e) => {
@@ -3755,16 +4488,20 @@ impl ViewerApp {
                         bone.vrm_bone_name = saved_bone_meta[i].1.clone();
                     }
                 }
-                self.convert_message = Some(ConvertMessage::failure(
-                    format!("追加読み込み後のGPU再構築に失敗しました。\n詳細: {e}")
-                ));
+                self.convert_message = Some(ConvertMessage::failure(format!(
+                    "追加読み込み後のGPU再構築に失敗しました。\n詳細: {e}"
+                )));
             }
         }
     }
 
     /// プログレスオーバーレイ描画（ビューポート上、結果メッセージと同じスタイル）
     fn paint_progress_overlay(&self, viewport: &egui::Ui, rect: egui::Rect, ctx: &egui::Context) {
-        let msg = if self.pending.load.is_some() || self.pending.append.is_some() || self.pending.pkg_load.is_some() || self.pending.archive_load.is_some() {
+        let msg = if self.pending.load.is_some()
+            || self.pending.append.is_some()
+            || self.pending.pkg_load.is_some()
+            || self.pending.archive_load.is_some()
+        {
             Some("読み込み中...")
         } else if self.pending.rebuild.is_some() || self.pending.reload.is_some() {
             Some("処理中...")
@@ -3841,9 +4578,15 @@ impl ViewerApp {
 
     /// テクスチャプレビューの同期（selection と previewed の差分を GPU に反映）
     pub fn sync_tex_preview(&mut self) {
-        let Some(ref mut preview) = self.tex.pending_preview else { return };
-        let Some(ref mut loaded) = self.loaded else { return };
-        let Some(ref renderer) = self.renderer else { return };
+        let Some(ref mut preview) = self.tex.pending_preview else {
+            return;
+        };
+        let Some(ref mut loaded) = self.loaded else {
+            return;
+        };
+        let Some(ref renderer) = self.renderer else {
+            return;
+        };
         let device = &self.render_state.device;
         let texture_bgl = renderer.texture_bgl();
         let sampler = renderer.sampler();
@@ -3853,12 +4596,17 @@ impl ViewerApp {
                 // プレビュー適用: 元の bind group を退避し、プレビュー用に差し替え
                 for (draw_idx, draw) in loaded.gpu_model.draws.iter_mut().enumerate() {
                     if draw.material_index == mat_idx {
-                        if let std::collections::hash_map::Entry::Vacant(e) = preview.saved_binds.entry(draw_idx) {
+                        if let std::collections::hash_map::Entry::Vacant(e) =
+                            preview.saved_binds.entry(draw_idx)
+                        {
                             e.insert(draw.texture_bind_group.take());
                         }
-                        draw.texture_bind_group = Some(
-                            gpu::create_texture_bind_group(device, texture_bgl, &preview.texture_view, sampler),
-                        );
+                        draw.texture_bind_group = Some(gpu::create_texture_bind_group(
+                            device,
+                            texture_bgl,
+                            &preview.texture_view,
+                            sampler,
+                        ));
                     }
                 }
                 preview.previewed[mat_idx] = true;
@@ -3878,11 +4626,15 @@ impl ViewerApp {
 
     /// テクスチャプレビューを確定適用
     pub fn apply_tex_preview(&mut self) {
-        let Some(preview) = self.tex.pending_preview.take() else { return };
+        let Some(preview) = self.tex.pending_preview.take() else {
+            return;
+        };
         let path = &preview.path;
 
         // 選択された材質のインデックスを収集
-        let selected: Vec<usize> = preview.selection.iter()
+        let selected: Vec<usize> = preview
+            .selection
+            .iter()
             .enumerate()
             .filter_map(|(i, &v)| if v { Some(i) } else { None })
             .collect();
@@ -3894,51 +4646,62 @@ impl ViewerApp {
         }
 
         // IrModel にテクスチャを追加（1回だけ）
-        let Some(ref mut loaded) = self.loaded else { return };
+        let Some(ref mut loaded) = self.loaded else {
+            return;
+        };
 
         let is_psd = preview.is_psd;
         let tex_data = preview.cached_data.clone();
 
         // 一時パスの場合はキャッシュ用にバイト列を保持（消失前に判定済みのフラグを使用）
-        let cached_data = if preview.was_temp { Some(tex_data.clone()) } else { None };
+        let cached_data = if preview.was_temp {
+            Some(tex_data.clone())
+        } else {
+            None
+        };
 
-        let basename = path.file_stem()
+        let basename = path
+            .file_stem()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
 
         let (ir_data, ir_filename, ir_mime) = if is_psd {
             match Self::psd_to_png(&tex_data) {
-                Ok(png_data) => (png_data, format!("{}.png", basename), "image/png".to_string()),
+                Ok(png_data) => (
+                    png_data,
+                    format!("{}.png", basename),
+                    "image/png".to_string(),
+                ),
                 Err(e) => {
                     log::error!("PSD→PNG変換失敗: {e}");
                     return;
                 }
             }
         } else {
-            let filename = path.file_name()
+            let filename = path
+                .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let ext_l = path.extension()
+            let ext_l = path
+                .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_lowercase();
-            let mime = match ext_l.as_str() {
-                "png" => "image/png",
-                "tga" => "image/x-tga",
-                "bmp" => "image/bmp",
-                _ => "image/jpeg",
-            };
+            let mime = crate::intermediate::types::mime_for_ext(&ext_l);
             (tex_data, filename, mime.to_string())
         };
 
         let tex_idx = loaded.ir.textures.len();
-        loaded.ir.textures.push(crate::intermediate::types::IrTexture {
-            filename: ir_filename,
-            data: ir_data,
-            mime_type: ir_mime,
-        });
+        loaded
+            .ir
+            .textures
+            .push(crate::intermediate::types::IrTexture {
+                filename: ir_filename,
+                data: ir_data,
+                mime_type: ir_mime,
+            });
 
         // 選択した材質の texture_index を更新
         let path_buf = path.clone();
@@ -3948,14 +4711,16 @@ impl ViewerApp {
             mat.apply_textured_defaults();
             log::info!(
                 "テクスチャ割り当て: 材質[{}] '{}' ← {}",
-                mat_idx, mat.name, path_buf.display()
+                mat_idx,
+                mat.name,
+                path_buf.display()
             );
         }
 
         // 割り当て履歴を記録（reload_current 時の復元用）
         let tex_src = if let Some(data) = cached_data {
             TextureSource::Cached {
-                original_name: path_buf.to_string_lossy().to_string(),
+                original_name: path_buf.to_string_lossy().into_owned(),
                 data: Arc::from(data.into_boxed_slice()),
                 is_psd,
             }
@@ -3987,7 +4752,9 @@ impl ViewerApp {
 
     /// テクスチャプレビューをキャンセル（元に戻す）
     pub fn cancel_tex_preview(&mut self) {
-        let Some(preview) = self.tex.pending_preview.take() else { return };
+        let Some(preview) = self.tex.pending_preview.take() else {
+            return;
+        };
         self.cancel_tex_preview_inner(preview);
     }
 
@@ -3997,7 +4764,9 @@ impl ViewerApp {
             let mut renderer = self.render_state.renderer.write();
             renderer.free_texture(&tex_id);
         }
-        let Some(ref mut loaded) = self.loaded else { return };
+        let Some(ref mut loaded) = self.loaded else {
+            return;
+        };
         // 退避した全 bind group を復元
         for (draw_idx, orig) in preview.saved_binds.into_iter() {
             if draw_idx < loaded.gpu_model.draws.len() {
@@ -4009,17 +4778,29 @@ impl ViewerApp {
     /// 遅延処理（ファイル読み込み、GPU再構築、PMX変換など）を実行
     fn process_pending_tasks(&mut self) {
         if let Some((_, true)) = self.pending.load {
-            let (path, _) = self.pending.load.take().expect("pending_load は Some(true) 確認済み");
+            let (path, _) = self
+                .pending
+                .load
+                .take()
+                .expect("pending_load は Some(true) 確認済み");
             self.load_file(path);
         }
         // モデル追加読み込み（アペンド）
         if let Some((_, true)) = self.pending.append {
-            let (path, _) = self.pending.append.take().expect("pending_append は Some(true) 確認済み");
+            let (path, _) = self
+                .pending
+                .append
+                .take()
+                .expect("pending_append は Some(true) 確認済み");
             self.append_model(path);
         }
         // unitypackage モデル遅延読み込み
         if self.pending.pkg_load.as_ref().is_some_and(|p| p.shown) {
-            let p = self.pending.pkg_load.take().expect("pending_pkg_load は shown 確認済み");
+            let p = self
+                .pending
+                .pkg_load
+                .take()
+                .expect("pending_pkg_load は shown 確認済み");
             let source_path = p.source_path.clone();
 
             // source_override を構築（nested_archive_source > archive_snapshot > None）
@@ -4041,76 +4822,113 @@ impl ViewerApp {
                 if p.suppress_tex_match {
                     self.suppress_tex_match = true;
                 }
-                self.append_from_pkg(p.assets, p.fbx_index, p.model_type, &source_path, source_override.clone());
+                self.append_from_pkg(
+                    p.assets,
+                    p.fbx_index,
+                    p.model_type,
+                    &source_path,
+                    source_override.clone(),
+                );
                 self.suppress_tex_match = false;
                 // 以下の通常ロードをスキップ
             } else {
-            match p.model_type {
-                PkgModelType::Fbx => {
-                    if self.loaded.is_some() {
-                        let has_anim = if let Some(asset) = p.assets.get(p.fbx_index) {
-                            crate::fbx::animation::load_fbx_animation_from_data(&asset.data)
-                                .is_ok_and(|a| !a.is_empty())
+                match p.model_type {
+                    PkgModelType::Fbx => {
+                        if self.loaded.is_some() {
+                            let has_anim = if let Some(asset) = p.assets.get(p.fbx_index) {
+                                crate::fbx::animation::load_fbx_animation_from_data(&asset.data)
+                                    .is_ok_and(|a| !a.is_empty())
+                            } else {
+                                false
+                            };
+                            if has_anim {
+                                let fbx_name = p
+                                    .assets
+                                    .get(p.fbx_index)
+                                    .map(|a| a.filename())
+                                    .unwrap_or_default();
+                                self.pending.fbx_choice = Some(PendingFbxChoice {
+                                    path: std::path::PathBuf::from(&fbx_name),
+                                    load_model: true,
+                                    load_animation: true,
+                                    pkg_context: Some(PendingFbxChoicePkg {
+                                        assets: p.assets,
+                                        fbx_index: p.fbx_index,
+                                        source_path,
+                                        archive_snapshot: p.archive_snapshot,
+                                        nested_archive_source: source_override,
+                                    }),
+                                    preloaded: None,
+                                });
+                            } else {
+                                match self.load_fbx_from_assets(
+                                    p.assets,
+                                    p.fbx_index,
+                                    &source_path,
+                                    FbxLoadMode::ModelOnly,
+                                    source_override,
+                                ) {
+                                    Ok(()) => {
+                                        self.convert_message = None;
+                                    }
+                                    Err(e) => {
+                                        log::error!("読み込み失敗: {e}");
+                                        self.convert_message = Some(ConvertMessage::failure(
+                                            format!("ファイルを読み込めませんでした。\n詳細: {e}"),
+                                        ));
+                                    }
+                                }
+                            }
                         } else {
-                            false
-                        };
-                        if has_anim {
-                            let fbx_name = p.assets.get(p.fbx_index)
-                                .map(|a| a.filename())
-                                .unwrap_or_default();
-                            self.pending.fbx_choice = Some(PendingFbxChoice {
-                                path: std::path::PathBuf::from(&fbx_name),
-                                load_model: true,
-                                load_animation: true,
-                                pkg_context: Some(PendingFbxChoicePkg {
-                                    assets: p.assets,
-                                    fbx_index: p.fbx_index,
-                                    source_path,
-                                    archive_snapshot: p.archive_snapshot,
-                                    nested_archive_source: source_override,
-                                }),
-                                preloaded: None,
-                            });
-                        } else {
-                            match self.load_fbx_from_assets(p.assets, p.fbx_index, &source_path, FbxLoadMode::ModelOnly, source_override) {
-                                Ok(()) => { self.convert_message = None; }
+                            match self.load_fbx_from_assets(
+                                p.assets,
+                                p.fbx_index,
+                                &source_path,
+                                FbxLoadMode::Both,
+                                source_override,
+                            ) {
+                                Ok(()) => {
+                                    log::info!("読み込み成功: {}", source_path.display());
+                                    self.convert_message = None;
+                                }
                                 Err(e) => {
                                     log::error!("読み込み失敗: {e}");
-                                    self.convert_message = Some(ConvertMessage::failure(format!("ファイルを読み込めませんでした。\n詳細: {e}")));
+                                    self.convert_message = Some(ConvertMessage::failure(format!(
+                                        "ファイルを読み込めませんでした。\n詳細: {e}"
+                                    )));
                                 }
                             }
                         }
-                    } else {
-                        match self.load_fbx_from_assets(p.assets, p.fbx_index, &source_path, FbxLoadMode::Both, source_override) {
+                    }
+                    PkgModelType::Vrm => {
+                        match self.load_vrm_from_assets(
+                            p.assets,
+                            p.fbx_index,
+                            &source_path,
+                            source_override,
+                        ) {
                             Ok(()) => {
                                 log::info!("読み込み成功: {}", source_path.display());
                                 self.convert_message = None;
                             }
                             Err(e) => {
                                 log::error!("読み込み失敗: {e}");
-                                self.convert_message = Some(ConvertMessage::failure(format!("ファイルを読み込めませんでした。\n詳細: {e}")));
+                                self.convert_message = Some(ConvertMessage::failure(format!(
+                                    "ファイルを読み込めませんでした。\n詳細: {e}"
+                                )));
                             }
                         }
                     }
                 }
-                PkgModelType::Vrm => {
-                    match self.load_vrm_from_assets(p.assets, p.fbx_index, &source_path, source_override) {
-                        Ok(()) => {
-                            log::info!("読み込み成功: {}", source_path.display());
-                            self.convert_message = None;
-                        }
-                        Err(e) => {
-                            log::error!("読み込み失敗: {e}");
-                            self.convert_message = Some(ConvertMessage::failure(format!("ファイルを読み込めませんでした。\n詳細: {e}")));
-                        }
-                    }
-                }
-            }
             } // else (通常ロード)
         }
         // アーカイブモデル遅延読み込み
         if self.pending.archive_load.as_ref().is_some_and(|p| p.shown) {
-            let p = self.pending.archive_load.take().expect("pending_archive_load は shown 確認済み");
+            let p = self
+                .pending
+                .archive_load
+                .take()
+                .expect("pending_archive_load は shown 確認済み");
             let source_path = p.source_path.clone();
             match self.load_model_from_archive(p) {
                 Ok(()) => {
@@ -4122,9 +4940,9 @@ impl ViewerApp {
                 }
                 Err(e) => {
                     log::error!("アーカイブ読み込み失敗: {e}");
-                    self.convert_message = Some(ConvertMessage::failure(
-                        format!("アーカイブからの読み込みに失敗しました。\n詳細: {e}")
-                    ));
+                    self.convert_message = Some(ConvertMessage::failure(format!(
+                        "アーカイブからの読み込みに失敗しました。\n詳細: {e}"
+                    )));
                 }
             }
         }
@@ -4157,11 +4975,7 @@ impl ViewerApp {
 
             if let Some(ref mut loaded) = self.loaded {
                 let queue = &self.render_state.queue;
-                anim.apply_bone_animation(
-                    &mut loaded.gpu_model,
-                    queue,
-                    &self.morph_weights,
-                );
+                anim.apply_bone_animation(&mut loaded.gpu_model, queue, &self.morph_weights);
                 self.morph_dirty = false;
             }
         }
@@ -4170,14 +4984,20 @@ impl ViewerApp {
     /// ドラッグ＆ドロップ処理。(画像ホバー中, モデルホバー中) を返す
     fn process_drag_and_drop(&mut self, ctx: &egui::Context) -> (bool, bool) {
         let (dropped_files, hover_ext, shift_held) = ctx.input(|i| {
-            let hover_ext = i.raw.hovered_files.first()
+            let hover_ext = i
+                .raw
+                .hovered_files
+                .first()
                 .and_then(|f| f.path.as_ref())
                 .and_then(|p| p.extension())
                 .and_then(|e| e.to_str())
                 .map(|e| e.to_lowercase())
                 .unwrap_or_default();
             self.drag_hovering = !i.raw.hovered_files.is_empty();
-            let paths: Vec<PathBuf> = i.raw.dropped_files.iter()
+            let paths: Vec<PathBuf> = i
+                .raw
+                .dropped_files
+                .iter()
                 .filter_map(|f| f.path.clone())
                 .collect();
             (paths, hover_ext, i.modifiers.shift)
@@ -4189,7 +5009,8 @@ impl ViewerApp {
             let mut image_files: Vec<PathBuf> = Vec::new();
             let mut model_file: Option<PathBuf> = None;
             for path in dropped_files {
-                let ext = path.extension()
+                let ext = path
+                    .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("")
                     .to_lowercase();
@@ -4204,11 +5025,15 @@ impl ViewerApp {
 
             if let Some(model_path) = model_file {
                 // アペンド対応形式: VRM/FBX/PMX/PMD のみ
-                let append_ext = model_path.extension()
+                let append_ext = model_path
+                    .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("")
                     .to_lowercase();
-                let is_appendable = matches!(append_ext.as_str(), "vrm" | "fbx" | "pmx" | "pmd" | "unitypackage" | "zip" | "7z");
+                let is_appendable = matches!(
+                    append_ext.as_str(),
+                    "vrm" | "fbx" | "pmx" | "pmd" | "unitypackage" | "zip" | "7z"
+                );
 
                 if is_temp_path(&model_path) {
                     // 一時パス（zipアーカイブ等）: ファイル消失前にバイト列を先読み
@@ -4271,13 +5096,23 @@ impl ViewerApp {
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::R) {
                     if let Some(ref loaded) = self.loaded {
                         let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
-                        self.camera.reset_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_height);
+                        self.camera.reset_to_bbox_with_margin(
+                            bbox_min,
+                            bbox_max,
+                            self.last_viewport_width,
+                            self.last_viewport_height,
+                        );
                     }
                 }
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::F) {
                     if let Some(ref loaded) = self.loaded {
                         let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
-                        self.camera.fit_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_height);
+                        self.camera.fit_to_bbox_with_margin(
+                            bbox_min,
+                            bbox_max,
+                            self.last_viewport_width,
+                            self.last_viewport_height,
+                        );
                     }
                 }
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::G) {
@@ -4345,7 +5180,12 @@ impl ViewerApp {
                     if !i.modifiers.ctrl && i.key_pressed(egui::Key::Period) {
                         if let Some(ref loaded) = self.loaded {
                             let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
-                            self.camera.fit_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_height);
+                            self.camera.fit_to_bbox_with_margin(
+                                bbox_min,
+                                bbox_max,
+                                self.last_viewport_width,
+                                self.last_viewport_height,
+                            );
                         }
                     }
                 }
@@ -4407,7 +5247,10 @@ impl eframe::App for ViewerApp {
 
                 // モデル読み込み済みの場合のみ「追加」ボタンを表示
                 if self.loaded.is_some()
-                    && bar.button("追加").on_hover_text("モデルを追加読み込み（Shift+D&Dでも可）").clicked()
+                    && bar
+                        .button("追加")
+                        .on_hover_text("モデルを追加読み込み（Shift+D&Dでも可）")
+                        .clicked()
                 {
                     self.open_append_dialog();
                 }
@@ -4419,8 +5262,7 @@ impl eframe::App for ViewerApp {
                 if let Some(ref loaded) = self.loaded {
                     bar.separator();
                     bar.label(
-                        egui::RichText::new(&loaded.ir.name)
-                            .color(egui::Color32::from_gray(0x20)),
+                        egui::RichText::new(&loaded.ir.name).color(egui::Color32::from_gray(0x20)),
                     );
                 }
             });
@@ -4445,16 +5287,27 @@ impl eframe::App for ViewerApp {
 
                         // ファイルパス
                         let path_label = if loaded.source.is_snapshot() {
-                            format!("{} (キャッシュ済み)", loaded.source.display_path().to_string_lossy())
+                            format!(
+                                "{} (キャッシュ済み)",
+                                loaded.source.display_path().to_string_lossy()
+                            )
                         } else {
-                            loaded.source.display_path().to_string_lossy().to_string()
+                            loaded.source.display_path().to_string_lossy().into_owned()
                         };
-                        ui.label(egui::RichText::new(path_label).font(font.clone()).color(color));
+                        ui.label(
+                            egui::RichText::new(path_label)
+                                .font(font.clone())
+                                .color(color),
+                        );
 
                         ui.separator();
 
                         // モデル統計（キャッシュ済み文字列）
-                        ui.label(egui::RichText::new(&loaded.stats_cache.status_text).font(font.clone()).color(color));
+                        ui.label(
+                            egui::RichText::new(&loaded.stats_cache.status_text)
+                                .font(font.clone())
+                                .color(color),
+                        );
 
                         // FBXの場合、テクスチャ設定状況（キャッシュ済み文字列）
                         if ir.source_format == crate::intermediate::types::SourceFormat::Fbx {
@@ -4466,13 +5319,17 @@ impl eframe::App for ViewerApp {
                             } else {
                                 egui::Color32::from_rgb(0xD0, 0xA0, 0x40)
                             };
-                            ui.label(egui::RichText::new(&loaded.mat_cache.tex_status_text).font(font).color(tex_color));
+                            ui.label(
+                                egui::RichText::new(&loaded.mat_cache.tex_status_text)
+                                    .font(font)
+                                    .color(tex_color),
+                            );
                         }
                     } else {
                         ui.label(
                             egui::RichText::new("VRM/FBX ファイルを読み込んでください")
                                 .font(egui::FontId::proportional(11.0))
-                                .color(egui::Color32::from_gray(0x60))
+                                .color(egui::Color32::from_gray(0x60)),
                         );
                     }
 
@@ -4498,6 +5355,14 @@ impl eframe::App for ViewerApp {
                     egui::Sense::click_and_drag(),
                 );
                 self.camera.handle_input(ctx, &response);
+
+                // ダブルクリック: モデルにフィット
+                if response.double_clicked() {
+                    if let Some(ref loaded) = self.loaded {
+                        let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
+                        self.camera.fit_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_width, self.last_viewport_height);
+                    }
+                }
 
                 // モーフウェイト変更検知 → 頂点バッファ更新
                 if self.morph_dirty {
@@ -4608,8 +5473,18 @@ impl eframe::App for ViewerApp {
                     );
                 }
 
-                // ビューポートの高さを記録（フィット計算用）
+                // ビューポートのサイズを記録（フィット計算用）
+                self.last_viewport_width = response.rect.width();
                 self.last_viewport_height = response.rect.height();
+
+                // 初回ロード時の refit（ビューポートサイズ確定後）
+                if self.pending.refit {
+                    self.pending.refit = false;
+                    if let Some(ref loaded) = self.loaded {
+                        let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
+                        self.camera.reset_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_width, self.last_viewport_height);
+                    }
+                }
 
                 // カメラ情報（左上、テキスト直接描画）
                 if self.loaded.is_some() {
@@ -4644,13 +5519,13 @@ impl eframe::App for ViewerApp {
                             if ui.small_button("フィット(F)").on_hover_text("モデルにフィット").clicked() {
                                 if let Some(ref loaded) = self.loaded {
                                     let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
-                                    self.camera.fit_to_bbox_with_margin(bbox_min, bbox_max, rect.height());
+                                    self.camera.fit_to_bbox_with_margin(bbox_min, bbox_max, rect.width(), rect.height());
                                 }
                             }
                             if ui.small_button("リセット(R)").on_hover_text("カメラをリセット").clicked() {
                                 if let Some(ref loaded) = self.loaded {
                                     let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
-                                    self.camera.reset_to_bbox_with_margin(bbox_min, bbox_max, rect.height());
+                                    self.camera.reset_to_bbox_with_margin(bbox_min, bbox_max, rect.width(), rect.height());
                                 }
                             }
                         });
@@ -4671,10 +5546,12 @@ impl eframe::App for ViewerApp {
                 }
 
                 // Aスタンス/Tスタンス変換失敗時の常時警告（操作ヒントの上）
-                if self.normalize_pose {
+                if self.normalize_pose || self.normalize_to_tstance {
                     if let Some(ref loaded) = self.loaded {
                         use crate::intermediate::types::AStanceResult;
-                        let label = if loaded.ir.source_format.is_pmx_pmd() {
+                        let label = if loaded.ir.source_format.is_pmx_pmd()
+                            || self.normalize_to_tstance
+                        {
                             "Tスタンス"
                         } else {
                             "Aスタンス"
@@ -4717,7 +5594,7 @@ impl eframe::App for ViewerApp {
                         viewport.painter().text(
                             egui::pos2(rect.left() + 8.0, rect.bottom() - 22.0),
                             egui::Align2::LEFT_BOTTOM,
-                            "左ドラッグ:回転  右/中ドラッグ:パン  ホイール:ズーム  Ctrl+O:開く",
+                            "左ドラッグ:回転  右/中ドラッグ:パン  ホイール:ズーム  Shift:精密  ダブルクリック:フィット",
                             font.clone(),
                             hint_color,
                         );

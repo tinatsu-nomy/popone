@@ -34,7 +34,57 @@ PMX/PMD ファイルをビューアで表示するために、PMX 座標を glTF
 | 対象 | 処理 |
 |------|------|
 | 剛体位置 | ボーン相対オフセット → `bone.position + offset` で絶対座標に変換 |
-| 剛体回転 | 絶対 Euler 角。ボーン方向 Y < 0 なら X 反転 |
+| 剛体回転 | 絶対 Euler 角（そのまま使用、変換不要） |
+
+## ボーン表示
+
+ビューアはボーンをフラグに基づき4種類の形状で描画する。
+
+### 形状判定（優先順）
+
+| 優先度 | 条件 | 形状 | 描画内容 |
+|--------|------|------|----------|
+| 1 | `BONE_FLAG_IK` / PMD type=2 | ◻ IKコントローラ | 青外枠正方形 + オレンジ塗り + 青中心正方形 |
+| 2 | `BONE_FLAG_AXIS_FIXED` | ⊗ 軸制限 | 青外円（太線） + ✕（太線） |
+| 3 | `BONE_FLAG_TRANSLATABLE` / PMD type=1 | ◻ 移動 | 青外正方形 + 青内正方形 + 青中心塗り |
+| 4 | なし | ◎ 通常 | 青外円 + 青内円 + 青中心塗り |
+
+### IK 影響下ボーン
+
+IK の Link チェーンに登録されたボーンはオレンジ色で表示（外枠・テール三角形がオレンジ、中心塗りは青）。Target ボーンは通常色（青）。
+
+### 描画方向
+
+| ソース | 方式 |
+|--------|------|
+| PMX/PMD | self→tail（`BoneTail::BoneIndex` / `BoneTail::Offset`）|
+| VRM/FBX | parent→self（フォールバック） |
+
+アニメーション中は `tail_bone_index`（`BoneTail::BoneIndex` 由来）から `animated_globals` の動的位置を参照し、テイルがモデルに追従する。
+
+### 描画パイプライン
+
+3段階の描画で重なり順を制御する。
+
+| 順序 | パイプライン | 内容 |
+|------|-------------|------|
+| 1 | LineList | テール三角形（最背面） |
+| 2 | TriangleList | マーカー塗りつぶし面（テールの上） |
+| 3 | LineList | マーカー外枠線（最前面） |
+
+4パスで優先度の高いボーンが常に手前に描画される: 通常(0) → IK影響下(1) → 軸制限(2) → IKコントローラ(3)。
+
+### IrBone フィールド
+
+| フィールド | 型 | PMX | PMD | VRM/FBX |
+|-----------|-----|-----|-----|---------|
+| `tail_position` | `Option<Vec3>` | BoneTail → glTF座標 | child → glTF座標 | None |
+| `tail_bone_index` | `Option<usize>` | BoneTail::BoneIndex | child index | None |
+| `is_ik` | `bool` | IK Link ボーン | IK Chain ボーン | false |
+| `is_ik_bone` | `bool` | BONE_FLAG_IK | bone_type==2 | false |
+| `is_translatable` | `bool` | BONE_FLAG_TRANSLATABLE | bone_type==1 | false |
+| `is_axis_fixed` | `bool` | BONE_FLAG_AXIS_FIXED | false | false |
+| `is_visible` | `bool` | BONE_FLAG_VISIBLE | bone_type!=7 | true |
 
 ## MMD 標準ボーン挿入
 
@@ -95,6 +145,43 @@ PMX/PMD ファイルをビューアで表示するために、PMX 座標を glTF
 
 ステップ後、`fix_duplicate_names`（重複ボーン名解決）と `sort_bones_topological`（変形順序ソート）が実行され、最終的なボーン配列が確定する。
 
+## PMX 付与（grant）アニメーション
+
+PMX の回転付与（`BONE_FLAG_ROTATION_GRANT`）・移動付与（`BONE_FLAG_MOVE_GRANT`）をアニメーション再生時に処理する。
+
+### D-bones の仕組み
+
+Tda 式等の標準 MMD モデルでは、IK リンクボーン（足・ひざ・足首）に対応する「D ボーン」（足D・ひざD・足首D）が存在する。頂点ウェイトは D ボーンに割り当てられ、D ボーンは回転付与（ratio=1.0）で FK ボーンの回転をコピーする。
+
+```
+下半身
+├ 左足     ← VRMA "leftUpperLeg" の回転が適用される
+├ 左足D    ← 回転付与で「左足」の回転をコピー（ratio=1.0）
+│ └ 左ひざD ← 回転付与で「左ひざ」の回転をコピー
+│   └ 左足首D
+```
+
+### 処理フロー
+
+```
+1. compute_animated_globals_inplace()  — VRMA リターゲティング回転を適用
+2. apply_grants()                      — 付与デルタを適用しグローバル行列を再計算
+   フェーズ1: ボーンインデックス順に付与親のローカル回転/移動デルタを取得し、
+             付与率に基づいてワークバッファ（work_local_mats）を更新
+   フェーズ2: 全ボーンのグローバル行列をインデックス順に再計算（親→子の伝播保証）
+3. デルタ行列計算 → 頂点スキニング
+```
+
+### IrGrant データ構造
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `parent_index` | `usize` | 付与親ボーンインデックス |
+| `ratio` | `f32` | 付与率（1.0 = 完全コピー、-1.0 = 逆回転） |
+| `is_rotation` | `bool` | 回転付与フラグ |
+| `is_move` | `bool` | 移動付与フラグ |
+| `is_local` | `bool` | ローカル付与フラグ |
+
 ## PMX/PMD ロード（v0.2.1）
 
 ### PMX リーダー
@@ -131,22 +218,135 @@ PMX/PMD ファイルをビューアで表示するために、PMX 座標を glTF
 5. モーフオフセットに回転を適用
 6. 剛体・ジョイント: 影響ボーンの子孫に属するものの位置・回転を補正
 
-### 剛体回転の調整
+### 剛体回転
 
-PMX/PMD の剛体回転は Euler 角（ZXY）で格納。ビューア表示時にボーン方向による X 反転が必要:
+PMX/PMD の剛体回転は Euler 角で格納。D3DX 行優先規約 `v * Ry * Rx * Rz`（外的 ZXY）に準拠し、glam 列優先では `Rz * Rx * Ry`（内的 YXZ）として再構成する。ファイルの値をそのまま使用する（座標変換不要）。
 
-```rust
-// ボーン方向の Y 成分 < 0 なら X 回転を反転
-if bone_dir.y < 0.0 {
-    rotation.x = -rotation.x;
-}
-```
+#### 剛体アニメーション追従の座標変換
+
+ビューアの剛体・ジョイント描画は PMX 空間で行われる。`rb.position` と `joint.position` は PMX 座標のまま保持されるが、`bone.position` と `bone.global_mat` は PMX/PMD 抽出時に glTF 空間に変換されている（`pmx_pos_to_gltf`）。そのため、アニメーション追従のデルタ計算では全形式共通で glTF→PMX 座標変換を適用する:
+
+- **位置変換**: PMX/PMD は VRM 1.0 と同じ Z 反転（`pmx_pos_to_gltf(v) = (x/S, y/S, -z/S)`）なので `gltf_pos_to_pmx` で逆変換
+- **回転デルタ**: Z-flip `Quat(-x, -y, z, w)` を適用（VRM 1.0 と同一パス）
 
 ### テクスチャ読み込み
 
 - PMX: テクスチャパステーブルからの相対パスで読み込み
-- PMD: 材質の `texture_name` から `*` でスフィアテクスチャを分離し、メインテクスチャのみ使用
-- MIME ヒント: 拡張子から MIME タイプを推定し、`image::load_from_memory_with_format` で明示指定（TGA はマジックナンバーがなく自動判定が失敗するため）
+- PMD: `parse_pmd_texture_slots` で `*` 区切りのメイン/スフィアテクスチャを分離。`.sph`→乗算、`.spa`→加算で分類。トゥーンテクスチャはファイル存在確認付きで登録し、不在時は共有トゥーンにフォールバック
+- MIME ヒント: 拡張子から MIME タイプを推定し、`image::load_from_memory_with_format` で明示指定（TGA はマジックナンバーがなく自動判定が失敗するため）。`.sph/.spa` は `image/bmp` として扱う
+- UnityPackage テクスチャ: `embed_textures_into_ir` でファイル拡張子から `mime_for_ext` 経由で MIME タイプを設定。空 MIME のままだと TGA/BMP 等の自動判定が失敗しマゼンタフォールバックになる
+
+## MMD レンダリング（v0.2.6）
+
+PMX/PMD ロード時に自動 ON になる MMD レンダリングモード。
+
+### アーキテクチャ
+
+- **RenderStyle enum** — DrawCall 単位で `Standard` / `Mmd` を判定（材質の `source_format.is_pmx_pmd()` で決定）。append 混在時にも正しく動作
+- **フレーム単位 sRGB/Unorm 切り替え** — PMX/PMD 専用フレーム（全可視材質が MMD）では `Rgba8Unorm` レンダーターゲットを使用し、ガンマ空間で正確なアルファブレンドを実現。VRM 混在時は `Rgba8UnormSrgb` にフォールバック
+- **パイプライン 4 セット** — `(MSAA有無) × (sRGB/Unorm)` の 4 セットを初期化時に生成。ランタイムコストはパイプライン参照の切り替えのみ
+- **テクスチャデュアルビュー** — `view_formats: [Rgba8Unorm]` で同一テクスチャに sRGB/Unorm 両ビューを作成。MMD は Unorm ビューで読み取り（ガンマ空間のまま、メモリ増加なし）
+
+### MMD シェーダー
+
+#### メインシェーダー（`MMD_MAIN_SHADER_SRC` / `MMD_MAIN_SHADER_UNORM_SRC`）
+
+```
+Preshader:
+  // AmbientColor = saturate(MaterialAmbient × LightAmbient + MaterialEmissive)
+  // PMX ambient = D3D emissive, PMX diffuse = D3D ambient
+  base_color = clamp(mat.diffuse_rgb * LightAmbient + mat.ambient, 0, 1)
+  // LightAmbient = 154/255 ≈ 0.604
+
+Pixel:
+  tex = texture(Unorm)
+  out_rgb = base_color * tex.rgb
+  out_a   = tex.a * mat.alpha
+
+  // スフィアマップ (RGB のみ、アルファ影響なし)
+  // sphere_uv: X反転座標系 → vn_x * -0.5 + 0.5, vn_y * -0.5 + 0.5
+  sph = sphere_texture(sphere_uv).rgb
+  out_rgb += sph  // add モード
+  out_rgb *= sph  // mul モード
+
+  // トゥーン (NdotL 依存サンプリング + 乗算)
+  lightNormal = dot(N, -L)
+  toon_uv = (0, 0.5 - lightNormal * 0.5)
+  toon = toon_texture(toon_uv)
+  out_rgb *= toon.rgb
+
+  // アルファテスト
+  if out_a < 0.004: discard
+
+  // スペキュラ (最後に加算、トゥーンの影響を受けない)
+  // LightSpecular = LightAmbient (≈0.604)
+  spec_color = mat.specular * LightSpecular
+  out_rgb += spec_color * pow(NdotH, specular_power)
+
+  // sRGB版: pow(2.2) で sRGB encode を打ち消し
+  // Unorm版: ガンマ空間値をそのまま出力
+```
+
+#### エッジシェーダー（`MMD_EDGE_SHADER_SRC` / `MMD_EDGE_SHADER_UNORM_SRC`）
+
+- inverted hull 法（Front cull）
+- 法線方向膨張: `offset = edge_scale × mat.edge_size × camera.edge_thickness × pow(dist, 0.7) × 0.003`
+- 2 スロット頂点バッファ: slot0=既存 Vertex、slot1=edge_scale(f32)
+- sRGB 版: `pow(edge_color, 2.2)` で sRGB encode を打ち消し
+- Unorm 版: edge_color をそのまま出力
+
+### パイプライン構成
+
+sRGB/Unorm 各セットに同一構成のパイプラインを持つ（計 2×2=4 セット）。
+
+| パイプライン | cull | depth write | 用途 |
+|------------|------|-------------|------|
+| mmd_main_cull | Back | あり | MMD 不透明（片面） |
+| mmd_main_no_cull | なし | あり | MMD 不透明（両面） |
+| mmd_alpha_cull | Back | あり | MMD 半透明（片面） |
+| mmd_alpha_no_cull | なし | あり | MMD 半透明（両面） |
+| mmd_edge | Front | あり | エッジ |
+
+MMD 半透明パイプラインもデプス書き込みあり（MMD 準拠）。材質インデックス順で描画するため、モデル作者が意図した前後関係が維持される。
+
+#### MMD 描画順序
+
+MMD は材質インデックス順に1材質ずつ描画する。popone でも同様に単一ループで材質順に描画し、`is_alpha` に応じてパイプライン（opaque/alpha）を切り替える。不透明材質の場合はメイン描画の直後にエッジも描画する。
+
+```
+for each material (in index order):
+    select pipeline (opaque or alpha based on diffuse.w < 1.0)
+    draw material
+    if opaque && has_edge:
+        draw edge
+```
+
+`can_use_unorm_frame()` が毎フレーム判定し、全可視材質が MMD の場合のみ Unorm セットを使用。
+
+### 色空間
+
+MMD (D3D9) はガンマ空間で動作する。wgpu での再現:
+
+| 要素 | Standard (VRM/FBX) | MMD sRGB フォールバック | MMD Unorm（推奨） |
+|------|-------|------|------|
+| テクスチャ読み取り | Rgba8UnormSrgb（自動 sRGB→linear） | Rgba8Unorm（ガンマ空間） | Rgba8Unorm（ガンマ空間） |
+| ライティング計算 | リニア空間 | ガンマ空間 | ガンマ空間 |
+| アルファブレンド | リニア空間（正しい） | リニア空間（不正確） | ガンマ空間（MMD 準拠） |
+| 出力 | そのまま | pow(2.2) で sRGB encode を打ち消し | そのまま（ガンマ値直接出力） |
+
+### 共有トゥーンテクスチャ
+
+MMD 標準 toon01-10 の実ピクセルデータ（32行分の RGB 値）を定数配列として保持し、1×32 RGBA テクスチャとして GPU にアップロード。サンプラーは `ClampToEdge` + `Linear`。シェーダーからは NdotL 依存の UV `(0, 0.5 − NdotL × 0.5)` でサンプルし、法線とライト方向に応じたトゥーン陰影を再現。
+
+| トゥーン | 特徴 |
+|---------|------|
+| toon01 | 白→灰 (205,205,205)、2色ステップ |
+| toon02 | 白→ピンク (245,225,225)、2色ステップ |
+| toon03 | 白→暗灰 (154,154,154)、2色ステップ |
+| toon04 | 白→暖ベージュ (248,239,235)、2色ステップ |
+| toon05 | 白→暖ピンクのグラデーション |
+| toon06 | 黄色系、中央ハイライトバンド + 暗黄 |
+| toon07-10 | 全白（トゥーン効果なし） |
 
 ## ビューア表示スタイル
 
@@ -161,16 +361,17 @@ if bone_dir.y < 0.0 {
 ### 剛体表示
 
 - 描画: 1px LineList
-- 色: コライダー（group=1）= レッド `#ff0000`、スプリング（group!=1）= グリーン `#00ff00`
+- 色（PMX/PMD）: `physics_mode` で分類 — ボーン追従(0)=グリーン `#00ff00`、物理演算(1)=レッド `#ff0000`、物理+ボーン(2)=ブルー `#0080ff`
+- 色（VRM）: `group` で分類 — コライダー(group=1)=レッド `#ff0000`、スプリング(group!=1)=グリーン `#00ff00`
 - 球体: 8 経線（大円弧）+ 7 緯線
-- カプセル: 上下リング + 8 本接続線
-- ボックス: 12 辺
+- カプセル: 上下赤道リング + 8 本接続線 + 半球ワイヤーフレーム（4 経線 + 3 緯線 × 上下、PMX/PMD のみ）
+- ボックス: 12 辺（size は half-extent として扱う）
 
 ### ジョイント表示（PMX/PMD のみ）
 
 - 形状: 正立方体（面=イエロー `#ffff00`、エッジ=1px 黒線）
 - サイズ: 0.18 PMX 単位
-- 回転: Euler ZXY → Quat で姿勢反映
+- 回転: Euler YXZ intrinsic（= ZXY extrinsic）→ Quat で姿勢反映
 - アニメーション同期: rigid_a のボーンからのオフセットで追従
 - 濃さ: スライダーで調整可能
 
@@ -183,9 +384,56 @@ if bone_dir.y < 0.0 {
 
 後に描画されるものが最前面:
 
-1. ジョイント（最背面）
+1. 法線（最背面）
 2. ボーン
-3. 剛体（最前面）
+3. 剛体
+4. ジョイント（最前面）
+
+## カメラ・ライティング
+
+### カメラ
+
+| 項目 | 値 |
+|------|-----|
+| FOV | 30°（MMD 準拠） |
+| 投影 | 透視（デフォルト）/ 正射影（5 キーで切替） |
+| 操作 | 左ドラッグ:回転、右/中ドラッグ:パン、ホイール:ズーム |
+| 精密操作 | Shift キーで 1/3 速度 |
+| フィット | F / ダブルクリック（yaw/pitch 保持）、R（正面リセット） |
+
+### フィット計算（compute_fit）
+
+bbox 8 頂点を現在のカメラ view 軸（right / up / forward）に投影し、投影半幅・半高・半奥行きを算出。
+
+```
+distance = max(half_h / tan(effective_fov_y), half_w / tan(fov_x)) + depth_offset
+```
+
+- `depth_offset`: 透視投影時は `half_depth`（手前面 frustum 制約）、正射影時は 0
+- `effective_fov_y`: UI オーバーレイ（60px）を差し引いた有効 FOV
+- `fov_x`: `atan(tan(fov_y) * aspect)` で算出
+- 最終距離に `FIT_MARGIN = 1.15`（15% 余白）を乗算
+
+### ライティング
+
+| モード | 方向 |
+|--------|------|
+| 固定 | `Vec3(0.5, 1.0, -0.5).normalize()` — MMD 準拠（(-0.5,-1.0,0.5) の反転） |
+| カメラ追従 | `(forward + right*(-0.3) + up*0.7).normalize()` — MMD 風やや左上 |
+
+| パラメータ | 値 |
+|------------|-----|
+| light_intensity | 0.6 |
+| ambient_intensity | 0.5 |
+
+### MMD ambient 分離
+
+CameraUniform の `mmd_ambient_scale` フィールドで標準パスと MMD パスの環境光を分離:
+
+- MMD モード ON: `mmd_ambient_scale = 1.0`（材質の ambient 値をそのまま使用）
+- MMD モード OFF: `mmd_ambient_scale = ambient_intensity`（UI スライダー値）
+
+標準シェーダーは `camera.ambient` を使用し、MMD シェーダーのみ `camera.mmd_ambient_scale` を参照する。
 
 ## ログ出力
 
@@ -884,7 +1132,7 @@ src/
 │   ├── texture.rs       テクスチャ抽出（埋め込み / 外部ファイル）
 │   ├── blendshape.rs    ブレンドシェイプ抽出
 │   ├── animation.rs     FBX アニメーション抽出（Stack/Layer/CurveNode/Curve 階層、バイト列対応）
-│   └── humanoid.rs      ヒューマノイドリグ自動検出・マッピング
+│   └── humanoid.rs      ヒューマノイドリグ自動検出・マッピング（名前空間プレフィックス除去、CamelCase 対応）
 ├── pmx/
 │   ├── types.rs         PMX データ型定義
 │   ├── reader.rs        PMX 2.0/2.1 バイナリ読み込み（UTF-16LE/UTF-8、SoftBody 読み飛ばし）
@@ -931,7 +1179,7 @@ src/
 - **法線マップ（ノーマルマップ）未適用** — VRM/FBX の normalTexture はシェーディングに反映されない（法線マップ表示モードで確認は可能）
 - **テクスチャサイズ制限** — GPU の `max_texture_dimension_2d`（一般的に 8192px）を超えるテクスチャは `upload_rgba_to_gpu` で自動縮小される（`image::imageops::resize` による Triangle フィルタ）。PMX 変換出力には影響しない（ビューア表示のみ）
 - **展開サイズ上限** — アーカイブ（ZIP / 7z）および `.unitypackage` (tar.gz) の展開サイズは合計 2GB が上限（`MAX_TOTAL_BYTES`）。`.unitypackage` はヘッダサイズによる事前チェック + 実展開後の再チェックの二重防御
-- **Lat式初音ミク等** — MMD レンダリングに特化したモデルは一部サーフェイスが正しく表示されない場合がある
+- **MMD 特化モデル** — MMD レンダリングに特化したモデルは一部サーフェイスが正しく表示されない場合がある
 - **PMX 2.1 SoftBody** — 読み飛ばし（未対応）
 
 ## 参考資料
@@ -956,7 +1204,7 @@ src/
 - 文字列エンコーディングは UTF-16 LE（encoding=0）
 - インデックスサイズは可変（1/2/4 バイト、ヘッダで指定）
 - ボーンは IK・付与（回転/移動）・変形階層をサポート
-- 剛体・ジョイントは Bullet Physics 互換（Euler 角は ZXY 規約）
+- 剛体・ジョイントは Bullet Physics 互換（Euler 角は D3DX 行優先 ZXY 規約、glam では YXZ intrinsic）
 - 座標系は左手系・Y-up・+Z 前方、スケールは独自単位（本ツールでは 1m = 12.5）
 
 ### PMD 仕様の主要ポイント
@@ -967,3 +1215,33 @@ src/
 - IK はボーンとは別セクションに格納
 - モーフは base + offset 形式（base モーフのグローバル頂点位置 + 差分オフセット）
 - 英語ヘッダ・トゥーンテクスチャ・剛体・ジョイントはファイル末尾のオプション拡張
+
+## WGSL シェーダー構成
+
+`gpu.rs` のシェーダーは `macro_rules!` + `concat!` で共通構造体定義を一元管理している。
+
+### 共通マクロ
+
+| マクロ | 内容 | 使用箇所 |
+|--------|------|----------|
+| `wgsl_camera_uniform!()` | `CameraUniform` 構造体定義 | 全8シェーダー |
+| `wgsl_mmd_material_uniform!()` | `MmdMaterialUniform` 構造体定義 | MMD 系4シェーダー |
+| `wgsl_material_uniform!()` | `MaterialUniform` 構造体定義 | 基本シェーダー・ワイヤーオーバーレイ |
+| `wgsl_mmd_main_body!()` | MMD 頂点シェーダー + `compute_mmd_lighting` 関数 | MMD メイン sRGB/Unorm |
+| `wgsl_mmd_edge_body!()` | MMD エッジ頂点シェーダー | MMD エッジ sRGB/Unorm |
+| `wgsl_grid_body!()` | グリッド頂点シェーダー | グリッド sRGB/Unorm |
+
+### シェーダー定数
+
+| 定数名 | マクロ構成 | 差分（フラグメントシェーダー） |
+|--------|-----------|--------------------------|
+| `SHADER_SRC` | camera + material + 独自 | Half-Lambert テクスチャ描画 |
+| `MMD_EDGE_SHADER_SRC` | camera + mmd_mat + edge_body + 独自 | `pow(c.rgb, 2.2)` — sRGB 補正 |
+| `MMD_EDGE_SHADER_UNORM_SRC` | camera + mmd_mat + edge_body + 独自 | `edge_color` そのまま出力 |
+| `MMD_MAIN_SHADER_SRC` | camera + mmd_mat + main_body + 独自 | `pow(out_rgb, 2.2)` — sRGB 補正 |
+| `MMD_MAIN_SHADER_UNORM_SRC` | camera + mmd_mat + main_body + 独自 | `clamp(out_rgb)` — ガンマ空間直出力 |
+| `GRID_SHADER_SRC` | camera + grid_body + 独自 | `in.color` そのまま |
+| `GRID_SHADER_UNORM_SRC` | camera + grid_body + 独自 | `linear_to_srgb()` 変換付き |
+| `WIRE_OVERLAY_SHADER_SRC` | camera + material + 独自 | 黒色固定 `(0,0,0,1)` |
+
+sRGB 版と Unorm 版の差分は `compute_mmd_lighting()` の戻り値に対する最終変換のみ。ライティング・テクスチャサンプリング・スフィアマップ・トゥーンなどの本体ロジックは共通。

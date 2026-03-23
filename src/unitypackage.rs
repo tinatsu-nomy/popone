@@ -1,9 +1,9 @@
 //! .unitypackage (tar.gz) からアセットを抽出するモジュール
 
+use anyhow::{bail, Context, Result};
+use flate2::read::GzDecoder;
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
-use anyhow::{Context, Result, bail};
-use flate2::read::GzDecoder;
 
 /// FBXデータ、ファイル名、テクスチャ一覧のタプル型
 pub type FbxWithTextures = (Vec<u8>, String, Vec<(String, Vec<u8>)>);
@@ -36,7 +36,10 @@ pub fn extract_all_assets(archive_data: &[u8]) -> Result<Vec<ExtractedAsset>> {
 }
 
 /// .unitypackage からすべてのアセットを展開（サイズ上限指定）
-fn extract_all_assets_with_limit(archive_data: &[u8], max_bytes: u64) -> Result<Vec<ExtractedAsset>> {
+fn extract_all_assets_with_limit(
+    archive_data: &[u8],
+    max_bytes: u64,
+) -> Result<Vec<ExtractedAsset>> {
     let decoder = GzDecoder::new(Cursor::new(archive_data));
     let mut archive = tar::Archive::new(decoder);
 
@@ -47,7 +50,11 @@ fn extract_all_assets_with_limit(archive_data: &[u8], max_bytes: u64) -> Result<
 
     for entry in archive.entries().context("tarエントリ読み込み失敗")? {
         let mut entry = entry.context("tarエントリ解析失敗")?;
-        let path = entry.path().context("パス取得失敗")?.to_string_lossy().to_string();
+        let path = entry
+            .path()
+            .context("パス取得失敗")?
+            .to_string_lossy()
+            .to_string();
         // パスは "GUID/filename" 形式
         let parts: Vec<&str> = path.splitn(3, ['/', '\\']).collect();
         if parts.len() < 2 {
@@ -59,7 +66,9 @@ fn extract_all_assets_with_limit(archive_data: &[u8], max_bytes: u64) -> Result<
         match filename {
             "pathname" => {
                 let mut s = String::new();
-                entry.read_to_string(&mut s).context("pathname読み込み失敗")?;
+                entry
+                    .read_to_string(&mut s)
+                    .context("pathname読み込み失敗")?;
                 pathnames.insert(guid, s.trim().to_string());
             }
             "asset" => {
@@ -158,10 +167,7 @@ pub fn find_vrm_list(assets: &[ExtractedAsset]) -> Vec<(usize, String)> {
 
 /// 展開済みアセットから指定VRMを取り出す
 /// assets は消費される（所有権移動）
-pub fn take_vrm(
-    mut assets: Vec<ExtractedAsset>,
-    vrm_index: usize,
-) -> Result<(Vec<u8>, String)> {
+pub fn take_vrm(mut assets: Vec<ExtractedAsset>, vrm_index: usize) -> Result<(Vec<u8>, String)> {
     if vrm_index >= assets.len() {
         bail!("VRMインデックスが範囲外: {}", vrm_index);
     }
@@ -204,14 +210,21 @@ pub fn extract_fbx_from_unitypackage(
     // FBX 名が指定されていればそれを使用
     let selected_idx = if let Some(target) = fbx_name {
         let target_lower = target.to_lowercase();
-        fbx_list.iter()
+        fbx_list
+            .iter()
             .find(|(_, name)| name.to_lowercase().contains(&target_lower))
             .map(|(idx, _)| *idx)
-            .ok_or_else(|| anyhow::anyhow!(
-                "指定された FBX '{}' が見つかりません。利用可能: {}",
-                target,
-                fbx_list.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>().join(", ")
-            ))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "指定された FBX '{}' が見つかりません。利用可能: {}",
+                    target,
+                    fbx_list
+                        .iter()
+                        .map(|(_, n)| n.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?
     } else {
         fbx_list[0].0
     };
@@ -237,7 +250,8 @@ pub fn embed_textures_into_ir(
         .collect();
 
     // ステム（拡張子なし） → フルキーの逆引きマップ（ステム一致高速化）
-    let stem_map: HashMap<String, String> = tex_map.keys()
+    let stem_map: HashMap<String, String> = tex_map
+        .keys()
         .map(|k| {
             let stem = std::path::Path::new(k.as_str())
                 .file_stem()
@@ -269,14 +283,21 @@ pub fn embed_textures_into_ir(
         if let Some(ref key) = found_key {
             if let Some(data) = tex_map.get(key) {
                 let tex_idx = ir.textures.len();
+                let ext = std::path::Path::new(key.as_str())
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                 ir.textures.push(crate::intermediate::types::IrTexture {
                     filename: key.clone(),
                     data: data.to_vec(),
-                    mime_type: String::new(),
+                    mime_type: mime,
                 });
                 mat.texture_index = Some(tex_idx);
                 matched += 1;
-                log::info!("テクスチャ割当: {} → mat[{}]",
+                log::info!(
+                    "テクスチャ割当: {} → mat[{}]",
                     mat.source_texture_name.as_deref().unwrap_or("?"),
                     mat.name,
                 );
@@ -285,12 +306,19 @@ pub fn embed_textures_into_ir(
     }
 
     // 未割当材質のインデックスを収集
-    let unmatched: Vec<usize> = ir.materials.iter().enumerate()
+    let unmatched: Vec<usize> = ir
+        .materials
+        .iter()
+        .enumerate()
         .filter(|(_, mat)| mat.texture_index.is_none())
         .map(|(i, _)| i)
         .collect();
 
-    log::info!("unitypackageテクスチャ: {}/{}材質マッチ, 未割当: {}",
-        matched, ir.materials.len(), unmatched.len());
+    log::info!(
+        "unitypackageテクスチャ: {}/{}材質マッチ, 未割当: {}",
+        matched,
+        ir.materials.len(),
+        unmatched.len()
+    );
     unmatched
 }

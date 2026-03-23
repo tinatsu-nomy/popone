@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use glam::{EulerRot, Mat4, Quat, Vec3};
 use super::parser::FbxNode;
 use super::scene::FbxScene;
+use glam::{EulerRot, Mat4, Quat, Vec3};
+use std::collections::HashMap;
 
 pub struct Bone {
     pub id: i64,
@@ -20,15 +20,12 @@ pub struct BoneHierarchy {
     pub id_to_index: HashMap<i64, usize>,
 }
 
-
 impl BoneHierarchy {
     pub fn from_scene(scene: &FbxScene) -> Self {
         let mut bone_ids: Vec<i64> = Vec::new();
         for obj in scene.objects.values() {
             if obj.class == "Model"
-                && (obj.sub_type == "LimbNode"
-                    || obj.sub_type == "Root"
-                    || obj.sub_type == "Null")
+                && (obj.sub_type == "LimbNode" || obj.sub_type == "Root" || obj.sub_type == "Null")
             {
                 bone_ids.push(obj.id);
             }
@@ -45,7 +42,8 @@ impl BoneHierarchy {
 
         for &id in &bone_ids {
             let obj = &scene.objects[&id];
-            let (translation, rotation_euler, pre_rotation_euler, scale) = extract_transform(obj.node);
+            let (translation, rotation_euler, pre_rotation_euler, scale) =
+                extract_transform(obj.node);
             let pre_rotation = euler_deg_to_quat(pre_rotation_euler);
             let rotation = pre_rotation * euler_deg_to_quat(rotation_euler);
 
@@ -131,36 +129,72 @@ pub(crate) fn extract_transform(node: &FbxNode) -> (Vec3, Vec3, Vec3, Vec3) {
                 .unwrap_or("");
             match name {
                 "Lcl Translation" => {
-                    translation.x =
-                        p.properties.get(4).and_then(|v| v.as_f64_value()).unwrap_or(0.0) as f32;
-                    translation.y =
-                        p.properties.get(5).and_then(|v| v.as_f64_value()).unwrap_or(0.0) as f32;
-                    translation.z =
-                        p.properties.get(6).and_then(|v| v.as_f64_value()).unwrap_or(0.0) as f32;
+                    translation.x = p
+                        .properties
+                        .get(4)
+                        .and_then(|v| v.as_f64_value())
+                        .unwrap_or(0.0) as f32;
+                    translation.y = p
+                        .properties
+                        .get(5)
+                        .and_then(|v| v.as_f64_value())
+                        .unwrap_or(0.0) as f32;
+                    translation.z = p
+                        .properties
+                        .get(6)
+                        .and_then(|v| v.as_f64_value())
+                        .unwrap_or(0.0) as f32;
                 }
                 "Lcl Rotation" => {
-                    rotation.x =
-                        p.properties.get(4).and_then(|v| v.as_f64_value()).unwrap_or(0.0) as f32;
-                    rotation.y =
-                        p.properties.get(5).and_then(|v| v.as_f64_value()).unwrap_or(0.0) as f32;
-                    rotation.z =
-                        p.properties.get(6).and_then(|v| v.as_f64_value()).unwrap_or(0.0) as f32;
+                    rotation.x = p
+                        .properties
+                        .get(4)
+                        .and_then(|v| v.as_f64_value())
+                        .unwrap_or(0.0) as f32;
+                    rotation.y = p
+                        .properties
+                        .get(5)
+                        .and_then(|v| v.as_f64_value())
+                        .unwrap_or(0.0) as f32;
+                    rotation.z = p
+                        .properties
+                        .get(6)
+                        .and_then(|v| v.as_f64_value())
+                        .unwrap_or(0.0) as f32;
                 }
                 "PreRotation" => {
-                    pre_rotation.x =
-                        p.properties.get(4).and_then(|v| v.as_f64_value()).unwrap_or(0.0) as f32;
-                    pre_rotation.y =
-                        p.properties.get(5).and_then(|v| v.as_f64_value()).unwrap_or(0.0) as f32;
-                    pre_rotation.z =
-                        p.properties.get(6).and_then(|v| v.as_f64_value()).unwrap_or(0.0) as f32;
+                    pre_rotation.x = p
+                        .properties
+                        .get(4)
+                        .and_then(|v| v.as_f64_value())
+                        .unwrap_or(0.0) as f32;
+                    pre_rotation.y = p
+                        .properties
+                        .get(5)
+                        .and_then(|v| v.as_f64_value())
+                        .unwrap_or(0.0) as f32;
+                    pre_rotation.z = p
+                        .properties
+                        .get(6)
+                        .and_then(|v| v.as_f64_value())
+                        .unwrap_or(0.0) as f32;
                 }
                 "Lcl Scaling" => {
-                    scale.x =
-                        p.properties.get(4).and_then(|v| v.as_f64_value()).unwrap_or(1.0) as f32;
-                    scale.y =
-                        p.properties.get(5).and_then(|v| v.as_f64_value()).unwrap_or(1.0) as f32;
-                    scale.z =
-                        p.properties.get(6).and_then(|v| v.as_f64_value()).unwrap_or(1.0) as f32;
+                    scale.x = p
+                        .properties
+                        .get(4)
+                        .and_then(|v| v.as_f64_value())
+                        .unwrap_or(1.0) as f32;
+                    scale.y = p
+                        .properties
+                        .get(5)
+                        .and_then(|v| v.as_f64_value())
+                        .unwrap_or(1.0) as f32;
+                    scale.z = p
+                        .properties
+                        .get(6)
+                        .and_then(|v| v.as_f64_value())
+                        .unwrap_or(1.0) as f32;
                 }
                 _ => {}
             }

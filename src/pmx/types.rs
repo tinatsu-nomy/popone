@@ -19,7 +19,7 @@ pub struct PmxModel {
 #[derive(Debug, Clone)]
 pub struct PmxHeader {
     pub version: f32,
-    pub encoding: u8,      // 0:UTF16 1:UTF8
+    pub encoding: u8, // 0:UTF16 1:UTF8
     pub additional_uvs: u8,
     pub vertex_index_size: u8,
     pub texture_index_size: u8,
@@ -65,9 +65,18 @@ pub struct PmxVertex {
 
 #[derive(Debug, Clone)]
 pub enum PmxWeightType {
-    Bdef1 { bone: i32 },
-    Bdef2 { bone1: i32, bone2: i32, weight1: f32 },
-    Bdef4 { bones: [i32; 4], weights: [f32; 4] },
+    Bdef1 {
+        bone: i32,
+    },
+    Bdef2 {
+        bone1: i32,
+        bone2: i32,
+        weight1: f32,
+    },
+    Bdef4 {
+        bones: [i32; 4],
+        weights: [f32; 4],
+    },
 }
 
 /// 材質
@@ -140,19 +149,19 @@ pub struct IkLink {
 }
 
 /// PMXボーンフラグ定数
-pub const BONE_FLAG_TAIL_IS_BONE: u16   = 0x0001;
-pub const BONE_FLAG_ROTATABLE: u16      = 0x0002;
-pub const BONE_FLAG_TRANSLATABLE: u16   = 0x0004;
-pub const BONE_FLAG_VISIBLE: u16        = 0x0008;
-pub const BONE_FLAG_OPERABLE: u16       = 0x0010;
-pub const BONE_FLAG_IK: u16             = 0x0020;
-pub const BONE_FLAG_LOCAL_GRANT: u16    = 0x0080;
+pub const BONE_FLAG_TAIL_IS_BONE: u16 = 0x0001;
+pub const BONE_FLAG_ROTATABLE: u16 = 0x0002;
+pub const BONE_FLAG_TRANSLATABLE: u16 = 0x0004;
+pub const BONE_FLAG_VISIBLE: u16 = 0x0008;
+pub const BONE_FLAG_OPERABLE: u16 = 0x0010;
+pub const BONE_FLAG_IK: u16 = 0x0020;
+pub const BONE_FLAG_LOCAL_GRANT: u16 = 0x0080;
 pub const BONE_FLAG_ROTATION_GRANT: u16 = 0x0100;
-pub const BONE_FLAG_MOVE_GRANT: u16     = 0x0200;
-pub const BONE_FLAG_AXIS_FIXED: u16     = 0x0400;
-pub const BONE_FLAG_LOCAL_AXIS: u16     = 0x0800;
-pub const BONE_FLAG_PHYS_AFTER: u16     = 0x1000;
-pub const BONE_FLAG_EXT_PARENT: u16     = 0x2000;
+pub const BONE_FLAG_MOVE_GRANT: u16 = 0x0200;
+pub const BONE_FLAG_AXIS_FIXED: u16 = 0x0400;
+pub const BONE_FLAG_LOCAL_AXIS: u16 = 0x0800;
+pub const BONE_FLAG_PHYS_AFTER: u16 = 0x1000;
+pub const BONE_FLAG_EXT_PARENT: u16 = 0x2000;
 
 /// モーフ
 #[derive(Debug, Clone)]
@@ -236,7 +245,7 @@ pub struct PmxRigidBody {
     pub bone_index: i32,
     pub group: u8,
     pub no_collision_mask: u16,
-    pub shape: u8,  // 0:球 1:箱 2:カプセル
+    pub shape: u8, // 0:球 1:箱 2:カプセル
     pub size: Vec3,
     pub position: Vec3,
     pub rotation: Vec3,

@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use super::parser::{FbxDocument, FbxNode};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionType {
@@ -203,8 +203,7 @@ impl<'a> FbxScene<'a> {
             .objects
             .values()
             .filter(|obj| {
-                obj.class == "Geometry"
-                    && (obj.sub_type == "Mesh" || obj.sub_type.is_empty())
+                obj.class == "Geometry" && (obj.sub_type == "Mesh" || obj.sub_type.is_empty())
             })
             .collect();
         result.sort_by_key(|obj| obj.id);

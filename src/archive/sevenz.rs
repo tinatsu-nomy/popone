@@ -3,16 +3,20 @@
 use anyhow::Result;
 use std::path::Path;
 
-use super::{ArchiveEntry, normalize_archive_path, TEXTURE_EXTENSIONS, MODEL_EXTENSIONS};
+use super::{normalize_archive_path, ArchiveEntry, MODEL_EXTENSIONS, TEXTURE_EXTENSIONS};
 
 /// 展開対象の拡張子かどうか
 fn should_extract(path: &Path) -> bool {
-    let ext = path.extension()
+    let ext = path
+        .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
-    MODEL_EXTENSIONS.contains(&ext.as_str()) || TEXTURE_EXTENSIONS.contains(&ext.as_str())
-        || ext == "txt" || ext == "spa" || ext == "sph"
+    MODEL_EXTENSIONS.contains(&ext.as_str())
+        || TEXTURE_EXTENSIONS.contains(&ext.as_str())
+        || ext == "txt"
+        || ext == "spa"
+        || ext == "sph"
 }
 
 /// 7z を展開し、モデル/テクスチャ拡張子のみメモリ保持
@@ -45,8 +49,12 @@ pub fn extract_filtered(data: &[u8], max_total_bytes: u64) -> Result<Vec<Archive
         if total.saturating_add(size) > max_total_bytes {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("展開サイズ上限超過: {} + {} > {} bytes", total, size, max_total_bytes),
-            ).into());
+                format!(
+                    "展開サイズ上限超過: {} + {} > {} bytes",
+                    total, size, max_total_bytes
+                ),
+            )
+            .into());
         }
 
         // 実読込もハード制限（ヘッダサイズ詐称対策）
@@ -59,13 +67,19 @@ pub fn extract_filtered(data: &[u8], max_total_bytes: u64) -> Result<Vec<Archive
         let mut chunk = [0u8; 65536];
         loop {
             let n = reader.read(&mut chunk)?;
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             read_total += n as u64;
             if read_total > remaining {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::Other,
-                    format!("展開サイズ上限超過（実読込）: {} + {} > {} bytes", total, read_total, max_total_bytes),
-                ).into());
+                    format!(
+                        "展開サイズ上限超過（実読込）: {} + {} > {} bytes",
+                        total, read_total, max_total_bytes
+                    ),
+                )
+                .into());
             }
             buf.extend_from_slice(&chunk[..n]);
         }

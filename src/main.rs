@@ -1,15 +1,21 @@
 // viewer feature 有効時は Windows GUI サブシステムでビルドし、
 // Explorer からの起動時にコンソールウィンドウを表示しない
-#![cfg_attr(all(feature = "viewer", target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(feature = "viewer", target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
-use popone::{vrm, pmx, convert, intermediate};
+use popone::{convert, intermediate, pmx, vrm};
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
-#[command(name = "popone", about = "VRMファイルをPMX形式に変換します\n引数なしで起動するとビューアが開きます")]
+#[command(
+    name = "popone",
+    about = "VRMファイルをPMX形式に変換します\n引数なしで起動するとビューアが開きます"
+)]
 struct Args {
     /// 入力ファイルパス（VRM/FBX）
     input: Option<PathBuf>,
@@ -33,6 +39,10 @@ struct Args {
     #[arg(long)]
     normalize_pose: bool,
 
+    /// Aスタンスの腕をTスタンスに変換する（FBX用、デフォルト: off）
+    #[arg(long)]
+    normalize_to_tstance: bool,
+
     /// ログレベル (error, warn, info, debug)
     #[arg(long, default_value = "info")]
     log_level: String,
@@ -54,8 +64,7 @@ struct Args {
 /// stderr には `stderr_level` までのログを出力する。
 /// `log_file` が Some の場合、そのパスに DEBUG レベルまで全て書き出す。
 fn setup_logging(stderr_level: log::LevelFilter, log_file: Option<&std::path::Path>) -> Result<()> {
-    let mut base = fern::Dispatch::new()
-        .level(log::LevelFilter::Debug); // グローバル最小フィルター
+    let mut base = fern::Dispatch::new().level(log::LevelFilter::Debug); // グローバル最小フィルター
 
     // stderr: ユーザー指定レベル
     base = base.chain(
@@ -71,7 +80,9 @@ fn setup_logging(stderr_level: log::LevelFilter, log_file: Option<&std::path::Pa
     // ファイル: DEBUG まで全件（上書き）
     if let Some(path) = log_file {
         let file = std::fs::OpenOptions::new()
-            .write(true).create(true).truncate(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
             .open(path)?;
         base = base.chain(
             fern::Dispatch::new()
@@ -84,7 +95,8 @@ fn setup_logging(stderr_level: log::LevelFilter, log_file: Option<&std::path::Pa
         );
     }
 
-    base.apply().map_err(|e| anyhow::anyhow!("ロガー初期化失敗: {}", e))
+    base.apply()
+        .map_err(|e| anyhow::anyhow!("ロガー初期化失敗: {}", e))
 }
 
 /// Windows GUI サブシステムの場合、親コンソールにアタッチして
@@ -94,9 +106,13 @@ fn attach_parent_console() {
     extern "system" {
         fn AttachConsole(dw_process_id: u32) -> i32;
         fn CreateFileA(
-            name: *const u8, access: u32, share: u32,
-            sa: *mut std::ffi::c_void, disp: u32,
-            flags: u32, template: *mut std::ffi::c_void,
+            name: *const u8,
+            access: u32,
+            share: u32,
+            sa: *mut std::ffi::c_void,
+            disp: u32,
+            flags: u32,
+            template: *mut std::ffi::c_void,
         ) -> *mut std::ffi::c_void;
         fn SetStdHandle(std_handle: u32, handle: *mut std::ffi::c_void) -> i32;
     }
@@ -118,16 +134,26 @@ fn attach_parent_console() {
 
         // CONIN$ / CONOUT$ を開いてプロセスの標準ハンドルを差し替え
         let h_in = CreateFileA(
-            c"CONIN$".as_ptr().cast(), GENERIC_READ, FILE_SHARE_READ,
-            std::ptr::null_mut(), OPEN_EXISTING, 0, std::ptr::null_mut(),
+            c"CONIN$".as_ptr().cast(),
+            GENERIC_READ,
+            FILE_SHARE_READ,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
         );
         if h_in != INVALID {
             SetStdHandle(STD_INPUT_HANDLE, h_in);
         }
 
         let h_out = CreateFileA(
-            c"CONOUT$".as_ptr().cast(), GENERIC_WRITE, FILE_SHARE_WRITE,
-            std::ptr::null_mut(), OPEN_EXISTING, 0, std::ptr::null_mut(),
+            c"CONOUT$".as_ptr().cast(),
+            GENERIC_WRITE,
+            FILE_SHARE_WRITE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
         );
         if h_out != INVALID {
             SetStdHandle(STD_OUTPUT_HANDLE, h_out);
@@ -151,8 +177,6 @@ fn detach_console() {
         FreeConsole();
     }
 }
-
-
 
 /// IrModel のダンプ出力（共通処理）
 fn dump_ir(ir: &intermediate::types::IrModel) {
@@ -205,7 +229,6 @@ fn main() {
 }
 
 fn run_main(mut args: Args) -> Result<()> {
-
     // 引数なし → ビューア起動
     if args.input.is_none() {
         #[cfg(feature = "viewer")]
@@ -271,21 +294,26 @@ fn run_main(mut args: Args) -> Result<()> {
     // アーカイブ経由のPMX変換
     if matches!(ext.as_str(), "zip" | "7z") {
         let output = args.output.as_ref().context(
-            "出力ファイルパスを指定してください。\n使い方: popone <入力.zip> <出力.pmx>"
+            "出力ファイルパスを指定してください。\n使い方: popone <入力.zip> <出力.pmx>",
         )?;
         return run_archive_convert(&input, output, &ext, &args);
     }
 
-    let output = args.output.context(
-        "出力ファイルパスを指定してください。\n使い方: popone <入力.vrm> <出力.pmx>"
-    )?;
+    let output = args
+        .output
+        .context("出力ファイルパスを指定してください。\n使い方: popone <入力.vrm> <出力.pmx>")?;
 
     // ロガー初期化（dump 時はファイルログなし）
-    let log_level = args.log_level.parse::<log::LevelFilter>()
+    let log_level = args
+        .log_level
+        .parse::<log::LevelFilter>()
         .unwrap_or(log::LevelFilter::Info);
-    let log_path = if args.dump { None } else { Some(output.with_extension("log")) };
-    setup_logging(log_level, log_path.as_deref())
-        .context("ロガー初期化失敗")?;
+    let log_path = if args.dump {
+        None
+    } else {
+        Some(output.with_extension("log"))
+    };
+    setup_logging(log_level, log_path.as_deref()).context("ロガー初期化失敗")?;
     if let Some(ref p) = log_path {
         log::info!("ログファイル: {}", p.display());
     }
@@ -298,19 +326,32 @@ fn run_main(mut args: Args) -> Result<()> {
         "fbx" => {
             let data = std::fs::read(&input)
                 .with_context(|| format!("FBXファイル読み込み失敗: {}", input.display()))?;
-            let ir = popone::fbx::extract::extract_ir_model_from_fbx(&data, Some(&input))
-                .context("FBX中間表現の抽出に失敗")?;
+            let ir = popone::fbx::extract::extract_ir_model_from_fbx_with_options(
+                &data,
+                Some(&input),
+                args.normalize_pose,
+                args.normalize_to_tstance,
+            )
+            .context("FBX中間表現の抽出に失敗")?;
             (ir, None)
         }
         "unitypackage" => {
             let archive_data = std::fs::read(&input)
                 .with_context(|| format!("unitypackage読み込み失敗: {}", input.display()))?;
             let (fbx_data, fbx_name, textures) =
-                popone::unitypackage::extract_fbx_from_unitypackage(&archive_data, args.fbx_name.as_deref())
-                    .context("unitypackage展開失敗")?;
+                popone::unitypackage::extract_fbx_from_unitypackage(
+                    &archive_data,
+                    args.fbx_name.as_deref(),
+                )
+                .context("unitypackage展開失敗")?;
             log::info!("unitypackage内FBX: {}", fbx_name);
-            let mut ir = popone::fbx::extract::extract_ir_model_from_fbx(&fbx_data, Some(&input))
-                .context("FBX中間表現の抽出に失敗")?;
+            let mut ir = popone::fbx::extract::extract_ir_model_from_fbx_with_options(
+                &fbx_data,
+                Some(&input),
+                args.normalize_pose,
+                args.normalize_to_tstance,
+            )
+            .context("FBX中間表現の抽出に失敗")?;
             popone::unitypackage::embed_textures_into_ir(&mut ir, &textures);
             (ir, None)
         }
@@ -328,7 +369,8 @@ fn run_main(mut args: Args) -> Result<()> {
                 &version,
                 &all_extensions,
                 args.normalize_pose,
-            ).context("VRM中間表現の抽出に失敗")?;
+            )
+            .context("VRM中間表現の抽出に失敗")?;
             (ir, Some(glb))
         }
     };
@@ -344,9 +386,7 @@ fn run_main(mut args: Args) -> Result<()> {
     }
 
     // 出力ディレクトリ確定
-    let output_dir = output.parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    let output_dir = output.parent().unwrap_or(Path::new(".")).to_path_buf();
 
     // テクスチャ書き出し（VRM は保持済み glb を再利用）
     let tex_dir = output_dir.join("textures");
@@ -369,7 +409,8 @@ fn run_main(mut args: Args) -> Result<()> {
 
     let header = pmx_model.header.clone();
     let mut pmx_writer = pmx::writer::PmxWriter::new(writer, header);
-    pmx_writer.write_model(&pmx_model)
+    pmx_writer
+        .write_model(&pmx_model)
         .context("PMX書き出し失敗")?;
 
     log::info!("変換完了: {}", output.display());
@@ -380,11 +421,16 @@ fn run_main(mut args: Args) -> Result<()> {
 
 /// アーカイブ（ZIP/7z）→ PMX 変換
 fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> Result<()> {
-    let log_level = args.log_level.parse::<log::LevelFilter>()
+    let log_level = args
+        .log_level
+        .parse::<log::LevelFilter>()
         .unwrap_or(log::LevelFilter::Info);
-    let log_path = if args.dump { None } else { Some(output.with_extension("log")) };
-    setup_logging(log_level, log_path.as_deref())
-        .context("ロガー初期化失敗")?;
+    let log_path = if args.dump {
+        None
+    } else {
+        Some(output.with_extension("log"))
+    };
+    setup_logging(log_level, log_path.as_deref()).context("ロガー初期化失敗")?;
 
     log::info!("入力ファイル（アーカイブ）: {}", input.display());
 
@@ -392,8 +438,8 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         .with_context(|| format!("アーカイブ読み込み失敗: {}", input.display()))?;
     let format = popone::archive::archive_format_from_ext(ext)
         .ok_or_else(|| anyhow::anyhow!("未対応のアーカイブ形式: {ext}"))?;
-    let contents = popone::archive::list_models(&data, format)
-        .context("アーカイブ内モデル一覧取得失敗")?;
+    let contents =
+        popone::archive::list_models(&data, format).context("アーカイブ内モデル一覧取得失敗")?;
 
     if contents.models.is_empty() {
         anyhow::bail!("アーカイブ内にモデルファイルが見つかりません");
@@ -403,40 +449,60 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
     let selected = match (&args.model_name, contents.models.len()) {
         (Some(name), _) => {
             // 完全一致 → 前方一致 → 部分一致（各段階で一意のみ採用）
-            let exact: Vec<usize> = contents.models.iter().enumerate()
-                .filter(|(_, (_, p, _, _))| p.file_name().and_then(|f| f.to_str()) == Some(name.as_str()))
-                .map(|(i, _)| i).collect();
+            let exact: Vec<usize> = contents
+                .models
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, p, _, _))| {
+                    p.file_name().and_then(|f| f.to_str()) == Some(name.as_str())
+                })
+                .map(|(i, _)| i)
+                .collect();
             if exact.len() == 1 {
                 exact[0]
             } else if exact.len() > 1 {
-                let candidates: Vec<String> = exact.iter()
-                    .map(|&i| contents.models[i].1.display().to_string()).collect();
+                let candidates: Vec<String> = exact
+                    .iter()
+                    .map(|&i| contents.models[i].1.display().to_string())
+                    .collect();
                 anyhow::bail!(
                     "\"{}\" に完全一致するモデルが {} 個あります:\n  {}\n--list-models で確認し、パスで指定してください。",
                     name, exact.len(), candidates.join("\n  ")
                 );
             } else {
-                let prefix: Vec<usize> = contents.models.iter().enumerate()
+                let prefix: Vec<usize> = contents
+                    .models
+                    .iter()
+                    .enumerate()
                     .filter(|(_, (_, p, _, _))| p.to_string_lossy().starts_with(name.as_str()))
-                    .map(|(i, _)| i).collect();
+                    .map(|(i, _)| i)
+                    .collect();
                 if prefix.len() == 1 {
                     prefix[0]
                 } else if prefix.len() > 1 {
-                    let candidates: Vec<String> = prefix.iter()
-                        .map(|&i| contents.models[i].1.display().to_string()).collect();
+                    let candidates: Vec<String> = prefix
+                        .iter()
+                        .map(|&i| contents.models[i].1.display().to_string())
+                        .collect();
                     anyhow::bail!(
                         "\"{}\" に前方一致するモデルが {} 個あります:\n  {}\nより具体的に指定してください。",
                         name, prefix.len(), candidates.join("\n  ")
                     );
                 } else {
-                    let substr: Vec<usize> = contents.models.iter().enumerate()
+                    let substr: Vec<usize> = contents
+                        .models
+                        .iter()
+                        .enumerate()
                         .filter(|(_, (_, p, _, _))| p.to_string_lossy().contains(name.as_str()))
-                        .map(|(i, _)| i).collect();
+                        .map(|(i, _)| i)
+                        .collect();
                     if substr.len() == 1 {
                         substr[0]
                     } else if substr.len() > 1 {
-                        let candidates: Vec<String> = substr.iter()
-                            .map(|&i| contents.models[i].1.display().to_string()).collect();
+                        let candidates: Vec<String> = substr
+                            .iter()
+                            .map(|&i| contents.models[i].1.display().to_string())
+                            .collect();
                         anyhow::bail!(
                             "\"{}\" に部分一致するモデルが {} 個あります:\n  {}\nより具体的に指定してください。",
                             name, substr.len(), candidates.join("\n  ")
@@ -469,18 +535,31 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         ArchiveModelKind::Pmx => {
             let pmx_model = popone::pmx::reader::read_pmx_from_data(&bundle.model.data)
                 .context("PMX読み込み失敗")?;
-            popone::pmx::extract::pmx_to_ir_with_aux(&pmx_model, Path::new("."), Some(&bundle.aux_files))
-                .context("PMX中間表現の抽出に失敗")?
+            popone::pmx::extract::pmx_to_ir_with_aux(
+                &pmx_model,
+                Path::new("."),
+                Some(&bundle.aux_files),
+            )
+            .context("PMX中間表現の抽出に失敗")?
         }
         ArchiveModelKind::Pmd => {
             let pmd_model = popone::pmd::reader::read_pmd_from_data(&bundle.model.data)
                 .context("PMD読み込み失敗")?;
-            popone::pmd::extract::pmd_to_ir_with_aux(&pmd_model, &bundle.model.path, Some(&bundle.aux_files))
-                .context("PMD中間表現の抽出に失敗")?
+            popone::pmd::extract::pmd_to_ir_with_aux(
+                &pmd_model,
+                &bundle.model.path,
+                Some(&bundle.aux_files),
+            )
+            .context("PMD中間表現の抽出に失敗")?
         }
         ArchiveModelKind::Fbx => {
-            let mut ir = popone::fbx::extract::extract_ir_model_from_fbx(&bundle.model.data, Some(input))
-                .context("FBX中間表現の抽出に失敗")?;
+            let mut ir = popone::fbx::extract::extract_ir_model_from_fbx_with_options(
+                &bundle.model.data,
+                Some(input),
+                args.normalize_pose,
+                args.normalize_to_tstance,
+            )
+            .context("FBX中間表現の抽出に失敗")?;
             popone::unitypackage::embed_textures_into_ir(&mut ir, &bundle.textures);
             ir
         }
@@ -491,20 +570,36 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
             log::info!("VRMバージョン: {:?}", version);
             let all_extensions = popone::vrm::loader::get_raw_extensions(&glb.document);
             popone::vrm::extract::extract_ir_model_with_options(
-                &glb.document, &glb.buffers, &glb.images,
-                &glb.vrm_extension, &version, &all_extensions,
+                &glb.document,
+                &glb.buffers,
+                &glb.images,
+                &glb.vrm_extension,
+                &version,
+                &all_extensions,
                 args.normalize_pose,
-            ).context("VRM中間表現の抽出に失敗")?
+            )
+            .context("VRM中間表現の抽出に失敗")?
         }
         ArchiveModelKind::UnityPackage => {
             // アーカイブ内 .unitypackage を二重展開
             let (fbx_data, fbx_name, textures) =
                 popone::unitypackage::extract_fbx_from_unitypackage(
-                    &bundle.model.data, args.fbx_name.as_deref(),
-                ).context("アーカイブ内 unitypackage 展開失敗")?;
-            log::info!("unitypackage内FBX: {} テクスチャ: {}個", fbx_name, textures.len());
-            let mut ir = popone::fbx::extract::extract_ir_model_from_fbx(&fbx_data, Some(input))
-                .context("FBX中間表現の抽出に失敗")?;
+                    &bundle.model.data,
+                    args.fbx_name.as_deref(),
+                )
+                .context("アーカイブ内 unitypackage 展開失敗")?;
+            log::info!(
+                "unitypackage内FBX: {} テクスチャ: {}個",
+                fbx_name,
+                textures.len()
+            );
+            let mut ir = popone::fbx::extract::extract_ir_model_from_fbx_with_options(
+                &fbx_data,
+                Some(input),
+                args.normalize_pose,
+                args.normalize_to_tstance,
+            )
+            .context("FBX中間表現の抽出に失敗")?;
             popone::unitypackage::embed_textures_into_ir(&mut ir, &textures);
             ir
         }
@@ -534,7 +629,9 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
     let writer = std::io::BufWriter::new(output_file);
     let header = pmx_model.header.clone();
     let mut pmx_writer = pmx::writer::PmxWriter::new(writer, header);
-    pmx_writer.write_model(&pmx_model).context("PMX書き出し失敗")?;
+    pmx_writer
+        .write_model(&pmx_model)
+        .context("PMX書き出し失敗")?;
 
     log::info!("変換完了: {}", output.display());
     println!("変換完了: {} → {}", input.display(), output.display());
@@ -593,7 +690,10 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
                 eframe::egui_wgpu::WgpuSetupCreateNew {
                     device_descriptor: std::sync::Arc::new(|adapter| {
                         let mut features = eframe::wgpu::Features::default();
-                        if adapter.features().contains(eframe::wgpu::Features::POLYGON_MODE_LINE) {
+                        if adapter
+                            .features()
+                            .contains(eframe::wgpu::Features::POLYGON_MODE_LINE)
+                        {
                             features |= eframe::wgpu::Features::POLYGON_MODE_LINE;
                         }
                         eframe::wgpu::DeviceDescriptor {

@@ -2,13 +2,117 @@ use anyhow::Result;
 use glam::Vec3;
 use std::collections::HashMap;
 
+use crate::convert::coord::{gltf_pos_to_pmx, gltf_pos_to_pmx_v0, PMX_SCALE};
 use crate::intermediate::types::*;
 use crate::vrm::types_v0::SecondaryAnimation;
 use crate::vrm::types_v1::SpringBoneV1;
-use crate::convert::coord::{gltf_pos_to_pmx, gltf_pos_to_pmx_v0, PMX_SCALE};
 
 // スプリングボーン剛体は PMX グループ15 に統一
 const SPRING_PMX_GROUP: u8 = 15;
+
+/// 座標変換関数の型（V0/V1 で異なる変換を共通ヘルパーに渡すため）
+type CoordFn = fn(Vec3) -> Vec3;
+
+/// スプリング剛体の構築パラメータ
+struct SpringRigidParams {
+    name: String,
+    bone_index: usize,
+    spring_mask: u16,
+    hit_radius: f32,
+    drag: f32,
+    is_root: bool,
+    /// gltf 座標系でのボーン位置
+    bone_pos: Vec3,
+    /// gltf 座標系での次ボーン位置
+    next_pos: Vec3,
+}
+
+/// スプリングジョイントの構築パラメータ
+struct SpringJointParams {
+    name: String,
+    parent_rigid_idx: usize,
+    rigid_idx: usize,
+    stiffness: f32,
+    spring_rot_val: f32,
+    spring_move_val: f32,
+    gravity_power: f32,
+    gravity_dir: Vec3,
+    /// PMX 座標系でのボーン位置（ジョイント起点）
+    pmx_bone_pos: Vec3,
+    /// gltf 座標系でのボーン間距離（移動制限計算用）
+    bone_pos: Vec3,
+    next_pos: Vec3,
+}
+
+/// スプリング剛体を構築して physics に追加する共通ヘルパー
+fn push_spring_rigid(
+    physics: &mut IrPhysics,
+    params: &SpringRigidParams,
+    coord_fn: CoordFn,
+) -> (usize, Vec3) {
+    let rigid_idx = physics.rigid_bodies.len();
+    let bone_length = (params.next_pos - params.bone_pos).length().max(0.01) * PMX_SCALE;
+
+    let pmx_bone_pos = coord_fn(params.bone_pos);
+    let pmx_next_pos = coord_fn(params.next_pos);
+    let rb_rotation = bone_rotation(pmx_bone_pos, pmx_next_pos);
+    let rb_center = (pmx_bone_pos + pmx_next_pos) * 0.5;
+    let physics_mode = if params.is_root { 0 } else { 1 };
+
+    physics.rigid_bodies.push(IrRigidBody {
+        name: params.name.clone(),
+        bone_index: Some(params.bone_index),
+        group: SPRING_PMX_GROUP,
+        no_collision_mask: params.spring_mask,
+        shape: RigidShape::Capsule {
+            radius: params.hit_radius * PMX_SCALE,
+            height: bone_length,
+        },
+        position: rb_center,
+        rotation: rb_rotation,
+        mass: 1.0,
+        linear_damping: params.drag,
+        angular_damping: params.drag,
+        restitution: 0.0,
+        friction: 0.5,
+        physics_mode,
+    });
+
+    (rigid_idx, pmx_bone_pos)
+}
+
+/// スプリングジョイントを構築して physics に追加する共通ヘルパー
+fn push_spring_joint(physics: &mut IrPhysics, params: &SpringJointParams, coord_fn: CoordFn) {
+    // 回転制限: stiffnessに基づく動的計算
+    let base_limit = std::f32::consts::FRAC_PI_4; // 45°
+    let limit = base_limit + (1.0 - params.stiffness.min(1.0)) * std::f32::consts::FRAC_PI_4;
+    // stiffness=1.0 → ±45°, stiffness=0.0 → ±90°
+
+    // gravity による回転制限バイアス
+    let pmx_gravity = coord_fn(params.gravity_dir).normalize_or_zero();
+    let gravity_bias = pmx_gravity * params.gravity_power * std::f32::consts::FRAC_PI_4;
+
+    let rot_limit_lo = Vec3::splat(-limit) + gravity_bias.min(Vec3::ZERO);
+    let rot_limit_hi = Vec3::splat(limit) + gravity_bias.max(Vec3::ZERO);
+
+    // 移動制限: ボーン長の30%
+    let bone_length = (params.next_pos - params.bone_pos).length().max(0.01) * PMX_SCALE;
+    let move_limit = bone_length * 0.3;
+
+    physics.joints.push(IrJoint {
+        name: params.name.clone(),
+        rigid_a: params.parent_rigid_idx,
+        rigid_b: params.rigid_idx,
+        position: params.pmx_bone_pos,
+        rotation: Vec3::ZERO,
+        move_limit_lo: Vec3::splat(-move_limit),
+        move_limit_hi: Vec3::splat(move_limit),
+        rot_limit_lo,
+        rot_limit_hi,
+        spring_move: Vec3::splat(params.spring_move_val),
+        spring_rot: Vec3::splat(params.spring_rot_val),
+    });
+}
 
 /// VRM 0.0 SecondaryAnimation → IrPhysics
 pub fn build_physics_v0(
@@ -45,7 +149,9 @@ pub fn build_physics_v0(
                 bone_index: bone_idx,
                 group: pmx_group,
                 no_collision_mask: collider_mask,
-                shape: RigidShape::Sphere { radius: collider.radius * PMX_SCALE },
+                shape: RigidShape::Sphere {
+                    radius: collider.radius * PMX_SCALE,
+                },
                 position: gltf_pos_to_pmx_v0(world_pos),
                 rotation: Vec3::ZERO,
                 mass: 0.0,
@@ -64,7 +170,8 @@ pub fn build_physics_v0(
         let drag = group.drag_force.unwrap_or(0.5);
         let hit_radius = group.hit_radius.unwrap_or(0.02);
         let gravity_power = group.gravity_power.unwrap_or(0.0);
-        let gravity_dir = group.gravity_dir
+        let gravity_dir = group
+            .gravity_dir
             .map(Vec3::from)
             .unwrap_or(Vec3::new(0.0, -1.0, 0.0));
 
@@ -132,76 +239,56 @@ fn build_spring_chain_v0(
         None => return,
     };
 
+    let spring_rot_val = stiffness * 5.0;
+    let spring_move_val = spring_rot_val * 2.0;
+
     // チェーンをDFS走査
     let mut stack = vec![(root_bone, None::<usize>)]; // (ボーンIndex, 親剛体Index)
 
     while let Some((bone_idx, parent_rigid_idx)) = stack.pop() {
         let bone = &bones[bone_idx];
-        let rigid_idx = physics.rigid_bodies.len();
-
-        let spring_rot_val = stiffness * 5.0;
-        let spring_move_val = spring_rot_val * 2.0;
 
         // 次ボーン位置（剛体形状・ジョイント共用）
-        let next_pos = bone.children.first()
+        let next_pos = bone
+            .children
+            .first()
             .map(|&ci| bones[ci].position)
             .unwrap_or(bone.position + Vec3::new(0.0, -0.07, 0.0));
-        let bone_length = (next_pos - bone.position).length().max(0.01) * PMX_SCALE;
 
-        // PMX座標系で剛体中心・回転を計算
-        let pmx_bone_pos = gltf_pos_to_pmx_v0(bone.position);
-        let pmx_next_pos = gltf_pos_to_pmx_v0(next_pos);
-        let rb_rotation = bone_rotation(pmx_bone_pos, pmx_next_pos);
-
-        let physics_mode = if parent_rigid_idx.is_none() { 0 } else { 1 }; // 根本はボーン追従
-        let rb_center = (pmx_bone_pos + pmx_next_pos) * 0.5;
-        let rigid = IrRigidBody {
-            name: format!("spring_{}", bone.name),
-            bone_index: Some(bone_idx),
-            group: SPRING_PMX_GROUP,
-            no_collision_mask: spring_mask,
-            shape: RigidShape::Capsule { radius: hit_radius * PMX_SCALE, height: bone_length },
-            position: rb_center,
-            rotation: rb_rotation,
-            mass: 1.0,
-            linear_damping: drag,
-            angular_damping: drag,
-            restitution: 0.0,
-            friction: 0.5,
-            physics_mode,
-        };
-        physics.rigid_bodies.push(rigid);
+        let (rigid_idx, pmx_bone_pos) = push_spring_rigid(
+            physics,
+            &SpringRigidParams {
+                name: format!("spring_{}", bone.name),
+                bone_index: bone_idx,
+                spring_mask,
+                hit_radius,
+                drag,
+                is_root: parent_rigid_idx.is_none(),
+                bone_pos: bone.position,
+                next_pos,
+            },
+            gltf_pos_to_pmx_v0,
+        );
 
         // ジョイント（親剛体→この剛体）
         if let Some(parent_idx) = parent_rigid_idx {
-            // 回転制限: stiffnessに基づく動的計算
-            let base_limit = std::f32::consts::FRAC_PI_4; // 45°
-            let limit = base_limit + (1.0 - stiffness.min(1.0)) * std::f32::consts::FRAC_PI_4;
-            // stiffness=1.0 → ±45°, stiffness=0.0 → ±90°
-
-            // gravity による回転制限バイアス（V0でも適用）
-            let pmx_gravity = gltf_pos_to_pmx_v0(gravity_dir).normalize_or_zero();
-            let gravity_bias = pmx_gravity * gravity_power * std::f32::consts::FRAC_PI_4;
-
-            let rot_limit_lo = Vec3::splat(-limit) + gravity_bias.min(Vec3::ZERO);
-            let rot_limit_hi = Vec3::splat(limit) + gravity_bias.max(Vec3::ZERO);
-
-            // 移動制限: ボーン長の30%
-            let move_limit = bone_length * 0.3;
-
-            physics.joints.push(IrJoint {
-                name: format!("joint_{}", bone.name),
-                rigid_a: parent_idx,
-                rigid_b: rigid_idx,
-                position: pmx_bone_pos, // ジョイントはボーン起点
-                rotation: Vec3::ZERO,
-                move_limit_lo: Vec3::splat(-move_limit),
-                move_limit_hi: Vec3::splat(move_limit),
-                rot_limit_lo,
-                rot_limit_hi,
-                spring_move: Vec3::splat(spring_move_val),
-                spring_rot: Vec3::splat(spring_rot_val),
-            });
+            push_spring_joint(
+                physics,
+                &SpringJointParams {
+                    name: format!("joint_{}", bone.name),
+                    parent_rigid_idx: parent_idx,
+                    rigid_idx,
+                    stiffness,
+                    spring_rot_val,
+                    spring_move_val,
+                    gravity_power,
+                    gravity_dir,
+                    pmx_bone_pos,
+                    bone_pos: bone.position,
+                    next_pos,
+                },
+                gltf_pos_to_pmx_v0,
+            );
         }
 
         // 子骨を処理
@@ -234,7 +321,9 @@ pub fn build_physics_v1(
     }
     // 未割り当てコライダーはグループ1にフォールバック
     for g in &mut collider_pmx_group {
-        if *g == 0 { *g = 1; }
+        if *g == 0 {
+            *g = 1;
+        }
     }
 
     // コライダー → ボーン追従静的剛体
@@ -242,48 +331,72 @@ pub fn build_physics_v1(
         let node_idx = collider.node as usize;
         let bone_idx = node_to_bone.get(&node_idx).copied();
 
-        let global_mat = bone_idx.map(|bi| bones[bi].global_mat).unwrap_or(glam::Mat4::IDENTITY);
+        let global_mat = bone_idx
+            .map(|bi| bones[bi].global_mat)
+            .unwrap_or(glam::Mat4::IDENTITY);
         let pmx_group = collider_pmx_group.get(ci).copied().unwrap_or(1);
 
         // コライダーはスプリング(G15)とのみ衝突
         let collider_mask = !(1u16 << SPRING_PMX_GROUP);
 
-        let (shape, world_pos, rotation) = if let Some(sphere) = &collider.shape.sphere {
-            let offset_v = Vec3::from(sphere.offset.unwrap_or([0.0; 3]));
-            let radius = sphere.radius.unwrap_or(0.05);
-            let world_offset = global_mat.transform_point3(offset_v);
-            let pos = gltf_pos_to_pmx(world_offset);
-            (RigidShape::Sphere { radius: radius * PMX_SCALE }, pos, Vec3::ZERO)
-        } else if let Some(capsule) = &collider.shape.capsule {
-            let offset_v = Vec3::from(capsule.offset.unwrap_or([0.0; 3]));
-            let tail_v   = Vec3::from(capsule.tail.unwrap_or([0.0, 0.1, 0.0]));
-            let radius   = capsule.radius.unwrap_or(0.05);
+        let (shape, world_pos, rotation) =
+            if let Some(sphere) = &collider.shape.sphere {
+                let offset_v = Vec3::from(sphere.offset.unwrap_or([0.0; 3]));
+                let radius = sphere.radius.unwrap_or(0.05);
+                let world_offset = global_mat.transform_point3(offset_v);
+                let pos = gltf_pos_to_pmx(world_offset);
+                (
+                    RigidShape::Sphere {
+                        radius: radius * PMX_SCALE,
+                    },
+                    pos,
+                    Vec3::ZERO,
+                )
+            } else if let Some(capsule) = &collider.shape.capsule {
+                let offset_v = Vec3::from(capsule.offset.unwrap_or([0.0; 3]));
+                let tail_v = Vec3::from(capsule.tail.unwrap_or([0.0, 0.1, 0.0]));
+                let radius = capsule.radius.unwrap_or(0.05);
 
-            let world_offset = global_mat.transform_point3(offset_v);
-            let world_tail   = global_mat.transform_point3(tail_v);
+                let world_offset = global_mat.transform_point3(offset_v);
+                let world_tail = global_mat.transform_point3(tail_v);
 
-            let height = (world_tail - world_offset).length().max(1e-4);
-            let pmx_center = gltf_pos_to_pmx((world_offset + world_tail) * 0.5);
+                let height = (world_tail - world_offset).length().max(1e-4);
+                let pmx_center = gltf_pos_to_pmx((world_offset + world_tail) * 0.5);
 
-            let pmx_offset = gltf_pos_to_pmx(world_offset);
-            let pmx_tail   = gltf_pos_to_pmx(world_tail);
-            let rot = bone_rotation(pmx_offset, pmx_tail);
+                let pmx_offset = gltf_pos_to_pmx(world_offset);
+                let pmx_tail = gltf_pos_to_pmx(world_tail);
+                let rot = bone_rotation(pmx_offset, pmx_tail);
 
-            log::debug!(
+                log::debug!(
                 "  capsule local_offset=({:.3},{:.3},{:.3}) local_tail=({:.3},{:.3},{:.3}) h={:.3}",
                 offset_v.x, offset_v.y, offset_v.z,
                 tail_v.x, tail_v.y, tail_v.z, height
             );
-            (RigidShape::Capsule { radius: radius * PMX_SCALE, height: height * PMX_SCALE }, pmx_center, rot)
-        } else {
-            let bone_pos = bone_idx.map(|bi| bones[bi].position).unwrap_or_default();
-            (RigidShape::Sphere { radius: 0.05 * PMX_SCALE }, gltf_pos_to_pmx(bone_pos), Vec3::ZERO)
-        };
+                (
+                    RigidShape::Capsule {
+                        radius: radius * PMX_SCALE,
+                        height: height * PMX_SCALE,
+                    },
+                    pmx_center,
+                    rot,
+                )
+            } else {
+                let bone_pos = bone_idx.map(|bi| bones[bi].position).unwrap_or_default();
+                (
+                    RigidShape::Sphere {
+                        radius: 0.05 * PMX_SCALE,
+                    },
+                    gltf_pos_to_pmx(bone_pos),
+                    Vec3::ZERO,
+                )
+            };
 
         let bone_name = bone_idx.map(|bi| bones[bi].name.as_str()).unwrap_or("?");
         let shape_desc = match &shape {
             RigidShape::Sphere { radius } => format!("Sphere r={:.3}", radius),
-            RigidShape::Capsule { radius, height } => format!("Capsule r={:.3} h={:.3}", radius, height),
+            RigidShape::Capsule { radius, height } => {
+                format!("Capsule r={:.3} h={:.3}", radius, height)
+            }
             _ => "Other".to_string(),
         };
         log::debug!(
@@ -326,7 +439,11 @@ pub fn build_physics_v1(
             );
         }
 
-        log::debug!("spring \"{}\" ({} joints):", spring.name.as_deref().unwrap_or("?"), joints.len());
+        log::debug!(
+            "spring \"{}\" ({} joints):",
+            spring.name.as_deref().unwrap_or("?"),
+            joints.len()
+        );
 
         // このスプリングが参照するコライダーグループからマスク構築
         let spring_mask = if let Some(ref cg_refs) = spring.collider_groups {
@@ -351,7 +468,6 @@ pub fn build_physics_v1(
             let spring_move_val = spring_rot_val * 2.0;
 
             let bone = &bones[bone_idx];
-            let rigid_idx = physics.rigid_bodies.len();
 
             // 次のジョイントとの間の長さを計算
             let next_pos = if ji + 1 < joints.len() {
@@ -364,81 +480,58 @@ pub fn build_physics_v1(
                 // 末端に仮想tail追加（仕様準拠: 7cm下）
                 bone.position + Vec3::new(0.0, -0.07, 0.0)
             };
-            let height = (next_pos - bone.position).length().max(0.01) * PMX_SCALE;
 
             log::debug!(
                 "  [{ji}] bone=\"{}\" gltf_pos=({:.3},{:.3},{:.3}) next=({:.3},{:.3},{:.3}) h={:.3}",
                 bone.name,
                 bone.position.x, bone.position.y, bone.position.z,
                 next_pos.x, next_pos.y, next_pos.z,
-                height
+                (next_pos - bone.position).length().max(0.01) * PMX_SCALE
             );
 
-            // PMX座標系で剛体中心・回転を計算
-            let pmx_bone_pos = gltf_pos_to_pmx(bone.position);
-            let pmx_next_pos = gltf_pos_to_pmx(next_pos);
-            let rb_rotation = bone_rotation(pmx_bone_pos, pmx_next_pos);
-
-            let physics_mode = if prev_rigid_idx.is_none() { 0 } else { 1 }; // 根本はボーン追従
-            let rb_center = (pmx_bone_pos + pmx_next_pos) * 0.5;
-            physics.rigid_bodies.push(IrRigidBody {
-                name: format!(
-                    "spring_{}_{}",
-                    spring.name.as_deref().unwrap_or("chain"),
-                    ji
-                ),
-                bone_index: Some(bone_idx),
-                group: SPRING_PMX_GROUP,
-                no_collision_mask: spring_mask,
-                shape: RigidShape::Capsule { radius: hit_radius * PMX_SCALE, height },
-                position: rb_center,
-                rotation: rb_rotation,
-                mass: 1.0,
-                linear_damping: drag,
-                angular_damping: drag,
-                restitution: 0.0,
-                friction: 0.5,
-                physics_mode,
-            });
-
-            if let Some(pa) = prev_rigid_idx {
-                // 回転制限: stiffnessに基づく動的計算
-                let base_limit = std::f32::consts::FRAC_PI_4; // 45°
-                let limit = base_limit + (1.0 - stiffness.min(1.0)) * std::f32::consts::FRAC_PI_4;
-                // stiffness=1.0 → ±45°, stiffness=0.0 → ±90°
-
-                // gravity による回転制限バイアス
-                let gravity_power = joint.gravity_power.unwrap_or(0.0);
-                let gravity_dir = joint.gravity_dir.map(Vec3::from)
-                    .unwrap_or(Vec3::new(0.0, -1.0, 0.0));
-
-                let pmx_gravity = gltf_pos_to_pmx(gravity_dir).normalize_or_zero();
-                let gravity_bias = pmx_gravity * gravity_power * std::f32::consts::FRAC_PI_4;
-
-                let rot_limit_lo = Vec3::splat(-limit) + gravity_bias.min(Vec3::ZERO);
-                let rot_limit_hi = Vec3::splat(limit) + gravity_bias.max(Vec3::ZERO);
-
-                // 移動制限: ボーン長の30%
-                let bone_length = (next_pos - bone.position).length().max(0.01) * PMX_SCALE;
-                let move_limit = bone_length * 0.3;
-
-                physics.joints.push(IrJoint {
+            let (rigid_idx, pmx_bone_pos) = push_spring_rigid(
+                &mut physics,
+                &SpringRigidParams {
                     name: format!(
-                        "joint_{}_{}",
+                        "spring_{}_{}",
                         spring.name.as_deref().unwrap_or("chain"),
                         ji
                     ),
-                    rigid_a: pa,
-                    rigid_b: rigid_idx,
-                    position: pmx_bone_pos, // ジョイントはボーン起点
-                    rotation: Vec3::ZERO,
-                    move_limit_lo: Vec3::splat(-move_limit),
-                    move_limit_hi: Vec3::splat(move_limit),
-                    rot_limit_lo,
-                    rot_limit_hi,
-                    spring_move: Vec3::splat(spring_move_val),
-                    spring_rot: Vec3::splat(spring_rot_val),
-                });
+                    bone_index: bone_idx,
+                    spring_mask,
+                    hit_radius,
+                    drag,
+                    is_root: prev_rigid_idx.is_none(),
+                    bone_pos: bone.position,
+                    next_pos,
+                },
+                gltf_pos_to_pmx,
+            );
+
+            if let Some(pa) = prev_rigid_idx {
+                let gravity_power = joint.gravity_power.unwrap_or(0.0);
+                let gravity_dir = joint
+                    .gravity_dir
+                    .map(Vec3::from)
+                    .unwrap_or(Vec3::new(0.0, -1.0, 0.0));
+
+                push_spring_joint(
+                    &mut physics,
+                    &SpringJointParams {
+                        name: format!("joint_{}_{}", spring.name.as_deref().unwrap_or("chain"), ji),
+                        parent_rigid_idx: pa,
+                        rigid_idx,
+                        stiffness,
+                        spring_rot_val,
+                        spring_move_val,
+                        gravity_power,
+                        gravity_dir,
+                        pmx_bone_pos,
+                        bone_pos: bone.position,
+                        next_pos,
+                    },
+                    gltf_pos_to_pmx,
+                );
             }
 
             prev_rigid_idx = Some(rigid_idx);
@@ -476,9 +569,10 @@ fn bone_rotation(from_pmx: Vec3, to_pmx: Vec3) -> Vec3 {
     };
     let z_axis = x_axis.cross(y_axis).normalize();
 
-    // ZXY オイラー分解（R = Rz * Rx * Ry）
+    // YXZ intrinsic = ZXY extrinsic オイラー分解（R = Rz * Rx * Ry）
+    // D3DX行優先: v * Ry * Rx * Rz → glam列優先: Rz * Rx * Ry
     let mat = glam::Mat3::from_cols(x_axis, y_axis, z_axis);
     let quat = glam::Quat::from_mat3(&mat);
-    let (rz, rx, ry) = quat.to_euler(glam::EulerRot::ZXY);
+    let (ry, rx, rz) = quat.to_euler(glam::EulerRot::YXZ);
     Vec3::new(rx, ry, rz)
 }

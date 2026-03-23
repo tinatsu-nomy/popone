@@ -212,7 +212,10 @@ mod tests {
     use super::*;
 
     fn make_scalar_keyframes(pairs: Vec<(f32, f32)>) -> Vec<ScalarKeyframe> {
-        pairs.into_iter().map(|(time, value)| ScalarKeyframe { time, value }).collect()
+        pairs
+            .into_iter()
+            .map(|(time, value)| ScalarKeyframe { time, value })
+            .collect()
     }
 
     #[test]
@@ -232,15 +235,19 @@ mod tests {
     #[test]
     fn test_scalar_clamp_before_first() {
         let kfs = make_scalar_keyframes(vec![(1.0, 5.0), (2.0, 10.0)]);
-        assert!((sample_scalar(&kfs, Interpolation::Linear, 0.0) - 5.0).abs() < 1e-6,
-            "最初のキーフレームより前はクランプされるべき");
+        assert!(
+            (sample_scalar(&kfs, Interpolation::Linear, 0.0) - 5.0).abs() < 1e-6,
+            "最初のキーフレームより前はクランプされるべき"
+        );
     }
 
     #[test]
     fn test_scalar_clamp_after_last() {
         let kfs = make_scalar_keyframes(vec![(0.0, 0.0), (1.0, 5.0)]);
-        assert!((sample_scalar(&kfs, Interpolation::Linear, 99.0) - 5.0).abs() < 1e-6,
-            "最後のキーフレームより後はクランプされるべき");
+        assert!(
+            (sample_scalar(&kfs, Interpolation::Linear, 99.0) - 5.0).abs() < 1e-6,
+            "最後のキーフレームより後はクランプされるべき"
+        );
     }
 
     #[test]

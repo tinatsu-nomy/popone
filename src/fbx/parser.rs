@@ -195,7 +195,9 @@ fn parse_property(cursor: &mut Cursor<&[u8]>) -> Result<FbxProperty> {
         b'C' => {
             let v = cursor.read_u8()?;
             // 0x59='Y'=true, 0x54='T'=false, Blenderバグ対応で奇偶判定
-            Ok(FbxProperty::Bool(v == 0x59 || v == 0x01 || (v != 0x54 && v != 0x00 && v % 2 == 1)))
+            Ok(FbxProperty::Bool(
+                v == 0x59 || v == 0x01 || (v != 0x54 && v != 0x00 && v % 2 == 1),
+            ))
         }
         b'Y' => Ok(FbxProperty::I16(cursor.read_i16::<LittleEndian>()?)),
         b'I' => Ok(FbxProperty::I32(cursor.read_i32::<LittleEndian>()?)),
@@ -206,33 +208,47 @@ fn parse_property(cursor: &mut Cursor<&[u8]>) -> Result<FbxProperty> {
         // 配列型
         b'b' => {
             let raw = read_array_raw(cursor, 1)?;
-            Ok(FbxProperty::BoolArray(raw.into_iter().map(|b| b != 0).collect()))
+            Ok(FbxProperty::BoolArray(
+                raw.into_iter().map(|b| b != 0).collect(),
+            ))
         }
         b'i' => {
             let raw = read_array_raw(cursor, 4)?;
-            let values = raw.chunks_exact(4)
-                .map(|c| i32::from_le_bytes(c.try_into().expect("chunks_exact(4) guarantees 4 bytes")))
+            let values = raw
+                .chunks_exact(4)
+                .map(|c| {
+                    i32::from_le_bytes(c.try_into().expect("chunks_exact(4) guarantees 4 bytes"))
+                })
                 .collect();
             Ok(FbxProperty::I32Array(values))
         }
         b'l' => {
             let raw = read_array_raw(cursor, 8)?;
-            let values = raw.chunks_exact(8)
-                .map(|c| i64::from_le_bytes(c.try_into().expect("chunks_exact(8) guarantees 8 bytes")))
+            let values = raw
+                .chunks_exact(8)
+                .map(|c| {
+                    i64::from_le_bytes(c.try_into().expect("chunks_exact(8) guarantees 8 bytes"))
+                })
                 .collect();
             Ok(FbxProperty::I64Array(values))
         }
         b'f' => {
             let raw = read_array_raw(cursor, 4)?;
-            let values = raw.chunks_exact(4)
-                .map(|c| f32::from_le_bytes(c.try_into().expect("chunks_exact(4) guarantees 4 bytes")))
+            let values = raw
+                .chunks_exact(4)
+                .map(|c| {
+                    f32::from_le_bytes(c.try_into().expect("chunks_exact(4) guarantees 4 bytes"))
+                })
                 .collect();
             Ok(FbxProperty::F32Array(values))
         }
         b'd' => {
             let raw = read_array_raw(cursor, 8)?;
-            let values = raw.chunks_exact(8)
-                .map(|c| f64::from_le_bytes(c.try_into().expect("chunks_exact(8) guarantees 8 bytes")))
+            let values = raw
+                .chunks_exact(8)
+                .map(|c| {
+                    f64::from_le_bytes(c.try_into().expect("chunks_exact(8) guarantees 8 bytes"))
+                })
                 .collect();
             Ok(FbxProperty::F64Array(values))
         }
@@ -242,7 +258,9 @@ fn parse_property(cursor: &mut Cursor<&[u8]>) -> Result<FbxProperty> {
             let len = cursor.read_u32::<LittleEndian>()? as usize;
             let mut buf = vec![0u8; len];
             cursor.read_exact(&mut buf)?;
-            Ok(FbxProperty::String(String::from_utf8_lossy(&buf).to_string()))
+            Ok(FbxProperty::String(
+                String::from_utf8_lossy(&buf).to_string(),
+            ))
         }
         b'R' => {
             let len = cursor.read_u32::<LittleEndian>()? as usize;
@@ -269,7 +287,8 @@ fn read_array_raw(cursor: &mut Cursor<&[u8]>, element_size: usize) -> Result<Vec
             let expected_size = array_len * element_size;
             let mut decoder = ZlibDecoder::new(&compressed[..]);
             let mut decompressed = vec![0u8; expected_size];
-            decoder.read_exact(&mut decompressed)
+            decoder
+                .read_exact(&mut decompressed)
                 .context("zlib decompression failed")?;
             decompressed
         }
@@ -299,7 +318,8 @@ fn parse_ascii(data: &[u8]) -> Result<FbxDocument> {
     }
 
     // FBXHeaderExtension > FBXVersion からバージョン取得
-    let version = nodes.iter()
+    let version = nodes
+        .iter()
         .find(|n| n.name == "FBXHeaderExtension")
         .and_then(|h| h.child("FBXVersion"))
         .and_then(|v| v.properties.first())
@@ -352,8 +372,7 @@ impl<'a> AsciiParser<'a> {
             (stripped.trim(), true)
         } else {
             // 次行が `{` のみの場合
-            let next_is_brace = self.pos < self.lines.len()
-                && self.lines[self.pos].trim() == "{";
+            let next_is_brace = self.pos < self.lines.len() && self.lines[self.pos].trim() == "{";
             if next_is_brace {
                 self.pos += 1;
                 (after_colon, true)
@@ -404,12 +423,17 @@ impl<'a> AsciiParser<'a> {
                 if !raw_lines.is_empty() {
                     let joined = raw_lines.join("");
                     properties = vec![FbxProperty::String(joined)];
-                    log::debug!("ASCII FBX: Content ブロック（{}行）を文字列として保持", raw_lines.len());
+                    log::debug!(
+                        "ASCII FBX: Content ブロック（{}行）を文字列として保持",
+                        raw_lines.len()
+                    );
                 }
             } else {
                 loop {
                     self.skip_empty_and_comments();
-                    if self.pos >= self.lines.len() { break; }
+                    if self.pos >= self.lines.len() {
+                        break;
+                    }
                     if self.lines[self.pos].trim() == "}" {
                         self.pos += 1;
                         break;
@@ -428,7 +452,11 @@ impl<'a> AsciiParser<'a> {
             }
         }
 
-        Ok(Some(FbxNode { name, properties, children }))
+        Ok(Some(FbxNode {
+            name,
+            properties,
+            children,
+        }))
     }
 
     /// 配列データ解析: `*N {` の後の `a: v1, v2, ...` 行を `}` まで読み取る
@@ -443,34 +471,52 @@ impl<'a> AsciiParser<'a> {
             self.pos += 1;
             let line = ascii_strip_inline_comment(line);
             let content = line.strip_prefix("a:").unwrap_or(line).trim();
-            if content.is_empty() { continue; }
+            if content.is_empty() {
+                continue;
+            }
             if !data_str.is_empty() && !data_str.ends_with(',') {
                 data_str.push(',');
             }
             data_str.push_str(content);
         }
 
-        let values: Vec<&str> = data_str.split(',')
+        let values: Vec<&str> = data_str
+            .split(',')
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .collect();
 
         match ascii_array_type(node_name, &values) {
             AsciiArrayType::F64 => {
-                let arr: Vec<f64> = values.iter()
-                    .map(|s| s.parse::<f64>().with_context(|| format!("ASCII FBX: '{s}' を f64 に変換できません (node: {node_name})")))
+                let arr: Vec<f64> = values
+                    .iter()
+                    .map(|s| {
+                        s.parse::<f64>().with_context(|| {
+                            format!("ASCII FBX: '{s}' を f64 に変換できません (node: {node_name})")
+                        })
+                    })
                     .collect::<Result<_>>()?;
                 Ok(FbxProperty::F64Array(arr))
             }
             AsciiArrayType::I32 => {
-                let arr: Vec<i32> = values.iter()
-                    .map(|s| s.parse::<i32>().with_context(|| format!("ASCII FBX: '{s}' を i32 に変換できません (node: {node_name})")))
+                let arr: Vec<i32> = values
+                    .iter()
+                    .map(|s| {
+                        s.parse::<i32>().with_context(|| {
+                            format!("ASCII FBX: '{s}' を i32 に変換できません (node: {node_name})")
+                        })
+                    })
                     .collect::<Result<_>>()?;
                 Ok(FbxProperty::I32Array(arr))
             }
             AsciiArrayType::I64 => {
-                let arr: Vec<i64> = values.iter()
-                    .map(|s| s.parse::<i64>().with_context(|| format!("ASCII FBX: '{s}' を i64 に変換できません (node: {node_name})")))
+                let arr: Vec<i64> = values
+                    .iter()
+                    .map(|s| {
+                        s.parse::<i64>().with_context(|| {
+                            format!("ASCII FBX: '{s}' を i64 に変換できません (node: {node_name})")
+                        })
+                    })
                     .collect::<Result<_>>()?;
                 Ok(FbxProperty::I64Array(arr))
             }
@@ -480,21 +526,27 @@ impl<'a> AsciiParser<'a> {
 
 // --- ASCII FBX ヘルパー関数 ---
 
-enum AsciiArrayType { F64, I32, I64 }
+enum AsciiArrayType {
+    F64,
+    I32,
+    I64,
+}
 
 /// ノード名と配列データから要素の型を推定
 /// 既知ノード名 → 明確な型。不明ノード → データ内容から推定（小数点/指数表記→F64、それ以外→I32）
 fn ascii_array_type(name: &str, values: &[&str]) -> AsciiArrayType {
     match name {
-        "PolygonVertexIndex" | "Indexes" | "Materials"
-        | "NormalsIndex" | "UVIndex" | "EdgeIndices" => AsciiArrayType::I32,
+        "PolygonVertexIndex" | "Indexes" | "Materials" | "NormalsIndex" | "UVIndex"
+        | "EdgeIndices" => AsciiArrayType::I32,
         "KeyTime" => AsciiArrayType::I64,
-        "Vertices" | "Normals" | "UV" | "Weights" | "Transform" | "TransformLink"
-        | "Matrix" | "KeyValueFloat" | "FullWeights" | "Binormals" | "BinormalsW"
-        | "Tangents" | "TangentsW" | "NormalsW" => AsciiArrayType::F64,
+        "Vertices" | "Normals" | "UV" | "Weights" | "Transform" | "TransformLink" | "Matrix"
+        | "KeyValueFloat" | "FullWeights" | "Binormals" | "BinormalsW" | "Tangents"
+        | "TangentsW" | "NormalsW" => AsciiArrayType::F64,
         _ => {
             // 不明ノード: データ内容から推定
-            let has_float = values.iter().any(|s| s.contains('.') || s.contains('e') || s.contains('E'));
+            let has_float = values
+                .iter()
+                .any(|s| s.contains('.') || s.contains('e') || s.contains('E'));
             if has_float {
                 AsciiArrayType::F64
             } else {
@@ -532,7 +584,8 @@ fn ascii_find_colon(s: &str) -> Option<usize> {
 
 /// カンマ区切りのプロパティ値を引用符を尊重して分割・解析
 fn ascii_parse_inline_values(s: &str) -> Vec<FbxProperty> {
-    ascii_split_csv(s).into_iter()
+    ascii_split_csv(s)
+        .into_iter()
         .map(|v| ascii_parse_scalar(v.trim()))
         .collect()
 }
@@ -587,20 +640,28 @@ fn ascii_parse_scalar(s: &str) -> FbxProperty {
 
 /// P ノードの properties[4+] を型ヒント (properties[1]) に基づいて修正
 fn ascii_fixup_p_node(properties: &mut [FbxProperty]) {
-    if properties.len() < 5 { return; }
+    if properties.len() < 5 {
+        return;
+    }
     let type_hint = match &properties[1] {
         FbxProperty::String(s) => s.as_str(),
         _ => return,
     };
 
-    let is_int = matches!(type_hint,
-        "int" | "Integer" | "enum" | "Bool" | "bool"
-        | "Visibility" | "Visibility Inheritance");
-    let is_float = type_hint == "double" || type_hint == "Number" || type_hint == "Float"
-        || type_hint.starts_with("Lcl ") || type_hint.starts_with("Vector")
+    let is_int = matches!(
+        type_hint,
+        "int" | "Integer" | "enum" | "Bool" | "bool" | "Visibility" | "Visibility Inheritance"
+    );
+    let is_float = type_hint == "double"
+        || type_hint == "Number"
+        || type_hint == "Float"
+        || type_hint.starts_with("Lcl ")
+        || type_hint.starts_with("Vector")
         || type_hint.starts_with("Color");
 
-    if !is_int && !is_float { return; }
+    if !is_int && !is_float {
+        return;
+    }
 
     for prop in properties[4..].iter_mut() {
         if is_int {

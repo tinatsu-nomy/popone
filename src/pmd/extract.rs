@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::types::*;
 use crate::convert::coord::PMX_SCALE;
 use crate::intermediate::types::*;
-use super::types::*;
 
 /// PMD 座標 → glTF 座標（PMXと同じ座標系: 左手系Y-up）
 #[inline]
@@ -67,7 +67,8 @@ fn load_material_names(
     materials: &mut [IrMaterial],
 ) {
     let txt_path = pmd_path.with_extension("txt");
-    let txt_filename = txt_path.file_name()
+    let txt_filename = txt_path
+        .file_name()
         .map(|f| PathBuf::from(f))
         .unwrap_or_default();
 
@@ -93,14 +94,20 @@ fn load_material_names(
     if lines.len() != materials.len() {
         log::info!(
             "材質名テキスト '{}': 行数({})と材質数({})が不一致、スキップ",
-            txt_path.display(), lines.len(), materials.len()
+            txt_path.display(),
+            lines.len(),
+            materials.len()
         );
         return;
     }
     for (mat, line) in materials.iter_mut().zip(lines.iter()) {
         mat.name = line.trim().to_string();
     }
-    log::info!("材質名テキスト '{}' から{}材質名を適用", txt_path.display(), materials.len());
+    log::info!(
+        "材質名テキスト '{}' から{}材質名を適用",
+        txt_path.display(),
+        materials.len()
+    );
 }
 
 fn extract_bones(pmd: &PmdModel) -> Vec<IrBone> {
@@ -115,13 +122,24 @@ fn extract_bones(pmd: &PmdModel) -> Vec<IrBone> {
                 Some(b.parent as usize)
             };
 
-            let name_en = pmd.english_header.as_ref()
+            let name_en = pmd
+                .english_header
+                .as_ref()
                 .and_then(|eh| eh.bone_names.get(i))
                 .cloned()
                 .unwrap_or_default();
 
-            let vrm_bone_name = crate::convert::bone_map::pmx_name_to_vrm_bone(&b.name)
-                .map(|s| s.to_string());
+            let vrm_bone_name =
+                crate::convert::bone_map::pmx_name_to_vrm_bone(&b.name).map(|s| s.to_string());
+
+            // テイル位置: PMDの child ボーンIndex（0xFFFF/0 = なし）
+            let (tail_position, tail_bone_index) =
+                if b.child != 0xFFFF && b.child != 0 && (b.child as usize) < pmd.bones.len() {
+                    let ci = b.child as usize;
+                    (Some(pmx_pos_to_gltf(pmd.bones[ci].position)), Some(ci))
+                } else {
+                    (None, None)
+                };
 
             IrBone {
                 name: b.name.clone(),
@@ -133,6 +151,14 @@ fn extract_bones(pmd: &PmdModel) -> Vec<IrBone> {
                 children: Vec::new(),
                 node_index: i,
                 is_physics: false,
+                tail_position,
+                tail_bone_index,
+                is_ik: false, // 後で IK Target/Link を設定
+                is_ik_bone: b.bone_type == 2,
+                is_translatable: b.bone_type == 1,
+                is_axis_fixed: false, // PMDには軸制限フラグなし
+                is_visible: b.bone_type != 7,
+                grant: None, // PMDの付与は未対応
             }
         })
         .collect();
@@ -165,7 +191,43 @@ fn extract_bones(pmd: &PmdModel) -> Vec<IrBone> {
         }
     }
 
+    // IK影響下ボーン（Chainのみ）をマーク — Targetはブルー表示
+    for ik in &pmd.ik_list {
+        for &chain_bone in &ik.chain {
+            let ci = chain_bone as usize;
+            if ci < bones.len() {
+                bones[ci].is_ik = true;
+            }
+        }
+    }
+
     bones
+}
+
+/// テクスチャファイル名を分類: .sph→乗算(1), .spa→加算(2), それ以外→メインテクスチャ
+fn classify_tex(s: &str) -> (Option<&str>, Option<(&str, u8)>) {
+    let lower = s.to_ascii_lowercase();
+    if lower.ends_with(".sph") {
+        (None, Some((s, 1u8)))
+    } else if lower.ends_with(".spa") {
+        (None, Some((s, 2u8)))
+    } else {
+        (Some(s), None)
+    }
+}
+
+/// テクスチャ名を main/sphere に分解し、.sph→乗算, .spa→加算 を判定
+fn parse_pmd_texture_slots(name: &str) -> (Option<&str>, Option<(&str, u8)>) {
+    let mut parts = name.split('*').filter(|s| !s.is_empty());
+    match (parts.next(), parts.next()) {
+        (Some(a), Some(b)) => {
+            let (ma, sa) = classify_tex(a);
+            let (mb, sb) = classify_tex(b);
+            (ma.or(mb), sa.or(sb))
+        }
+        (Some(a), None) => classify_tex(a),
+        _ => (None, None),
+    }
 }
 
 fn extract_textures(
@@ -173,16 +235,38 @@ fn extract_textures(
     pmd_dir: &Path,
     aux_files: Option<&HashMap<PathBuf, Arc<[u8]>>>,
 ) -> Vec<IrTexture> {
-    // PMD材質からユニークなテクスチャパスを収集
+    // PMD材質からユニークなテクスチャパスを収集（メイン + スフィア + トゥーン）
     let mut tex_paths: Vec<String> = Vec::new();
     for mat in &pmd.materials {
         if mat.texture_name.is_empty() {
             continue;
         }
-        // "*" でスフィアテクスチャと分離
-        let main_tex = mat.texture_name.split('*').next().unwrap_or("");
-        if !main_tex.is_empty() && !tex_paths.contains(&main_tex.to_string()) {
-            tex_paths.push(main_tex.to_string());
+        let (main_tex, sphere) = parse_pmd_texture_slots(&mat.texture_name);
+        if let Some(path) = main_tex {
+            if !path.is_empty() && !tex_paths.contains(&path.to_string()) {
+                tex_paths.push(path.to_string());
+            }
+        }
+        if let Some((path, _)) = sphere {
+            if !path.is_empty() && !tex_paths.contains(&path.to_string()) {
+                tex_paths.push(path.to_string());
+            }
+        }
+    }
+    // トゥーンテクスチャもテクスチャ表に登録（モデル同梱分のみ）
+    for toon_name in &pmd.toon_textures {
+        if !toon_name.is_empty() && !tex_paths.contains(toon_name) {
+            let normalized = toon_name.replace('\\', "/");
+            let full_path = pmd_dir.join(&normalized);
+            // aux_files にあるか、ファイルシステムに存在する場合のみ登録
+            let exists = if let Some(aux) = aux_files {
+                aux.contains_key(&PathBuf::from(&normalized))
+            } else {
+                full_path.exists()
+            };
+            if exists {
+                tex_paths.push(toon_name.clone());
+            }
         }
     }
 
@@ -193,7 +277,7 @@ fn extract_textures(
             let full_path = pmd_dir.join(&normalized);
             let filename = Path::new(&normalized)
                 .file_name()
-                .map(|f| f.to_string_lossy().to_string())
+                .map(|f| f.to_string_lossy().into_owned())
                 .unwrap_or_else(|| normalized.clone());
 
             let ext = Path::new(&normalized)
@@ -206,6 +290,7 @@ fn extract_textures(
                 "jpg" | "jpeg" => "image/jpeg",
                 "bmp" => "image/bmp",
                 "tga" => "image/tga",
+                "sph" | "spa" => "image/bmp", // スフィアマップは通常 BMP
                 _ => "application/octet-stream",
             };
 
@@ -235,37 +320,95 @@ fn extract_textures(
 }
 
 /// テクスチャ名 → IrTexture インデックスのマッピング
-fn build_tex_map(pmd: &PmdModel) -> HashMap<String, usize> {
+/// extract_textures の結果から構築し、インデックスの一貫性を保証する
+fn build_tex_map(pmd: &PmdModel, textures: &[IrTexture]) -> HashMap<String, usize> {
+    // IrTexture の filename からインデックスマップを構築
+    let filename_to_idx: HashMap<&str, usize> = textures
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.filename.as_str(), i))
+        .collect();
+
     let mut map = HashMap::new();
-    let mut idx = 0;
+    // 材質テクスチャ（メイン + スフィア）
     for mat in &pmd.materials {
         if mat.texture_name.is_empty() {
             continue;
         }
-        let main_tex = mat.texture_name.split('*').next().unwrap_or("");
-        if !main_tex.is_empty() && !map.contains_key(main_tex) {
-            map.insert(main_tex.to_string(), idx);
-            idx += 1;
+        let (main_tex, sphere) = parse_pmd_texture_slots(&mat.texture_name);
+        if let Some(path) = main_tex {
+            if !path.is_empty() && !map.contains_key(path) {
+                if let Some(&idx) = filename_to_idx.get(path) {
+                    map.insert(path.to_string(), idx);
+                }
+            }
+        }
+        if let Some((path, _)) = sphere {
+            if !path.is_empty() && !map.contains_key(path) {
+                if let Some(&idx) = filename_to_idx.get(path) {
+                    map.insert(path.to_string(), idx);
+                }
+            }
+        }
+    }
+    // トゥーンテクスチャ
+    for toon_name in &pmd.toon_textures {
+        if !toon_name.is_empty() && !map.contains_key(toon_name) {
+            if let Some(&idx) = filename_to_idx.get(toon_name.as_str()) {
+                map.insert(toon_name.clone(), idx);
+            }
         }
     }
     map
 }
 
-fn extract_materials(pmd: &PmdModel, _textures: &[IrTexture]) -> Vec<IrMaterial> {
-    let tex_map = build_tex_map(pmd);
+fn extract_materials(pmd: &PmdModel, textures: &[IrTexture]) -> Vec<IrMaterial> {
+    let tex_map = build_tex_map(pmd, textures);
 
     pmd.materials
         .iter()
         .enumerate()
         .map(|(i, m)| {
-            let main_tex = m.texture_name.split('*').next().unwrap_or("");
-            let texture_index = if main_tex.is_empty() {
-                None
-            } else {
-                tex_map.get(main_tex).copied()
+            let (main_tex, sphere) = parse_pmd_texture_slots(&m.texture_name);
+            let texture_index = main_tex.and_then(|path| {
+                if path.is_empty() {
+                    None
+                } else {
+                    tex_map.get(path).copied()
+                }
+            });
+
+            // スフィアテクスチャ
+            let (sphere_texture_index, sphere_mode) = match sphere {
+                Some((path, mode)) => (tex_map.get(path).copied(), mode),
+                None => (None, 0),
             };
 
-            let has_edge = m.edge_flag == 0; // PMD: 0=エッジあり
+            // トゥーン参照: toon_index が 0..=9 → 共有トゥーン、
+            // pmd.toon_textures にファイル名があればそれを個別トゥーンとして使用
+            let (toon_texture_index, toon_shared_index) = if m.toon_index <= 9 {
+                let toon_name = &pmd.toon_textures[m.toon_index as usize];
+                if !toon_name.is_empty() {
+                    // 個別トゥーンテクスチャがテクスチャリストに存在するか確認
+                    if let Some(&idx) = tex_map.get(toon_name) {
+                        (Some(idx), None)
+                    } else {
+                        // ファイルが見つからなければ共有トゥーンにフォールバック
+                        (None, Some(m.toon_index))
+                    }
+                } else {
+                    (None, Some(m.toon_index))
+                }
+            } else {
+                log::warn!(
+                    "材質{}: toon_index={} が範囲外（0-9）、トゥーンなしとして扱います",
+                    i + 1,
+                    m.toon_index
+                );
+                (None, None)
+            };
+
+            let has_edge = m.edge_flag == 1; // PMD: 1=エッジあり
 
             IrMaterial {
                 name: format!("材質{}", i + 1),
@@ -276,12 +419,21 @@ fn extract_materials(pmd: &PmdModel, _textures: &[IrTexture]) -> Vec<IrMaterial>
                 texture_index,
                 is_double_sided: false,
                 is_mtoon: false,
-                edge_color: if has_edge { Vec4::new(0.0, 0.0, 0.0, 1.0) } else { Vec4::ZERO },
+                edge_color: if has_edge {
+                    Vec4::new(0.0, 0.0, 0.0, 1.0)
+                } else {
+                    Vec4::ZERO
+                },
                 edge_size: if has_edge { 1.0 } else { 0.0 },
                 shade_color: None,
                 shade_texture_index: None,
                 outline_width_texture_index: None,
                 source_texture_name: None,
+                source_format: SourceFormat::Pmd,
+                sphere_texture_index,
+                sphere_mode,
+                toon_texture_index,
+                toon_shared_index,
             }
         })
         .collect()
@@ -318,17 +470,27 @@ fn extract_meshes(pmd: &PmdModel, _materials: &[IrMaterial]) -> (Vec<IrMesh>, Ha
 
                     let v = &pmd.vertices[global_idx as usize];
                     let w1 = v.weight as f32 / 100.0;
-                    let mut weights = vec![(v.bone1 as usize, w1)];
-                    if w1 < 1.0 {
-                        weights.push((v.bone2 as usize, 1.0 - w1));
-                    }
+                    let (w_arr, w_cnt) = if w1 < 1.0 {
+                        (
+                            [
+                                (v.bone1 as usize, w1),
+                                (v.bone2 as usize, 1.0 - w1),
+                                (0, 0.0),
+                                (0, 0.0),
+                            ],
+                            2u8,
+                        )
+                    } else {
+                        ([(v.bone1 as usize, w1), (0, 0.0), (0, 0.0), (0, 0.0)], 1u8)
+                    };
 
                     local_vertices.push(IrVertex {
                         position: pmx_pos_to_gltf(v.position),
                         normal: pmx_normal_to_gltf(v.normal),
                         uv: v.uv,
-                        weights,
-                        edge_scale: if v.edge_flag == 0 { 1.0 } else { 0.0 },
+                        weights: w_arr,
+                        weight_count: w_cnt,
+                        edge_scale: if v.edge_flag == 1 { 1.0 } else { 0.0 },
                     });
                     new_idx
                 };
@@ -392,7 +554,9 @@ fn extract_morphs(pmd: &PmdModel, pmd_to_ir_vertex: &HashMap<u32, usize>) -> Vec
                 _ => 4, // その他
             };
 
-            let name_en = pmd.english_header.as_ref()
+            let name_en = pmd
+                .english_header
+                .as_ref()
                 .and_then(|eh| eh.morph_names.get(i))
                 .cloned()
                 .unwrap_or_default();
@@ -407,35 +571,16 @@ fn extract_morphs(pmd: &PmdModel, pmd_to_ir_vertex: &HashMap<u32, usize>) -> Vec
         .collect()
 }
 
-/// PMD剛体回転の調整: ボーン方向が下向き（Y<0）の場合、X回転を反転
-/// PMXEditor の GetPoseMatrix_Bone と同様の Y軸反転規約に対応
-fn adjust_pmd_rigid_rotation(pmd: &PmdModel, bone_index: Option<usize>, rot: Vec3) -> Vec3 {
-    let Some(bi) = bone_index else { return rot; };
-    let bone = &pmd.bones[bi];
-    let child_idx = bone.child as usize;
-
-    let dir = if child_idx < pmd.bones.len() && child_idx != bi {
-        pmd.bones[child_idx].position - bone.position
-    } else if bone.parent != 0xFFFF {
-        bone.position - pmd.bones[bone.parent as usize].position
-    } else {
-        return rot;
-    };
-
-    if dir.y < 0.0 {
-        Vec3::new(-rot.x, rot.y, rot.z)
-    } else {
-        rot
-    }
-}
-
 fn extract_physics(pmd: &PmdModel) -> IrPhysics {
     let rigid_bodies = pmd
         .rigid_bodies
         .iter()
         .map(|r| {
+            // bone_index=0xFFFF（関連ボーンなし）の場合はボーン0（センター）に追従
             let bone_index = if (r.bone_index as usize) < pmd.bones.len() {
                 Some(r.bone_index as usize)
+            } else if !pmd.bones.is_empty() {
+                Some(0)
             } else {
                 None
             };
@@ -465,7 +610,7 @@ fn extract_physics(pmd: &PmdModel) -> IrPhysics {
                 no_collision_mask: r.no_collision_mask,
                 shape,
                 position: abs_position,
-                rotation: adjust_pmd_rigid_rotation(pmd, bone_index, r.rotation),
+                rotation: r.rotation,
                 mass: r.mass,
                 linear_damping: r.linear_damping,
                 angular_damping: r.angular_damping,

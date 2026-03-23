@@ -3,7 +3,7 @@
 use anyhow::{bail, Result};
 use std::io::Read;
 
-use super::{ArchiveEntry, ArchiveEntryMeta, normalize_archive_path};
+use super::{normalize_archive_path, ArchiveEntry, ArchiveEntryMeta};
 
 /// ZIP エントリのファイル名を取得（UTF-8 → Shift_JIS フォールバック）
 fn decode_filename(file: &zip::read::ZipFile) -> Result<String> {
@@ -42,7 +42,11 @@ pub fn list_entries(data: &[u8]) -> Result<Vec<ArchiveEntryMeta>> {
 
 /// Pass 2: 指定パスのファイル群のみ展開
 /// max_total_bytes: 総展開サイズ上限（zip bomb 対策）
-pub fn extract_files(data: &[u8], paths: &[&std::path::Path], max_total_bytes: u64) -> Result<Vec<ArchiveEntry>> {
+pub fn extract_files(
+    data: &[u8],
+    paths: &[&std::path::Path],
+    max_total_bytes: u64,
+) -> Result<Vec<ArchiveEntry>> {
     let reader = std::io::Cursor::new(data);
     let mut archive = zip::ZipArchive::new(reader)?;
     let mut results = Vec::new();
@@ -63,7 +67,12 @@ pub fn extract_files(data: &[u8], paths: &[&std::path::Path], max_total_bytes: u
         // サイズチェック（declared size）
         let declared = file.size();
         if total + declared > max_total_bytes {
-            bail!("展開サイズ上限超過: {} + {} > {} bytes", total, declared, max_total_bytes);
+            bail!(
+                "展開サイズ上限超過: {} + {} > {} bytes",
+                total,
+                declared,
+                max_total_bytes
+            );
         }
 
         // 実際の読み込み（take でハード制限）

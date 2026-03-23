@@ -47,7 +47,8 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
 
             let reader = channel.reader(|buf| Some(&buffers[buf.index()]));
 
-            let times: Vec<f32> = reader.read_inputs()
+            let times: Vec<f32> = reader
+                .read_inputs()
                 .map(|iter| iter.collect())
                 .unwrap_or_default();
 
@@ -62,7 +63,8 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
             };
 
             // ノード名をキーとして使用
-            let node_name = nodes.get(node_idx)
+            let node_name = nodes
+                .get(node_idx)
                 .and_then(|n| n.name())
                 .unwrap_or("")
                 .to_string();
@@ -73,7 +75,8 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
 
             match target.property() {
                 gltf::animation::Property::Rotation => {
-                    let rotations: Vec<Quat> = reader.read_outputs()
+                    let rotations: Vec<Quat> = reader
+                        .read_outputs()
                         .map(|out| {
                             if let gltf::animation::util::ReadOutputs::Rotations(rots) = out {
                                 rots.into_f32().map(Quat::from_array).collect()
@@ -83,22 +86,26 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                         })
                         .unwrap_or_default();
 
-                    let keyframes: Vec<RotationKeyframe> = times.iter()
+                    let keyframes: Vec<RotationKeyframe> = times
+                        .iter()
                         .zip(rotations.iter())
                         .map(|(&t, &v)| RotationKeyframe { time: t, value: v })
                         .collect();
 
-                    let entry = bone_channels.entry(node_name).or_insert_with(|| BoneChannel {
-                        rotation: Vec::new(),
-                        rotation_interp: interp,
-                        translation: None,
-                        translation_interp: None,
-                    });
+                    let entry = bone_channels
+                        .entry(node_name)
+                        .or_insert_with(|| BoneChannel {
+                            rotation: Vec::new(),
+                            rotation_interp: interp,
+                            translation: None,
+                            translation_interp: None,
+                        });
                     entry.rotation = keyframes;
                     entry.rotation_interp = interp;
                 }
                 gltf::animation::Property::Translation => {
-                    let translations: Vec<Vec3> = reader.read_outputs()
+                    let translations: Vec<Vec3> = reader
+                        .read_outputs()
                         .map(|out| {
                             if let gltf::animation::util::ReadOutputs::Translations(trans) = out {
                                 trans.map(Vec3::from).collect()
@@ -108,23 +115,27 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                         })
                         .unwrap_or_default();
 
-                    let keyframes: Vec<TranslationKeyframe> = times.iter()
+                    let keyframes: Vec<TranslationKeyframe> = times
+                        .iter()
                         .zip(translations.iter())
                         .map(|(&t, &v)| TranslationKeyframe { time: t, value: v })
                         .collect();
 
-                    let entry = bone_channels.entry(node_name).or_insert_with(|| BoneChannel {
-                        rotation: Vec::new(),
-                        rotation_interp: Interpolation::Linear,
-                        translation: None,
-                        translation_interp: None,
-                    });
+                    let entry = bone_channels
+                        .entry(node_name)
+                        .or_insert_with(|| BoneChannel {
+                            rotation: Vec::new(),
+                            rotation_interp: Interpolation::Linear,
+                            translation: None,
+                            translation_interp: None,
+                        });
                     entry.translation = Some(keyframes);
                     entry.translation_interp = Some(interp);
                 }
                 gltf::animation::Property::MorphTargetWeights => {
                     // モーフターゲットウェイト: メッシュのモーフターゲット名と対応
-                    let weights: Vec<f32> = reader.read_outputs()
+                    let weights: Vec<f32> = reader
+                        .read_outputs()
                         .map(|out| {
                             if let gltf::animation::util::ReadOutputs::MorphTargetWeights(w) = out {
                                 w.into_f32().collect()
@@ -135,7 +146,8 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                         .unwrap_or_default();
 
                     // ターゲットノードのメッシュからモーフターゲット名を取得
-                    let morph_names: Vec<String> = nodes.get(node_idx)
+                    let morph_names: Vec<String> = nodes
+                        .get(node_idx)
                         .and_then(|n| n.mesh())
                         .map(|mesh| {
                             mesh.primitives()
@@ -154,11 +166,14 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                         .unwrap_or_default();
 
                     // メッシュの target_names を取得（もしあれば）
-                    let target_names: Vec<String> = nodes.get(node_idx)
+                    let target_names: Vec<String> = nodes
+                        .get(node_idx)
                         .and_then(|n| n.mesh())
                         .map(|mesh| {
                             let json_mesh = &document.as_json().meshes[mesh.index()];
-                            json_mesh.extras.as_deref()
+                            json_mesh
+                                .extras
+                                .as_deref()
                                 .and_then(|e: &serde_json::value::RawValue| {
                                     serde_json::from_str::<serde_json::Value>(e.get()).ok()
                                 })
@@ -178,17 +193,21 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                     if morph_count > 0 {
                         // weights は [frame0_target0, frame0_target1, ..., frame1_target0, ...] の順
                         for (mi, morph_name) in target_names.iter().enumerate() {
-                            let keyframes: Vec<ScalarKeyframe> = times.iter().enumerate()
+                            let keyframes: Vec<ScalarKeyframe> = times
+                                .iter()
+                                .enumerate()
                                 .filter_map(|(fi, &t)| {
                                     let idx = fi * morph_count + mi;
-                                    weights.get(idx).map(|&w| ScalarKeyframe { time: t, value: w })
+                                    weights
+                                        .get(idx)
+                                        .map(|&w| ScalarKeyframe { time: t, value: w })
                                 })
                                 .collect();
                             if !keyframes.is_empty() {
-                                expression_channels.insert(morph_name.clone(), ExpressionChannel {
-                                    keyframes,
-                                    interp,
-                                });
+                                expression_channels.insert(
+                                    morph_name.clone(),
+                                    ExpressionChannel { keyframes, interp },
+                                );
                             }
                         }
                     }
@@ -211,18 +230,26 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
             ) {
                 let node = &nodes[node_idx];
                 let (t, r, _s) = node.transform().decomposed();
-                let local_mat = glam::Mat4::from_rotation_translation(
-                    Quat::from_array(r),
-                    Vec3::from(t),
-                );
+                let local_mat =
+                    glam::Mat4::from_rotation_translation(Quat::from_array(r), Vec3::from(t));
                 node_globals[node_idx] = parent_global * local_mat;
                 for child in node.children() {
-                    compute_node_globals(nodes, node_globals, child.index(), node_globals[node_idx]);
+                    compute_node_globals(
+                        nodes,
+                        node_globals,
+                        child.index(),
+                        node_globals[node_idx],
+                    );
                 }
             }
             for scene in document.scenes() {
                 for root_node in scene.nodes() {
-                    compute_node_globals(&nodes, &mut node_globals, root_node.index(), glam::Mat4::IDENTITY);
+                    compute_node_globals(
+                        &nodes,
+                        &mut node_globals,
+                        root_node.index(),
+                        glam::Mat4::IDENTITY,
+                    );
                 }
             }
             // 各ボーンチャネルのレストポーズを保存
@@ -232,12 +259,16 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                     let (t, r, _s) = node.transform().decomposed();
                     let local_rot = Quat::from_array(r);
                     let local_trans = Vec3::from(t);
-                    let (_, global_rot, _) = node_globals[node.index()].to_scale_rotation_translation();
-                    bone_rests.insert(name.clone(), VrmaBoneRest {
-                        local_rotation: local_rot,
-                        global_rotation: global_rot,
-                        local_translation: local_trans,
-                    });
+                    let (_, global_rot, _) =
+                        node_globals[node.index()].to_scale_rotation_translation();
+                    bone_rests.insert(
+                        name.clone(),
+                        VrmaBoneRest {
+                            local_rotation: local_rot,
+                            global_rotation: global_rot,
+                            local_translation: local_trans,
+                        },
+                    );
                 }
             }
 
@@ -250,9 +281,12 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                     if let Some(name) = node.name() {
                         let lower = name.to_lowercase();
                         if lower.contains("left")
-                            && (lower.contains("arm") || lower.contains("leg") || lower.contains("shoulder"))
+                            && (lower.contains("arm")
+                                || lower.contains("leg")
+                                || lower.contains("shoulder"))
                         {
-                            let (_, _, global_t) = node_globals[node.index()].to_scale_rotation_translation();
+                            let (_, _, global_t) =
+                                node_globals[node.index()].to_scale_rotation_translation();
                             left_x_sum += global_t.x;
                             count += 1;
                         }
@@ -262,7 +296,8 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
             };
 
             // ボーン名からヒューマノイドマッピングを試行
-            let glb_names: Vec<(usize, &str)> = bone_channels.keys()
+            let glb_names: Vec<(usize, &str)> = bone_channels
+                .keys()
                 .enumerate()
                 .map(|(i, name)| (i, name.as_str()))
                 .collect();
@@ -287,7 +322,9 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                 }
                 log::info!(
                     "glTFヒューマノイド検出: {} ({}/{}ch マッピング)",
-                    humanoid.rig_type.label(), mapped_count, name_list.len(),
+                    humanoid.rig_type.label(),
+                    mapped_count,
+                    name_list.len(),
                 );
                 (renamed, renamed_rests, BoneMatchMode::Humanoid)
             } else {
@@ -351,7 +388,9 @@ fn parse_vrma(
     let bone_rests = extract_vrma_bone_rests(document, &bone_node_map);
 
     // 最初のアニメーションを読み込む（仕様: animations の最初を使用）
-    let anim = document.animations().next()
+    let anim = document
+        .animations()
+        .next()
         .context("glTF アニメーションが含まれていません")?;
 
     let name = anim.name().unwrap_or("vrma").to_string();
@@ -368,7 +407,8 @@ fn parse_vrma(
         let reader = channel.reader(|buf| Some(&buffers[buf.index()]));
 
         // キーフレームの時間を読み込み
-        let times: Vec<f32> = reader.read_inputs()
+        let times: Vec<f32> = reader
+            .read_inputs()
             .map(|iter| iter.collect())
             .unwrap_or_default();
 
@@ -386,7 +426,8 @@ fn parse_vrma(
         if let Some(bone_name) = bone_node_map.get(&node_idx) {
             match target.property() {
                 gltf::animation::Property::Rotation => {
-                    let rotations: Vec<Quat> = reader.read_outputs()
+                    let rotations: Vec<Quat> = reader
+                        .read_outputs()
                         .map(|out| {
                             if let gltf::animation::util::ReadOutputs::Rotations(rots) = out {
                                 rots.into_f32().map(Quat::from_array).collect()
@@ -396,22 +437,27 @@ fn parse_vrma(
                         })
                         .unwrap_or_default();
 
-                    let keyframes: Vec<RotationKeyframe> = times.iter()
+                    let keyframes: Vec<RotationKeyframe> = times
+                        .iter()
                         .zip(rotations.iter())
                         .map(|(&t, &v)| RotationKeyframe { time: t, value: v })
                         .collect();
 
-                    let entry = bone_channels.entry(bone_name.clone()).or_insert_with(|| BoneChannel {
-                        rotation: Vec::new(),
-                        rotation_interp: interp,
-                        translation: None,
-                        translation_interp: None,
-                    });
+                    let entry =
+                        bone_channels
+                            .entry(bone_name.clone())
+                            .or_insert_with(|| BoneChannel {
+                                rotation: Vec::new(),
+                                rotation_interp: interp,
+                                translation: None,
+                                translation_interp: None,
+                            });
                     entry.rotation = keyframes;
                     entry.rotation_interp = interp;
                 }
                 gltf::animation::Property::Translation => {
-                    let translations: Vec<Vec3> = reader.read_outputs()
+                    let translations: Vec<Vec3> = reader
+                        .read_outputs()
                         .map(|out| {
                             if let gltf::animation::util::ReadOutputs::Translations(trans) = out {
                                 trans.map(Vec3::from).collect()
@@ -421,17 +467,21 @@ fn parse_vrma(
                         })
                         .unwrap_or_default();
 
-                    let keyframes: Vec<TranslationKeyframe> = times.iter()
+                    let keyframes: Vec<TranslationKeyframe> = times
+                        .iter()
                         .zip(translations.iter())
                         .map(|(&t, &v)| TranslationKeyframe { time: t, value: v })
                         .collect();
 
-                    let entry = bone_channels.entry(bone_name.clone()).or_insert_with(|| BoneChannel {
-                        rotation: Vec::new(),
-                        rotation_interp: Interpolation::Linear,
-                        translation: None,
-                        translation_interp: None,
-                    });
+                    let entry =
+                        bone_channels
+                            .entry(bone_name.clone())
+                            .or_insert_with(|| BoneChannel {
+                                rotation: Vec::new(),
+                                rotation_interp: Interpolation::Linear,
+                                translation: None,
+                                translation_interp: None,
+                            });
                     entry.translation = Some(keyframes);
                     entry.translation_interp = Some(interp);
                 }
@@ -442,7 +492,8 @@ fn parse_vrma(
         // 表情チャネル: translation.x をウェイトとして解釈
         if let Some(expr_name) = expr_node_map.get(&node_idx) {
             if matches!(target.property(), gltf::animation::Property::Translation) {
-                let translations: Vec<Vec3> = reader.read_outputs()
+                let translations: Vec<Vec3> = reader
+                    .read_outputs()
                     .map(|out| {
                         if let gltf::animation::util::ReadOutputs::Translations(trans) = out {
                             trans.map(Vec3::from).collect()
@@ -452,15 +503,17 @@ fn parse_vrma(
                     })
                     .unwrap_or_default();
 
-                let keyframes: Vec<ScalarKeyframe> = times.iter()
+                let keyframes: Vec<ScalarKeyframe> = times
+                    .iter()
                     .zip(translations.iter())
-                    .map(|(&t, v)| ScalarKeyframe { time: t, value: v.x })
+                    .map(|(&t, v)| ScalarKeyframe {
+                        time: t,
+                        value: v.x,
+                    })
                     .collect();
 
-                expression_channels.insert(expr_name.clone(), ExpressionChannel {
-                    keyframes,
-                    interp,
-                });
+                expression_channels
+                    .insert(expr_name.clone(), ExpressionChannel { keyframes, interp });
             }
         }
     }
@@ -512,7 +565,8 @@ fn extract_vrma_bone_rests(
 
     // グローバル回転を伝搬（ルートから）
     let mut computed = vec![false; n];
-    let mut stack: Vec<(usize, Quat)> = nodes.iter()
+    let mut stack: Vec<(usize, Quat)> = nodes
+        .iter()
         .filter(|node| !has_parent[node.index()])
         .map(|node| (node.index(), Quat::IDENTITY))
         .collect();
@@ -533,11 +587,14 @@ fn extract_vrma_bone_rests(
     let mut rests = HashMap::new();
     for (&node_idx, bone_name) in bone_node_map {
         if node_idx < n {
-            rests.insert(bone_name.clone(), VrmaBoneRest {
-                local_rotation: local_rotations[node_idx],
-                global_rotation: global_rotations[node_idx],
-                local_translation: local_translations[node_idx],
-            });
+            rests.insert(
+                bone_name.clone(),
+                VrmaBoneRest {
+                    local_rotation: local_rotations[node_idx],
+                    global_rotation: global_rotations[node_idx],
+                    local_translation: local_translations[node_idx],
+                },
+            );
         }
     }
 
@@ -547,7 +604,10 @@ fn extract_vrma_bone_rests(
 /// humanoid.humanBones のノードマッピングをパース
 fn parse_humanoid_mapping(vrma_ext: &Value) -> HashMap<usize, String> {
     let mut map = HashMap::new();
-    if let Some(bones) = vrma_ext.pointer("/humanoid/humanBones").and_then(|v| v.as_object()) {
+    if let Some(bones) = vrma_ext
+        .pointer("/humanoid/humanBones")
+        .and_then(|v| v.as_object())
+    {
         for (bone_name, bone_val) in bones {
             if let Some(node) = bone_val.get("node").and_then(|v| v.as_u64()) {
                 map.insert(node as usize, bone_name.clone());
@@ -562,7 +622,10 @@ fn parse_expression_mapping(vrma_ext: &Value) -> HashMap<usize, String> {
     let mut map = HashMap::new();
 
     // プリセット表情
-    if let Some(preset) = vrma_ext.pointer("/expressions/preset").and_then(|v| v.as_object()) {
+    if let Some(preset) = vrma_ext
+        .pointer("/expressions/preset")
+        .and_then(|v| v.as_object())
+    {
         for (name, val) in preset {
             if let Some(node) = val.get("node").and_then(|v| v.as_u64()) {
                 map.insert(node as usize, name.clone());
@@ -571,7 +634,10 @@ fn parse_expression_mapping(vrma_ext: &Value) -> HashMap<usize, String> {
     }
 
     // カスタム表情
-    if let Some(custom) = vrma_ext.pointer("/expressions/custom").and_then(|v| v.as_object()) {
+    if let Some(custom) = vrma_ext
+        .pointer("/expressions/custom")
+        .and_then(|v| v.as_object())
+    {
         for (name, val) in custom {
             if let Some(node) = val.get("node").and_then(|v| v.as_u64()) {
                 map.insert(node as usize, name.clone());
@@ -598,7 +664,8 @@ mod tests {
         assert!(!anim.bone_channels.is_empty(), "ボーンチャネルが空");
         eprintln!(
             "VRMA: {} ({:.2}s), bones={}, exprs={}",
-            anim.name, anim.duration,
+            anim.name,
+            anim.duration,
             anim.bone_channels.len(),
             anim.expression_channels.len(),
         );

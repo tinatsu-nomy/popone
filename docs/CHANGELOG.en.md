@@ -2,6 +2,71 @@
 
 [日本語](CHANGELOG.md)
 
+## v0.2.6
+
+### Bug Fixes
+
+- **Rigid Body / Joint Euler Rotation Order Fix** — Changed Euler decomposition/reconstruction for rigid bodies and joints from `ZXY` (intrinsic ZXY = extrinsic YXZ) to `YXZ` (intrinsic YXZ = extrinsic ZXY). Now conforms to D3DX row-major convention `v * Ry * Rx * Rz` (in glam column-major: `Rz * Rx * Ry`). The mismatch was inconspicuous for spheres/capsules but clearly visible for box rigid bodies. Both conversion output (`convert/physics.rs`) and viewer rendering (`gpu.rs`) are fixed
+- **PMD/PMX Rigid Body bone_index Fallback** — Rigid bodies with PMD `bone_index=0xFFFF` (no associated bone) and PMX `bone_index=-1` now fall back to bone 0 (center). Previously these were `None`, leaving no base point for position calculation
+- **Joint Connection Line Display Separation** — Removed joint connection lines (yellow lines) from `generate_spring_bone_vertices` (physics display (P) toggle). Joint lines are already independently drawn by `generate_joint_vertices` and controlled by the joint display toggle
+- **MMD Draw Order Fix** — Merged separate opaque/transparent draw loops into a single material-index-order loop. Now correctly preserves PMX/PMD material order (the front-to-back order intended by the model author). Edges are drawn immediately after each opaque material
+- **MMD Transparent Depth Write Enabled** — Enabled depth write for MMD transparent pipelines (MMD-compliant). Combined with material-order drawing, materials with alpha=0.99 (effectively opaque) now correctly occlude subsequent materials
+- **PMD Custom Toon Texture Fix** — Fixed `build_tex_map()` not registering custom toon texture indices. Now builds the mapping from `extract_textures()` results, ensuring model-bundled toon textures are correctly referenced (eliminates incorrect fallback to shared toon)
+- **PMX/PMD Rigid Body Animation Tracking Fix** — Fixed rigid bodies and joints not correctly following bones during VRMA animation playback on PMX/PMD models. Root cause was coordinate space mismatch between `bone.position` (converted to glTF space) and `rb.position` (kept in PMX space). Since PMX/PMD's `pmx_pos_to_gltf` uses the same Z-flip as VRM 1.0, the rigid body tracking delta computation now applies the same `gltf_pos_to_pmx` conversion and rotation delta Z-flip as VRM 1.0
+- **FBX Humanoid Bone Detection Improvement** — Fixed Blender rig CamelCase bone names (e.g., `UpperLeg.L` → `upperleg_l`) failing to match `upper_leg_l` patterns. Added underscore-free alternative patterns (`upperleg_l` / `lowerleg_l` / `upperarm_l` / `lowerarm_l`), singular toe (`toe_l` / `toe_r`), reversed finger patterns (`index_proximal_l`, etc.), and pinky aliases. Also strips Unity FBX export namespace prefixes (`Model::Hips`, etc.) via `strip_namespace_lower()` for rig detection and pattern matching
+- **UnityPackage Texture MIME Type Fix** — Fixed all textures appearing as magenta (1x1 pink) when loading FBX models from UnityPackage files. `embed_textures_into_ir` was creating IrTexture with an empty `mime_type`, causing `image::load_from_memory` auto-detection to fail for formats without magic numbers (e.g., TGA). Now derives MIME type from the file extension. Also added `"image/x-tga"` to the TGA MIME match in `decode_image_to_rgba_with_hint` to fix mismatch with the value returned by `mime_for_ext`
+
+### New Features
+
+- **PMX Grant (付与) Animation Support** — Rotation/move grants on PMX bones are now processed during animation playback. D-bones (leg D, knee D, etc.) in models like Tda Miku copy FK bone rotations via grants, but this mechanism was unimplemented, causing legs to not follow VRMA animations. Added `IrGrant` (parent index, ratio, rotation/move/local flags) to `IrBone` and extracts grant data during PMX loading. Implemented as a 2-phase post-process after animation computation: apply grant deltas in topological order, then recompute global matrices linearly. Local grants (`is_local`) apply deltas relative to the child bone's rest pose. Grant processing order is pre-computed via topological sort (Kahn's BFS algorithm), ensuring correct dependency order even for malformed PMX files
+- **Bone Display Improvements** — Draws PMX/PMD bones with flag-based shapes. Normal = ◎ (double circle + filled center), Move = ◻ (square + filled center), Axis-fixed = ⊗ (circle + ✕), IK Controller = ◻ (blue outline + orange fill + blue center). IK-affected bones (Link) displayed in orange. Tail-based drawing (self→tail) shows bone direction like PMXEditor. Full solid fills via TriangleList, 3-stage pipeline (tail → fill → outline), 4-pass priority rendering (normal → IK-affected → axis-fixed → IK controller)
+
+- **FBX T-Stance Conversion** — Added A-to-T stance conversion for FBX models. In the viewer, a "T-Stance Conversion" checkbox appears when an FBX model is loaded (mutually exclusive with A-stance conversion). Available via `--normalize-to-tstance` CLI option
+- **MMD Rendering Mode** — Auto-enabled on PMX/PMD load. Displays with MMD-specific toon shading, Blinn-Phong specular, and sphere maps (multiply/add)
+- **Edge (Outline) Drawing** — Inverted hull method outlines. Per-material edge color/size, distance attenuation, UI toggle and thickness slider (0.1–3.0)
+- **Shared Toon Textures** — CPU-generated MMD standard toon01–toon10 gradients. Individual toon textures also supported
+- **Sphere Maps** — PMX sphere_mode (multiply/add), PMD .sph/.spa file support. Sphere UV computed from view-space normals
+- **Color Space Reproduction** — Reproduces MMD's gamma-space rendering. PMX/PMD-only frames switch to `Rgba8Unorm` render target for correct gamma-space alpha blending. Falls back to `Rgba8UnormSrgb` when VRM is mixed
+- **PMD Sphere/Toon Extraction** — `parse_pmd_texture_slots` separates main/sphere textures via `*` delimiter. Toon texture registration with file existence check
+
+### Improvements
+
+- **Rigid Body Display Fix** — Removed unnecessary X flip correction (`adjust_pmd_rigid_rotation` / `adjust_pmx_rigid_rotation`) from PMD/PMX rigid body rotation. PMX/PMD model coordinates are already in PMX space, so glTF→PMX coordinate conversion is now skipped during viewer rendering. Fixed Box rigid body size to correctly treat values as half-extents (removed erroneous `* 0.5` double-halving). Added hemisphere wireframes (4 meridians + 3 parallels × top/bottom) to capsule rigid bodies for PMXEditor-compliant display
+- **Rigid Body physics_mode Coloring** — PMX/PMD rigid bodies now colored by `physics_mode` (0: bone-follow = green, 1: physics = red, 2: physics+bone = blue). VRM retains group-based coloring (collider = red, spring = green)
+- **Overlay Draw Order Change** — Changed visualization overlay draw order to "Normals → Bones → Rigid Bodies → Joints" (joints are frontmost). Normals are drawn farthest back as they relate to mesh surfaces, while joints are frontmost for better visibility of connection relationships
+- **MMD Lighting Overhaul** — Switched to toon multiply method (removed lit/shadow lerp). Fixed D3D ambient/emissive mapping with `base_color = saturate(diffuse × LightAmbient + ambient)`. Specular now added independently after toon (highlights preserved in shadow regions). LightAmbient = 154/255 ≈ 0.604, LightSpecular unified to same value
+- **NdotL-Dependent Toon Sampling** — Changed from fixed UV `(0.5, 0.85)` to `(0, 0.5 − NdotL × 0.5)`, reproducing shade gradients based on normal-light angle
+- **Real Shared Toon Texture Data** — Replaced estimated gradients (256×16) with actual MMD standard toon01-10 pixel data (1×32, 32-row RGB values). toon01-04: 2-color step, toon05: warm pink gradient, toon06: yellow + highlight band, toon07-10: all white
+- **Sphere UV X Inversion** — Fixed for X-inverted coordinate system with `vn_x × -0.5 + 0.5`. Sphere map applies RGB only (alpha safety for BMP etc.)
+- **PMD Edge Flag Fix** — Changed `edge_flag` interpretation from `0=enabled` to `1=edge present`
+- **PMX Toon Unset Handling** — `PmxToonRef::Texture(-1)` now treated as `(None, None)`, correctly handling no-toon materials
+- **MMD-Compliant Camera & Lighting** — FOV 45° → 30° (MMD standard), light direction changed to MMD-compliant (fixed: inversion of (-0.5,-1.0,0.5), camera-follow: MMD-style upper-left bias). Light intensity 0.6, ambient 0.5
+- **View-Dependent Fit** — Improved bounding box fit calculation to be view-dependent. Projects bbox 8 corners onto camera axes, computing distance that fits width, height, and depth within the frustum. Supports both aspect ratio and perspective/orthographic modes
+- **Shift Precision Mode** — Hold Shift for 1/3 speed precision camera control (rotation, pan, and zoom)
+- **Double-Click Fit** — Double-click viewport to fit model
+- **MMD Ambient Separation** — Separated MMD rendering ambient from the standard path. Controlled via `mmd_ambient_scale` in CameraUniform, so MMD mode toggle no longer affects standard material brightness
+- **IrMaterial Extension** — Added `source_format`, `sphere_texture_index`, `sphere_mode`, `toon_texture_index`, `toon_shared_index` fields. Index remap on merge supported
+- **Texture Dual Views** — GPU textures managed with both `Rgba8UnormSrgb` (standard) and `Rgba8Unorm` (MMD) views. Zero memory overhead
+- **Wireframe Coexistence** — Wire / S+W / normal map display falls back to standard pipeline even with MMD mode ON
+
+### Code Quality & Performance
+
+- **Animation Inverse Matrix Cache** — Cache rest-pose bone global inverse matrices at `SkinningData` construction time. Eliminates per-frame `Mat4::inverse()` computation for 175 bones
+- **WGSL Shader Consolidation** — Unified `CameraUniform` (8 duplicates) and `MmdMaterialUniform` (4 duplicates) struct definitions via `macro_rules!` + `concat!`. Shared MMD main shader body via `compute_mmd_lighting` function, localizing sRGB/Unorm differences to a single fragment shader function
+- **Duplicate Code Extraction** — Extracted `build_pkg_model_list` (unitypackage model list ×3), `load_animation_file` (animation load routing ×2), `mime_for_ext` (MIME type detection ×4) into shared functions
+- **`to_string_lossy()` Improvement** — Changed `.to_string_lossy().to_string()` to `.to_string_lossy().into_owned()` across 7 files (18 occurrences). Avoids unnecessary allocation for UTF-8 compatible paths
+- **`is_psd_filename` Optimization** — Replaced `to_lowercase()` String allocation with `eq_ignore_ascii_case`
+- **`update_mat_cache` Simplification** — Removed unnecessary double `if let` borrow pattern using NLL
+- **PMX Reader Safety Hardening** — Added negative value checks to all 14 `i32 as usize` count casts via `checked_count` helper. Prevents OOM panic on corrupt files. Removed unnecessary `BufReader` wrapping around `Cursor` (both PMX and PMD)
+- **`sort_bones_topological` Optimization** — Changed child bone search from O(n²) linear scan to O(n) adjacency list. Replaced post-sort `clone()` with `Option::take()` pattern, eliminating deep copy of all bones
+- **PSD Output I/O Optimization** — Changed UV map PSD channel data writing from per-byte `write_all` to batch buffer writes (reduced from up to 64M calls to 4 for 4096×4096). Added `reserve` to layer data buffers
+- **Texture Upload Optimization** — Eliminated `rgba.to_vec()` copy in `upload_rgba_to_gpu` when no downscaling is needed (changed to pass-by-reference). Also eliminated `img.pixels.clone()` for RGBA8 format textures by uploading directly
+- **GPU Rendering Minor Improvements** — Changed joint cube vertices from `Vec<Vec3>` to `[Vec3; 8]` fixed-size array. Changed normal cache update from `to_vec()` to `clear()` + `extend_from_slice()` for heap reuse
+- **PMX Writer Optimization** — Changed UTF-16LE encoding from manual byte push to `to_le_bytes()` + `extend_from_slice()`. UTF-8 paths now written directly without intermediate `Vec` copy
+- **Camera Matrix Reuse** — `view_proj()` now reuses `view_matrix()` instead of calling `look_at_lh` directly
+- **Dead Code Removal** — Removed empty loop (no-op for loop) in `pmx/extract.rs`
+- **`build_composite` Redundant Loop Removal** — Removed unnecessary alpha-setting loop after `vec![255u8; ...]` initialization (all bytes already 255)
+
 ## v0.2.5
 
 ### Improvements
@@ -276,5 +341,5 @@ Integration test file paths can be configured via environment variables:
 - Custom binary / ASCII FBX parser (scene graph, coordinate system conversion, PreRotation, UnitScaleFactor)
 - ASCII FBX: Content blocks (embedded textures) preserved as strings; external file fallback for texture recovery
 - Skin weights (up to 4 bones, normalized), blend shapes, UV mapping
-- Humanoid rig auto-detection (Mixamo / 3ds Max Biped / Maya HumanIK / VRoid / Blender)
+- Humanoid rig auto-detection (Mixamo / 3ds Max Biped / Maya HumanIK / VRoid / Unreal / Blender). CamelCase bone names and namespace prefixes (`Model::`, etc.) supported
 - Zero-normal auto-repair, embedded/external texture support

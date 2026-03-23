@@ -19,4 +19,3 @@ pub fn detect_version(document: &gltf::Document) -> VrmVersion {
 
     VrmVersion::Unknown
 }
-

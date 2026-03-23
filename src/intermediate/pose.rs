@@ -44,7 +44,9 @@ fn compute_astance_corrections(
     const A_STANCE_ANGLE_DEG: f32 = 30.0;
 
     let find_bone = |vrm_name: &str| -> Option<usize> {
-        bones.iter().position(|b| b.vrm_bone_name.as_deref() == Some(vrm_name))
+        bones
+            .iter()
+            .position(|b| b.vrm_bone_name.as_deref() == Some(vrm_name))
     };
 
     let arm_pairs = [
@@ -53,9 +55,9 @@ fn compute_astance_corrections(
     ];
 
     // 腕ボーンが存在するかチェック
-    let has_arms = arm_pairs.iter().any(|(upper, lower)| {
-        find_bone(upper).is_some() && find_bone(lower).is_some()
-    });
+    let has_arms = arm_pairs
+        .iter()
+        .any(|(upper, lower)| find_bone(upper).is_some() && find_bone(lower).is_some());
     if !has_arms {
         return (Vec::new(), AStanceResult::NotFound);
     }
@@ -83,7 +85,8 @@ fn compute_astance_corrections(
             if current_angle > A_STANCE_ANGLE_DEG - 5.0 && dir.y < 0.0 {
                 log::info!(
                     "Aスタンス変換: {} は既にAスタンスに近い（{:.1}°）、スキップ",
-                    upper, current_angle
+                    upper,
+                    current_angle
                 );
                 already_target_count += 1;
                 return None;
@@ -98,7 +101,8 @@ fn compute_astance_corrections(
 
             log::info!(
                 "Aスタンス変換: {} を {:.1}° 回転してAスタンスに変換",
-                upper, A_STANCE_ANGLE_DEG
+                upper,
+                A_STANCE_ANGLE_DEG
             );
             Some(AStanceCorrection {
                 bone_idx: ua_idx,
@@ -150,8 +154,9 @@ fn apply_mesh_corrections(
     let corr_data: Vec<(HashSet<usize>, Mat4, glam::Mat3)> = corrections
         .iter()
         .map(|corr| {
-            let descendants: HashSet<usize> =
-                collect_descendants_inclusive(bones, corr.bone_idx).into_iter().collect();
+            let descendants: HashSet<usize> = collect_descendants_inclusive(bones, corr.bone_idx)
+                .into_iter()
+                .collect();
             let rot_mat = Mat4::from_translation(corr.pivot)
                 * Mat4::from_quat(corr.rotation)
                 * Mat4::from_translation(-corr.pivot);
@@ -175,7 +180,7 @@ fn apply_mesh_corrections(
 
             for (affected_bones, rot_mat, rot3) in &corr_data {
                 let mut corr_weight = 0.0f32;
-                for &(bone_idx, w) in &vert.weights {
+                for &(bone_idx, w) in vert.active_weights() {
                     if affected_bones.contains(&bone_idx) {
                         corr_weight += w;
                     }
@@ -201,7 +206,7 @@ fn apply_mesh_corrections(
                 let mut blended_rot = glam::Mat3::IDENTITY * remaining;
                 for (affected_bones, _rot_mat, rot3) in &corr_data {
                     let mut corr_weight = 0.0f32;
-                    for &(bone_idx, w) in &vert.weights {
+                    for &(bone_idx, w) in vert.active_weights() {
                         if affected_bones.contains(&bone_idx) {
                             corr_weight += w;
                         }
@@ -224,10 +229,7 @@ fn apply_mesh_corrections(
 }
 
 /// モーフオフセットにAスタンス回転を適用
-fn apply_morph_corrections(
-    morphs: &mut [IrMorph],
-    vertex_rot3s: &[glam::Mat3],
-) {
+fn apply_morph_corrections(morphs: &mut [IrMorph], vertex_rot3s: &[glam::Mat3]) {
     for morph in morphs.iter_mut() {
         if let IrMorphKind::Vertex(ref mut voffs) = morph.kind {
             for (global_vi, offset) in voffs.iter_mut() {
@@ -291,8 +293,9 @@ fn apply_physics_corrections(
     pos_fn: fn(Vec3) -> Vec3,
 ) {
     for corr in corrections {
-        let descendants: HashSet<usize> =
-            collect_descendants_inclusive(bones, corr.bone_idx).into_iter().collect();
+        let descendants: HashSet<usize> = collect_descendants_inclusive(bones, corr.bone_idx)
+            .into_iter()
+            .collect();
         let pivot_pmx = pos_fn(corr.pivot);
         let rot_mat = Mat4::from_translation(pivot_pmx)
             * Mat4::from_quat(corr.rotation)
@@ -305,7 +308,10 @@ fn apply_physics_corrections(
                     rb.position = rot_mat.transform_point3(rb.position);
                     // 回転も補正（Euler ZXY → Quat → 回転 → Euler ZXY）
                     let rb_quat = glam::Quat::from_euler(
-                        glam::EulerRot::ZXY, rb.rotation.z, rb.rotation.x, rb.rotation.y,
+                        glam::EulerRot::ZXY,
+                        rb.rotation.z,
+                        rb.rotation.x,
+                        rb.rotation.y,
                     );
                     let new_quat = corr.rotation * rb_quat;
                     let (rz, rx, ry) = new_quat.to_euler(glam::EulerRot::ZXY);
@@ -326,7 +332,10 @@ fn apply_physics_corrections(
             if should_transform {
                 joint.position = rot_mat.transform_point3(joint.position);
                 let j_quat = glam::Quat::from_euler(
-                    glam::EulerRot::ZXY, joint.rotation.z, joint.rotation.x, joint.rotation.y,
+                    glam::EulerRot::ZXY,
+                    joint.rotation.z,
+                    joint.rotation.x,
+                    joint.rotation.y,
                 );
                 let new_quat = corr.rotation * j_quat;
                 let (rz, rx, ry) = new_quat.to_euler(glam::EulerRot::ZXY);
@@ -342,7 +351,10 @@ fn compute_tstance_corrections(bones: &[IrBone]) -> (Vec<AStanceCorrection>, ASt
     let find_bone = |names: &[&str]| -> Option<usize> {
         for name in names {
             // vrm_bone_name で検索
-            if let Some(idx) = bones.iter().position(|b| b.vrm_bone_name.as_deref() == Some(name)) {
+            if let Some(idx) = bones
+                .iter()
+                .position(|b| b.vrm_bone_name.as_deref() == Some(name))
+            {
                 return Some(idx);
             }
         }
@@ -357,8 +369,14 @@ fn compute_tstance_corrections(bones: &[IrBone]) -> (Vec<AStanceCorrection>, ASt
 
     // (上腕名候補, 前腕名候補) のペア
     let arm_pairs = [
-        (&["leftUpperArm", "左腕"][..], &["leftLowerArm", "左ひじ"][..]),
-        (&["rightUpperArm", "右腕"][..], &["rightLowerArm", "右ひじ"][..]),
+        (
+            &["leftUpperArm", "左腕"][..],
+            &["leftLowerArm", "左ひじ"][..],
+        ),
+        (
+            &["rightUpperArm", "右腕"][..],
+            &["rightLowerArm", "右ひじ"][..],
+        ),
     ];
 
     // 腕ボーンが存在するかチェック

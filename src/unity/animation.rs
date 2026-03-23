@@ -31,7 +31,7 @@ pub fn load_unity_anim_with_params(
 
     let name = parsed.name.unwrap_or_else(|| {
         path.file_stem()
-            .map(|s| s.to_string_lossy().to_string())
+            .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "unity_anim".to_string())
     });
 
@@ -151,7 +151,11 @@ fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
         }
 
         // m_FloatCurves セクション終了判定（同レベルか浅い別フィールドが来たら）
-        if in_float_curves && indent <= indent_float_curves && !trimmed.starts_with('-') && trimmed.contains(':') {
+        if in_float_curves
+            && indent <= indent_float_curves
+            && !trimmed.starts_with('-')
+            && trimmed.contains(':')
+        {
             // 現在のカーブを保存
             if !current_attribute.is_empty() && !current_keyframes.is_empty() {
                 float_curves.push(AnimCurve {
@@ -201,12 +205,18 @@ fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
             }
 
             if trimmed.starts_with("time:") {
-                current_time = trimmed.split(':').nth(1).and_then(|s| s.trim().parse().ok());
+                current_time = trimmed
+                    .split(':')
+                    .nth(1)
+                    .and_then(|s| s.trim().parse().ok());
                 continue;
             }
 
             if trimmed.starts_with("value:") {
-                current_value = trimmed.split(':').nth(1).and_then(|s| s.trim().parse().ok());
+                current_value = trimmed
+                    .split(':')
+                    .nth(1)
+                    .and_then(|s| s.trim().parse().ok());
                 continue;
             }
 
@@ -275,190 +285,243 @@ fn swing_twist(x_deg: f32, y_deg: f32, z_deg: f32) -> Quat {
 
 /// Muscle名一覧 (index = muscle index)
 const MUSCLE_NAMES: [&str; 95] = [
-    "Spine Front-Back", "Spine Left-Right", "Spine Twist Left-Right",
-    "Chest Front-Back", "Chest Left-Right", "Chest Twist Left-Right",
-    "UpperChest Front-Back", "UpperChest Left-Right", "UpperChest Twist Left-Right",
-    "Neck Nod Down-Up", "Neck Tilt Left-Right", "Neck Turn Left-Right",
-    "Head Nod Down-Up", "Head Tilt Left-Right", "Head Turn Left-Right",
-    "Left Eye Down-Up", "Left Eye In-Out", "Right Eye Down-Up", "Right Eye In-Out",
-    "Jaw Close", "Jaw Left-Right",
-    "Left Upper Leg Front-Back", "Left Upper Leg In-Out", "Left Upper Leg Twist In-Out",
-    "Left Lower Leg Stretch", "Left Lower Leg Twist In-Out",
-    "Left Foot Up-Down", "Left Foot Twist In-Out", "Left Toes Up-Down",
-    "Right Upper Leg Front-Back", "Right Upper Leg In-Out", "Right Upper Leg Twist In-Out",
-    "Right Lower Leg Stretch", "Right Lower Leg Twist In-Out",
-    "Right Foot Up-Down", "Right Foot Twist In-Out", "Right Toes Up-Down",
-    "Left Shoulder Down-Up", "Left Shoulder Front-Back",
-    "Left Arm Down-Up", "Left Arm Front-Back", "Left Arm Twist In-Out",
-    "Left Forearm Stretch", "Left Forearm Twist In-Out",
-    "Left Hand Down-Up", "Left Hand In-Out",
-    "Right Shoulder Down-Up", "Right Shoulder Front-Back",
-    "Right Arm Down-Up", "Right Arm Front-Back", "Right Arm Twist In-Out",
-    "Right Forearm Stretch", "Right Forearm Twist In-Out",
-    "Right Hand Down-Up", "Right Hand In-Out",
-    "LeftHand.Thumb.1 Stretched", "LeftHand.Thumb.Spread",
-    "LeftHand.Thumb.2 Stretched", "LeftHand.Thumb.3 Stretched",
-    "LeftHand.Index.1 Stretched", "LeftHand.Index.Spread",
-    "LeftHand.Index.2 Stretched", "LeftHand.Index.3 Stretched",
-    "LeftHand.Middle.1 Stretched", "LeftHand.Middle.Spread",
-    "LeftHand.Middle.2 Stretched", "LeftHand.Middle.3 Stretched",
-    "LeftHand.Ring.1 Stretched", "LeftHand.Ring.Spread",
-    "LeftHand.Ring.2 Stretched", "LeftHand.Ring.3 Stretched",
-    "LeftHand.Little.1 Stretched", "LeftHand.Little.Spread",
-    "LeftHand.Little.2 Stretched", "LeftHand.Little.3 Stretched",
-    "RightHand.Thumb.1 Stretched", "RightHand.Thumb.Spread",
-    "RightHand.Thumb.2 Stretched", "RightHand.Thumb.3 Stretched",
-    "RightHand.Index.1 Stretched", "RightHand.Index.Spread",
-    "RightHand.Index.2 Stretched", "RightHand.Index.3 Stretched",
-    "RightHand.Middle.1 Stretched", "RightHand.Middle.Spread",
-    "RightHand.Middle.2 Stretched", "RightHand.Middle.3 Stretched",
-    "RightHand.Ring.1 Stretched", "RightHand.Ring.Spread",
-    "RightHand.Ring.2 Stretched", "RightHand.Ring.3 Stretched",
-    "RightHand.Little.1 Stretched", "RightHand.Little.Spread",
-    "RightHand.Little.2 Stretched", "RightHand.Little.3 Stretched",
+    "Spine Front-Back",
+    "Spine Left-Right",
+    "Spine Twist Left-Right",
+    "Chest Front-Back",
+    "Chest Left-Right",
+    "Chest Twist Left-Right",
+    "UpperChest Front-Back",
+    "UpperChest Left-Right",
+    "UpperChest Twist Left-Right",
+    "Neck Nod Down-Up",
+    "Neck Tilt Left-Right",
+    "Neck Turn Left-Right",
+    "Head Nod Down-Up",
+    "Head Tilt Left-Right",
+    "Head Turn Left-Right",
+    "Left Eye Down-Up",
+    "Left Eye In-Out",
+    "Right Eye Down-Up",
+    "Right Eye In-Out",
+    "Jaw Close",
+    "Jaw Left-Right",
+    "Left Upper Leg Front-Back",
+    "Left Upper Leg In-Out",
+    "Left Upper Leg Twist In-Out",
+    "Left Lower Leg Stretch",
+    "Left Lower Leg Twist In-Out",
+    "Left Foot Up-Down",
+    "Left Foot Twist In-Out",
+    "Left Toes Up-Down",
+    "Right Upper Leg Front-Back",
+    "Right Upper Leg In-Out",
+    "Right Upper Leg Twist In-Out",
+    "Right Lower Leg Stretch",
+    "Right Lower Leg Twist In-Out",
+    "Right Foot Up-Down",
+    "Right Foot Twist In-Out",
+    "Right Toes Up-Down",
+    "Left Shoulder Down-Up",
+    "Left Shoulder Front-Back",
+    "Left Arm Down-Up",
+    "Left Arm Front-Back",
+    "Left Arm Twist In-Out",
+    "Left Forearm Stretch",
+    "Left Forearm Twist In-Out",
+    "Left Hand Down-Up",
+    "Left Hand In-Out",
+    "Right Shoulder Down-Up",
+    "Right Shoulder Front-Back",
+    "Right Arm Down-Up",
+    "Right Arm Front-Back",
+    "Right Arm Twist In-Out",
+    "Right Forearm Stretch",
+    "Right Forearm Twist In-Out",
+    "Right Hand Down-Up",
+    "Right Hand In-Out",
+    "LeftHand.Thumb.1 Stretched",
+    "LeftHand.Thumb.Spread",
+    "LeftHand.Thumb.2 Stretched",
+    "LeftHand.Thumb.3 Stretched",
+    "LeftHand.Index.1 Stretched",
+    "LeftHand.Index.Spread",
+    "LeftHand.Index.2 Stretched",
+    "LeftHand.Index.3 Stretched",
+    "LeftHand.Middle.1 Stretched",
+    "LeftHand.Middle.Spread",
+    "LeftHand.Middle.2 Stretched",
+    "LeftHand.Middle.3 Stretched",
+    "LeftHand.Ring.1 Stretched",
+    "LeftHand.Ring.Spread",
+    "LeftHand.Ring.2 Stretched",
+    "LeftHand.Ring.3 Stretched",
+    "LeftHand.Little.1 Stretched",
+    "LeftHand.Little.Spread",
+    "LeftHand.Little.2 Stretched",
+    "LeftHand.Little.3 Stretched",
+    "RightHand.Thumb.1 Stretched",
+    "RightHand.Thumb.Spread",
+    "RightHand.Thumb.2 Stretched",
+    "RightHand.Thumb.3 Stretched",
+    "RightHand.Index.1 Stretched",
+    "RightHand.Index.Spread",
+    "RightHand.Index.2 Stretched",
+    "RightHand.Index.3 Stretched",
+    "RightHand.Middle.1 Stretched",
+    "RightHand.Middle.Spread",
+    "RightHand.Middle.2 Stretched",
+    "RightHand.Middle.3 Stretched",
+    "RightHand.Ring.1 Stretched",
+    "RightHand.Ring.Spread",
+    "RightHand.Ring.2 Stretched",
+    "RightHand.Ring.3 Stretched",
+    "RightHand.Little.1 Stretched",
+    "RightHand.Little.Spread",
+    "RightHand.Little.2 Stretched",
+    "RightHand.Little.3 Stretched",
 ];
 
 /// Muscle デフォルト最小角度 (HumanTrait.GetMuscleDefaultMin)
 const MUSCLE_DEFAULT_MIN: [f32; 95] = [
-    -40.0,-40.0,-40.0,-40.0,-40.0,-40.0,-20.0,-20.0,-20.0,-40.0,-40.0,-40.0,-40.0,-40.0,-40.0,
-    -10.0,-20.0,-10.0,-20.0,-10.0,-10.0,
-    -90.0,-60.0,-60.0,-80.0,-90.0,-50.0,-30.0,-50.0,
-    -90.0,-60.0,-60.0,-80.0,-90.0,-50.0,-30.0,-50.0,
-    -15.0,-15.0,-60.0,-100.0,-90.0,-80.0,-90.0,-80.0,-40.0,
-    -15.0,-15.0,-60.0,-100.0,-90.0,-80.0,-90.0,-80.0,-40.0,
-    -20.0,-25.0,-40.0,-40.0,-50.0,-20.0,-45.0,-45.0,-50.0,-7.5,-45.0,-45.0,-50.0,-7.5,-45.0,-45.0,-50.0,-20.0,-45.0,-45.0,
-    -20.0,-25.0,-40.0,-40.0,-50.0,-20.0,-45.0,-45.0,-50.0,-7.5,-45.0,-45.0,-50.0,-7.5,-45.0,-45.0,-50.0,-20.0,-45.0,-45.0,
+    -40.0, -40.0, -40.0, -40.0, -40.0, -40.0, -20.0, -20.0, -20.0, -40.0, -40.0, -40.0, -40.0,
+    -40.0, -40.0, -10.0, -20.0, -10.0, -20.0, -10.0, -10.0, -90.0, -60.0, -60.0, -80.0, -90.0,
+    -50.0, -30.0, -50.0, -90.0, -60.0, -60.0, -80.0, -90.0, -50.0, -30.0, -50.0, -15.0, -15.0,
+    -60.0, -100.0, -90.0, -80.0, -90.0, -80.0, -40.0, -15.0, -15.0, -60.0, -100.0, -90.0, -80.0,
+    -90.0, -80.0, -40.0, -20.0, -25.0, -40.0, -40.0, -50.0, -20.0, -45.0, -45.0, -50.0, -7.5,
+    -45.0, -45.0, -50.0, -7.5, -45.0, -45.0, -50.0, -20.0, -45.0, -45.0, -20.0, -25.0, -40.0,
+    -40.0, -50.0, -20.0, -45.0, -45.0, -50.0, -7.5, -45.0, -45.0, -50.0, -7.5, -45.0, -45.0, -50.0,
+    -20.0, -45.0, -45.0,
 ];
 
 /// Muscle デフォルト最大角度 (HumanTrait.GetMuscleDefaultMax)
 const MUSCLE_DEFAULT_MAX: [f32; 95] = [
-    40.0,40.0,40.0,40.0,40.0,40.0,20.0,20.0,20.0,40.0,40.0,40.0,40.0,40.0,40.0,
-    15.0,20.0,15.0,20.0,10.0,10.0,
-    50.0,60.0,60.0,80.0,90.0,50.0,30.0,50.0,
-    50.0,60.0,60.0,80.0,90.0,50.0,30.0,50.0,
-    30.0,15.0,100.0,100.0,90.0,80.0,90.0,80.0,40.0,
-    30.0,15.0,100.0,100.0,90.0,80.0,90.0,80.0,40.0,
-    20.0,25.0,35.0,35.0,50.0,20.0,45.0,45.0,50.0,7.5,45.0,45.0,50.0,7.5,45.0,45.0,50.0,20.0,45.0,45.0,
-    20.0,25.0,35.0,35.0,50.0,20.0,45.0,45.0,50.0,7.5,45.0,45.0,50.0,7.5,45.0,45.0,50.0,20.0,45.0,45.0,
+    40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 20.0, 20.0, 20.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 15.0,
+    20.0, 15.0, 20.0, 10.0, 10.0, 50.0, 60.0, 60.0, 80.0, 90.0, 50.0, 30.0, 50.0, 50.0, 60.0, 60.0,
+    80.0, 90.0, 50.0, 30.0, 50.0, 30.0, 15.0, 100.0, 100.0, 90.0, 80.0, 90.0, 80.0, 40.0, 30.0,
+    15.0, 100.0, 100.0, 90.0, 80.0, 90.0, 80.0, 40.0, 20.0, 25.0, 35.0, 35.0, 50.0, 20.0, 45.0,
+    45.0, 50.0, 7.5, 45.0, 45.0, 50.0, 7.5, 45.0, 45.0, 50.0, 20.0, 45.0, 45.0, 20.0, 25.0, 35.0,
+    35.0, 50.0, 20.0, 45.0, 45.0, 50.0, 7.5, 45.0, 45.0, 50.0, 7.5, 45.0, 45.0, 50.0, 20.0, 45.0,
+    45.0,
 ];
 
 /// ボーンインデックス → (twist_muscle, swing_y_muscle, swing_z_muscle)
 /// -1 は該当 DOF なし
 const MUSCLE_FROM_BONE: [(i8, i8, i8); 55] = [
-    (-1,-1,-1),   // 0: Hips
-    (23,22,21),   // 1: LeftUpperLeg
-    (31,30,29),   // 2: RightUpperLeg
-    (25,-1,24),   // 3: LeftLowerLeg
-    (33,-1,32),   // 4: RightLowerLeg
-    (-1,27,26),   // 5: LeftFoot
-    (-1,35,34),   // 6: RightFoot
-    (2,1,0),      // 7: Spine
-    (5,4,3),      // 8: Chest
-    (11,10,9),    // 9: Neck
-    (14,13,12),   // 10: Head
-    (-1,38,37),   // 11: LeftShoulder
-    (-1,47,46),   // 12: RightShoulder
-    (41,40,39),   // 13: LeftUpperArm
-    (50,49,48),   // 14: RightUpperArm
-    (43,-1,42),   // 15: LeftLowerArm
-    (52,-1,51),   // 16: RightLowerArm
-    (-1,45,44),   // 17: LeftHand
-    (-1,54,53),   // 18: RightHand
-    (-1,-1,28),   // 19: LeftToes
-    (-1,-1,36),   // 20: RightToes
-    (-1,16,15),   // 21: LeftEye
-    (-1,18,17),   // 22: RightEye
-    (-1,20,19),   // 23: Jaw
-    (-1,56,55),   // 24: LeftThumbMetacarpal
-    (-1,-1,57),   // 25: LeftThumbProximal
-    (-1,-1,58),   // 26: LeftThumbDistal
-    (-1,60,59),   // 27: LeftIndexProximal
-    (-1,-1,61),   // 28: LeftIndexIntermediate
-    (-1,-1,62),   // 29: LeftIndexDistal
-    (-1,64,63),   // 30: LeftMiddleProximal
-    (-1,-1,65),   // 31: LeftMiddleIntermediate
-    (-1,-1,66),   // 32: LeftMiddleDistal
-    (-1,68,67),   // 33: LeftRingProximal
-    (-1,-1,69),   // 34: LeftRingIntermediate
-    (-1,-1,70),   // 35: LeftRingDistal
-    (-1,72,71),   // 36: LeftLittleProximal
-    (-1,-1,73),   // 37: LeftLittleIntermediate
-    (-1,-1,74),   // 38: LeftLittleDistal
-    (-1,76,75),   // 39: RightThumbMetacarpal
-    (-1,-1,77),   // 40: RightThumbProximal
-    (-1,-1,78),   // 41: RightThumbDistal
-    (-1,80,79),   // 42: RightIndexProximal
-    (-1,-1,81),   // 43: RightIndexIntermediate
-    (-1,-1,82),   // 44: RightIndexDistal
-    (-1,84,83),   // 45: RightMiddleProximal
-    (-1,-1,85),   // 46: RightMiddleIntermediate
-    (-1,-1,86),   // 47: RightMiddleDistal
-    (-1,88,87),   // 48: RightRingProximal
-    (-1,-1,89),   // 49: RightRingIntermediate
-    (-1,-1,90),   // 50: RightRingDistal
-    (-1,92,91),   // 51: RightLittleProximal
-    (-1,-1,93),   // 52: RightLittleIntermediate
-    (-1,-1,94),   // 53: RightLittleDistal
-    (8,7,6),      // 54: UpperChest
+    (-1, -1, -1), // 0: Hips
+    (23, 22, 21), // 1: LeftUpperLeg
+    (31, 30, 29), // 2: RightUpperLeg
+    (25, -1, 24), // 3: LeftLowerLeg
+    (33, -1, 32), // 4: RightLowerLeg
+    (-1, 27, 26), // 5: LeftFoot
+    (-1, 35, 34), // 6: RightFoot
+    (2, 1, 0),    // 7: Spine
+    (5, 4, 3),    // 8: Chest
+    (11, 10, 9),  // 9: Neck
+    (14, 13, 12), // 10: Head
+    (-1, 38, 37), // 11: LeftShoulder
+    (-1, 47, 46), // 12: RightShoulder
+    (41, 40, 39), // 13: LeftUpperArm
+    (50, 49, 48), // 14: RightUpperArm
+    (43, -1, 42), // 15: LeftLowerArm
+    (52, -1, 51), // 16: RightLowerArm
+    (-1, 45, 44), // 17: LeftHand
+    (-1, 54, 53), // 18: RightHand
+    (-1, -1, 28), // 19: LeftToes
+    (-1, -1, 36), // 20: RightToes
+    (-1, 16, 15), // 21: LeftEye
+    (-1, 18, 17), // 22: RightEye
+    (-1, 20, 19), // 23: Jaw
+    (-1, 56, 55), // 24: LeftThumbMetacarpal
+    (-1, -1, 57), // 25: LeftThumbProximal
+    (-1, -1, 58), // 26: LeftThumbDistal
+    (-1, 60, 59), // 27: LeftIndexProximal
+    (-1, -1, 61), // 28: LeftIndexIntermediate
+    (-1, -1, 62), // 29: LeftIndexDistal
+    (-1, 64, 63), // 30: LeftMiddleProximal
+    (-1, -1, 65), // 31: LeftMiddleIntermediate
+    (-1, -1, 66), // 32: LeftMiddleDistal
+    (-1, 68, 67), // 33: LeftRingProximal
+    (-1, -1, 69), // 34: LeftRingIntermediate
+    (-1, -1, 70), // 35: LeftRingDistal
+    (-1, 72, 71), // 36: LeftLittleProximal
+    (-1, -1, 73), // 37: LeftLittleIntermediate
+    (-1, -1, 74), // 38: LeftLittleDistal
+    (-1, 76, 75), // 39: RightThumbMetacarpal
+    (-1, -1, 77), // 40: RightThumbProximal
+    (-1, -1, 78), // 41: RightThumbDistal
+    (-1, 80, 79), // 42: RightIndexProximal
+    (-1, -1, 81), // 43: RightIndexIntermediate
+    (-1, -1, 82), // 44: RightIndexDistal
+    (-1, 84, 83), // 45: RightMiddleProximal
+    (-1, -1, 85), // 46: RightMiddleIntermediate
+    (-1, -1, 86), // 47: RightMiddleDistal
+    (-1, 88, 87), // 48: RightRingProximal
+    (-1, -1, 89), // 49: RightRingIntermediate
+    (-1, -1, 90), // 50: RightRingDistal
+    (-1, 92, 91), // 51: RightLittleProximal
+    (-1, -1, 93), // 52: RightLittleIntermediate
+    (-1, -1, 94), // 53: RightLittleDistal
+    (8, 7, 6),    // 54: UpperChest
 ];
 
 /// Per-bone sign values (V-Sekai/unidot_importer, GetLimitSign)
 const SIGNS: [(f32, f32, f32); 55] = [
-    ( 1.0, 1.0, 1.0),  // 0: Hips
-    ( 1.0, 1.0, 1.0),  // 1: LeftUpperLeg
-    (-1.0,-1.0, 1.0),  // 2: RightUpperLeg
-    ( 1.0,-1.0,-1.0),  // 3: LeftLowerLeg
-    (-1.0, 1.0,-1.0),  // 4: RightLowerLeg
-    ( 1.0, 1.0, 1.0),  // 5: LeftFoot
-    (-1.0,-1.0, 1.0),  // 6: RightFoot
-    ( 1.0, 1.0, 1.0),  // 7: Spine
-    ( 1.0, 1.0, 1.0),  // 8: Chest
-    ( 1.0, 1.0, 1.0),  // 9: Neck
-    ( 1.0, 1.0, 1.0),  // 10: Head
-    ( 1.0, 1.0,-1.0),  // 11: LeftShoulder
-    (-1.0, 1.0, 1.0),  // 12: RightShoulder
-    ( 1.0, 1.0,-1.0),  // 13: LeftUpperArm
-    (-1.0, 1.0, 1.0),  // 14: RightUpperArm
-    ( 1.0, 1.0,-1.0),  // 15: LeftLowerArm
-    (-1.0, 1.0, 1.0),  // 16: RightLowerArm
-    ( 1.0, 1.0,-1.0),  // 17: LeftHand
-    (-1.0, 1.0, 1.0),  // 18: RightHand
-    ( 1.0, 1.0, 1.0),  // 19: LeftToes
-    (-1.0,-1.0, 1.0),  // 20: RightToes
-    (-1.0, 1.0,-1.0),  // 21: LeftEye
-    ( 1.0,-1.0,-1.0),  // 22: RightEye
-    ( 1.0, 1.0, 1.0),  // 23: Jaw
-    ( 1.0,-1.0, 1.0),  // 24: LeftThumbMetacarpal
-    ( 1.0,-1.0, 1.0),  // 25: LeftThumbProximal
-    ( 1.0,-1.0, 1.0),  // 26: LeftThumbDistal
-    (-1.0,-1.0,-1.0),  // 27: LeftIndexProximal
-    (-1.0,-1.0,-1.0),  // 28: LeftIndexIntermediate
-    (-1.0,-1.0,-1.0),  // 29: LeftIndexDistal
-    (-1.0,-1.0,-1.0),  // 30: LeftMiddleProximal
-    (-1.0,-1.0,-1.0),  // 31: LeftMiddleIntermediate
-    (-1.0,-1.0,-1.0),  // 32: LeftMiddleDistal
-    ( 1.0, 1.0,-1.0),  // 33: LeftRingProximal
-    ( 1.0, 1.0,-1.0),  // 34: LeftRingIntermediate
-    ( 1.0, 1.0,-1.0),  // 35: LeftRingDistal
-    ( 1.0, 1.0,-1.0),  // 36: LeftLittleProximal
-    ( 1.0, 1.0,-1.0),  // 37: LeftLittleIntermediate
-    ( 1.0, 1.0,-1.0),  // 38: LeftLittleDistal
-    (-1.0,-1.0,-1.0),  // 39: RightThumbMetacarpal
-    (-1.0,-1.0,-1.0),  // 40: RightThumbProximal
-    (-1.0,-1.0,-1.0),  // 41: RightThumbDistal
-    ( 1.0,-1.0, 1.0),  // 42: RightIndexProximal
-    ( 1.0,-1.0, 1.0),  // 43: RightIndexIntermediate
-    ( 1.0,-1.0, 1.0),  // 44: RightIndexDistal
-    ( 1.0,-1.0, 1.0),  // 45: RightMiddleProximal
-    ( 1.0,-1.0, 1.0),  // 46: RightMiddleIntermediate
-    ( 1.0,-1.0, 1.0),  // 47: RightMiddleDistal
-    (-1.0, 1.0, 1.0),  // 48: RightRingProximal
-    (-1.0, 1.0, 1.0),  // 49: RightRingIntermediate
-    (-1.0, 1.0, 1.0),  // 50: RightRingDistal
-    (-1.0, 1.0, 1.0),  // 51: RightLittleProximal
-    (-1.0, 1.0, 1.0),  // 52: RightLittleIntermediate
-    (-1.0, 1.0, 1.0),  // 53: RightLittleDistal
-    ( 1.0, 1.0, 1.0),  // 54: UpperChest
+    (1.0, 1.0, 1.0),    // 0: Hips
+    (1.0, 1.0, 1.0),    // 1: LeftUpperLeg
+    (-1.0, -1.0, 1.0),  // 2: RightUpperLeg
+    (1.0, -1.0, -1.0),  // 3: LeftLowerLeg
+    (-1.0, 1.0, -1.0),  // 4: RightLowerLeg
+    (1.0, 1.0, 1.0),    // 5: LeftFoot
+    (-1.0, -1.0, 1.0),  // 6: RightFoot
+    (1.0, 1.0, 1.0),    // 7: Spine
+    (1.0, 1.0, 1.0),    // 8: Chest
+    (1.0, 1.0, 1.0),    // 9: Neck
+    (1.0, 1.0, 1.0),    // 10: Head
+    (1.0, 1.0, -1.0),   // 11: LeftShoulder
+    (-1.0, 1.0, 1.0),   // 12: RightShoulder
+    (1.0, 1.0, -1.0),   // 13: LeftUpperArm
+    (-1.0, 1.0, 1.0),   // 14: RightUpperArm
+    (1.0, 1.0, -1.0),   // 15: LeftLowerArm
+    (-1.0, 1.0, 1.0),   // 16: RightLowerArm
+    (1.0, 1.0, -1.0),   // 17: LeftHand
+    (-1.0, 1.0, 1.0),   // 18: RightHand
+    (1.0, 1.0, 1.0),    // 19: LeftToes
+    (-1.0, -1.0, 1.0),  // 20: RightToes
+    (-1.0, 1.0, -1.0),  // 21: LeftEye
+    (1.0, -1.0, -1.0),  // 22: RightEye
+    (1.0, 1.0, 1.0),    // 23: Jaw
+    (1.0, -1.0, 1.0),   // 24: LeftThumbMetacarpal
+    (1.0, -1.0, 1.0),   // 25: LeftThumbProximal
+    (1.0, -1.0, 1.0),   // 26: LeftThumbDistal
+    (-1.0, -1.0, -1.0), // 27: LeftIndexProximal
+    (-1.0, -1.0, -1.0), // 28: LeftIndexIntermediate
+    (-1.0, -1.0, -1.0), // 29: LeftIndexDistal
+    (-1.0, -1.0, -1.0), // 30: LeftMiddleProximal
+    (-1.0, -1.0, -1.0), // 31: LeftMiddleIntermediate
+    (-1.0, -1.0, -1.0), // 32: LeftMiddleDistal
+    (1.0, 1.0, -1.0),   // 33: LeftRingProximal
+    (1.0, 1.0, -1.0),   // 34: LeftRingIntermediate
+    (1.0, 1.0, -1.0),   // 35: LeftRingDistal
+    (1.0, 1.0, -1.0),   // 36: LeftLittleProximal
+    (1.0, 1.0, -1.0),   // 37: LeftLittleIntermediate
+    (1.0, 1.0, -1.0),   // 38: LeftLittleDistal
+    (-1.0, -1.0, -1.0), // 39: RightThumbMetacarpal
+    (-1.0, -1.0, -1.0), // 40: RightThumbProximal
+    (-1.0, -1.0, -1.0), // 41: RightThumbDistal
+    (1.0, -1.0, 1.0),   // 42: RightIndexProximal
+    (1.0, -1.0, 1.0),   // 43: RightIndexIntermediate
+    (1.0, -1.0, 1.0),   // 44: RightIndexDistal
+    (1.0, -1.0, 1.0),   // 45: RightMiddleProximal
+    (1.0, -1.0, 1.0),   // 46: RightMiddleIntermediate
+    (1.0, -1.0, 1.0),   // 47: RightMiddleDistal
+    (-1.0, 1.0, 1.0),   // 48: RightRingProximal
+    (-1.0, 1.0, 1.0),   // 49: RightRingIntermediate
+    (-1.0, 1.0, 1.0),   // 50: RightRingDistal
+    (-1.0, 1.0, 1.0),   // 51: RightLittleProximal
+    (-1.0, 1.0, 1.0),   // 52: RightLittleIntermediate
+    (-1.0, 1.0, 1.0),   // 53: RightLittleDistal
+    (1.0, 1.0, 1.0),    // 54: UpperChest
 ];
 
 /// V-Sekai 正規化スケルトンの postQ_inverse (右手系/glTF座標系)
@@ -468,17 +531,17 @@ const SIGNS: [(f32, f32, f32); 55] = [
 #[allow(clippy::if_same_then_else, clippy::approx_constant)]
 /// 正規化スケルトンでは preQ == postQ
 const POSTQ_INV_NORMALIZED: [(f32, f32, f32, f32); 55] = [
-    (0.0, 0.0, 0.0, 1.0),  // 0: Hips
-    (0.48977, -0.50952, 0.51876, 0.48105),   // 1: LeftUpperLeg
-    (0.51876, -0.48105, 0.48977, 0.50952),   // 2: RightUpperLeg
-    (-0.51894, 0.48097, 0.50616, 0.49312),   // 3: LeftLowerLeg
-    (-0.50616, 0.49312, 0.51894, 0.48097),   // 4: RightLowerLeg
-    (-0.707107, 0.0, -0.707107, 0.0),        // 5: LeftFoot
-    (-0.707107, 0.0, -0.707107, 0.0),        // 6: RightFoot
-    (-0.46815, 0.52994, -0.46815, -0.52994), // 7: Spine
-    (-0.52661, 0.47189, -0.52661, -0.47189), // 8: Chest
-    (-0.46642, 0.5316, -0.46748, -0.5304),   // 9: Neck
-    (0.5, -0.5, 0.5, 0.5),                   // 10: Head
+    (0.0, 0.0, 0.0, 1.0),                        // 0: Hips
+    (0.48977, -0.50952, 0.51876, 0.48105),       // 1: LeftUpperLeg
+    (0.51876, -0.48105, 0.48977, 0.50952),       // 2: RightUpperLeg
+    (-0.51894, 0.48097, 0.50616, 0.49312),       // 3: LeftLowerLeg
+    (-0.50616, 0.49312, 0.51894, 0.48097),       // 4: RightLowerLeg
+    (-0.707107, 0.0, -0.707107, 0.0),            // 5: LeftFoot
+    (-0.707107, 0.0, -0.707107, 0.0),            // 6: RightFoot
+    (-0.46815, 0.52994, -0.46815, -0.52994),     // 7: Spine
+    (-0.52661, 0.47189, -0.52661, -0.47189),     // 8: Chest
+    (-0.46642, 0.5316, -0.46748, -0.5304),       // 9: Neck
+    (0.5, -0.5, 0.5, 0.5),                       // 10: Head
     (-0.523995, 0.469295, -0.557075, -0.441435), // 11: LeftShoulder
     (0.46929, -0.524, -0.44143, -0.55708),       // 12: RightShoulder
     (0.513635, -0.486185, -0.509345, -0.490275), // 13: LeftUpperArm
@@ -539,8 +602,8 @@ fn get_post_q(unity_idx: usize) -> Quat {
 
 /// ボーンごとの preQ/postQ/sign パラメータ
 struct BoneParams {
-    pre_q: Quat,   // glTF 右手系
-    post_q: Quat,  // glTF 右手系
+    pre_q: Quat,  // glTF 右手系
+    post_q: Quat, // glTF 右手系
     sign: (f32, f32, f32),
     /// ボーンのローカル回転 (glTF 右手系、Hips用)
     local_rotation: Quat,
@@ -573,9 +636,15 @@ fn parse_quat_lh_to_rh(json: &serde_json::Value, key: &str) -> Quat {
 fn parse_f32x3(json: &serde_json::Value, key: &str, default: (f32, f32, f32)) -> (f32, f32, f32) {
     if let Some(arr) = json.get(key).and_then(|v| v.as_array()) {
         (
-            arr.first().and_then(|v| v.as_f64()).unwrap_or(default.0 as f64) as f32,
-            arr.get(1).and_then(|v| v.as_f64()).unwrap_or(default.1 as f64) as f32,
-            arr.get(2).and_then(|v| v.as_f64()).unwrap_or(default.2 as f64) as f32,
+            arr.first()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(default.0 as f64) as f32,
+            arr.get(1)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(default.1 as f64) as f32,
+            arr.get(2)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(default.2 as f64) as f32,
         )
     } else {
         default
@@ -586,8 +655,8 @@ fn parse_f32x3(json: &serde_json::Value, key: &str, default: (f32, f32, f32)) ->
 pub fn load_humanoid_params(path: &Path) -> Result<HumanoidParams> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("Humanoidパラメータ読み込み失敗: {}", path.display()))?;
-    let json: serde_json::Value = serde_json::from_str(&text)
-        .with_context(|| "Humanoidパラメータ JSON パース失敗")?;
+    let json: serde_json::Value =
+        serde_json::from_str(&text).with_context(|| "Humanoidパラメータ JSON パース失敗")?;
 
     let mut bones = HashMap::new();
     let mut muscle_ranges = HashMap::new();
@@ -614,7 +683,16 @@ pub fn load_humanoid_params(path: &Path) -> Result<HumanoidParams> {
             let (lx, ly, lz) = parse_f32x3(bd, "localPosition", (0.0, 0.0, 0.0));
             let local_position = Vec3::new(-lx, ly, lz);
 
-            bones.insert(idx, BoneParams { pre_q, post_q, sign, local_rotation, local_position });
+            bones.insert(
+                idx,
+                BoneParams {
+                    pre_q,
+                    post_q,
+                    sign,
+                    local_rotation,
+                    local_position,
+                },
+            );
         }
     }
 
@@ -625,16 +703,29 @@ pub fn load_humanoid_params(path: &Path) -> Result<HumanoidParams> {
                 Some(i) => i as usize,
                 None => continue,
             };
-            let min = md.get("defaultMin").and_then(|v| v.as_f64())
-                .unwrap_or(MUSCLE_DEFAULT_MIN.get(mi).copied().unwrap_or(-40.0) as f64) as f32;
-            let max = md.get("defaultMax").and_then(|v| v.as_f64())
-                .unwrap_or(MUSCLE_DEFAULT_MAX.get(mi).copied().unwrap_or(40.0) as f64) as f32;
+            let min = md
+                .get("defaultMin")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(MUSCLE_DEFAULT_MIN.get(mi).copied().unwrap_or(-40.0) as f64)
+                as f32;
+            let max = md
+                .get("defaultMax")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(MUSCLE_DEFAULT_MAX.get(mi).copied().unwrap_or(40.0) as f64)
+                as f32;
             muscle_ranges.insert(mi, (min, max));
         }
     }
 
-    log::info!("Humanoidパラメータ読み込み: {}ボーン, {}muscle", bones.len(), muscle_ranges.len());
-    Ok(HumanoidParams { bones, muscle_ranges })
+    log::info!(
+        "Humanoidパラメータ読み込み: {}ボーン, {}muscle",
+        bones.len(),
+        muscle_ranges.len()
+    );
+    Ok(HumanoidParams {
+        bones,
+        muscle_ranges,
+    })
 }
 
 // ─── Muscle → ボーンチャネル変換 ───
@@ -653,8 +744,13 @@ fn muscle_to_deg_with_range(value: f32, min_deg: f32, max_deg: f32) -> f32 {
 /// Root直値のattribute名パターン
 #[derive(Debug)]
 enum RootAttr {
-    TransX, TransY, TransZ,
-    RotX, RotY, RotZ, RotW,
+    TransX,
+    TransY,
+    TransZ,
+    RotX,
+    RotY,
+    RotZ,
+    RotW,
 }
 
 fn parse_root_attr(attr: &str) -> Option<RootAttr> {
@@ -695,7 +791,8 @@ fn build_bone_channels(
     params: Option<&HumanoidParams>,
 ) -> HashMap<String, BoneChannel> {
     // Muscle名 → (muscle_index, カーブ) のマップ
-    let muscle_name_to_idx: HashMap<&str, usize> = MUSCLE_NAMES.iter()
+    let muscle_name_to_idx: HashMap<&str, usize> = MUSCLE_NAMES
+        .iter()
         .enumerate()
         .map(|(i, &name)| (name, i))
         .collect();
@@ -733,28 +830,59 @@ fn build_bone_channels(
 
     // Unity ボーンインデックス → VRM ボーン名
     let unity_bone_to_vrm: [(usize, &str); 54] = [
-        (1, "leftUpperLeg"), (2, "rightUpperLeg"),
-        (3, "leftLowerLeg"), (4, "rightLowerLeg"),
-        (5, "leftFoot"), (6, "rightFoot"),
-        (7, "spine"), (8, "chest"),
-        (9, "neck"), (10, "head"),
-        (11, "leftShoulder"), (12, "rightShoulder"),
-        (13, "leftUpperArm"), (14, "rightUpperArm"),
-        (15, "leftLowerArm"), (16, "rightLowerArm"),
-        (17, "leftHand"), (18, "rightHand"),
-        (19, "leftToes"), (20, "rightToes"),
-        (21, "leftEye"), (22, "rightEye"),
+        (1, "leftUpperLeg"),
+        (2, "rightUpperLeg"),
+        (3, "leftLowerLeg"),
+        (4, "rightLowerLeg"),
+        (5, "leftFoot"),
+        (6, "rightFoot"),
+        (7, "spine"),
+        (8, "chest"),
+        (9, "neck"),
+        (10, "head"),
+        (11, "leftShoulder"),
+        (12, "rightShoulder"),
+        (13, "leftUpperArm"),
+        (14, "rightUpperArm"),
+        (15, "leftLowerArm"),
+        (16, "rightLowerArm"),
+        (17, "leftHand"),
+        (18, "rightHand"),
+        (19, "leftToes"),
+        (20, "rightToes"),
+        (21, "leftEye"),
+        (22, "rightEye"),
         (23, "jaw"),
-        (24, "leftThumbMetacarpal"), (25, "leftThumbProximal"), (26, "leftThumbDistal"),
-        (27, "leftIndexProximal"), (28, "leftIndexIntermediate"), (29, "leftIndexDistal"),
-        (30, "leftMiddleProximal"), (31, "leftMiddleIntermediate"), (32, "leftMiddleDistal"),
-        (33, "leftRingProximal"), (34, "leftRingIntermediate"), (35, "leftRingDistal"),
-        (36, "leftLittleProximal"), (37, "leftLittleIntermediate"), (38, "leftLittleDistal"),
-        (39, "rightThumbMetacarpal"), (40, "rightThumbProximal"), (41, "rightThumbDistal"),
-        (42, "rightIndexProximal"), (43, "rightIndexIntermediate"), (44, "rightIndexDistal"),
-        (45, "rightMiddleProximal"), (46, "rightMiddleIntermediate"), (47, "rightMiddleDistal"),
-        (48, "rightRingProximal"), (49, "rightRingIntermediate"), (50, "rightRingDistal"),
-        (51, "rightLittleProximal"), (52, "rightLittleIntermediate"), (53, "rightLittleDistal"),
+        (24, "leftThumbMetacarpal"),
+        (25, "leftThumbProximal"),
+        (26, "leftThumbDistal"),
+        (27, "leftIndexProximal"),
+        (28, "leftIndexIntermediate"),
+        (29, "leftIndexDistal"),
+        (30, "leftMiddleProximal"),
+        (31, "leftMiddleIntermediate"),
+        (32, "leftMiddleDistal"),
+        (33, "leftRingProximal"),
+        (34, "leftRingIntermediate"),
+        (35, "leftRingDistal"),
+        (36, "leftLittleProximal"),
+        (37, "leftLittleIntermediate"),
+        (38, "leftLittleDistal"),
+        (39, "rightThumbMetacarpal"),
+        (40, "rightThumbProximal"),
+        (41, "rightThumbDistal"),
+        (42, "rightIndexProximal"),
+        (43, "rightIndexIntermediate"),
+        (44, "rightIndexDistal"),
+        (45, "rightMiddleProximal"),
+        (46, "rightMiddleIntermediate"),
+        (47, "rightMiddleDistal"),
+        (48, "rightRingProximal"),
+        (49, "rightRingIntermediate"),
+        (50, "rightRingDistal"),
+        (51, "rightLittleProximal"),
+        (52, "rightLittleIntermediate"),
+        (53, "rightLittleDistal"),
         (54, "upperChest"),
     ];
 
@@ -779,9 +907,7 @@ fn build_bone_channels(
         let post_q_inv = post_q.inverse();
 
         // このボーンに関連する muscle カーブがあるか
-        let has_curve = |mi: i8| -> bool {
-            mi >= 0 && muscle_curves.contains_key(&(mi as usize))
-        };
+        let has_curve = |mi: i8| -> bool { mi >= 0 && muscle_curves.contains_key(&(mi as usize)) };
         if !has_curve(mfb.0) && !has_curve(mfb.1) && !has_curve(mfb.2) {
             continue;
         }
@@ -802,62 +928,80 @@ fn build_bone_channels(
             continue;
         }
 
-        let keyframes: Vec<RotationKeyframe> = all_times.iter().map(|&t| {
-            let mut degrees = [0.0f32; 3]; // [twist_x, swing_y, swing_z]
+        let keyframes: Vec<RotationKeyframe> = all_times
+            .iter()
+            .map(|&t| {
+                let mut degrees = [0.0f32; 3]; // [twist_x, swing_y, swing_z]
 
-            for (dof_idx, &muscle_idx) in [mfb.0, mfb.1, mfb.2].iter().enumerate() {
-                if muscle_idx < 0 {
-                    continue;
+                for (dof_idx, &muscle_idx) in [mfb.0, mfb.1, mfb.2].iter().enumerate() {
+                    if muscle_idx < 0 {
+                        continue;
+                    }
+                    let mi = muscle_idx as usize;
+                    let mv = if let Some(curve) = muscle_curves.get(&mi) {
+                        sample_curve_linear(&curve.keyframes, t)
+                    } else {
+                        0.0
+                    };
+                    // Muscle角度範囲: params の上書きがあればそちらを使用
+                    let (min_deg, max_deg) = if let Some(p) = params {
+                        p.muscle_ranges
+                            .get(&mi)
+                            .copied()
+                            .unwrap_or((MUSCLE_DEFAULT_MIN[mi], MUSCLE_DEFAULT_MAX[mi]))
+                    } else {
+                        (MUSCLE_DEFAULT_MIN[mi], MUSCLE_DEFAULT_MAX[mi])
+                    };
+                    let deg = muscle_to_deg_with_range(mv, min_deg, max_deg) * muscle_scale;
+                    let s = match dof_idx {
+                        0 => sign.0,
+                        1 => sign.1,
+                        _ => sign.2,
+                    };
+                    degrees[dof_idx] = s * deg;
                 }
-                let mi = muscle_idx as usize;
-                let mv = if let Some(curve) = muscle_curves.get(&mi) {
-                    sample_curve_linear(&curve.keyframes, t)
-                } else {
-                    0.0
-                };
-                // Muscle角度範囲: params の上書きがあればそちらを使用
-                let (min_deg, max_deg) = if let Some(p) = params {
-                    p.muscle_ranges.get(&mi).copied()
-                        .unwrap_or((MUSCLE_DEFAULT_MIN[mi], MUSCLE_DEFAULT_MAX[mi]))
-                } else {
-                    (MUSCLE_DEFAULT_MIN[mi], MUSCLE_DEFAULT_MAX[mi])
-                };
-                let deg = muscle_to_deg_with_range(mv, min_deg, max_deg) * muscle_scale;
-                let s = match dof_idx {
-                    0 => sign.0,
-                    1 => sign.1,
-                    _ => sign.2,
-                };
-                degrees[dof_idx] = s * deg;
-            }
 
-            // SwingTwist 変換
-            let st = swing_twist(degrees[0], degrees[1], degrees[2]);
+                // SwingTwist 変換
+                let st = swing_twist(degrees[0], degrees[1], degrees[2]);
 
-            // preQ × SwingTwist × Inv(postQ)
-            // params あり: 絶対ローカル回転
-            // params なし: postQ × SwingTwist × Inv(postQ)（正規化デルタ、muscle=0でIdentity）
-            let anim_rot = (pre_q * st * post_q_inv).normalize();
+                // preQ × SwingTwist × Inv(postQ)
+                // params あり: 絶対ローカル回転
+                // params なし: postQ × SwingTwist × Inv(postQ)（正規化デルタ、muscle=0でIdentity）
+                let anim_rot = (pre_q * st * post_q_inv).normalize();
 
-            RotationKeyframe { time: t, value: anim_rot }
-        }).collect();
+                RotationKeyframe {
+                    time: t,
+                    value: anim_rot,
+                }
+            })
+            .collect();
 
-        channels.insert(vrm_bone.to_string(), BoneChannel {
-            rotation: keyframes,
-            rotation_interp: Interpolation::Linear,
-            translation: None,
-            translation_interp: None,
-        });
+        channels.insert(
+            vrm_bone.to_string(),
+            BoneChannel {
+                rotation: keyframes,
+                rotation_interp: Interpolation::Linear,
+                translation: None,
+                translation_interp: None,
+            },
+        );
     }
 
     // Hips の rest 情報（params から取得可能な場合）
-    let hips_rest_rot = params.and_then(|p| p.bones.get(&0)).map(|bp| bp.local_rotation);
-    let hips_rest_pos = params.and_then(|p| p.bones.get(&0)).map(|bp| bp.local_position);
+    let hips_rest_rot = params
+        .and_then(|p| p.bones.get(&0))
+        .map(|bp| bp.local_rotation);
+    let hips_rest_pos = params
+        .and_then(|p| p.bones.get(&0))
+        .map(|bp| bp.local_position);
 
     // Root → hips: 回転（RootQ）
     if root_qx.is_some() || root_qy.is_some() || root_qz.is_some() || root_qw.is_some() {
         let mut all_times: Vec<f32> = Vec::new();
-        for c in [&root_qx, &root_qy, &root_qz, &root_qw].into_iter().flatten() {
+        for c in [&root_qx, &root_qy, &root_qz, &root_qw]
+            .into_iter()
+            .flatten()
+        {
             all_times.extend(c.keyframes.iter().map(|(t, _)| *t));
         }
         all_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -865,47 +1009,74 @@ fn build_bone_channels(
 
         if !all_times.is_empty() {
             // 初期フレームの回転（glTF座標系）
-            let q0_x = root_qx.map(|c| sample_curve_linear(&c.keyframes, 0.0)).unwrap_or(0.0);
-            let q0_y = root_qy.map(|c| sample_curve_linear(&c.keyframes, 0.0)).unwrap_or(0.0);
-            let q0_z = root_qz.map(|c| sample_curve_linear(&c.keyframes, 0.0)).unwrap_or(0.0);
-            let q0_w = root_qw.map(|c| sample_curve_linear(&c.keyframes, 0.0)).unwrap_or(1.0);
+            let q0_x = root_qx
+                .map(|c| sample_curve_linear(&c.keyframes, 0.0))
+                .unwrap_or(0.0);
+            let q0_y = root_qy
+                .map(|c| sample_curve_linear(&c.keyframes, 0.0))
+                .unwrap_or(0.0);
+            let q0_z = root_qz
+                .map(|c| sample_curve_linear(&c.keyframes, 0.0))
+                .unwrap_or(0.0);
+            let q0_w = root_qw
+                .map(|c| sample_curve_linear(&c.keyframes, 0.0))
+                .unwrap_or(1.0);
             let q0_gltf = unity_quat_to_gltf(q0_x, q0_y, q0_z, q0_w);
             let q0_inv = q0_gltf.inverse();
 
             let mut prev_q = q0_gltf;
 
-            let rot_keyframes: Vec<RotationKeyframe> = all_times.iter().map(|&t| {
-                let qx = root_qx.map(|c| sample_curve_linear(&c.keyframes, t)).unwrap_or(0.0);
-                let qy = root_qy.map(|c| sample_curve_linear(&c.keyframes, t)).unwrap_or(0.0);
-                let qz = root_qz.map(|c| sample_curve_linear(&c.keyframes, t)).unwrap_or(0.0);
-                let qw = root_qw.map(|c| sample_curve_linear(&c.keyframes, t)).unwrap_or(1.0);
+            let rot_keyframes: Vec<RotationKeyframe> = all_times
+                .iter()
+                .map(|&t| {
+                    let qx = root_qx
+                        .map(|c| sample_curve_linear(&c.keyframes, t))
+                        .unwrap_or(0.0);
+                    let qy = root_qy
+                        .map(|c| sample_curve_linear(&c.keyframes, t))
+                        .unwrap_or(0.0);
+                    let qz = root_qz
+                        .map(|c| sample_curve_linear(&c.keyframes, t))
+                        .unwrap_or(0.0);
+                    let qw = root_qw
+                        .map(|c| sample_curve_linear(&c.keyframes, t))
+                        .unwrap_or(1.0);
 
-                let mut qi = unity_quat_to_gltf(qx, qy, qz, qw);
+                    let mut qi = unity_quat_to_gltf(qx, qy, qz, qw);
 
-                // 符号一貫性: 前フレームとの内積が負なら反転
-                if prev_q.dot(qi) < 0.0 {
-                    qi = -qi;
-                }
-                prev_q = qi;
+                    // 符号一貫性: 前フレームとの内積が負なら反転
+                    if prev_q.dot(qi) < 0.0 {
+                        qi = -qi;
+                    }
+                    prev_q = qi;
 
-                // デルタ: Inv(q0) × qi — rest からの回転差分
-                let delta = (q0_inv * qi).normalize();
+                    // デルタ: Inv(q0) × qi — rest からの回転差分
+                    let delta = (q0_inv * qi).normalize();
 
-                if let Some(rest) = hips_rest_rot {
-                    // params あり: 絶対ローカル回転 = rest × delta
-                    RotationKeyframe { time: t, value: (rest * delta).normalize() }
-                } else {
-                    // フォールバック: デルタのまま（ビューアで rest × delta）
-                    RotationKeyframe { time: t, value: delta }
-                }
-            }).collect();
+                    if let Some(rest) = hips_rest_rot {
+                        // params あり: 絶対ローカル回転 = rest × delta
+                        RotationKeyframe {
+                            time: t,
+                            value: (rest * delta).normalize(),
+                        }
+                    } else {
+                        // フォールバック: デルタのまま（ビューアで rest × delta）
+                        RotationKeyframe {
+                            time: t,
+                            value: delta,
+                        }
+                    }
+                })
+                .collect();
 
-            let entry = channels.entry("hips".to_string()).or_insert_with(|| BoneChannel {
-                rotation: Vec::new(),
-                rotation_interp: Interpolation::Linear,
-                translation: None,
-                translation_interp: None,
-            });
+            let entry = channels
+                .entry("hips".to_string())
+                .or_insert_with(|| BoneChannel {
+                    rotation: Vec::new(),
+                    rotation_interp: Interpolation::Linear,
+                    translation: None,
+                    translation_interp: None,
+                });
             entry.rotation = rot_keyframes;
         }
     }
@@ -921,32 +1092,58 @@ fn build_bone_channels(
 
         if !all_times.is_empty() {
             // 初期フレームの値をデルタ基準にする
-            let t0_tx = root_tx.map(|c| sample_curve_linear(&c.keyframes, 0.0)).unwrap_or(0.0);
-            let t0_ty = root_ty.map(|c| sample_curve_linear(&c.keyframes, 0.0)).unwrap_or(0.0);
-            let t0_tz = root_tz.map(|c| sample_curve_linear(&c.keyframes, 0.0)).unwrap_or(0.0);
+            let t0_tx = root_tx
+                .map(|c| sample_curve_linear(&c.keyframes, 0.0))
+                .unwrap_or(0.0);
+            let t0_ty = root_ty
+                .map(|c| sample_curve_linear(&c.keyframes, 0.0))
+                .unwrap_or(0.0);
+            let t0_tz = root_tz
+                .map(|c| sample_curve_linear(&c.keyframes, 0.0))
+                .unwrap_or(0.0);
 
-            let trans_keyframes: Vec<TranslationKeyframe> = all_times.iter().map(|&t| {
-                let tx = root_tx.map(|c| sample_curve_linear(&c.keyframes, t)).unwrap_or(0.0) - t0_tx;
-                let ty = root_ty.map(|c| sample_curve_linear(&c.keyframes, t)).unwrap_or(0.0) - t0_ty;
-                let tz = root_tz.map(|c| sample_curve_linear(&c.keyframes, t)).unwrap_or(0.0) - t0_tz;
-                // Unity左手系 → glTF右手系 のデルタ
-                let delta = unity_vec3_to_gltf(tx, ty, tz);
+            let trans_keyframes: Vec<TranslationKeyframe> = all_times
+                .iter()
+                .map(|&t| {
+                    let tx = root_tx
+                        .map(|c| sample_curve_linear(&c.keyframes, t))
+                        .unwrap_or(0.0)
+                        - t0_tx;
+                    let ty = root_ty
+                        .map(|c| sample_curve_linear(&c.keyframes, t))
+                        .unwrap_or(0.0)
+                        - t0_ty;
+                    let tz = root_tz
+                        .map(|c| sample_curve_linear(&c.keyframes, t))
+                        .unwrap_or(0.0)
+                        - t0_tz;
+                    // Unity左手系 → glTF右手系 のデルタ
+                    let delta = unity_vec3_to_gltf(tx, ty, tz);
 
-                if let Some(rest_pos) = hips_rest_pos {
-                    // params あり: 絶対位置 = rest + delta
-                    TranslationKeyframe { time: t, value: rest_pos + delta }
-                } else {
-                    // フォールバック: デルタのまま
-                    TranslationKeyframe { time: t, value: delta }
-                }
-            }).collect();
+                    if let Some(rest_pos) = hips_rest_pos {
+                        // params あり: 絶対位置 = rest + delta
+                        TranslationKeyframe {
+                            time: t,
+                            value: rest_pos + delta,
+                        }
+                    } else {
+                        // フォールバック: デルタのまま
+                        TranslationKeyframe {
+                            time: t,
+                            value: delta,
+                        }
+                    }
+                })
+                .collect();
 
-            let entry = channels.entry("hips".to_string()).or_insert_with(|| BoneChannel {
-                rotation: Vec::new(),
-                rotation_interp: Interpolation::Linear,
-                translation: None,
-                translation_interp: None,
-            });
+            let entry = channels
+                .entry("hips".to_string())
+                .or_insert_with(|| BoneChannel {
+                    rotation: Vec::new(),
+                    rotation_interp: Interpolation::Linear,
+                    translation: None,
+                    translation_interp: None,
+                });
             entry.translation = Some(trans_keyframes);
             entry.translation_interp = Some(Interpolation::Linear);
         }
@@ -972,7 +1169,11 @@ fn sample_curve_linear(keyframes: &[(f32, f32)], time: f32) -> f32 {
     let idx = idx.min(keyframes.len() - 1).max(1);
     let (t0, v0) = keyframes[idx - 1];
     let (t1, v1) = keyframes[idx];
-    let frac = if (t1 - t0).abs() < 1e-9 { 0.0 } else { (time - t0) / (t1 - t0) };
+    let frac = if (t1 - t0).abs() < 1e-9 {
+        0.0
+    } else {
+        (time - t0) / (t1 - t0)
+    };
     v0 + (v1 - v0) * frac
 }
 
@@ -983,7 +1184,7 @@ mod tests {
     #[test]
     fn test_load_kizuna_anim() {
         let path = std::path::Path::new(
-            r"E:\misc\nomy\vrm_view\tmp\unitypackage\KizunaAI_KAMATTE_VRM&Motion\Assets\KizunaAI\KizunaAI_KAMATTE\Motion\KizunaAI_KAMATTE_Kamacho_Motion.anim"
+            r"E:\misc\nomy\vrm_view\tmp\unitypackage\KizunaAI_KAMATTE_VRM&Motion\Assets\KizunaAI\KizunaAI_KAMATTE\Motion\KizunaAI_KAMATTE_Kamacho_Motion.anim",
         );
         if !path.exists() {
             eprintln!("テストファイルが見つからない: {}", path.display());
@@ -995,13 +1196,18 @@ mod tests {
         eprintln!("duration: {:.2}秒", anim.duration);
         eprintln!("ボーンch数: {}", anim.bone_channels.len());
         for (name, ch) in &anim.bone_channels {
-            eprintln!("  {} : rot={}kf, trans={}kf",
+            eprintln!(
+                "  {} : rot={}kf, trans={}kf",
                 name,
                 ch.rotation.len(),
                 ch.translation.as_ref().map(|t| t.len()).unwrap_or(0),
             );
         }
-        assert!(anim.bone_channels.len() > 5, "ボーンチャネルが少なすぎる: {}", anim.bone_channels.len());
+        assert!(
+            anim.bone_channels.len() > 5,
+            "ボーンチャネルが少なすぎる: {}",
+            anim.bone_channels.len()
+        );
     }
 
     #[test]
@@ -1016,7 +1222,11 @@ mod tests {
         let q = swing_twist(90.0, 0.0, 0.0);
         let expected = Quat::from_axis_angle(Vec3::X, 90.0f32.to_radians());
         let diff = q * expected.inverse();
-        assert!((diff.w.abs() - 1.0).abs() < 1e-4, "pure twist mismatch: {:?}", diff);
+        assert!(
+            (diff.w.abs() - 1.0).abs() < 1e-4,
+            "pure twist mismatch: {:?}",
+            diff
+        );
     }
 
     #[test]
@@ -1026,7 +1236,12 @@ mod tests {
             let post_q = get_post_q(unity_idx);
             let result = post_q * Quat::IDENTITY * post_q.inverse();
             let angle = result.to_axis_angle().1.abs();
-            assert!(angle < 1e-4, "bone {} rest not identity: angle={}", unity_idx, angle);
+            assert!(
+                angle < 1e-4,
+                "bone {} rest not identity: angle={}",
+                unity_idx,
+                angle
+            );
         }
     }
 }

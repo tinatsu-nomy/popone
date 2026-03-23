@@ -27,22 +27,61 @@ impl RigType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HumanBone {
-    Hips, Spine, Chest, UpperChest, Neck, Head,
-    LeftShoulder, LeftUpperArm, LeftLowerArm, LeftHand,
-    RightShoulder, RightUpperArm, RightLowerArm, RightHand,
-    LeftUpperLeg, LeftLowerLeg, LeftFoot, LeftToes,
-    RightUpperLeg, RightLowerLeg, RightFoot, RightToes,
-    LeftThumbProximal, LeftThumbIntermediate, LeftThumbDistal,
-    LeftIndexProximal, LeftIndexIntermediate, LeftIndexDistal,
-    LeftMiddleProximal, LeftMiddleIntermediate, LeftMiddleDistal,
-    LeftRingProximal, LeftRingIntermediate, LeftRingDistal,
-    LeftLittleProximal, LeftLittleIntermediate, LeftLittleDistal,
-    RightThumbProximal, RightThumbIntermediate, RightThumbDistal,
-    RightIndexProximal, RightIndexIntermediate, RightIndexDistal,
-    RightMiddleProximal, RightMiddleIntermediate, RightMiddleDistal,
-    RightRingProximal, RightRingIntermediate, RightRingDistal,
-    RightLittleProximal, RightLittleIntermediate, RightLittleDistal,
-    LeftEye, RightEye, Jaw,
+    Hips,
+    Spine,
+    Chest,
+    UpperChest,
+    Neck,
+    Head,
+    LeftShoulder,
+    LeftUpperArm,
+    LeftLowerArm,
+    LeftHand,
+    RightShoulder,
+    RightUpperArm,
+    RightLowerArm,
+    RightHand,
+    LeftUpperLeg,
+    LeftLowerLeg,
+    LeftFoot,
+    LeftToes,
+    RightUpperLeg,
+    RightLowerLeg,
+    RightFoot,
+    RightToes,
+    LeftThumbProximal,
+    LeftThumbIntermediate,
+    LeftThumbDistal,
+    LeftIndexProximal,
+    LeftIndexIntermediate,
+    LeftIndexDistal,
+    LeftMiddleProximal,
+    LeftMiddleIntermediate,
+    LeftMiddleDistal,
+    LeftRingProximal,
+    LeftRingIntermediate,
+    LeftRingDistal,
+    LeftLittleProximal,
+    LeftLittleIntermediate,
+    LeftLittleDistal,
+    RightThumbProximal,
+    RightThumbIntermediate,
+    RightThumbDistal,
+    RightIndexProximal,
+    RightIndexIntermediate,
+    RightIndexDistal,
+    RightMiddleProximal,
+    RightMiddleIntermediate,
+    RightMiddleDistal,
+    RightRingProximal,
+    RightRingIntermediate,
+    RightRingDistal,
+    RightLittleProximal,
+    RightLittleIntermediate,
+    RightLittleDistal,
+    LeftEye,
+    RightEye,
+    Jaw,
 }
 
 impl HumanBone {
@@ -165,15 +204,12 @@ pub fn detect_humanoid(bone_names: &[(usize, &str)]) -> HumanoidMapping {
 
     let mut mapping = HashMap::new();
     for &(idx, name) in bone_names {
-        let lower = name.to_lowercase();
-        let stripped = lower
-            .replace("mixamorig:", "")
-            .replace("mixamorig_", "");
+        let lower = strip_namespace_lower(name);
+        let stripped = lower.replace("mixamorig:", "").replace("mixamorig_", "");
 
         // Blender リグ: スペース/ドット/アンダースコアを正規化してマッチ
         let normalized = if rig_type == RigType::Blender {
-            stripped
-                .replace([' ', '.'], "_")
+            stripped.replace([' ', '.'], "_")
         } else {
             stripped
         };
@@ -189,8 +225,21 @@ pub fn detect_humanoid(bone_names: &[(usize, &str)]) -> HumanoidMapping {
     HumanoidMapping { rig_type, mapping }
 }
 
+/// "Model::Hips" → "hips" のように名前空間プレフィックスを除去して小文字化
+fn strip_namespace_lower(name: &str) -> String {
+    let s = if let Some(pos) = name.rfind("::") {
+        &name[pos + 2..]
+    } else {
+        name
+    };
+    s.to_lowercase()
+}
+
 fn detect_rig_type(bone_names: &[(usize, &str)]) -> RigType {
-    let names: Vec<String> = bone_names.iter().map(|(_, n)| n.to_lowercase()).collect();
+    let names: Vec<String> = bone_names
+        .iter()
+        .map(|(_, n)| strip_namespace_lower(n))
+        .collect();
 
     if names
         .iter()
@@ -213,9 +262,7 @@ fn detect_rig_type(bone_names: &[(usize, &str)]) -> RigType {
     if names.iter().any(|n| n.starts_with("hik_")) {
         return RigType::MayaHumanIK;
     }
-    if names.iter().any(|n| n == "root")
-        && names.iter().any(|n| n == "pelvis")
-    {
+    if names.iter().any(|n| n == "root") && names.iter().any(|n| n == "pelvis") {
         return RigType::Unreal;
     }
 
@@ -331,18 +378,28 @@ const BLENDER_MAP: &[(&str, HumanBone)] = &[
     ("shoulder_r", HumanBone::RightShoulder),
     ("upper_arm_l", HumanBone::LeftUpperArm),
     ("upper_arm_r", HumanBone::RightUpperArm),
+    ("upperarm_l", HumanBone::LeftUpperArm),
+    ("upperarm_r", HumanBone::RightUpperArm),
     ("lower_arm_l", HumanBone::LeftLowerArm),
     ("lower_arm_r", HumanBone::RightLowerArm),
+    ("lowerarm_l", HumanBone::LeftLowerArm),
+    ("lowerarm_r", HumanBone::RightLowerArm),
     ("hand_l", HumanBone::LeftHand),
     ("hand_r", HumanBone::RightHand),
     ("upper_leg_l", HumanBone::LeftUpperLeg),
     ("upper_leg_r", HumanBone::RightUpperLeg),
+    ("upperleg_l", HumanBone::LeftUpperLeg),
+    ("upperleg_r", HumanBone::RightUpperLeg),
     ("lower_leg_l", HumanBone::LeftLowerLeg),
     ("lower_leg_r", HumanBone::RightLowerLeg),
+    ("lowerleg_l", HumanBone::LeftLowerLeg),
+    ("lowerleg_r", HumanBone::RightLowerLeg),
     ("foot_l", HumanBone::LeftFoot),
     ("foot_r", HumanBone::RightFoot),
     ("toes_l", HumanBone::LeftToes),
     ("toes_r", HumanBone::RightToes),
+    ("toe_l", HumanBone::LeftToes),
+    ("toe_r", HumanBone::RightToes),
     ("lefteye", HumanBone::LeftEye),
     ("righteye", HumanBone::RightEye),
     ("thumb_proximal_l", HumanBone::LeftThumbProximal),
@@ -381,6 +438,37 @@ const BLENDER_MAP: &[(&str, HumanBone)] = &[
     ("intermediate_little_r", HumanBone::RightLittleIntermediate),
     ("distal_little_l", HumanBone::LeftLittleDistal),
     ("distal_little_r", HumanBone::RightLittleDistal),
+    // 逆順パターン: "Finger Position.Side" → "finger_position_side"
+    ("index_proximal_l", HumanBone::LeftIndexProximal),
+    ("index_proximal_r", HumanBone::RightIndexProximal),
+    ("index_intermediate_l", HumanBone::LeftIndexIntermediate),
+    ("index_intermediate_r", HumanBone::RightIndexIntermediate),
+    ("index_distal_l", HumanBone::LeftIndexDistal),
+    ("index_distal_r", HumanBone::RightIndexDistal),
+    ("middle_proximal_l", HumanBone::LeftMiddleProximal),
+    ("middle_proximal_r", HumanBone::RightMiddleProximal),
+    ("middle_intermediate_l", HumanBone::LeftMiddleIntermediate),
+    ("middle_intermediate_r", HumanBone::RightMiddleIntermediate),
+    ("middle_distal_l", HumanBone::LeftMiddleDistal),
+    ("middle_distal_r", HumanBone::RightMiddleDistal),
+    ("ring_proximal_l", HumanBone::LeftRingProximal),
+    ("ring_proximal_r", HumanBone::RightRingProximal),
+    ("ring_intermediate_l", HumanBone::LeftRingIntermediate),
+    ("ring_intermediate_r", HumanBone::RightRingIntermediate),
+    ("ring_distal_l", HumanBone::LeftRingDistal),
+    ("ring_distal_r", HumanBone::RightRingDistal),
+    ("little_proximal_l", HumanBone::LeftLittleProximal),
+    ("little_proximal_r", HumanBone::RightLittleProximal),
+    ("little_intermediate_l", HumanBone::LeftLittleIntermediate),
+    ("little_intermediate_r", HumanBone::RightLittleIntermediate),
+    ("little_distal_l", HumanBone::LeftLittleDistal),
+    ("little_distal_r", HumanBone::RightLittleDistal),
+    ("pinky_proximal_l", HumanBone::LeftLittleProximal),
+    ("pinky_proximal_r", HumanBone::RightLittleProximal),
+    ("pinky_intermediate_l", HumanBone::LeftLittleIntermediate),
+    ("pinky_intermediate_r", HumanBone::RightLittleIntermediate),
+    ("pinky_distal_l", HumanBone::LeftLittleDistal),
+    ("pinky_distal_r", HumanBone::RightLittleDistal),
 ];
 
 const UNREAL_MAP: &[(&str, HumanBone)] = &[

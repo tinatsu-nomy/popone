@@ -12,8 +12,16 @@ type BoneExtractResult = (Vec<IrBone>, HashMap<usize, usize>, Vec<Mat4>);
 use crate::vrm::{
     detect::VrmVersion,
     types_v0::VrmV0,
-    types_v1::{VrmV1, SpringBoneV1},
+    types_v1::{SpringBoneV1, VrmV1},
 };
+
+/// VRM拡張JSONを1回だけデシリアライズした結果を保持する列挙型
+enum VrmTyped {
+    V0(VrmV0),
+    V1(VrmV1),
+    /// VRM 拡張なしの plain GLB
+    Unknown,
+}
 
 pub fn extract_ir_model(
     document: &gltf::Document,
@@ -23,7 +31,15 @@ pub fn extract_ir_model(
     version: &VrmVersion,
     all_extensions: &Value,
 ) -> Result<IrModel> {
-    extract_ir_model_with_options(document, buffers, images, vrm_ext, version, all_extensions, false)
+    extract_ir_model_with_options(
+        document,
+        buffers,
+        images,
+        vrm_ext,
+        version,
+        all_extensions,
+        false,
+    )
 }
 
 pub fn extract_ir_model_with_options(
@@ -42,35 +58,63 @@ pub fn extract_ir_model_with_options(
         SourceFormat::Vrm1
     };
 
+    // VRM拡張JSONを1回だけデシリアライズ（以後 typed を参照渡しで使い回す）
+    let typed = match version {
+        VrmVersion::V0 => {
+            let v0: VrmV0 = serde_json::from_value(vrm_ext.clone()).unwrap_or_else(|e| {
+                log::warn!("VrmV0 デシリアライズエラー: {}", e);
+                VrmV0::default()
+            });
+            VrmTyped::V0(v0)
+        }
+        VrmVersion::V1 => {
+            let v1: VrmV1 = serde_json::from_value(vrm_ext.clone()).unwrap_or_else(|e| {
+                log::warn!("VrmV1 デシリアライズエラー: {}", e);
+                VrmV1::default()
+            });
+            VrmTyped::V1(v1)
+        }
+        VrmVersion::Unknown => VrmTyped::Unknown,
+    };
+
     // テクスチャ抽出
     model.textures = extract_textures(document, images)?;
 
     // 材質抽出
-    model.materials = extract_materials(document, vrm_ext, version, &model.textures)?;
+    model.materials = extract_materials(document, &typed, version, &model.textures)?;
 
     // ボーン抽出（ノード→ボーン構造）
-    let (bones, node_to_bone, mut global_mats) = extract_bones(document, vrm_ext, version)?;
+    let (bones, node_to_bone, mut global_mats) = extract_bones(document, &typed)?;
     model.bones = bones;
     model.node_to_bone = node_to_bone;
 
     // T→Aスタンス変換（オプション）
     if normalize_pose {
-        model.astance_result =
-            crate::intermediate::pose::normalize_pose_to_astance(&mut model.bones, &mut global_mats);
+        model.astance_result = crate::intermediate::pose::normalize_pose_to_astance(
+            &mut model.bones,
+            &mut global_mats,
+        );
     }
 
     // モデル名・コメント
-    model.name = extract_model_name(vrm_ext, version);
-    model.comment = extract_meta_comment(vrm_ext, version);
+    model.name = extract_model_name(&typed);
+    model.comment = extract_meta_comment(&typed);
 
     // メッシュ抽出（補正済み global_mats を使用）
-    model.meshes = extract_meshes(document, buffers, images, &model.node_to_bone, &model.materials, &global_mats)?;
+    model.meshes = extract_meshes(
+        document,
+        buffers,
+        images,
+        &model.node_to_bone,
+        &model.materials,
+        &global_mats,
+    )?;
 
     // モーフ抽出
-    model.morphs = extract_morphs(document, vrm_ext, version, &model.meshes, &model.node_to_bone)?;
+    model.morphs = extract_morphs(document, &typed, &model.meshes, &model.node_to_bone)?;
 
     // 物理抽出
-    model.physics = extract_physics(vrm_ext, all_extensions, version, &model.node_to_bone, &model.bones)?;
+    model.physics = extract_physics(&typed, all_extensions, &model.node_to_bone, &model.bones)?;
 
     // 物理演算ボーン（physics_mode=1）に is_physics フラグを立てる
     // → build_bones() で BONE_FLAG_PHYS_AFTER に変換される
@@ -85,44 +129,44 @@ pub fn extract_ir_model_with_options(
     }
 
     // VRMは常にヒューマノイド
-    model.humanoid_bone_count = model.bones.iter()
+    model.humanoid_bone_count = model
+        .bones
+        .iter()
         .filter(|b| b.vrm_bone_name.is_some())
         .count();
 
     Ok(model)
 }
 
-fn extract_model_name(vrm_ext: &Value, version: &VrmVersion) -> String {
-    match version {
-        VrmVersion::V1 => {
-            if let Ok(v1) = serde_json::from_value::<VrmV1>(vrm_ext.clone()) {
-                if let Some(meta) = v1.meta {
-                    if let Some(name) = meta.name {
-                        return name;
-                    }
+fn extract_model_name(typed: &VrmTyped) -> String {
+    match typed {
+        VrmTyped::V1(v1) => {
+            if let Some(meta) = &v1.meta {
+                if let Some(name) = &meta.name {
+                    return name.clone();
                 }
             }
         }
-        VrmVersion::V0 => {
-            if let Ok(v0) = serde_json::from_value::<VrmV0>(vrm_ext.clone()) {
-                if let Some(meta) = v0.meta {
-                    if let Some(title) = meta.title {
-                        return title;
-                    }
+        VrmTyped::V0(v0) => {
+            if let Some(meta) = &v0.meta {
+                if let Some(title) = &meta.title {
+                    return title.clone();
                 }
             }
         }
-        _ => {}
+        VrmTyped::Unknown => {}
     }
     "Unknown".to_string()
 }
 
-fn extract_meta_comment(vrm_ext: &Value, version: &VrmVersion) -> String {
+fn extract_meta_comment(typed: &VrmTyped) -> String {
     let mut lines: Vec<String> = Vec::new();
 
     macro_rules! section {
         ($title:expr) => {
-            if !lines.is_empty() { lines.push(String::new()); }
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
             lines.push(format!("[{}]", $title));
         };
     }
@@ -144,65 +188,60 @@ fn extract_meta_comment(vrm_ext: &Value, version: &VrmVersion) -> String {
         };
     }
 
-    match version {
-        VrmVersion::V0 => {
-            match serde_json::from_value::<VrmV0>(vrm_ext.clone()) {
-            Err(e) => log::warn!("VrmV0 デシリアライズエラー (meta comment): {}", e),
-            Ok(v0) => if let Some(m) = v0.meta {
-                    section!("Model Info");
-                    field!("model name", m.title.as_deref());
-                    field!("version", m.version.as_deref());
+    match typed {
+        VrmTyped::V0(v0) => {
+            if let Some(m) = &v0.meta {
+                section!("Model Info");
+                field!("model name", m.title.as_deref());
+                field!("version", m.version.as_deref());
 
-                    section!("Author");
-                    field!("author", m.author.as_deref());
-                    field!("contact information", m.contact_information.as_deref());
-                    field!("reference", m.reference.as_deref());
+                section!("Author");
+                field!("author", m.author.as_deref());
+                field!("contact information", m.contact_information.as_deref());
+                field!("reference", m.reference.as_deref());
 
-                    section!("Permissions");
-                    field!("allowed user", m.allowed_user_name.as_deref());
-                    field!("violent ussage", m.violent_ussage_name.as_deref());
-                    field!("sexual ussage", m.sexual_ussage_name.as_deref());
-                    field!("commercial ussage", m.commercial_ussage_name.as_deref());
-                    field!("other permission", m.other_permission_url.as_deref());
+                section!("Permissions");
+                field!("allowed user", m.allowed_user_name.as_deref());
+                field!("violent ussage", m.violent_ussage_name.as_deref());
+                field!("sexual ussage", m.sexual_ussage_name.as_deref());
+                field!("commercial ussage", m.commercial_ussage_name.as_deref());
+                field!("other permission", m.other_permission_url.as_deref());
 
-                    section!("License");
-                    field!("license", m.license_name.as_deref());
-                    field!("other license", m.other_license_url.as_deref());
-                }
+                section!("License");
+                field!("license", m.license_name.as_deref());
+                field!("other license", m.other_license_url.as_deref());
             }
         }
-        VrmVersion::V1 => {
-            if let Ok(v1) = serde_json::from_value::<VrmV1>(vrm_ext.clone()) {
-                if let Some(m) = v1.meta {
-                    section!("Model Info");
-                    field!("model name", m.name.as_deref());
-                    field!("version", m.version.as_deref());
+        VrmTyped::V1(v1) => {
+            if let Some(m) = &v1.meta {
+                section!("Model Info");
+                field!("model name", m.name.as_deref());
+                field!("version", m.version.as_deref());
 
-                    section!("Author");
-                    field!("author", vec m.authors);
-                    field!("copyright information", m.copyright_information.as_deref());
-                    field!("contact information", m.contact_information.as_deref());
-                    field!("reference", vec m.references);
-                    field!("third party licenses", m.third_party_licenses.as_deref());
+                section!("Author");
+                field!("author", vec m.authors);
+                field!("copyright information", m.copyright_information.as_deref());
+                field!("contact information", m.contact_information.as_deref());
+                field!("reference", vec m.references);
+                field!("third party licenses", m.third_party_licenses.as_deref());
 
-                    section!("License");
-                    field!("license", m.license_url.as_deref());
-                    field!("other license", m.other_license_url.as_deref());
+                section!("License");
+                field!("license", m.license_url.as_deref());
+                field!("other license", m.other_license_url.as_deref());
 
-                    section!("Permissions");
-                    field!("avatar permission", m.avatar_permission.as_deref());
-                    field!("allow excessively violent usage", bool m.allow_excessively_violent_usage.map(|v| v.to_string()));
-                    field!("allow excessively sexual usage", bool m.allow_excessively_sexual_usage.map(|v| v.to_string()));
-                    field!("commercial usage", m.commercial_usage.as_deref());
-                    field!("allow political or religious usage", bool m.allow_political_or_religious_usage.map(|v| v.to_string()));
-                    field!("allow antisocial or hate usage", bool m.allow_antisocial_or_hate_usage.map(|v| v.to_string()));
-                    field!("credit notation", m.credit_notation.as_deref());
-                    field!("allow redistribution", bool m.allow_redistribution.map(|v| v.to_string()));
-                    field!("modification", m.modification.as_deref());
-                }
+                section!("Permissions");
+                field!("avatar permission", m.avatar_permission.as_deref());
+                field!("allow excessively violent usage", bool m.allow_excessively_violent_usage.map(|v| v.to_string()));
+                field!("allow excessively sexual usage", bool m.allow_excessively_sexual_usage.map(|v| v.to_string()));
+                field!("commercial usage", m.commercial_usage.as_deref());
+                field!("allow political or religious usage", bool m.allow_political_or_religious_usage.map(|v| v.to_string()));
+                field!("allow antisocial or hate usage", bool m.allow_antisocial_or_hate_usage.map(|v| v.to_string()));
+                field!("credit notation", m.credit_notation.as_deref());
+                field!("allow redistribution", bool m.allow_redistribution.map(|v| v.to_string()));
+                field!("modification", m.modification.as_deref());
             }
         }
-        _ => {}
+        VrmTyped::Unknown => {}
     }
 
     let comment = lines.join("\r\n");
@@ -239,28 +278,29 @@ fn extract_textures(
 
 fn sanitize_filename(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
 #[allow(clippy::field_reassign_with_default)]
 fn extract_materials(
     document: &gltf::Document,
-    vrm_ext: &Value,
+    typed: &VrmTyped,
     version: &VrmVersion,
     _textures: &[IrTexture],
 ) -> Result<Vec<IrMaterial>> {
     let mut materials = Vec::new();
 
     // VRM 0.0 のmaterialPropertiesを優先使用
-    let v0_mat_props: Vec<crate::vrm::types_v0::VrmMaterialProperty> = if *version == VrmVersion::V0 {
-        if let Ok(v0) = serde_json::from_value::<VrmV0>(vrm_ext.clone()) {
-            v0.material_properties
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
+    let v0_mat_props: &[crate::vrm::types_v0::VrmMaterialProperty] = match typed {
+        VrmTyped::V0(v0) => &v0.material_properties,
+        VrmTyped::V1(_) | VrmTyped::Unknown => &[],
     };
 
     for (i, mat) in document.materials().enumerate() {
@@ -278,7 +318,10 @@ fn extract_materials(
             let src_idx = tex_info.texture().source().index();
             ir_mat.texture_index = Some(src_idx);
             // VRM埋め込みテクスチャの名前を source_texture_name に設定
-            let img_name = tex_info.texture().source().name()
+            let img_name = tex_info
+                .texture()
+                .source()
+                .name()
                 .map(|n| n.to_string())
                 .or_else(|| _textures.get(src_idx).map(|t| t.filename.clone()));
             ir_mat.source_texture_name = img_name;
@@ -292,7 +335,9 @@ fn extract_materials(
 
             if ir_mat.is_mtoon {
                 // _OutlineWidthMode: 0=None, 1=WorldCoordinates, 2=ScreenCoordinates
-                let outline_mode = v0_prop.float_properties.as_ref()
+                let outline_mode = v0_prop
+                    .float_properties
+                    .as_ref()
                     .and_then(|fp| fp.get("_OutlineWidthMode"))
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0) as i32;
@@ -316,7 +361,7 @@ fn extract_materials(
                             // VRM 1.0 outlineWidthFactor と同等にするには w * 0.01 が実効幅(メートル)
                             ir_mat.edge_size = match outline_mode {
                                 1 => w * 0.01 * PMX_SCALE * 10.0, // WorldCoordinates
-                                2 => w * 100.0,                    // ScreenCoordinates
+                                2 => w * 100.0,                   // ScreenCoordinates
                                 _ => 0.0,
                             };
                         }
@@ -358,12 +403,14 @@ fn extract_materials(
                         ir_mat.is_mtoon = true;
 
                         // outlineWidthMode が "none" 以外ならエッジ有効
-                        let mode = mtoon.get("outlineWidthMode")
+                        let mode = mtoon
+                            .get("outlineWidthMode")
                             .and_then(|v| v.as_str())
                             .unwrap_or("none");
 
                         if mode != "none" {
-                            let width = mtoon.get("outlineWidthFactor")
+                            let width = mtoon
+                                .get("outlineWidthFactor")
                                 .and_then(|v| v.as_f64())
                                 .unwrap_or(0.0) as f32;
 
@@ -378,9 +425,12 @@ fn extract_materials(
                             // outlineColorFactor [r,g,b] → Vec4(r,g,b,1.0)
                             if let Some(color) = mtoon.get("outlineColorFactor") {
                                 if let Some(arr) = color.as_array() {
-                                    let r = arr.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                                    let g = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                                    let b = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                    let r =
+                                        arr.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                    let g =
+                                        arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                    let b =
+                                        arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                     ir_mat.edge_color = Vec4::new(r, g, b, 1.0);
                                 }
                             }
@@ -429,18 +479,14 @@ fn extract_materials(
     Ok(materials)
 }
 
-fn extract_bones(
-    document: &gltf::Document,
-    vrm_ext: &Value,
-    version: &VrmVersion,
-) -> Result<BoneExtractResult> {
+fn extract_bones(document: &gltf::Document, typed: &VrmTyped) -> Result<BoneExtractResult> {
     let nodes: Vec<gltf::Node> = document.nodes().collect();
     let mut bones: Vec<IrBone> = Vec::with_capacity(nodes.len());
     let mut node_to_bone: HashMap<usize, usize> = HashMap::new();
 
     // VRMヒューマノイドボーンのノードIndex → ボーン名 のマップを構築
     let mut humanoid_map: HashMap<usize, String> = HashMap::new();
-    build_humanoid_map(vrm_ext, version, &mut humanoid_map)?;
+    build_humanoid_map(typed, &mut humanoid_map)?;
 
     // 全ノードのグローバル変換行列を計算
     let global_mats = compute_global_transforms(&nodes);
@@ -465,6 +511,14 @@ fn extract_bones(
             children: Vec::new(),
             node_index: idx,
             is_physics: false,
+            tail_position: None,
+            tail_bone_index: None,
+            is_ik: false,
+            is_ik_bone: false,
+            is_translatable: false,
+            is_axis_fixed: false,
+            is_visible: true,
+            grant: None,
         });
     }
 
@@ -526,21 +580,10 @@ fn compute_global_transforms(nodes: &[gltf::Node]) -> Vec<Mat4> {
     global_mat
 }
 
-fn build_humanoid_map(
-    vrm_ext: &Value,
-    version: &VrmVersion,
-    map: &mut HashMap<usize, String>,
-) -> Result<()> {
-    match version {
-        VrmVersion::V1 => {
-            let v1: VrmV1 = match serde_json::from_value(vrm_ext.clone()) {
-                Ok(v) => v,
-                Err(e) => {
-                    log::warn!("VrmV1 デシリアライズエラー: {}", e);
-                    VrmV1::default()
-                }
-            };
-            if let Some(humanoid) = v1.humanoid {
+fn build_humanoid_map(typed: &VrmTyped, map: &mut HashMap<usize, String>) -> Result<()> {
+    match typed {
+        VrmTyped::V1(v1) => {
+            if let Some(humanoid) = &v1.humanoid {
                 let bones = &humanoid.human_bones;
                 macro_rules! add_bone {
                     ($field:expr, $name:expr) => {
@@ -606,19 +649,17 @@ fn build_humanoid_map(
                 add_bone!(bones.right_little_distal, "rightLittleDistal");
             }
         }
-        VrmVersion::V0 => {
-            let v0: VrmV0 = serde_json::from_value(vrm_ext.clone()).unwrap_or_default();
-            if let Some(humanoid) = v0.humanoid {
+        VrmTyped::V0(v0) => {
+            if let Some(humanoid) = &v0.humanoid {
                 for bone in &humanoid.human_bones {
                     map.insert(bone.node as usize, bone.bone.clone());
                 }
             }
         }
-        _ => {}
+        VrmTyped::Unknown => {}
     }
     Ok(())
 }
-
 
 fn extract_meshes(
     document: &gltf::Document,
@@ -691,7 +732,10 @@ fn extract_meshes(
                     skin.joints()
                         .enumerate()
                         .map(|(ji, j)| {
-                            let world = global_mats.get(j.index()).copied().unwrap_or(Mat4::IDENTITY);
+                            let world = global_mats
+                                .get(j.index())
+                                .copied()
+                                .unwrap_or(Mat4::IDENTITY);
                             let inv_bind = inv_binds.get(ji).copied().unwrap_or(Mat4::IDENTITY);
                             world * inv_bind
                         })
@@ -702,9 +746,10 @@ fn extract_meshes(
 
                 // 法線変換用の逆転置行列を事前計算（glTF仕様準拠）
                 // 非一様スケールがある場合に M*n では法線方向が崩れるため (M⁻¹)ᵀ*n を使用
-                let normal_mats: Vec<Mat3> = skin_mats.iter().map(|sm| {
-                    Mat3::from_mat4(*sm).inverse().transpose()
-                }).collect();
+                let normal_mats: Vec<Mat3> = skin_mats
+                    .iter()
+                    .map(|sm| Mat3::from_mat4(*sm).inverse().transpose())
+                    .collect();
 
                 // 頂点構築（スキニングによりT-ポーズ世界座標を計算）
                 let vertices: Vec<IrVertex> = positions
@@ -715,55 +760,59 @@ fn extract_meshes(
                         let uv = uvs.get(i).copied().unwrap_or([0.0, 0.0]);
 
                         // スキニング演算でT-ポーズ頂点位置・法線を計算
-                        let (final_pos, final_normal) = if !skin_mats.is_empty() && !joints.is_empty() {
-                            let j = joints.get(i).copied().unwrap_or([0; 4]);
-                            let w = weights.get(i).copied().unwrap_or([0.0; 4]);
-                            let lp = Vec4::new(pos[0], pos[1], pos[2], 1.0);
-                            let ln = Vec3::new(normal[0], normal[1], normal[2]);
-                            let mut wp = Vec4::ZERO;
-                            let mut wn = Vec3::ZERO;
-                            for k in 0..4 {
-                                if w[k] > 0.0 {
-                                    let ji = j[k] as usize;
-                                    if let Some(sm) = skin_mats.get(ji) {
-                                        wp += w[k] * (*sm * lp);
-                                    }
-                                    // 法線は逆転置行列で変換（glTF仕様準拠）
-                                    if let Some(nm) = normal_mats.get(ji) {
-                                        wn += w[k] * (*nm * ln);
+                        let (final_pos, final_normal) =
+                            if !skin_mats.is_empty() && !joints.is_empty() {
+                                let j = joints.get(i).copied().unwrap_or([0; 4]);
+                                let w = weights.get(i).copied().unwrap_or([0.0; 4]);
+                                let lp = Vec4::new(pos[0], pos[1], pos[2], 1.0);
+                                let ln = Vec3::new(normal[0], normal[1], normal[2]);
+                                let mut wp = Vec4::ZERO;
+                                let mut wn = Vec3::ZERO;
+                                for k in 0..4 {
+                                    if w[k] > 0.0 {
+                                        let ji = j[k] as usize;
+                                        if let Some(sm) = skin_mats.get(ji) {
+                                            wp += w[k] * (*sm * lp);
+                                        }
+                                        // 法線は逆転置行列で変換（glTF仕様準拠）
+                                        if let Some(nm) = normal_mats.get(ji) {
+                                            wn += w[k] * (*nm * ln);
+                                        }
                                     }
                                 }
-                            }
-                            let fp = Vec3::new(wp.x, wp.y, wp.z);
-                            let fn3 = wn.normalize_or_zero();
-                            (fp, [fn3.x, fn3.y, fn3.z])
-                        } else {
-                            // 非スキンメッシュ: ノードのワールド変換を適用
-                            let node_mat = global_mats.get(node_idx).copied().unwrap_or(Mat4::IDENTITY);
-                            let lp = Vec4::new(pos[0], pos[1], pos[2], 1.0);
-                            let wp = node_mat * lp;
-                            let fp = Vec3::new(wp.x, wp.y, wp.z);
-                            let ln = Vec3::new(normal[0], normal[1], normal[2]);
-                            let nmat = Mat3::from_mat4(node_mat).inverse().transpose();
-                            let fn3 = (nmat * ln).normalize_or_zero();
-                            (fp, [fn3.x, fn3.y, fn3.z])
-                        };
+                                let fp = Vec3::new(wp.x, wp.y, wp.z);
+                                let fn3 = wn.normalize_or_zero();
+                                (fp, [fn3.x, fn3.y, fn3.z])
+                            } else {
+                                // 非スキンメッシュ: ノードのワールド変換を適用
+                                let node_mat =
+                                    global_mats.get(node_idx).copied().unwrap_or(Mat4::IDENTITY);
+                                let lp = Vec4::new(pos[0], pos[1], pos[2], 1.0);
+                                let wp = node_mat * lp;
+                                let fp = Vec3::new(wp.x, wp.y, wp.z);
+                                let ln = Vec3::new(normal[0], normal[1], normal[2]);
+                                let nmat = Mat3::from_mat4(node_mat).inverse().transpose();
+                                let fn3 = (nmat * ln).normalize_or_zero();
+                                (fp, [fn3.x, fn3.y, fn3.z])
+                            };
 
-                        let vtx_weights = if !joints.is_empty() && !skin_bone_map.is_empty() {
+                        let (vtx_weights, vtx_weight_count) = if !joints.is_empty()
+                            && !skin_bone_map.is_empty()
+                        {
                             let j = joints.get(i).copied().unwrap_or([0; 4]);
                             let w = weights.get(i).copied().unwrap_or([0.0; 4]);
-                            (0..4)
-                                .filter(|&k| w[k] > 0.0)
-                                .map(|k| {
-                                    let bi = skin_bone_map
-                                        .get(j[k] as usize)
-                                        .copied()
-                                        .unwrap_or(0);
-                                    (bi, w[k])
-                                })
-                                .collect()
+                            let mut arr = [(0usize, 0.0f32); 4];
+                            let mut cnt = 0u8;
+                            for k in 0..4 {
+                                if w[k] > 0.0 {
+                                    let bi = skin_bone_map.get(j[k] as usize).copied().unwrap_or(0);
+                                    arr[cnt as usize] = (bi, w[k]);
+                                    cnt += 1;
+                                }
+                            }
+                            (arr, cnt)
                         } else {
-                            vec![(bone_idx, 1.0)]
+                            ([(bone_idx, 1.0), (0, 0.0), (0, 0.0), (0, 0.0)], 1)
                         };
 
                         IrVertex {
@@ -771,6 +820,7 @@ fn extract_meshes(
                             normal: Vec3::new(final_normal[0], final_normal[1], final_normal[2]),
                             uv: Vec2::new(uv[0], uv[1]),
                             weights: vtx_weights,
+                            weight_count: vtx_weight_count,
                             edge_scale: 1.0, // テクスチャサンプリング後に更新
                         }
                     })
@@ -786,7 +836,8 @@ fn extract_meshes(
                 let material_index = primitive.material().index().unwrap_or(0);
 
                 // モーフターゲット
-                let morph_targets = extract_morph_targets_from_reader(&primitive, buffers, positions.len());
+                let morph_targets =
+                    extract_morph_targets_from_reader(&primitive, buffers, positions.len());
 
                 // outlineWidthMultiplyTexture からエッジ倍率を頂点ごとに設定
                 let mut vertices = vertices;
@@ -796,10 +847,13 @@ fn extract_meshes(
                             let src_idx = gltf_tex.source().index();
                             if let Some(img) = images.get(src_idx) {
                                 for vtx in &mut vertices {
-                                    vtx.edge_scale = sample_image_g_channel(img, vtx.uv.x, vtx.uv.y);
+                                    vtx.edge_scale =
+                                        sample_image_g_channel(img, vtx.uv.x, vtx.uv.y);
                                 }
-                                let zero_count = vertices.iter().filter(|v| v.edge_scale < 0.01).count();
-                                let full_count = vertices.iter().filter(|v| v.edge_scale > 0.99).count();
+                                let zero_count =
+                                    vertices.iter().filter(|v| v.edge_scale < 0.01).count();
+                                let full_count =
+                                    vertices.iter().filter(|v| v.edge_scale > 0.99).count();
                                 log::debug!("メッシュ \"{}\" outline_width_texture: 頂点{}中 edge_scale≈0:{}, ≈1:{}",
                                     mesh.name().unwrap_or("?"), vertices.len(), zero_count, full_count);
                             }
@@ -808,7 +862,10 @@ fn extract_meshes(
                 }
 
                 ir_meshes.push(IrMesh {
-                    name: mesh.name().unwrap_or(&format!("mesh_{}", mesh.index())).to_string(),
+                    name: mesh
+                        .name()
+                        .unwrap_or(&format!("mesh_{}", mesh.index()))
+                        .to_string(),
                     vertices,
                     indices,
                     material_index,
@@ -827,7 +884,9 @@ fn extract_meshes(
 fn sample_image_g_channel(img: &gltf::image::Data, u: f32, v: f32) -> f32 {
     let w = img.width as usize;
     let h = img.height as usize;
-    if w == 0 || h == 0 { return 1.0; }
+    if w == 0 || h == 0 {
+        return 1.0;
+    }
 
     // UV → ピクセル座標（繰り返しラップ）
     let fu = u.fract();
@@ -839,14 +898,17 @@ fn sample_image_g_channel(img: &gltf::image::Data, u: f32, v: f32) -> f32 {
 
     use gltf::image::Format;
     let (bpp, g_offset) = match img.format {
-        Format::R8 => (1, 0),           // 単チャネル → R値を使用
+        Format::R8 => (1, 0), // 単チャネル → R値を使用
         Format::R8G8 => (2, 1),
         Format::R8G8B8 => (3, 1),
         Format::R8G8B8A8 => (4, 1),
         _ => return 1.0, // 16bit/float形式は非対応
     };
     let idx = (py * w + px) * bpp + g_offset;
-    img.pixels.get(idx).map(|&v| v as f32 / 255.0).unwrap_or(1.0)
+    img.pixels
+        .get(idx)
+        .map(|&v| v as f32 / 255.0)
+        .unwrap_or(1.0)
 }
 
 fn extract_morph_targets_from_reader(
@@ -857,16 +919,15 @@ fn extract_morph_targets_from_reader(
     let reader = primitive.reader(|buf| Some(&buffers[buf.index()]));
     let mut targets = Vec::new();
 
-    for (i, (positions_opt, _normals_opt, _tangents_opt)) in reader.read_morph_targets().enumerate() {
-        let positions: Vec<[f32; 3]> = positions_opt
-            .map(|iter| iter.collect())
-            .unwrap_or_default();
+    for (i, (positions_opt, _normals_opt, _tangents_opt)) in reader.read_morph_targets().enumerate()
+    {
+        let positions: Vec<[f32; 3]> = positions_opt.map(|iter| iter.collect()).unwrap_or_default();
 
-        let position_offsets = (0..vertex_count)
-            .map(|j| {
+        let position_offsets: Vec<(u32, Vec3)> = (0..vertex_count)
+            .filter_map(|j| {
                 positions.get(j).and_then(|p| {
                     if p[0].abs() > 1e-7 || p[1].abs() > 1e-7 || p[2].abs() > 1e-7 {
-                        Some(Vec3::new(p[0], p[1], p[2]))
+                        Some((j as u32, Vec3::new(p[0], p[1], p[2])))
                     } else {
                         None
                     }
@@ -884,25 +945,23 @@ fn extract_morph_targets_from_reader(
 
 fn extract_morphs(
     document: &gltf::Document,
-    vrm_ext: &Value,
-    version: &VrmVersion,
+    typed: &VrmTyped,
     ir_meshes: &[IrMesh],
     node_to_bone: &HashMap<usize, usize>,
 ) -> Result<Vec<IrMorph>> {
-    match version {
-        VrmVersion::V0 => extract_morphs_v0(document, vrm_ext, ir_meshes),
-        VrmVersion::V1 => extract_morphs_v1(document, vrm_ext, ir_meshes, node_to_bone),
-        _ => Ok(Vec::new()),
+    match typed {
+        VrmTyped::V0(v0) => extract_morphs_v0(document, v0, ir_meshes),
+        VrmTyped::V1(v1) => extract_morphs_v1(document, v1, ir_meshes, node_to_bone),
+        VrmTyped::Unknown => Ok(Vec::new()),
     }
 }
 
 fn extract_morphs_v0(
     document: &gltf::Document,
-    vrm_ext: &Value,
+    v0: &VrmV0,
     ir_meshes: &[IrMesh],
 ) -> Result<Vec<IrMorph>> {
-    let v0: VrmV0 = serde_json::from_value(vrm_ext.clone()).unwrap_or_default();
-    let bsm = match v0.blend_shape_master {
+    let bsm = match &v0.blend_shape_master {
         Some(b) => b,
         None => return Ok(Vec::new()),
     };
@@ -923,26 +982,37 @@ fn extract_morphs_v0(
     let mut morphs = Vec::new();
     for group in &bsm.blend_shape_groups {
         let (jp_name, panel) = crate::convert::morph::preset_to_jp_v0(&group.preset_name);
-        let name = if jp_name.is_empty() { group.name.clone() } else { jp_name };
+        let name = if jp_name.is_empty() {
+            group.name.clone()
+        } else {
+            jp_name
+        };
 
         let mut vertex_offsets: Vec<(usize, Vec3)> = Vec::new();
 
         for bind in &group.binds {
             let target_mesh_idx = bind.mesh as usize;
             // document.meshes().nth(target_mesh_idx) からメッシュ名を取得してir_meshを検索
-            let mesh_name = document.meshes().nth(target_mesh_idx)
+            let mesh_name = document
+                .meshes()
+                .nth(target_mesh_idx)
                 .and_then(|m| m.name().map(|s| s.to_string()));
 
             // IrMeshの中から対応するものを探す
             for (ir_idx, ir_mesh) in ir_meshes.iter().enumerate() {
                 // メッシュ名が一致するか、ノードのメッシュindexが一致
-                let name_match = mesh_name.as_deref().map(|n| n == ir_mesh.name).unwrap_or(false);
+                let name_match = mesh_name
+                    .as_deref()
+                    .map(|n| n == ir_mesh.name)
+                    .unwrap_or(false);
                 if !name_match {
                     // 名前が違う場合はnodeのmeshインデックスで突合
                     // nodeがmeshを持ち、そのmesh.index() == target_mesh_idxの場合
                     let node_has_mesh = document.nodes().any(|n| {
-                        n.index() == ir_mesh.node_index &&
-                        n.mesh().map(|m| m.index() == target_mesh_idx).unwrap_or(false)
+                        n.index() == ir_mesh.node_index
+                            && n.mesh()
+                                .map(|m| m.index() == target_mesh_idx)
+                                .unwrap_or(false)
                     });
                     if !node_has_mesh {
                         continue;
@@ -953,10 +1023,8 @@ fn extract_morphs_v0(
                 if let Some(mt) = morph_target {
                     let scale = bind.weight / 100.0; // VRM0.0は0-100スケール
                     let vstart = mesh_vertex_start[ir_idx];
-                    for (vi, offset) in mt.position_offsets.iter().enumerate() {
-                        if let Some(off) = offset {
-                            vertex_offsets.push((vstart + vi, *off * scale));
-                        }
+                    for &(vi, off) in &mt.position_offsets {
+                        vertex_offsets.push((vstart + vi as usize, off * scale));
                     }
                 }
             }
@@ -977,12 +1045,11 @@ fn extract_morphs_v0(
 
 fn extract_morphs_v1(
     _document: &gltf::Document,
-    vrm_ext: &Value,
+    v1: &VrmV1,
     ir_meshes: &[IrMesh],
     _node_to_bone: &HashMap<usize, usize>,
 ) -> Result<Vec<IrMorph>> {
-    let v1: VrmV1 = serde_json::from_value(vrm_ext.clone()).unwrap_or_default();
-    let expressions = match v1.expressions {
+    let expressions = match &v1.expressions {
         Some(e) => e,
         None => return Ok(Vec::new()),
     };
@@ -1017,10 +1084,8 @@ fn extract_morphs_v1(
                     if let Some(mt) = ir_mesh.morph_targets.get(bind.index as usize) {
                         let scale = bind.weight;
                         let vstart = mesh_vertex_start[ir_idx];
-                        for (vi, offset) in mt.position_offsets.iter().enumerate() {
-                            if let Some(off) = offset {
-                                vertex_offsets.push((vstart + vi, *off * scale));
-                            }
+                        for &(vi, off) in &mt.position_offsets {
+                            vertex_offsets.push((vstart + vi as usize, off * scale));
                         }
                     }
                 }
@@ -1096,31 +1161,32 @@ fn extract_morphs_v1(
 }
 
 fn extract_physics(
-    vrm_ext: &Value,
+    typed: &VrmTyped,
     all_extensions: &Value,
-    version: &VrmVersion,
     node_to_bone: &HashMap<usize, usize>,
     bones: &[IrBone],
 ) -> Result<IrPhysics> {
-    match version {
-        VrmVersion::V0 => extract_physics_v0(vrm_ext, node_to_bone, bones),
-        VrmVersion::V1 => extract_physics_v1(all_extensions, node_to_bone, bones),
-        _ => Ok(IrPhysics::default()),
+    match typed {
+        VrmTyped::V0(v0) => extract_physics_v0(v0, node_to_bone, bones),
+        // V1 および Unknown: all_extensions から VRMC_springBone を検索
+        // （plain GLB でも VRMC_springBone 拡張を持つ可能性がある）
+        VrmTyped::V1(_) | VrmTyped::Unknown => {
+            extract_physics_v1(all_extensions, node_to_bone, bones)
+        }
     }
 }
 
 fn extract_physics_v0(
-    vrm_ext: &Value,
+    v0: &VrmV0,
     node_to_bone: &HashMap<usize, usize>,
     bones: &[IrBone],
 ) -> Result<IrPhysics> {
-    let v0: VrmV0 = serde_json::from_value(vrm_ext.clone()).unwrap_or_default();
-    let sec = match v0.secondary_animation {
+    let sec = match &v0.secondary_animation {
         Some(s) => s,
         None => return Ok(IrPhysics::default()),
     };
 
-    crate::convert::physics::build_physics_v0(&sec, node_to_bone, bones)
+    crate::convert::physics::build_physics_v0(sec, node_to_bone, bones)
 }
 
 fn extract_physics_v1(

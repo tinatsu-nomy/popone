@@ -25,11 +25,8 @@ pub fn fbx_has_mesh(data: &[u8]) -> bool {
 }
 
 /// FBX バイナリデータから IrModel を構築
-pub fn extract_ir_model_from_fbx(
-    data: &[u8],
-    fbx_path: Option<&Path>,
-) -> Result<IrModel> {
-    extract_ir_model_from_fbx_with_options(data, fbx_path, false)
+pub fn extract_ir_model_from_fbx(data: &[u8], fbx_path: Option<&Path>) -> Result<IrModel> {
+    extract_ir_model_from_fbx_with_options(data, fbx_path, false, false)
 }
 
 /// FBX バイナリデータから IrModel を構築（オプション付き）
@@ -37,6 +34,7 @@ pub fn extract_ir_model_from_fbx_with_options(
     data: &[u8],
     fbx_path: Option<&Path>,
     normalize_pose: bool,
+    normalize_to_tstance: bool,
 ) -> Result<IrModel> {
     let doc = parser::parse(data)?;
     let scene = FbxScene::from_document(&doc);
@@ -109,7 +107,10 @@ pub fn extract_ir_model_from_fbx_with_options(
             // Opacity=0 + TransparencyFactor=1 の冗長指定は Unity/Blender FBX Exporter の既知パターン。
             // テクスチャ有無に関係なく全材質にデフォルト値として出力されるため、無条件でフォールバック
             let opacity = if props.opacity_both_zero {
-                log::debug!("材質 '{}': Opacity=0+TransparencyFactor=1 → 1.0 にフォールバック", mat_obj.name);
+                log::debug!(
+                    "材質 '{}': Opacity=0+TransparencyFactor=1 → 1.0 にフォールバック",
+                    mat_obj.name
+                );
                 1.0
             } else {
                 props.opacity.clamp(0.0, 1.0)
@@ -157,13 +158,11 @@ pub fn extract_ir_model_from_fbx_with_options(
                 })
                 .unwrap_or([0.0; 3]);
 
-            let raw_normal = mesh::get_normal(
-                normals.as_ref(),
-                &normal_indices,
-                poly_vert_idx,
-            );
+            let raw_normal = mesh::get_normal(normals.as_ref(), &normal_indices, poly_vert_idx);
             let normal = if has_model_transform {
-                let n = normal_matrix.transform_vector3(Vec3::from(raw_normal)).normalize_or_zero();
+                let n = normal_matrix
+                    .transform_vector3(Vec3::from(raw_normal))
+                    .normalize_or_zero();
                 coord_fn(n.to_array())
             } else {
                 coord_fn(raw_normal)
@@ -244,10 +243,8 @@ pub fn extract_ir_model_from_fbx_with_options(
             }
 
             // この材質で使われる頂点を収集
-            let mut used_verts: Vec<u32> = triangles
-                .iter()
-                .flat_map(|t| t.iter().copied())
-                .collect();
+            let mut used_verts: Vec<u32> =
+                triangles.iter().flat_map(|t| t.iter().copied()).collect();
             used_verts.sort_unstable();
             used_verts.dedup();
             let mut old_to_new: HashMap<u32, u32> = HashMap::new();
@@ -258,14 +255,24 @@ pub fn extract_ir_model_from_fbx_with_options(
                 // グローバルマッピングを記録
                 geom_local_to_global.insert(old_idx, global_vertex_offset + new_idx as usize);
                 let i = old_idx as usize;
+                let (w_arr, w_cnt) = skin_weights
+                    .as_ref()
+                    .map(|w| {
+                        let src = &w[i];
+                        let mut arr = [(0usize, 0.0f32); 4];
+                        let n = src.len().min(4);
+                        for j in 0..n {
+                            arr[j] = src[j];
+                        }
+                        (arr, n as u8)
+                    })
+                    .unwrap_or(([(0, 0.0); 4], 0));
                 ir_vertices.push(IrVertex {
                     position: Vec3::from(vert_positions[i]),
                     normal: Vec3::from(vert_normals[i]),
                     uv: Vec2::from(vert_uvs[i]),
-                    weights: skin_weights
-                        .as_ref()
-                        .map(|w| w[i].clone())
-                        .unwrap_or_default(),
+                    weights: w_arr,
+                    weight_count: w_cnt,
                     edge_scale: 1.0,
                 });
             }
@@ -304,9 +311,9 @@ pub fn extract_ir_model_from_fbx_with_options(
                 .iter()
                 .filter_map(|&(vi, offset)| {
                     // ジオメトリローカルインデックス → グローバル IrMesh 頂点インデックスに変換
-                    geom_local_to_global.get(&vi).map(|&global_vi| {
-                        (global_vi, Vec3::from(offset))
-                    })
+                    geom_local_to_global
+                        .get(&vi)
+                        .map(|&global_vi| (global_vi, Vec3::from(offset)))
                 })
                 .collect();
             if !deltas.is_empty() {
@@ -318,14 +325,22 @@ pub fn extract_ir_model_from_fbx_with_options(
                 });
             }
         }
-
     }
 
-    // T→Aスタンス変換（オプション）
+    // スタンス変換（オプション、T→AとA→Tは排他）
     let astance_result = if normalize_pose {
         let mut global_mats: Vec<Mat4> = ir_bones.iter().map(|b| b.global_mat).collect();
         crate::intermediate::pose::normalize_pose_to_astance_with_meshes(
-            &mut ir_bones, &mut global_mats, &mut ir_meshes, &mut ir_morphs,
+            &mut ir_bones,
+            &mut global_mats,
+            &mut ir_meshes,
+            &mut ir_morphs,
+        )
+    } else if normalize_to_tstance {
+        crate::intermediate::pose::normalize_pose_to_tstance_with_meshes(
+            &mut ir_bones,
+            &mut ir_meshes,
+            &mut ir_morphs,
         )
     } else {
         AStanceResult::NotRequested
@@ -366,9 +381,7 @@ pub fn extract_ir_model_from_fbx_with_options(
 
 /// FBX GlobalSettings から座標系変換関数を構築
 /// UnitScaleFactor も読み取りメートル単位に正規化
-fn build_coord_transform(
-    doc: &parser::FbxDocument,
-) -> impl Fn([f32; 3]) -> [f32; 3] {
+fn build_coord_transform(doc: &parser::FbxDocument) -> impl Fn([f32; 3]) -> [f32; 3] {
     let mut up_axis = 1i32; // デフォルト Y-Up
     let mut up_sign = 1i32;
     let mut front_axis = 2i32; // デフォルト Z
@@ -383,15 +396,25 @@ fn build_coord_transform(
                 if p.name != "P" {
                     continue;
                 }
-                let name = p.properties.first().and_then(|v| v.as_string()).unwrap_or("");
+                let name = p
+                    .properties
+                    .first()
+                    .and_then(|v| v.as_string())
+                    .unwrap_or("");
                 match name {
                     "UnitScaleFactor" => {
-                        unit_scale_factor = p.properties.get(4)
+                        unit_scale_factor = p
+                            .properties
+                            .get(4)
                             .and_then(|v| v.as_f64_value())
                             .unwrap_or(1.0);
                     }
                     _ => {
-                        let val = p.properties.get(4).and_then(|v| v.as_i64_value()).unwrap_or(0) as i32;
+                        let val = p
+                            .properties
+                            .get(4)
+                            .and_then(|v| v.as_i64_value())
+                            .unwrap_or(0) as i32;
                         match name {
                             "UpAxis" => up_axis = val,
                             "UpAxisSign" => up_sign = val,
@@ -472,6 +495,14 @@ fn convert_bones(
             children: bone.children_indices.clone(),
             node_index: i,
             is_physics: false,
+            tail_position: None,
+            tail_bone_index: None,
+            is_ik: false,
+            is_ik_bone: false,
+            is_translatable: false,
+            is_axis_fixed: false,
+            is_visible: true,
+            grant: None,
         });
     }
 
@@ -491,17 +522,19 @@ fn convert_mat4(m: Mat4, coord_fn: &impl Fn([f32; 3]) -> [f32; 3]) -> Mat4 {
 }
 
 /// FBX TextureData → IrTexture（PNG エンコード）
-fn texture_to_ir(
-    tex: &texture::TextureData,
-    ir_textures: &mut Vec<IrTexture>,
-) -> Option<usize> {
+fn texture_to_ir(tex: &texture::TextureData, ir_textures: &mut Vec<IrTexture>) -> Option<usize> {
     // RGBA → PNG エンコード
     let mut png_data = Vec::new();
     {
         let encoder = image::codecs::png::PngEncoder::new(&mut png_data);
         use image::ImageEncoder;
         if encoder
-            .write_image(&tex.rgba, tex.width, tex.height, image::ExtendedColorType::Rgba8)
+            .write_image(
+                &tex.rgba,
+                tex.width,
+                tex.height,
+                image::ExtendedColorType::Rgba8,
+            )
             .is_err()
         {
             log::warn!("テクスチャ '{}' の PNG エンコード失敗", tex.name);
@@ -525,12 +558,7 @@ fn compute_geometry_world_transform(scene: &FbxScene, geom_id: i64) -> Mat4 {
     let parent_model_id = scene
         .parents_of(geom_id)
         .iter()
-        .find(|&&pid| {
-            scene
-                .objects
-                .get(&pid)
-                .is_some_and(|o| o.class == "Model")
-        })
+        .find(|&&pid| scene.objects.get(&pid).is_some_and(|o| o.class == "Model"))
         .copied();
 
     let Some(start_id) = parent_model_id else {
@@ -551,12 +579,7 @@ fn compute_geometry_world_transform(scene: &FbxScene, geom_id: i64) -> Mat4 {
         let parent = scene
             .parents_of(current_id)
             .iter()
-            .find(|&&pid| {
-                scene
-                    .objects
-                    .get(&pid)
-                    .is_some_and(|o| o.class == "Model")
-            })
+            .find(|&&pid| scene.objects.get(&pid).is_some_and(|o| o.class == "Model"))
             .copied();
         match parent {
             Some(pid) => current_id = pid,
@@ -574,8 +597,7 @@ fn compute_geometry_world_transform(scene: &FbxScene, geom_id: i64) -> Mat4 {
 
 /// Model ノードのローカル変換行列（T * PreRotation * Rotation * S）
 fn compute_model_local_transform(node: &parser::FbxNode) -> Mat4 {
-    let (translation, rotation_euler, pre_rotation_euler, scale) =
-        bone::extract_transform(node);
+    let (translation, rotation_euler, pre_rotation_euler, scale) = bone::extract_transform(node);
     let pre_rot = bone::euler_deg_to_quat(pre_rotation_euler);
     let rot = bone::euler_deg_to_quat(rotation_euler);
     let combined = pre_rot * rot;

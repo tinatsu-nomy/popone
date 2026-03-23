@@ -58,9 +58,18 @@ pub fn export_uv_map_grouped(
                     continue;
                 }
                 let raw: [(f32, f32); 3] = [
-                    { let uv = verts[tri[0] as usize].uv; (fract_uv(uv.x), fract_uv(uv.y)) },
-                    { let uv = verts[tri[1] as usize].uv; (fract_uv(uv.x), fract_uv(uv.y)) },
-                    { let uv = verts[tri[2] as usize].uv; (fract_uv(uv.x), fract_uv(uv.y)) },
+                    {
+                        let uv = verts[tri[0] as usize].uv;
+                        (fract_uv(uv.x), fract_uv(uv.y))
+                    },
+                    {
+                        let uv = verts[tri[1] as usize].uv;
+                        (fract_uv(uv.x), fract_uv(uv.y))
+                    },
+                    {
+                        let uv = verts[tri[2] as usize].uv;
+                        (fract_uv(uv.x), fract_uv(uv.y))
+                    },
                 ];
 
                 let u_wraps = uv_wraps(raw[0].0, raw[1].0, raw[2].0);
@@ -72,13 +81,18 @@ pub fn export_uv_map_grouped(
                 for &uo in u_offsets {
                     for &vo in v_offsets {
                         let shifted: [(f32, f32); 3] = std::array::from_fn(|i| {
-                            let u = raw[i].0 + if u_wraps && raw[i].0 < 0.5 { 1.0 } else { 0.0 } + uo;
-                            let v = raw[i].1 + if v_wraps && raw[i].1 < 0.5 { 1.0 } else { 0.0 } + vo;
+                            let u =
+                                raw[i].0 + if u_wraps && raw[i].0 < 0.5 { 1.0 } else { 0.0 } + uo;
+                            let v =
+                                raw[i].1 + if v_wraps && raw[i].1 < 0.5 { 1.0 } else { 0.0 } + vo;
                             (u, v)
                         });
 
                         let px: [(i32, i32); 3] = std::array::from_fn(|i| {
-                            ((shifted[i].0 * dim as f32) as i32, (shifted[i].1 * dim as f32) as i32)
+                            (
+                                (shifted[i].0 * dim as f32) as i32,
+                                (shifted[i].1 * dim as f32) as i32,
+                            )
                         });
 
                         draw_line(&mut buf, dim, px[0], px[1]);
@@ -103,7 +117,13 @@ pub fn export_uv_map_grouped(
     write_psd_file(&mut w, size, size, &entries)?;
     w.flush()?;
 
-    log::info!("UVマップ出力: {} ({}x{}, {}レイヤー)", path.display(), size, size, mat_count);
+    log::info!(
+        "UVマップ出力: {} ({}x{}, {}レイヤー)",
+        path.display(),
+        size,
+        size,
+        mat_count
+    );
     Ok(())
 }
 
@@ -111,22 +131,25 @@ pub fn export_uv_map_grouped(
 
 /// グループ情報を検証し、各材質の処理済みフラグを返す。
 /// 範囲外・重複・逆順があればエラー。
-fn validate_groups(
-    groups: &[(String, Range<usize>)],
-    mat_count: usize,
-) -> io::Result<Vec<bool>> {
+fn validate_groups(groups: &[(String, Range<usize>)], mat_count: usize) -> io::Result<Vec<bool>> {
     let mut processed = vec![false; mat_count];
     for (name, range) in groups {
         if range.start > range.end {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("グループ '{}' の範囲が逆順です: {}..{}", name, range.start, range.end),
+                format!(
+                    "グループ '{}' の範囲が逆順です: {}..{}",
+                    name, range.start, range.end
+                ),
             ));
         }
         if range.end > mat_count {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("グループ '{}' の範囲が材質数 {} を超えています: {}..{}", name, mat_count, range.start, range.end),
+                format!(
+                    "グループ '{}' の範囲が材質数 {} を超えています: {}..{}",
+                    name, mat_count, range.start, range.end
+                ),
             ));
         }
         for i in range.clone() {
@@ -176,7 +199,9 @@ fn build_entries<'a>(
         if current_group != target_group {
             // 前のグループを閉じる
             if let Some(prev_si) = current_group {
-                entries.push(PsdLayerEntry::GroupStart { name: &groups[sorted_indices[prev_si]].0 });
+                entries.push(PsdLayerEntry::GroupStart {
+                    name: &groups[sorted_indices[prev_si]].0,
+                });
             }
             // 新しいグループを開く
             if target_group.is_some() {
@@ -193,7 +218,9 @@ fn build_entries<'a>(
 
     // 最後のグループを閉じる
     if let Some(last_si) = current_group {
-        entries.push(PsdLayerEntry::GroupStart { name: &groups[sorted_indices[last_si]].0 });
+        entries.push(PsdLayerEntry::GroupStart {
+            name: &groups[sorted_indices[last_si]].0,
+        });
     }
 
     entries
@@ -205,7 +232,11 @@ fn build_entries<'a>(
 #[inline]
 fn fract_uv(v: f32) -> f32 {
     let f = v % 1.0;
-    if f < 0.0 { f + 1.0 } else { f }
+    if f < 0.0 {
+        f + 1.0
+    } else {
+        f
+    }
 }
 
 /// 三角形の3頂点の UV 座標（fract済み 0..1）が境界をまたぐか判定
@@ -233,12 +264,16 @@ fn draw_line(buf: &mut [u8], dim: usize, p0: (i32, i32), p1: (i32, i32)) {
         }
         let e2 = 2 * err;
         if e2 >= dy {
-            if x0 == x1 { break; }
+            if x0 == x1 {
+                break;
+            }
             err += dy;
             x0 += sx;
         }
         if e2 <= dx {
-            if y0 == y1 { break; }
+            if y0 == y1 {
+                break;
+            }
             err += dx;
             y0 += sy;
         }
@@ -252,7 +287,7 @@ fn put_pixel(buf: &mut [u8], dim: usize, x: i32, y: i32) {
         return;
     }
     let offset = ((y as usize) * dim + x as usize) * 4;
-    buf[offset] = 0;     // R
+    buf[offset] = 0; // R
     buf[offset + 1] = 0; // G
     buf[offset + 2] = 0; // B
     buf[offset + 3] = 255; // A
@@ -290,8 +325,8 @@ fn write_psd_file<W: Write>(
     w.write_all(&ch_count.to_be_bytes())?;
     w.write_all(&height.to_be_bytes())?;
     w.write_all(&width.to_be_bytes())?;
-    w.write_all(&8u16.to_be_bytes())?;  // depth = 8 bit
-    w.write_all(&3u16.to_be_bytes())?;  // color mode = RGB
+    w.write_all(&8u16.to_be_bytes())?; // depth = 8 bit
+    w.write_all(&3u16.to_be_bytes())?; // color mode = RGB
 
     // ── Color Mode Data ──
     w.write_all(&0u32.to_be_bytes())?;
@@ -307,21 +342,19 @@ fn write_psd_file<W: Write>(
     // ── Image Data (composite) ──
     w.write_all(&0u16.to_be_bytes())?; // compression = raw
     let composite = build_composite(width, height, entries);
+    let mut ch_buf = vec![0u8; pixel_count];
     for ch in 0..4 {
         for i in 0..pixel_count {
-            w.write_all(&[composite[i * 4 + ch]])?;
+            ch_buf[i] = composite[i * 4 + ch];
         }
+        w.write_all(&ch_buf)?;
     }
 
     Ok(())
 }
 
 /// レイヤーセクションを構築
-fn build_layer_section(
-    width: u32,
-    height: u32,
-    entries: &[PsdLayerEntry],
-) -> io::Result<Vec<u8>> {
+fn build_layer_section(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
 
     let layer_info = build_layer_info(width, height, entries)?;
@@ -335,11 +368,7 @@ fn build_layer_section(
 }
 
 /// レイヤー情報を構築（entries ベース）
-fn build_layer_info(
-    width: u32,
-    height: u32,
-    entries: &[PsdLayerEntry],
-) -> io::Result<Vec<u8>> {
+fn build_layer_info(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
     let layer_count = entries.len() as i16;
     let pixel_count = (width as usize) * (height as usize);
@@ -356,23 +385,23 @@ fn build_layer_info(
     for entry in entries {
         match entry {
             PsdLayerEntry::Content { name, .. } => {
-                w_u32(&mut buf, 0)?;           // top
-                w_u32(&mut buf, 0)?;           // left
-                w_u32(&mut buf, height)?;      // bottom
-                w_u32(&mut buf, width)?;       // right
-                w_u16(&mut buf, 4)?;           // number of channels
+                w_u32(&mut buf, 0)?; // top
+                w_u32(&mut buf, 0)?; // left
+                w_u32(&mut buf, height)?; // bottom
+                w_u32(&mut buf, width)?; // right
+                w_u16(&mut buf, 4)?; // number of channels
 
                 for ch_id in &[0i16, 1, 2, -1] {
                     w_i16(&mut buf, *ch_id)?;
                     w_u32(&mut buf, content_ch_data_len)?;
                 }
 
-                buf.extend_from_slice(b"8BIM");  // blend mode signature
-                buf.extend_from_slice(b"norm");  // blend mode = normal
-                buf.push(255);                   // opacity
-                buf.push(0);                     // clipping = base
-                buf.push(0);                     // flags (visible)
-                buf.push(0);                     // filler
+                buf.extend_from_slice(b"8BIM"); // blend mode signature
+                buf.extend_from_slice(b"norm"); // blend mode = normal
+                buf.push(255); // opacity
+                buf.push(0); // clipping = base
+                buf.push(0); // flags (visible)
+                buf.push(0); // filler
 
                 let pascal_name = encode_pascal_string(name);
                 let luni_block = build_luni_block(name);
@@ -399,10 +428,10 @@ fn build_layer_info(
 
                 buf.extend_from_slice(b"8BIM");
                 buf.extend_from_slice(b"pass"); // pass-through blend mode
-                buf.push(255);                   // opacity
-                buf.push(0);                     // clipping
-                buf.push(0);                     // flags
-                buf.push(0);                     // filler
+                buf.push(255); // opacity
+                buf.push(0); // clipping
+                buf.push(0); // flags
+                buf.push(0); // filler
 
                 let pascal_name = encode_pascal_string(name);
                 let luni_block = build_luni_block(name);
@@ -431,10 +460,10 @@ fn build_layer_info(
 
                 buf.extend_from_slice(b"8BIM");
                 buf.extend_from_slice(b"pass"); // pass-through blend mode
-                buf.push(255);                   // opacity
-                buf.push(0);                     // clipping
-                buf.push(0);                     // flags
-                buf.push(0);                     // filler
+                buf.push(255); // opacity
+                buf.push(0); // clipping
+                buf.push(0); // flags
+                buf.push(0); // filler
 
                 let pascal_name = encode_pascal_string(end_name);
                 let luni_block = build_luni_block(end_name);
@@ -458,6 +487,7 @@ fn build_layer_info(
                 for ch in [0usize, 1, 2, 3] {
                     w_u16(&mut buf, 0)?; // compression = raw
                     let src_ch = if ch == 3 { 3 } else { ch };
+                    buf.reserve(pixel_count);
                     for i in 0..pixel_count {
                         buf.push(rgba[i * 4 + src_ch]);
                     }
@@ -478,10 +508,7 @@ fn build_layer_info(
 /// 全レイヤーを合成（entries 順 = PSD 下→上順、上のレイヤーが優先）
 fn build_composite(width: u32, height: u32, entries: &[PsdLayerEntry]) -> Vec<u8> {
     let pixel_count = (width as usize) * (height as usize);
-    let mut composite = vec![255u8; pixel_count * 4]; // 白背景
-    for i in 0..pixel_count {
-        composite[i * 4 + 3] = 255;
-    }
+    let mut composite = vec![255u8; pixel_count * 4]; // 白背景（RGBA全255）
 
     // entries は PSD 下→上順。Content のみを順に合成（後のレイヤーが上に重なる）
     for entry in entries {
@@ -579,10 +606,7 @@ mod tests {
 
     #[test]
     fn test_validate_groups_rejects_overlap() {
-        let groups = vec![
-            ("A".to_string(), 0..3),
-            ("B".to_string(), 2..5),
-        ];
+        let groups = vec![("A".to_string(), 0..3), ("B".to_string(), 2..5)];
         let result = validate_groups(&groups, 5);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("複数のグループ"));
@@ -611,9 +635,18 @@ mod tests {
             assert!(matches!(entry, PsdLayerEntry::Content { .. }));
         }
         // mat index 降順: c, b, a
-        match &entries[0] { PsdLayerEntry::Content { name, .. } => assert_eq!(*name, "c"), _ => panic!() }
-        match &entries[1] { PsdLayerEntry::Content { name, .. } => assert_eq!(*name, "b"), _ => panic!() }
-        match &entries[2] { PsdLayerEntry::Content { name, .. } => assert_eq!(*name, "a"), _ => panic!() }
+        match &entries[0] {
+            PsdLayerEntry::Content { name, .. } => assert_eq!(*name, "c"),
+            _ => panic!(),
+        }
+        match &entries[1] {
+            PsdLayerEntry::Content { name, .. } => assert_eq!(*name, "b"),
+            _ => panic!(),
+        }
+        match &entries[2] {
+            PsdLayerEntry::Content { name, .. } => assert_eq!(*name, "a"),
+            _ => panic!(),
+        }
     }
 
     #[test]
@@ -628,10 +661,22 @@ mod tests {
         // GroupEnd → m2 → m1 → m0 → GroupStart
         assert_eq!(entries.len(), 5);
         assert!(matches!(&entries[0], PsdLayerEntry::GroupEnd));
-        assert!(matches!(&entries[1], PsdLayerEntry::Content { name: "m2", .. }));
-        assert!(matches!(&entries[2], PsdLayerEntry::Content { name: "m1", .. }));
-        assert!(matches!(&entries[3], PsdLayerEntry::Content { name: "m0", .. }));
-        match &entries[4] { PsdLayerEntry::GroupStart { name } => assert_eq!(*name, "Model"), _ => panic!() }
+        assert!(matches!(
+            &entries[1],
+            PsdLayerEntry::Content { name: "m2", .. }
+        ));
+        assert!(matches!(
+            &entries[2],
+            PsdLayerEntry::Content { name: "m1", .. }
+        ));
+        assert!(matches!(
+            &entries[3],
+            PsdLayerEntry::Content { name: "m0", .. }
+        ));
+        match &entries[4] {
+            PsdLayerEntry::GroupStart { name } => assert_eq!(*name, "Model"),
+            _ => panic!(),
+        }
     }
 
     #[test]
@@ -646,11 +691,23 @@ mod tests {
 
         // orphan(2) → GroupEnd → m1 → m0 → GroupStart
         assert_eq!(entries.len(), 5);
-        assert!(matches!(&entries[0], PsdLayerEntry::Content { name: "orphan", .. }));
+        assert!(matches!(
+            &entries[0],
+            PsdLayerEntry::Content { name: "orphan", .. }
+        ));
         assert!(matches!(&entries[1], PsdLayerEntry::GroupEnd));
-        assert!(matches!(&entries[2], PsdLayerEntry::Content { name: "m1", .. }));
-        assert!(matches!(&entries[3], PsdLayerEntry::Content { name: "m0", .. }));
-        match &entries[4] { PsdLayerEntry::GroupStart { name } => assert_eq!(*name, "G"), _ => panic!() }
+        assert!(matches!(
+            &entries[2],
+            PsdLayerEntry::Content { name: "m1", .. }
+        ));
+        assert!(matches!(
+            &entries[3],
+            PsdLayerEntry::Content { name: "m0", .. }
+        ));
+        match &entries[4] {
+            PsdLayerEntry::GroupStart { name } => assert_eq!(*name, "G"),
+            _ => panic!(),
+        }
     }
 
     #[test]
@@ -659,10 +716,7 @@ mod tests {
         let dim = 2usize;
         let layers: Vec<Vec<u8>> = (0..5).map(|_| vec![0u8; dim * dim * 4]).collect();
         let names: Vec<String> = (0..5).map(|i| format!("m{i}")).collect();
-        let groups = vec![
-            ("GA".to_string(), 0..2),
-            ("GB".to_string(), 3..5),
-        ];
+        let groups = vec![("GA".to_string(), 0..2), ("GB".to_string(), 3..5)];
         let processed = validate_groups(&groups, 5).unwrap();
         let entries = build_entries(&layers, &names, &groups, &processed, 5);
 
@@ -670,17 +724,19 @@ mod tests {
         // GroupEnd(GB) → m4 → m3 → GroupStart(GB)
         // → orphan(m2)
         // → GroupEnd(GA) → m1 → m0 → GroupStart(GA)
-        let entry_desc: Vec<&str> = entries.iter().map(|e| match e {
-            PsdLayerEntry::Content { name, .. } => *name,
-            PsdLayerEntry::GroupStart { name } => *name,
-            PsdLayerEntry::GroupEnd => "</end>",
-        }).collect();
+        let entry_desc: Vec<&str> = entries
+            .iter()
+            .map(|e| match e {
+                PsdLayerEntry::Content { name, .. } => *name,
+                PsdLayerEntry::GroupStart { name } => *name,
+                PsdLayerEntry::GroupEnd => "</end>",
+            })
+            .collect();
 
-        assert_eq!(entry_desc, vec![
-            "</end>", "m4", "m3", "GB",
-            "m2",
-            "</end>", "m1", "m0", "GA",
-        ]);
+        assert_eq!(
+            entry_desc,
+            vec!["</end>", "m4", "m3", "GB", "m2", "</end>", "m1", "m0", "GA",]
+        );
     }
 
     #[test]
@@ -689,24 +745,24 @@ mod tests {
         let dim = 2usize;
         let layers: Vec<Vec<u8>> = (0..4).map(|_| vec![0u8; dim * dim * 4]).collect();
         let names: Vec<String> = (0..4).map(|i| format!("m{i}")).collect();
-        let groups = vec![
-            ("Second".to_string(), 2..4),
-            ("First".to_string(), 0..2),
-        ];
+        let groups = vec![("Second".to_string(), 2..4), ("First".to_string(), 0..2)];
         let processed = validate_groups(&groups, 4).unwrap();
         let entries = build_entries(&layers, &names, &groups, &processed, 4);
 
         // Second(2..4) が下、First(0..2) が上
-        let entry_desc: Vec<&str> = entries.iter().map(|e| match e {
-            PsdLayerEntry::Content { name, .. } => *name,
-            PsdLayerEntry::GroupStart { name } => *name,
-            PsdLayerEntry::GroupEnd => "</end>",
-        }).collect();
+        let entry_desc: Vec<&str> = entries
+            .iter()
+            .map(|e| match e {
+                PsdLayerEntry::Content { name, .. } => *name,
+                PsdLayerEntry::GroupStart { name } => *name,
+                PsdLayerEntry::GroupEnd => "</end>",
+            })
+            .collect();
 
-        assert_eq!(entry_desc, vec![
-            "</end>", "m3", "m2", "Second",
-            "</end>", "m1", "m0", "First",
-        ]);
+        assert_eq!(
+            entry_desc,
+            vec!["</end>", "m3", "m2", "Second", "</end>", "m1", "m0", "First",]
+        );
     }
 
     #[test]
@@ -728,8 +784,13 @@ mod tests {
         let info_bytes = &info;
         let mut lsct_types = Vec::new();
         for i in 0..info_bytes.len().saturating_sub(8) {
-            if &info_bytes[i..i+4] == b"8BIM" && &info_bytes[i+4..i+8] == b"lsct" {
-                let t = u32::from_be_bytes([info_bytes[i+12], info_bytes[i+13], info_bytes[i+14], info_bytes[i+15]]);
+            if &info_bytes[i..i + 4] == b"8BIM" && &info_bytes[i + 4..i + 8] == b"lsct" {
+                let t = u32::from_be_bytes([
+                    info_bytes[i + 12],
+                    info_bytes[i + 13],
+                    info_bytes[i + 14],
+                    info_bytes[i + 15],
+                ]);
                 lsct_types.push(t);
             }
         }
@@ -751,7 +812,7 @@ mod tests {
         // "pass" が2回出現するはず（GroupEnd と GroupStart のレイヤーレコード内）
         let mut pass_count = 0;
         for i in 0..info.len().saturating_sub(4) {
-            if &info[i..i+4] == b"pass" {
+            if &info[i..i + 4] == b"pass" {
                 pass_count += 1;
             }
         }

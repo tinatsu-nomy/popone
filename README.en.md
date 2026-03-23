@@ -6,7 +6,7 @@ A 3D viewer for VRM / FBX / PMX / PMD / UnityPackage / ZIP / 7z files.
 
 ## Download
 
-Latest release: **[popone-v0.2.5.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.5/popone-v0.2.5.exe)**
+Latest release: **[popone-v0.2.6.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.6/popone-v0.2.6.exe)**
 
 All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 

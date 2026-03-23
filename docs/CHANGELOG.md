@@ -2,6 +2,71 @@
 
 [English](CHANGELOG.en.md)
 
+## v0.2.6
+
+### バグ修正
+
+- **剛体・ジョイント Euler 回転順序修正** — 剛体・ジョイントの Euler 分解・再構成を `ZXY`（内的 ZXY = 外的 YXZ）から `YXZ`（内的 YXZ = 外的 ZXY）に修正。D3DX 行優先規約 `v * Ry * Rx * Rz` に準拠（glam 列優先では `Rz * Rx * Ry`）。球体・カプセルでは目立たないが、ボックス剛体で回転の不一致が顕著だった。変換出力（`convert/physics.rs`）とビューア描画（`gpu.rs`）の両方を修正
+- **PMD/PMX 剛体 bone_index フォールバック** — PMD の `bone_index=0xFFFF`（関連ボーンなし）および PMX の `bone_index=-1` の剛体をボーン 0（センター）に追従させるよう修正。従来は `None` となり位置計算の基点がなかった
+- **ジョイント接続線の表示分離** — `generate_spring_bone_vertices`（物理表示(P)トグル）に含まれていたジョイント接続線（黄色い線）を削除。ジョイント接続線は既に `generate_joint_vertices` で独立描画されており、ジョイント表示トグルで制御される
+- **MMD 描画順序修正** — 不透明/半透明で分離していた描画ループを材質インデックス順の単一ループに統合。PMX/PMD の材質順序（モデル作者が意図した前後関係）を正しく維持するようになった。エッジも各不透明材質の直後に描画
+- **MMD 半透明デプス書き込み有効化** — MMD 半透明パイプラインのデプス書き込みを有効化（MMD 準拠）。材質順描画との組み合わせで、alpha=0.99 等の「実質不透明」材質が後続材質を正しく遮蔽
+- **PMD カスタムトゥーンテクスチャ修正** — `build_tex_map()` がカスタムトゥーンテクスチャのインデックスを登録していなかったバグを修正。`extract_textures()` の結果からマッピングを構築するよう変更し、モデル同梱のトゥーンテクスチャが正しく参照されるようになった（共有トゥーンへの誤フォールバックを解消）
+- **PMX/PMD 剛体アニメーション追従修正** — VRMA アニメーション再生時に PMX/PMD モデルの剛体・ジョイントがボーンに正しく追従しなかったバグを修正。原因は `bone.position`（glTF 空間に変換済み）と `rb.position`（PMX 空間のまま）の座標空間不整合。PMX/PMD の `pmx_pos_to_gltf` は VRM 1.0 と同じ Z 反転変換のため、剛体追従のデルタ計算で VRM 1.0 と同じ `gltf_pos_to_pmx` 変換と回転デルタの Z-flip を適用するよう修正
+- **FBX ヒューマノイドボーン検出改善** — Blender リグの CamelCase ボーン名（`UpperLeg.L` → `upperleg_l`）が `upper_leg_l` パターンにマッチしなかった問題を修正。アンダースコアなしの代替パターン（`upperleg_l` / `lowerleg_l` / `upperarm_l` / `lowerarm_l`）、つま先の単数形（`toe_l` / `toe_r`）、指ボーン逆順パターン（`index_proximal_l` 等）、pinky エイリアスを追加。Unity FBX エクスポートの名前空間プレフィックス（`Model::Hips` 等）を `strip_namespace_lower()` で除去し、リグ検出・パターンマッチに反映
+- **UnityPackage テクスチャ MIME タイプ修正** — UnityPackage 経由で読み込んだ FBX モデルのテクスチャが全てマゼンタ（1x1 ピンク）になるバグを修正。`embed_textures_into_ir` で IrTexture を作成する際に `mime_type` が空文字列になっており、TGA 等マジックナンバーのないフォーマットで `image::load_from_memory` の自動判定が失敗していた。ファイル拡張子から MIME タイプを設定するよう修正。併せて `decode_image_to_rgba_with_hint` の TGA MIME マッチに `"image/x-tga"` を追加（`mime_for_ext` が返す値との不一致を解消）
+
+### 新機能
+
+- **PMX 付与（grant）アニメーション対応** — PMX ボーンの回転付与・移動付与をアニメーション再生時に処理するようになった。Tda 式初音ミク等の D-bones（足D・ひざD 等）は FK ボーンの回転を付与でコピーする仕組みだが、この処理が未実装だったため VRMA アニメーション時に足が追従しなかった。`IrBone` に `IrGrant`（付与親・付与率・回転/移動/ローカルフラグ）を追加し、PMX 読み込み時に付与データを抽出。アニメーション計算後、ボーンインデックス順に付与デルタを適用しグローバル行列を再計算する 2 フェーズ方式で実装。ローカル付与（`is_local`）は子ボーンのレスト姿勢を基準にデルタを適用。付与処理順序はトポロジカルソート（カーン法 BFS）で事前計算し、不正な PMX ファイルでも正しい依存順序を保証
+- **ボーン表示改善** — PMX/PMD のボーンをフラグに基づき形状別に描画。通常=◎（二重円＋中心塗り）、移動=◻（正方形＋中心塗り）、軸制限=⊗（円＋✕）、IKコントローラ=◻（青枠＋オレンジ塗り＋青中心）。IK影響下ボーン（Link）はオレンジ表示。テイルベース描画（self→tail）により PMXEditor と同様のボーン方向を表示。TriangleList による完全塗りつぶし、3段階パイプライン（テール→塗り面→外枠線）、4パス優先描画（通常→IK影響下→軸制限→IKコントローラ）
+
+- **FBX Tスタンス変換** — FBX モデルの A→T スタンス変換に対応。ビューアでは FBX 読み込み時に「Tスタンス変換」チェックボックスが表示される（Aスタンス変換と排他）。CLI では `--normalize-to-tstance` オプションで使用可能
+- **MMD レンダリングモード** — PMX/PMD ロード時に自動 ON。MMD 固有のトゥーンシェーディング、Blinn-Phong スペキュラ、スフィアマップ（乗算/加算）で表示
+- **エッジ（輪郭線）描画** — inverted hull 法による輪郭線。材質ごとのエッジ色・太さ、距離減衰、UI からの ON/OFF・太さスライダー（0.1〜3.0）
+- **共有トゥーンテクスチャ** — MMD 標準 toon01〜toon10 のグラデーションを CPU で生成。個別トゥーンテクスチャにも対応
+- **スフィアマップ** — PMX の sphere_mode（乗算/加算）、PMD の .sph/.spa ファイルに対応。ビュー空間法線からスフィア UV を算出
+- **色空間再現** — MMD のガンマ空間レンダリングを再現。PMX/PMD 専用フレームでは `Rgba8Unorm` レンダーターゲットに切り替え、ガンマ空間での正確なアルファブレンドを実現。VRM 混在時は `Rgba8UnormSrgb` にフォールバック
+- **PMD スフィア/トゥーン抽出** — `parse_pmd_texture_slots` で `*` 区切りのメイン/スフィアテクスチャを分離。トゥーンテクスチャのファイル存在確認付き登録
+
+### 改善
+
+- **剛体表示修正** — PMD/PMX の剛体回転から不要な X 反転補正（`adjust_pmd_rigid_rotation` / `adjust_pmx_rigid_rotation`）を削除。PMX/PMD モデルの座標は既に PMX 空間にあるため、ビューア描画時の glTF→PMX 座標変換をスキップ。Box 剛体のサイズを half-extent として正しく扱うよう修正（従来の `* 0.5` による二重除算を解消）。カプセル剛体に半球ワイヤーフレーム（4 経線 + 3 緯線 × 上下）を追加し PMXEditor 準拠の表示に改善
+- **剛体 physics_mode 色分け** — PMX/PMD モデルの剛体表示を `physics_mode` で色分け（0:ボーン追従=グリーン、1:物理演算=レッド、2:物理+ボーン=ブルー）。VRM は従来通り group ベース（コライダー=レッド、スプリング=グリーン）
+- **オーバーレイ描画順序変更** — 可視化オーバーレイの描画順を「法線 → ボーン → 剛体 → ジョイント」に変更（ジョイントが最前面）。メッシュ表面の法線は最背面に、接続関係を示すジョイントを最前面に配置し視認性を改善
+- **MMD ライティング見直し** — トゥーン乗算方式に移行（lit/shadow lerp 廃止）。`base_color = saturate(diffuse × LightAmbient + ambient)` で D3D ambient/emissive マッピングを修正。スペキュラはトゥーン適用後に独立加算（影領域でもハイライト維持）。LightAmbient = 154/255 ≈ 0.604、LightSpecular も同値に統一
+- **トゥーンサンプリング NdotL 依存化** — 固定 UV `(0.5, 0.85)` から `(0, 0.5 − NdotL × 0.5)` に変更し、法線とライト方向に応じた陰影グラデーションを再現
+- **共有トゥーンテクスチャ実データ化** — 推定グラデーション（256×16）を MMD 標準 toon01-10 の実ピクセルデータ（1×32、32行RGB値）に置換。toon01-04: 2色ステップ、toon05: 暖ピンクグラデーション、toon06: 黄色+ハイライトバンド、toon07-10: 全白
+- **スフィア UV X 反転** — X 反転座標系に対応し `vn_x × -0.5 + 0.5` に修正。スフィアマップ反映は RGB のみ（アルファ不正対策）
+- **PMD エッジフラグ修正** — `edge_flag` の解釈を `0=有効` から `1=エッジあり` に修正
+- **PMX トゥーン未設定対応** — `PmxToonRef::Texture(-1)` を `(None, None)` として処理し、トゥーンなしを正しく扱うように修正
+- **カメラ・ライティング MMD 準拠** — FOV 45° → 30°（MMD 標準）、ライト方向を MMD 準拠に変更（固定: (-0.5,-1.0,0.5) の反転、カメラ追従: MMD 風左上寄り）。ライト強度 0.6、環境光 0.5 に調整
+- **視点依存フィット** — バウンディングボックスのフィット計算を視点依存に改善。bbox 8 頂点をカメラ軸に投影し、幅・高さ・奥行きの全方向で frustum に収まる距離を算出。アスペクト比・透視/正射影の両方に対応
+- **Shift 精密操作** — Shift キーを押しながらのカメラ操作で 1/3 速度の精密モード（回転・パン・ズーム全対応）
+- **ダブルクリックフィット** — ビューポートのダブルクリックでモデルにフィット
+- **MMD ambient 分離** — MMD レンダリング時の環境光を標準パスから分離。CameraUniform の `mmd_ambient_scale` で制御し、MMD モード切替が標準材質の明るさに影響しなくなった
+- **IrMaterial 拡張** — `source_format`、`sphere_texture_index`、`sphere_mode`、`toon_texture_index`、`toon_shared_index` フィールド追加。merge 時の index remap 対応
+- **テクスチャデュアルビュー** — GPU テクスチャを `Rgba8UnormSrgb`（標準）と `Rgba8Unorm`（MMD）の 2 ビューで管理。メモリ増加なし
+- **ワイヤーフレーム共存** — MMD モード ON でも Wire / S+W / 法線マップ表示時は既存パイプラインにフォールバック
+
+### コード品質・パフォーマンス改善
+
+- **アニメーション逆行列キャッシュ** — レストポーズのボーングローバル逆行列を `SkinningData` 構築時にキャッシュ。毎フレーム175ボーン分の `Mat4::inverse()` 計算を排除
+- **WGSL シェーダー共通化** — `CameraUniform`（8重複）・`MmdMaterialUniform`（4重複）の struct 定義を `macro_rules!` + `concat!` で一元管理。sRGB/Unorm 版の MMD メインシェーダーを `compute_mmd_lighting` 関数で共通化し、差分をフラグメントシェーダー1関数に局所化
+- **重複コード関数化** — `build_pkg_model_list`（unitypackageモデルリスト構築×3）、`load_animation_file`（アニメーション読込ルーティング×2）、`mime_for_ext`（MIMEタイプ判定×4）を共通関数に抽出
+- **`to_string_lossy()` 改善** — 7ファイル18箇所の `.to_string_lossy().to_string()` を `.to_string_lossy().into_owned()` に変更。UTF-8 互換パスでの不要なアロケーションを回避
+- **`is_psd_filename` 最適化** — `to_lowercase()` による String アロケーションを `eq_ignore_ascii_case` に置換
+- **`update_mat_cache` 簡素化** — NLL で不要な二重 `if let` 借用を除去
+- **PMX リーダー安全性強化** — 全14箇所の `i32 as usize` カウントキャストに負値チェックを追加（`checked_count` ヘルパー）。破損ファイルでの OOM パニックを防止。`Cursor` に不要な `BufReader` ラッピングを除去（PMX/PMD 両方）
+- **`sort_bones_topological` 最適化** — ボーン並び替えの子探索を O(n²) 線形走査から O(n) 隣接リストに変更。並び替え後の `clone()` を `Option::take()` パターンに変更し全ボーンのディープコピーを排除
+- **PSD 出力 I/O 最適化** — UVマップ PSD のチャンネルデータ書き出しを 1バイト単位 `write_all` からチャンネルバッファ一括書き出しに変更（4096×4096 で最大 64M 回→4回に削減）。レイヤーデータにも `reserve` を追加
+- **テクスチャアップロード最適化** — `upload_rgba_to_gpu` で縮小不要時の `rgba.to_vec()` コピーを排除（参照渡しに変更）。RGBA8 形式テクスチャの `img.pixels.clone()` も排除し直接アップロード
+- **GPU 描画軽微改善** — ジョイント立方体頂点を `Vec<Vec3>` から `[Vec3; 8]` 固定長配列に変更。法線キャッシュ更新を `to_vec()` から `clear()` + `extend_from_slice()` に変更しヒープ再利用
+- **PMX ライター最適化** — UTF-16LE エンコードを手動バイトプッシュから `to_le_bytes()` + `extend_from_slice()` に変更。UTF-8 パスは `Vec` コピーを経由せず直接書き出し
+- **カメラ行列再利用** — `view_proj()` 内で `look_at_lh` を直接呼ぶ代わりに `view_matrix()` を再利用
+- **デッドコード削除** — `pmx/extract.rs` の空ループ（何も処理しない for ループ）を除去
+- **`build_composite` 冗長ループ削除** — `vec![255u8; ...]` で全バイト 255 初期化後に不要なアルファ設定ループを除去
+
 ## v0.2.5
 
 ### 改善
@@ -276,5 +341,5 @@ fn build_bone_map(bones: &[PmxBone]) -> HashMap<String, usize> {
 - バイナリ / ASCII FBX の自前パーサー（シーングラフ・座標系自動変換・PreRotation・UnitScaleFactor）
 - ASCII FBX: Content ブロック（埋め込みテクスチャ）は文字列として保持し、外部ファイルフォールバックで復元
 - スキンウェイト（最大 4 ボーン正規化）、ブレンドシェイプ、UV マッピング
-- ヒューマノイドリグ自動検出（Mixamo / 3ds Max Biped / Maya HumanIK / VRoid / Blender）
+- ヒューマノイドリグ自動検出（Mixamo / 3ds Max Biped / Maya HumanIK / VRoid / Unreal / Blender）。CamelCase ボーン名・名前空間プレフィックス（`Model::` 等）対応
 - 零法線の自動補完、埋め込み/外部テクスチャ対応

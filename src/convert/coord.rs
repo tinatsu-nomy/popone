@@ -105,7 +105,7 @@ mod tests {
         // VRM 1.0: (x, y, -z) × scale → PMX
         let v = Vec3::new(1.0, 2.0, 3.0);
         let pmx = gltf_pos_to_pmx(v);
-        assert!((pmx.x - 12.5).abs() < 1e-3);   // X は反転しない
+        assert!((pmx.x - 12.5).abs() < 1e-3); // X は反転しない
         assert!((pmx.y - 25.0).abs() < 1e-3);
         assert!((pmx.z - (-37.5)).abs() < 1e-3); // Z のみ反転
     }
@@ -123,7 +123,7 @@ mod tests {
         let pmx = gltf_pos_to_pmx_v0(v);
         assert!((pmx.x - (-12.5)).abs() < 1e-3); // X 反転
         assert!((pmx.y - 25.0).abs() < 1e-3);
-        assert!((pmx.z - 37.5).abs() < 1e-3);    // Z 反転なし
+        assert!((pmx.z - 37.5).abs() < 1e-3); // Z 反転なし
     }
 
     #[test]
@@ -132,7 +132,10 @@ mod tests {
         let original = Vec3::new(1.5, -0.3, 2.7);
         let pmx = gltf_pos_to_pmx(original);
         let back = pmx_pos_to_gltf(pmx, false);
-        assert!((original - back).length() < 1e-4, "V1 roundtrip failed: {original} → {pmx} → {back}");
+        assert!(
+            (original - back).length() < 1e-4,
+            "V1 roundtrip failed: {original} → {pmx} → {back}"
+        );
     }
 
     #[test]
@@ -140,7 +143,10 @@ mod tests {
         let original = Vec3::new(1.5, -0.3, 2.7);
         let pmx = gltf_pos_to_pmx_v0(original);
         let back = pmx_pos_to_gltf(pmx, true);
-        assert!((original - back).length() < 1e-4, "V0 roundtrip failed: {original} → {pmx} → {back}");
+        assert!(
+            (original - back).length() < 1e-4,
+            "V0 roundtrip failed: {original} → {pmx} → {back}"
+        );
     }
 
     #[test]
@@ -183,6 +189,9 @@ mod tests {
     fn test_unified_normal_matches_versioned() {
         let n = Vec3::new(0.5, 0.5, 0.707);
         assert_eq!(gltf_normal_to_pmx_unified(n, false), gltf_normal_to_pmx(n));
-        assert_eq!(gltf_normal_to_pmx_unified(n, true), gltf_normal_to_pmx_v0(n));
+        assert_eq!(
+            gltf_normal_to_pmx_unified(n, true),
+            gltf_normal_to_pmx_v0(n)
+        );
     }
 }

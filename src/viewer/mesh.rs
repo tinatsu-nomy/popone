@@ -21,6 +21,13 @@ enum GpuMorphEntry {
     Group(Vec<(usize, f32)>),
 }
 
+/// 描画方式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderStyle {
+    Standard,
+    Mmd,
+}
+
 /// 材質ごとの描画情報
 pub struct DrawCall {
     pub index_offset: u32,
@@ -30,6 +37,14 @@ pub struct DrawCall {
     pub texture_bind_group: Option<wgpu::BindGroup>,
     pub material_bind_group: wgpu::BindGroup,
     pub material_index: usize,
+    pub render_style: RenderStyle,
+    pub has_edge: bool,
+    // MMD 用 BindGroup（prepare_mmd_resources で設定）
+    pub mmd_material_buf: Option<wgpu::Buffer>,
+    pub mmd_material_bind_group: Option<wgpu::BindGroup>,
+    pub mmd_aux_bind_group: Option<wgpu::BindGroup>,
+    /// MMD 用テクスチャ bind group（Unorm ビュー使用）
+    pub mmd_texture_bind_group: Option<wgpu::BindGroup>,
 }
 
 /// GPU上のモデルデータ
@@ -38,6 +53,12 @@ pub struct GpuModel {
     pub index_buf: wgpu::Buffer,
     pub draws: Vec<DrawCall>,
     pub has_alpha: bool,
+    /// エッジスケールバッファ（MMD エッジ用、f32 × 頂点数）
+    pub edge_scale_buf: Option<wgpu::Buffer>,
+    /// GPU テクスチャビュー sRGB（標準描画用）
+    pub gpu_texture_views: Vec<wgpu::TextureView>,
+    /// GPU テクスチャビュー Unorm（MMD 描画用）
+    pub gpu_texture_views_unorm: Vec<wgpu::TextureView>,
     /// ベース頂点（モーフ適用前）
     base_vertices: Vec<Vertex>,
     /// インデックスバッファの生データ（法線表示フィルタ用）
@@ -68,9 +89,12 @@ impl GpuModel {
     ) {
         for draw in &mut self.draws {
             if draw.material_index == material_index {
-                draw.texture_bind_group = Some(
-                    gpu::create_texture_bind_group(device, texture_bgl, texture_view, sampler),
-                );
+                draw.texture_bind_group = Some(gpu::create_texture_bind_group(
+                    device,
+                    texture_bgl,
+                    texture_view,
+                    sampler,
+                ));
             }
         }
     }
@@ -92,7 +116,9 @@ impl GpuModel {
 
     /// アニメーション済み頂点を取得（あればアニメ済み、なければベース）
     pub fn current_vertices(&self) -> &[Vertex] {
-        self.animated_vertices.as_deref().unwrap_or(&self.base_vertices)
+        self.animated_vertices
+            .as_deref()
+            .unwrap_or(&self.base_vertices)
     }
 
     /// アニメーション済み頂点をキャッシュ
@@ -159,11 +185,7 @@ impl GpuModel {
     }
 
     /// モーフウェイトを適用して頂点バッファを更新
-    pub fn apply_morphs(
-        &mut self,
-        weights: &[f32],
-        queue: &wgpu::Queue,
-    ) {
+    pub fn apply_morphs(&mut self, weights: &[f32], queue: &wgpu::Queue) {
         // 作業バッファにベース頂点をコピー（Vec の再割り当てを回避）
         self.morph_work.clear();
         self.morph_work.extend_from_slice(&self.base_vertices);
@@ -180,11 +202,7 @@ impl GpuModel {
     }
 
     /// モーフウェイトを外部バッファに適用（アニメーション用：GPU アップロードはしない）
-    pub fn apply_morphs_to_buf(
-        &self,
-        weights: &[f32],
-        vertices: &mut [Vertex],
-    ) {
+    pub fn apply_morphs_to_buf(&self, weights: &[f32], vertices: &mut [Vertex]) {
         for morph_idx in 0..self.gpu_morphs.len() {
             let w = weights.get(morph_idx).copied().unwrap_or(0.0);
             if w.abs() < 1e-6 {
@@ -247,7 +265,13 @@ pub fn build_gpu_model(
     clear_custom_normals: bool,
 ) -> Result<GpuModel> {
     let gpu_textures = super::texture::upload_textures(ir, images, device, queue)?;
-    build_gpu_model_inner(ir, gpu_textures, device, smooth_normals, clear_custom_normals)
+    build_gpu_model_inner(
+        ir,
+        gpu_textures,
+        device,
+        smooth_normals,
+        clear_custom_normals,
+    )
 }
 
 /// IrModel のみから GPU バッファを構築（FBX 用）
@@ -259,12 +283,18 @@ pub fn build_gpu_model_from_ir(
     clear_custom_normals: bool,
 ) -> Result<GpuModel> {
     let gpu_textures = super::texture::upload_textures_from_ir(ir, device, queue)?;
-    build_gpu_model_inner(ir, gpu_textures, device, smooth_normals, clear_custom_normals)
+    build_gpu_model_inner(
+        ir,
+        gpu_textures,
+        device,
+        smooth_normals,
+        clear_custom_normals,
+    )
 }
 
 fn build_gpu_model_inner(
     ir: &IrModel,
-    gpu_textures: Vec<wgpu::TextureView>,
+    gpu_textures_dual: Vec<(wgpu::TextureView, wgpu::TextureView)>,
     device: &wgpu::Device,
     smooth_normals: bool,
     clear_custom_normals: bool,
@@ -381,7 +411,10 @@ fn build_gpu_model_inner(
 
             // インデックス
             let mut indices: Vec<u32> = if smooth_normals {
-                mesh.indices.iter().map(|&i| global_to_gpu[global_offset + i as usize]).collect()
+                mesh.indices
+                    .iter()
+                    .map(|&i| global_to_gpu[global_offset + i as usize])
+                    .collect()
             } else {
                 let base = global_to_gpu[global_offset];
                 mesh.indices.iter().map(|&i| i + base).collect()
@@ -392,23 +425,29 @@ fn build_gpu_model_inner(
 
         let index_count = all_indices.len() as u32 - index_offset;
 
-        // テクスチャ bind group
+        // テクスチャ bind group（sRGB ビューを使用 — 標準描画用）
         let tex_bg = mat.texture_index.and_then(|ti| {
-            gpu_textures.get(ti).map(|view| {
-                gpu::create_texture_bind_group(device, &texture_bgl, view, &tex_sampler)
+            gpu_textures_dual.get(ti).map(|(srgb_view, _)| {
+                gpu::create_texture_bind_group(device, &texture_bgl, srgb_view, &tex_sampler)
             })
         });
 
         // 材質 bind group
         let diffuse = mat.diffuse;
-        let mat_bg =
-            gpu::create_material_bind_group(device, &material_bgl, diffuse.to_array());
+        let mat_bg = gpu::create_material_bind_group(device, &material_bgl, diffuse.to_array());
 
         if diffuse.w < 1.0 {
             has_alpha = true;
         }
 
         let is_alpha = diffuse.w < 1.0;
+
+        let render_style = if mat.source_format.is_pmx_pmd() {
+            RenderStyle::Mmd
+        } else {
+            RenderStyle::Standard
+        };
+        let has_edge = mat.edge_size > 0.0;
 
         draws.push(DrawCall {
             index_offset,
@@ -418,6 +457,12 @@ fn build_gpu_model_inner(
             texture_bind_group: tex_bg,
             material_bind_group: mat_bg,
             material_index: mat_idx,
+            render_style,
+            has_edge,
+            mmd_material_buf: None,
+            mmd_material_bind_group: None,
+            mmd_aux_bind_group: None,
+            mmd_texture_bind_group: None,
         });
     }
 
@@ -439,8 +484,10 @@ fn build_gpu_model_inner(
     }
 
     // GPU空間モーフデータを事前計算（重複排除 + 座標変換済み）
-    let gpu_morphs: Vec<GpuMorphEntry> = ir.morphs.iter().map(|morph| {
-        match &morph.kind {
+    let gpu_morphs: Vec<GpuMorphEntry> = ir
+        .morphs
+        .iter()
+        .map(|morph| match &morph.kind {
             IrMorphKind::Vertex(voffs) => {
                 let mut seen = HashSet::with_capacity(voffs.len());
                 let mut deduped = Vec::with_capacity(voffs.len());
@@ -454,11 +501,9 @@ fn build_gpu_model_inner(
                 }
                 GpuMorphEntry::Vertex(deduped)
             }
-            IrMorphKind::Group(goffs) => {
-                GpuMorphEntry::Group(goffs.clone())
-            }
-        }
-    }).collect();
+            IrMorphKind::Group(goffs) => GpuMorphEntry::Group(goffs.clone()),
+        })
+        .collect();
 
     // ベース頂点を保存 + bbox 計算
     let base_vertices = all_vertices.clone();
@@ -485,12 +530,44 @@ fn build_gpu_model_inner(
         usage: wgpu::BufferUsages::INDEX,
     });
 
+    // エッジスケールバッファ（MMD draw がある場合のみ）
+    // 注意: smooth_normals ON 時は同一位置の頂点が統合され、異なる material の
+    // edge_scale が混在しうるが、UI 側で MMD draw 存在時は smooth_normals を
+    // 無効化しているため、実用上は material 境界を越えた干渉は発生しない
+    let has_mmd = draws.iter().any(|d| d.render_style == RenderStyle::Mmd);
+    let edge_scale_buf = if has_mmd {
+        let mut edge_scales = vec![1.0f32; all_vertices.len()];
+        let mut global_vi = 0usize;
+        for mesh in &ir.meshes {
+            for v in &mesh.vertices {
+                if let Some(&gpu_vi) = global_to_gpu.get(global_vi) {
+                    edge_scales[gpu_vi as usize] = edge_scales[gpu_vi as usize].min(v.edge_scale);
+                }
+                global_vi += 1;
+            }
+        }
+        Some(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("edge_scale_buf"),
+                contents: bytemuck::cast_slice(&edge_scales),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+        )
+    } else {
+        None
+    };
+
     let morph_work = Vec::with_capacity(base_vertices.len());
+    let (gpu_texture_views, gpu_texture_views_unorm): (Vec<_>, Vec<_>) =
+        gpu_textures_dual.into_iter().unzip();
     Ok(GpuModel {
         vertex_buf,
         index_buf,
         draws,
         has_alpha,
+        edge_scale_buf,
+        gpu_texture_views,
+        gpu_texture_views_unorm,
         base_vertices,
         base_indices: all_indices,
         global_to_gpu,
@@ -586,4 +663,3 @@ impl PosUvKey {
         }
     }
 }
-

@@ -118,7 +118,7 @@ impl From<Vec3Json> for glam::Vec3 {
 #[serde(rename_all = "camelCase")]
 pub struct BoneGroup {
     pub comment: Option<String>,
-    pub stiffiness: Option<f32>,  // VRM0.0はtypoあり
+    pub stiffiness: Option<f32>, // VRM0.0はtypoあり
     pub gravity_power: Option<f32>,
     pub gravity_dir: Option<Vec3Json>,
     pub drag_force: Option<f32>,

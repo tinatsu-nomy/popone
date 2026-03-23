@@ -1,6 +1,6 @@
-use glam::Mat4;
 use super::parser::FbxProperty;
 use super::scene::FbxScene;
+use glam::Mat4;
 
 pub struct Cluster {
     pub bone_id: i64,

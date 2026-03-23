@@ -5,7 +5,12 @@ use std::path::Path;
 use crate::intermediate::types::IrTexture;
 
 /// テクスチャをPNGとして書き出す
-pub fn write_texture(tex: &IrTexture, output_dir: &Path, width: u32, height: u32) -> Result<String> {
+pub fn write_texture(
+    tex: &IrTexture,
+    output_dir: &Path,
+    width: u32,
+    height: u32,
+) -> Result<String> {
     let out_path = output_dir.join(&tex.filename);
 
     // 生ピクセルデータ（gltf::image::Data.pixels）はRGB8またはRGBA8
@@ -27,8 +32,13 @@ pub fn write_texture(tex: &IrTexture, output_dir: &Path, width: u32, height: u32
             .ok_or_else(|| anyhow::anyhow!("RGB→RGBA変換失敗: {}", tex.filename))?
     } else {
         // サイズ不一致の場合は空白画像
-        log::warn!("テクスチャ '{}' のサイズが不一致 (data={}, expected={}x{})",
-            tex.filename, tex.data.len(), width, height);
+        log::warn!(
+            "テクスチャ '{}' のサイズが不一致 (data={}, expected={}x{})",
+            tex.filename,
+            tex.data.len(),
+            width,
+            height
+        );
         RgbaImage::new(1, 1)
     };
 

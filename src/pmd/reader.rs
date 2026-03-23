@@ -22,9 +22,8 @@ fn read_vec3<R: Read>(r: &mut R) -> Result<Vec3> {
 
 /// バイト列から PMD を読み込む（オンメモリキャッシュ用）
 pub fn read_pmd_from_data(data: &[u8]) -> Result<PmdModel> {
-    let cursor = std::io::Cursor::new(data);
-    let mut r = std::io::BufReader::new(cursor);
-    read_pmd_inner(&mut r)
+    let mut cursor = std::io::Cursor::new(data);
+    read_pmd_inner(&mut cursor)
 }
 
 pub fn read_pmd(path: &std::path::Path) -> Result<PmdModel> {
@@ -34,7 +33,6 @@ pub fn read_pmd(path: &std::path::Path) -> Result<PmdModel> {
 }
 
 fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
-
     // ヘッダ: "Pmd" + version(float) + name(20) + comment(256)
     let mut magic = [0u8; 3];
     r.read_exact(&mut magic)?;
@@ -214,7 +212,8 @@ fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
     }
 
     // 英語ヘッダ（オプション）
-    let english_header = read_english_header(&mut r, bone_count, morph_count, bone_display_name_count).ok();
+    let english_header =
+        read_english_header(&mut r, bone_count, morph_count, bone_display_name_count).ok();
 
     // トゥーンテクスチャ
     let mut toon_textures = std::array::from_fn(|_| String::new());
@@ -376,7 +375,9 @@ mod tests {
 
     #[test]
     fn test_read_miku_v2_pmd() {
-        let Some(path) = crate::test_util::try_test_file(crate::test_util::miku_v2_pmd()) else { return; };
+        let Some(path) = crate::test_util::try_test_file(crate::test_util::miku_v2_pmd()) else {
+            return;
+        };
 
         let model = read_pmd(&path).expect("PMD読み込みに失敗");
 

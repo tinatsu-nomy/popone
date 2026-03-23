@@ -1,10 +1,10 @@
-pub mod parser;
-pub mod scene;
-pub mod bone;
-pub mod skin;
+pub mod animation;
 pub mod blendshape;
-pub mod texture;
+pub mod bone;
+pub mod extract;
 pub mod humanoid;
 pub(crate) mod mesh;
-pub mod extract;
-pub mod animation;
+pub mod parser;
+pub mod scene;
+pub mod skin;
+pub mod texture;

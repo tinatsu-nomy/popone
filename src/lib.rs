@@ -1,20 +1,20 @@
-pub mod error;
-pub mod vrm;
-pub mod intermediate;
-pub mod pmx;
-pub mod pmd;
+pub mod archive;
 pub mod convert;
+pub mod error;
 pub mod fbx;
+pub mod intermediate;
+pub mod pmd;
+pub mod pmx;
 pub mod unity;
 pub mod unitypackage;
-pub mod archive;
+pub mod vrm;
 
 #[cfg(feature = "viewer")]
 pub mod viewer;
 
-use std::path::Path;
 use error::Result;
 use serde::Serialize;
+use std::path::Path;
 
 #[derive(Serialize, Debug)]
 pub struct ConvertStats {
@@ -42,7 +42,13 @@ pub fn convert_vrm_to_pmx_with_options(
     no_physics: bool,
     align_rigid_rotation: bool,
 ) -> Result<ConvertStats> {
-    convert_vrm_to_pmx_full(input_path, output_path, no_physics, align_rigid_rotation, false)
+    convert_vrm_to_pmx_full(
+        input_path,
+        output_path,
+        no_physics,
+        align_rigid_rotation,
+        false,
+    )
 }
 
 pub fn convert_vrm_to_pmx_full(
@@ -79,10 +85,7 @@ pub fn convert_vrm_to_pmx_full(
 }
 
 /// FBX → PMX 変換
-pub fn convert_fbx_to_pmx(
-    input_path: &Path,
-    output_path: &Path,
-) -> Result<ConvertStats> {
+pub fn convert_fbx_to_pmx(input_path: &Path, output_path: &Path) -> Result<ConvertStats> {
     let data = std::fs::read(input_path)?;
     let ir = fbx::extract::extract_ir_model_from_fbx(&data, Some(input_path))?;
     convert_ir_to_pmx(&ir, output_path, false)
@@ -109,8 +112,8 @@ fn write_pmx_and_stats(
     tex_dir: &Path,
 ) -> Result<ConvertStats> {
     let stats = ConvertStats {
-        output_path: output_path.to_string_lossy().to_string(),
-        tex_dir: tex_dir.to_string_lossy().to_string(),
+        output_path: output_path.to_string_lossy().into_owned(),
+        tex_dir: tex_dir.to_string_lossy().into_owned(),
         bones: pmx_model.bones.len(),
         vertices: pmx_model.vertices.len(),
         faces: pmx_model.faces.len(),
@@ -207,7 +210,10 @@ pub mod test_util {
         if path.exists() {
             Some(path)
         } else {
-            eprintln!("テストファイルが存在しません（スキップ）: {}", path.display());
+            eprintln!(
+                "テストファイルが存在しません（スキップ）: {}",
+                path.display()
+            );
             None
         }
     }
@@ -217,16 +223,21 @@ pub mod test_util {
 mod tests {
     #[test]
     fn test_vrm_to_pmx_end_to_end() {
-        let Some(input) = crate::test_util::try_test_file(crate::test_util::seed_san_vrm()) else { return; };
+        let Some(input) = crate::test_util::try_test_file(crate::test_util::seed_san_vrm()) else {
+            return;
+        };
         let output = std::env::temp_dir().join("popone_test_e2e.pmx");
 
         // VRM → PMX 変換
-        let stats = crate::convert_vrm_to_pmx(&input, &output, false)
-            .expect("VRM→PMX変換失敗");
+        let stats = crate::convert_vrm_to_pmx(&input, &output, false).expect("VRM→PMX変換失敗");
 
         // 統計値の確認
         assert!(stats.bones > 100, "ボーン数が少なすぎる: {}", stats.bones);
-        assert!(stats.vertices > 1000, "頂点数が少なすぎる: {}", stats.vertices);
+        assert!(
+            stats.vertices > 1000,
+            "頂点数が少なすぎる: {}",
+            stats.vertices
+        );
         assert!(stats.materials > 0, "材質数がゼロ");
 
         // 出力ファイルの存在とサイズ確認
@@ -239,7 +250,11 @@ mod tests {
 
         // 読み戻して検証
         let pmx = crate::pmx::reader::read_pmx(&output).expect("PMX再読み込み失敗");
-        assert!(pmx.bones.len() > 100, "ボーン数が少なすぎる: {}", pmx.bones.len());
+        assert!(
+            pmx.bones.len() > 100,
+            "ボーン数が少なすぎる: {}",
+            pmx.bones.len()
+        );
         assert!(
             pmx.vertices.len() > 1000,
             "頂点数が少なすぎる: {}",

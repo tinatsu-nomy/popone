@@ -10,10 +10,7 @@ use crate::intermediate::types::{
 ///
 /// `visible_mat_indices` に含まれる material_index のメッシュ・材質のみを残し、
 /// 頂点モーフ・グループモーフの index を正しくリマップする。
-pub fn build_filtered_ir(
-    ir: &IrModel,
-    visible_mat_indices: &HashSet<usize>,
-) -> IrModel {
+pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> IrModel {
     // 全材質が非表示の場合は空 PMX を出力（ワーニング付き）
     if visible_mat_indices.is_empty() {
         log::warn!("全材質が非表示です。空の PMX を出力します。");
@@ -69,13 +66,18 @@ pub fn build_filtered_ir(
 
         new_meshes.push(IrMesh {
             name: mesh.name.clone(),
-            vertices: mesh.vertices.iter().map(|v| IrVertex {
-                position: v.position,
-                normal: v.normal,
-                uv: v.uv,
-                weights: v.weights.clone(),
-                edge_scale: v.edge_scale,
-            }).collect(),
+            vertices: mesh
+                .vertices
+                .iter()
+                .map(|v| IrVertex {
+                    position: v.position,
+                    normal: v.normal,
+                    uv: v.uv,
+                    weights: v.weights,
+                    weight_count: v.weight_count,
+                    edge_scale: v.edge_scale,
+                })
+                .collect(),
             indices: mesh.indices.clone(),
             material_index: new_mat_idx,
             morph_targets: mesh.morph_targets.clone(),
@@ -94,9 +96,9 @@ pub fn build_filtered_ir(
     // まず頂点モーフの有効性を判定（checked access で範囲外は無視）
     for (i, morph) in ir.morphs.iter().enumerate() {
         if let IrMorphKind::Vertex(voffs) = &morph.kind {
-            morph_alive[i] = voffs.iter().any(|&(vi, _)| {
-                vtx_remap.get(vi).copied().flatten().is_some()
-            });
+            morph_alive[i] = voffs
+                .iter()
+                .any(|&(vi, _)| vtx_remap.get(vi).copied().flatten().is_some());
         }
     }
 
@@ -104,17 +106,22 @@ pub fn build_filtered_ir(
     loop {
         let mut changed = false;
         for (i, morph) in ir.morphs.iter().enumerate() {
-            if morph_alive[i] { continue; }
+            if morph_alive[i] {
+                continue;
+            }
             if let IrMorphKind::Group(goffs) = &morph.kind {
-                if goffs.iter().any(|&(child, _)| {
-                    morph_alive.get(child).copied().unwrap_or(false)
-                }) {
+                if goffs
+                    .iter()
+                    .any(|&(child, _)| morph_alive.get(child).copied().unwrap_or(false))
+                {
                     morph_alive[i] = true;
                     changed = true;
                 }
             }
         }
-        if !changed { break; }
+        if !changed {
+            break;
+        }
     }
 
     // 除外されるモーフのワーニングログ
@@ -126,7 +133,8 @@ pub fn build_filtered_ir(
             };
             log::warn!(
                 "{}モーフ \"{}\" は除外材質の頂点のみを参照しているため削除されます。",
-                kind_label, morph.name
+                kind_label,
+                morph.name
             );
         }
     }
@@ -144,20 +152,30 @@ pub fn build_filtered_ir(
     // モーフ構築
     let mut final_morphs: Vec<IrMorph> = Vec::new();
     for (old_idx, morph) in ir.morphs.iter().enumerate() {
-        if !morph_alive[old_idx] { continue; }
+        if !morph_alive[old_idx] {
+            continue;
+        }
         let new_kind = match &morph.kind {
             IrMorphKind::Vertex(voffs) => {
-                let remapped: Vec<(usize, Vec3)> = voffs.iter()
+                let remapped: Vec<(usize, Vec3)> = voffs
+                    .iter()
                     .filter_map(|&(vi, off)| {
-                        vtx_remap.get(vi).copied().flatten().map(|new_vi| (new_vi, off))
+                        vtx_remap
+                            .get(vi)
+                            .copied()
+                            .flatten()
+                            .map(|new_vi| (new_vi, off))
                     })
                     .collect();
                 IrMorphKind::Vertex(remapped)
             }
             IrMorphKind::Group(goffs) => {
-                let remapped: Vec<(usize, f32)> = goffs.iter()
+                let remapped: Vec<(usize, f32)> = goffs
+                    .iter()
                     .filter_map(|&(child_idx, weight)| {
-                        morph_remap.get(&child_idx).map(|&new_child| (new_child, weight))
+                        morph_remap
+                            .get(&child_idx)
+                            .map(|&new_child| (new_child, weight))
                     })
                     .collect();
                 IrMorphKind::Group(remapped)
@@ -173,15 +191,24 @@ pub fn build_filtered_ir(
 
     let removed = morph_count - final_morphs.len();
     if removed > 0 {
-        log::warn!("モーフ {} 個中 {} 個が除外されました。", morph_count, removed);
+        log::warn!(
+            "モーフ {} 個中 {} 個が除外されました。",
+            morph_count,
+            removed
+        );
     }
 
     // ── Phase 5: テクスチャ pruning ──
     // フィルタ後の材質が参照するテクスチャのみ残す
-    let used_tex_indices: HashSet<usize> = new_materials.iter()
+    let used_tex_indices: HashSet<usize> = new_materials
+        .iter()
         .filter_map(|m| m.texture_index)
         .chain(new_materials.iter().filter_map(|m| m.shade_texture_index))
-        .chain(new_materials.iter().filter_map(|m| m.outline_width_texture_index))
+        .chain(
+            new_materials
+                .iter()
+                .filter_map(|m| m.outline_width_texture_index),
+        )
         .collect();
 
     let mut tex_remap: HashMap<usize, usize> = HashMap::new();
@@ -196,8 +223,12 @@ pub fn build_filtered_ir(
     // 材質の texture_index をリマップ
     for mat in &mut new_materials {
         mat.texture_index = mat.texture_index.and_then(|i| tex_remap.get(&i).copied());
-        mat.shade_texture_index = mat.shade_texture_index.and_then(|i| tex_remap.get(&i).copied());
-        mat.outline_width_texture_index = mat.outline_width_texture_index.and_then(|i| tex_remap.get(&i).copied());
+        mat.shade_texture_index = mat
+            .shade_texture_index
+            .and_then(|i| tex_remap.get(&i).copied());
+        mat.outline_width_texture_index = mat
+            .outline_width_texture_index
+            .and_then(|i| tex_remap.get(&i).copied());
     }
 
     // ── Phase 6: IrModel 構築 ──
@@ -238,6 +269,14 @@ mod tests {
             children: Vec::new(),
             node_index: 0,
             is_physics: false,
+            tail_position: None,
+            tail_bone_index: None,
+            is_ik: false,
+            is_ik_bone: false,
+            is_translatable: false,
+            is_axis_fixed: false,
+            is_visible: true,
+            grant: None,
         }
     }
 
@@ -247,7 +286,8 @@ mod tests {
                 position: Vec3::ZERO,
                 normal: Vec3::Y,
                 uv: Vec2::ZERO,
-                weights: vec![(0, 1.0)],
+                weights: [(0, 1.0), (0, 0.0), (0, 0.0), (0, 0.0)],
+                weight_count: 1,
                 edge_scale: 1.0,
             })
             .collect();
@@ -273,27 +313,34 @@ mod tests {
             name: "test".into(),
             bones: vec![make_bone("Root")],
             meshes: vec![
-                make_mesh("mesh0", 0, 6),  // 材質0: 頂点 0..6
-                make_mesh("mesh1", 1, 3),  // 材質1: 頂点 6..9
-                make_mesh("mesh2", 2, 4),  // 材質2: 頂点 9..13
+                make_mesh("mesh0", 0, 6), // 材質0: 頂点 0..6
+                make_mesh("mesh1", 1, 3), // 材質1: 頂点 6..9
+                make_mesh("mesh2", 2, 4), // 材質2: 頂点 9..13
             ],
             materials: vec![
-                IrMaterial { name: "mat0".into(), ..Default::default() },
-                IrMaterial { name: "mat1".into(), ..Default::default() },
-                IrMaterial { name: "mat2".into(), ..Default::default() },
-            ],
-            morphs: vec![
-                IrMorph {
-                    name: "blink".into(),
-                    name_en: String::new(),
-                    panel: 2,
-                    kind: IrMorphKind::Vertex(vec![
-                        (1, Vec3::Y),   // mesh0 の頂点1
-                        (7, Vec3::X),   // mesh1 の頂点1（除外対象）
-                        (10, Vec3::Z),  // mesh2 の頂点1
-                    ]),
+                IrMaterial {
+                    name: "mat0".into(),
+                    ..Default::default()
+                },
+                IrMaterial {
+                    name: "mat1".into(),
+                    ..Default::default()
+                },
+                IrMaterial {
+                    name: "mat2".into(),
+                    ..Default::default()
                 },
             ],
+            morphs: vec![IrMorph {
+                name: "blink".into(),
+                name_en: String::new(),
+                panel: 2,
+                kind: IrMorphKind::Vertex(vec![
+                    (1, Vec3::Y),  // mesh0 の頂点1
+                    (7, Vec3::X),  // mesh1 の頂点1（除外対象）
+                    (10, Vec3::Z), // mesh2 の頂点1
+                ]),
+            }],
             ..Default::default()
         };
 
@@ -330,13 +377,16 @@ mod tests {
         let ir = IrModel {
             name: "test".into(),
             bones: vec![make_bone("Root")],
-            meshes: vec![
-                make_mesh("mesh0", 0, 3),
-                make_mesh("mesh1", 1, 3),
-            ],
+            meshes: vec![make_mesh("mesh0", 0, 3), make_mesh("mesh1", 1, 3)],
             materials: vec![
-                IrMaterial { name: "mat0".into(), ..Default::default() },
-                IrMaterial { name: "mat1".into(), ..Default::default() },
+                IrMaterial {
+                    name: "mat0".into(),
+                    ..Default::default()
+                },
+                IrMaterial {
+                    name: "mat1".into(),
+                    ..Default::default()
+                },
             ],
             morphs: vec![
                 IrMorph {
@@ -344,8 +394,8 @@ mod tests {
                     name_en: String::new(),
                     panel: 3,
                     kind: IrMorphKind::Vertex(vec![
-                        (3, Vec3::Y),  // mesh1 の頂点0 のみ
-                        (4, Vec3::X),  // mesh1 の頂点1 のみ
+                        (3, Vec3::Y), // mesh1 の頂点0 のみ
+                        (4, Vec3::X), // mesh1 の頂点1 のみ
                     ]),
                 },
                 IrMorph {
@@ -353,7 +403,7 @@ mod tests {
                     name_en: String::new(),
                     panel: 2,
                     kind: IrMorphKind::Vertex(vec![
-                        (0, Vec3::Y),  // mesh0 の頂点0（残る）
+                        (0, Vec3::Y), // mesh0 の頂点0（残る）
                     ]),
                 },
             ],
@@ -376,13 +426,16 @@ mod tests {
         let ir = IrModel {
             name: "test".into(),
             bones: vec![make_bone("Root")],
-            meshes: vec![
-                make_mesh("mesh0", 0, 3),
-                make_mesh("mesh1", 1, 3),
-            ],
+            meshes: vec![make_mesh("mesh0", 0, 3), make_mesh("mesh1", 1, 3)],
             materials: vec![
-                IrMaterial { name: "mat0".into(), ..Default::default() },
-                IrMaterial { name: "mat1".into(), ..Default::default() },
+                IrMaterial {
+                    name: "mat0".into(),
+                    ..Default::default()
+                },
+                IrMaterial {
+                    name: "mat1".into(),
+                    ..Default::default()
+                },
             ],
             morphs: vec![
                 // [0] smile: mesh1 のみ → 除外される
@@ -435,13 +488,16 @@ mod tests {
         let ir = IrModel {
             name: "test".into(),
             bones: vec![make_bone("Root")],
-            meshes: vec![
-                make_mesh("mesh0", 0, 3),
-                make_mesh("mesh1", 1, 3),
-            ],
+            meshes: vec![make_mesh("mesh0", 0, 3), make_mesh("mesh1", 1, 3)],
             materials: vec![
-                IrMaterial { name: "mat0".into(), ..Default::default() },
-                IrMaterial { name: "mat1".into(), ..Default::default() },
+                IrMaterial {
+                    name: "mat0".into(),
+                    ..Default::default()
+                },
+                IrMaterial {
+                    name: "mat1".into(),
+                    ..Default::default()
+                },
             ],
             morphs: vec![
                 // [0] vtx_alive: mesh0 → 残る
@@ -501,15 +557,16 @@ mod tests {
             name: "test".into(),
             bones: vec![make_bone("Root")],
             meshes: vec![make_mesh("mesh0", 0, 3)],
-            materials: vec![IrMaterial { name: "mat0".into(), ..Default::default() }],
-            morphs: vec![
-                IrMorph {
-                    name: "blink".into(),
-                    name_en: String::new(),
-                    panel: 2,
-                    kind: IrMorphKind::Vertex(vec![(0, Vec3::Y)]),
-                },
-            ],
+            materials: vec![IrMaterial {
+                name: "mat0".into(),
+                ..Default::default()
+            }],
+            morphs: vec![IrMorph {
+                name: "blink".into(),
+                name_en: String::new(),
+                panel: 2,
+                kind: IrMorphKind::Vertex(vec![(0, Vec3::Y)]),
+            }],
             ..Default::default()
         };
 
@@ -532,10 +589,7 @@ mod tests {
         let ir = IrModel {
             name: "test".into(),
             bones: vec![make_bone("Root")],
-            meshes: vec![
-                make_mesh("mesh0", 0, 3),
-                make_mesh("mesh1", 1, 3),
-            ],
+            meshes: vec![make_mesh("mesh0", 0, 3), make_mesh("mesh1", 1, 3)],
             materials: vec![
                 IrMaterial {
                     name: "mat0".into(),
@@ -549,8 +603,16 @@ mod tests {
                 },
             ],
             textures: vec![
-                IrTexture { filename: "tex0.png".into(), data: vec![0], mime_type: "image/png".into() },
-                IrTexture { filename: "tex1.png".into(), data: vec![1], mime_type: "image/png".into() },
+                IrTexture {
+                    filename: "tex0.png".into(),
+                    data: vec![0],
+                    mime_type: "image/png".into(),
+                },
+                IrTexture {
+                    filename: "tex1.png".into(),
+                    data: vec![1],
+                    mime_type: "image/png".into(),
+                },
             ],
             ..Default::default()
         };

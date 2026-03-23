@@ -114,10 +114,10 @@ impl IrModel {
         let mut candidate: Vec<Option<usize>> = vec![None; other_bone_count];
         for (i, other_bone) in other.bones.iter().enumerate() {
             if let Some(&self_idx) = bone_name_to_self.get(other_bone.name.as_str()) {
-                let self_parent_name = self.bones[self_idx].parent
+                let self_parent_name = self.bones[self_idx]
+                    .parent
                     .map(|p| self.bones[p].name.as_str());
-                let other_parent_name = other_bone.parent
-                    .map(|p| other.bones[p].name.as_str());
+                let other_parent_name = other_bone.parent.map(|p| other.bones[p].name.as_str());
                 if self_parent_name == other_parent_name {
                     candidate[i] = Some(self_idx);
                 }
@@ -130,7 +130,9 @@ impl IrModel {
         while changed {
             changed = false;
             for i in 0..other_bone_count {
-                if candidate[i].is_none() { continue; }
+                if candidate[i].is_none() {
+                    continue;
+                }
                 if let Some(parent_idx) = other.bones[i].parent {
                     // 親が候補でない → この子も統合不可
                     if candidate[parent_idx].is_none() {
@@ -220,6 +222,12 @@ impl IrModel {
             if let Some(ref mut idx) = mat.outline_width_texture_index {
                 *idx += tex_offset;
             }
+            if let Some(ref mut idx) = mat.sphere_texture_index {
+                *idx += tex_offset;
+            }
+            if let Some(ref mut idx) = mat.toon_texture_index {
+                *idx += tex_offset;
+            }
         }
         self.materials.append(&mut other.materials);
 
@@ -228,7 +236,7 @@ impl IrModel {
             mesh.material_index += mat_offset;
             mesh.node_index += node_offset;
             for vtx in &mut mesh.vertices {
-                for (bone_idx, _) in &mut vtx.weights {
+                for (bone_idx, _) in vtx.active_weights_mut() {
                     *bone_idx = bone_remap[*bone_idx];
                 }
             }
@@ -258,7 +266,9 @@ impl IrModel {
                 *idx = bone_remap[*idx];
             }
         }
-        self.physics.rigid_bodies.append(&mut other.physics.rigid_bodies);
+        self.physics
+            .rigid_bodies
+            .append(&mut other.physics.rigid_bodies);
 
         for joint in &mut other.physics.joints {
             joint.rigid_a += rigid_offset;
@@ -269,7 +279,9 @@ impl IrModel {
         // ── メタ情報更新 ──
         self.name = format!("{} + {}", self.name, other.name);
         // ヒューマノイドボーン数を再計算（共有ボーンへの補完分も含めるため）
-        self.humanoid_bone_count = self.bones.iter()
+        self.humanoid_bone_count = self
+            .bones
+            .iter()
             .filter(|b| b.vrm_bone_name.is_some())
             .count();
         // Aスタンス変換結果の統合
@@ -282,11 +294,15 @@ impl IrModel {
             (AStanceResult::Applied(a), AStanceResult::Applied(b)) => AStanceResult::Applied(a + b),
             // Applied + NotFound/AlreadyAStance → Applied を優先
             // （メインモデルが変換済みなら、小物の NotFound は問題なし）
-            (AStanceResult::Applied(n), _) | (_, AStanceResult::Applied(n)) => AStanceResult::Applied(n),
+            (AStanceResult::Applied(n), _) | (_, AStanceResult::Applied(n)) => {
+                AStanceResult::Applied(n)
+            }
             // 両方 NotFound
             (AStanceResult::NotFound, AStanceResult::NotFound) => AStanceResult::NotFound,
             // AlreadyAStance + NotFound → AlreadyAStance を優先
-            (AStanceResult::AlreadyAStance, _) | (_, AStanceResult::AlreadyAStance) => AStanceResult::AlreadyAStance,
+            (AStanceResult::AlreadyAStance, _) | (_, AStanceResult::AlreadyAStance) => {
+                AStanceResult::AlreadyAStance
+            }
         };
 
         (merged_count, new_bone_count)
@@ -312,6 +328,38 @@ pub struct IrBone {
     pub node_index: usize,
     /// ボーン追従/物理フラグ
     pub is_physics: bool,
+    /// ボーンテイル位置（glTF座標系、PMX/PMDのみ）
+    /// PMXの BoneTail（オフセットまたはボーンIndex）から計算した先端位置（レストポーズ）
+    pub tail_position: Option<Vec3>,
+    /// テイル先ボーンIndex（BoneTail::BoneIndex由来、アニメーション時の動的追従用）
+    pub tail_bone_index: Option<usize>,
+    /// IK影響下フラグ（IKの Target + Link に登録されているボーン）
+    pub is_ik: bool,
+    /// IKコントローラフラグ（PMX: BONE_FLAG_IK、PMD: bone_type==2）
+    pub is_ik_bone: bool,
+    /// 移動可能フラグ（PMX: BONE_FLAG_TRANSLATABLE、PMD: bone_type==1）
+    pub is_translatable: bool,
+    /// 軸制限フラグ（PMX: BONE_FLAG_AXIS_FIXED）
+    pub is_axis_fixed: bool,
+    /// 表示フラグ（PMX: BONE_FLAG_VISIBLE、PMD: bone_type!=7）
+    pub is_visible: bool,
+    /// 付与データ（PMX回転付与・移動付与）
+    pub grant: Option<IrGrant>,
+}
+
+/// 付与データ（PMX回転付与・移動付与）
+#[derive(Debug, Clone)]
+pub struct IrGrant {
+    /// 付与親ボーンIndex
+    pub parent_index: usize,
+    /// 付与率
+    pub ratio: f32,
+    /// 回転付与フラグ
+    pub is_rotation: bool,
+    /// 移動付与フラグ
+    pub is_move: bool,
+    /// ローカル付与フラグ
+    pub is_local: bool,
 }
 
 /// 中間メッシュ
@@ -328,21 +376,56 @@ pub struct IrMesh {
 }
 
 /// 中間頂点
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct IrVertex {
     pub position: Vec3,
     pub normal: Vec3,
     pub uv: Vec2,
-    pub weights: Vec<(usize, f32)>, // (ボーンIndex, ウェイト) 最大4
-    pub edge_scale: f32,            // エッジ倍率（outlineWidthMultiplyTexture由来）
+    /// ボーンウェイト固定配列 (ボーンIndex, ウェイト)。有効要素数は weight_count。
+    pub weights: [(usize, f32); 4],
+    /// 有効なウェイト数 (0..=4)
+    pub weight_count: u8,
+    pub edge_scale: f32, // エッジ倍率（outlineWidthMultiplyTexture由来）
+}
+
+impl IrVertex {
+    /// ウェイトの有効スライスを返す
+    #[inline]
+    pub fn active_weights(&self) -> &[(usize, f32)] {
+        &self.weights[..self.weight_count as usize]
+    }
+
+    /// ウェイトの有効スライスを可変で返す
+    #[inline]
+    pub fn active_weights_mut(&mut self) -> &mut [(usize, f32)] {
+        &mut self.weights[..self.weight_count as usize]
+    }
+
+    /// Vec からウェイトを設定する（最大4要素、超過分は切り捨て）
+    pub fn set_weights_from_vec(&mut self, src: &[(usize, f32)]) {
+        let n = src.len().min(4);
+        self.weights = [(0, 0.0); 4];
+        self.weights[..n].copy_from_slice(&src[..n]);
+        self.weight_count = n as u8;
+    }
+
+    /// Vec<(usize, f32)> からウェイト付き IrVertex を構築するヘルパー
+    pub fn from_weights(src: Vec<(usize, f32)>) -> ([(usize, f32); 4], u8) {
+        let mut arr = [(0usize, 0.0f32); 4];
+        let n = src.len().min(4);
+        for (i, &val) in src.iter().take(4).enumerate() {
+            arr[i] = val;
+        }
+        (arr, n as u8)
+    }
 }
 
 /// モーフターゲット（メッシュ内）
 #[derive(Debug, Clone)]
 pub struct IrMorphTarget {
     pub name: String,
-    /// 各頂点の位置オフセット（Noneなら変化なし）
-    pub position_offsets: Vec<Option<Vec3>>,
+    /// 影響のある頂点の位置オフセット（疎表現: 頂点Index昇順）
+    pub position_offsets: Vec<(u32, Vec3)>,
 }
 
 /// 中間材質
@@ -368,6 +451,16 @@ pub struct IrMaterial {
     pub outline_width_texture_index: Option<usize>,
     /// FBX元テクスチャファイル名（一括割り当て用）
     pub source_texture_name: Option<String>,
+    /// 材質の出自（RenderStyle 決定に使用）
+    pub source_format: SourceFormat,
+    /// スフィアマップテクスチャ
+    pub sphere_texture_index: Option<usize>,
+    /// スフィアモード: 0=無効, 1=乗算, 2=加算 (3=サブテクスチャは非対応)
+    pub sphere_mode: u8,
+    /// 個別トゥーンテクスチャIndex
+    pub toon_texture_index: Option<usize>,
+    /// 共有トゥーン番号 (0-9 = toon01-10)
+    pub toon_shared_index: Option<u8>,
 }
 
 impl IrMaterial {
@@ -398,6 +491,11 @@ impl Default for IrMaterial {
             shade_texture_index: None,
             outline_width_texture_index: None,
             source_texture_name: None,
+            source_format: SourceFormat::Vrm1,
+            sphere_texture_index: None,
+            sphere_mode: 0,
+            toon_texture_index: None,
+            toon_shared_index: None,
         }
     }
 }
@@ -410,6 +508,16 @@ pub struct IrTexture {
     /// 生データ（PNG/JPEG）
     pub data: Vec<u8>,
     pub mime_type: String,
+}
+
+/// 拡張子から MIME タイプを返す（小文字の拡張子を期待）
+pub fn mime_for_ext(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "tga" => "image/x-tga",
+        "bmp" => "image/bmp",
+        _ => "image/jpeg",
+    }
 }
 
 /// 中間モーフ
@@ -494,18 +602,30 @@ mod tests {
             children,
             node_index: 0,
             is_physics: false,
+            tail_position: None,
+            tail_bone_index: None,
+            is_ik: false,
+            is_ik_bone: false,
+            is_translatable: false,
+            is_axis_fixed: false,
+            is_visible: true,
+            grant: None,
         }
     }
 
     /// テスト用ヘルパー: ウェイト付き頂点を含むメッシュ
     fn mesh_with_weights(name: &str, mat_idx: usize, bone_indices: &[usize]) -> IrMesh {
-        let vertices = bone_indices.iter().map(|&bi| IrVertex {
-            position: Vec3::ZERO,
-            normal: Vec3::Y,
-            uv: Vec2::ZERO,
-            weights: vec![(bi, 1.0)],
-            edge_scale: 1.0,
-        }).collect();
+        let vertices = bone_indices
+            .iter()
+            .map(|&bi| IrVertex {
+                position: Vec3::ZERO,
+                normal: Vec3::Y,
+                uv: Vec2::ZERO,
+                weights: [(bi, 1.0), (0, 0.0), (0, 0.0), (0, 0.0)],
+                weight_count: 1,
+                edge_scale: 1.0,
+            })
+            .collect();
         IrMesh {
             name: name.to_string(),
             vertices,
@@ -527,7 +647,10 @@ mod tests {
                 bone("Head", Some(1), vec![]),
             ],
             meshes: vec![mesh_with_weights("body", 0, &[1, 2, 1])],
-            materials: vec![IrMaterial { name: "mat_body".into(), ..Default::default() }],
+            materials: vec![IrMaterial {
+                name: "mat_body".into(),
+                ..Default::default()
+            }],
             ..Default::default()
         };
 
@@ -540,7 +663,10 @@ mod tests {
                 bone("Ribbon", Some(1), vec![]),
             ],
             meshes: vec![mesh_with_weights("costume", 0, &[1, 2, 1])],
-            materials: vec![IrMaterial { name: "mat_costume".into(), ..Default::default() }],
+            materials: vec![IrMaterial {
+                name: "mat_costume".into(),
+                ..Default::default()
+            }],
             ..Default::default()
         };
 
@@ -561,16 +687,30 @@ mod tests {
         assert_eq!(host.bones[3].parent, Some(1));
 
         // Spine の children に Ribbon(3) が追加されているべき
-        assert!(host.bones[1].children.contains(&3), "Spine の children に Ribbon(3) がない");
+        assert!(
+            host.bones[1].children.contains(&3),
+            "Spine の children に Ribbon(3) がない"
+        );
         // Head(2) も残っている
-        assert!(host.bones[1].children.contains(&2), "Spine の children に Head(2) がない");
+        assert!(
+            host.bones[1].children.contains(&2),
+            "Spine の children に Head(2) がない"
+        );
 
         // 衣装メッシュの頂点ウェイトが既存ボーンにリマップされていること
         let costume_mesh = &host.meshes[1];
         // other の Spine(idx=1) → self の Spine(idx=1)
-        assert_eq!(costume_mesh.vertices[0].weights[0].0, 1, "Spine にリマップ");
+        assert_eq!(
+            costume_mesh.vertices[0].active_weights()[0].0,
+            1,
+            "Spine にリマップ"
+        );
         // other の Ribbon(idx=2) → self の Ribbon(idx=3)
-        assert_eq!(costume_mesh.vertices[1].weights[0].0, 3, "Ribbon にリマップ");
+        assert_eq!(
+            costume_mesh.vertices[1].active_weights()[0].0,
+            3,
+            "Ribbon にリマップ"
+        );
 
         // 材質が2つ
         assert_eq!(host.materials.len(), 2);
@@ -594,11 +734,17 @@ mod tests {
                 rigid_bodies: vec![IrRigidBody {
                     name: "rb_spine".into(),
                     bone_index: Some(1),
-                    group: 0, no_collision_mask: 0xFFFF,
+                    group: 0,
+                    no_collision_mask: 0xFFFF,
                     shape: RigidShape::Sphere { radius: 0.1 },
-                    position: Vec3::ZERO, rotation: Vec3::ZERO,
-                    mass: 1.0, linear_damping: 0.5, angular_damping: 0.5,
-                    restitution: 0.0, friction: 0.5, physics_mode: 0,
+                    position: Vec3::ZERO,
+                    rotation: Vec3::ZERO,
+                    mass: 1.0,
+                    linear_damping: 0.5,
+                    angular_damping: 0.5,
+                    restitution: 0.0,
+                    friction: 0.5,
+                    physics_mode: 0,
                 }],
                 joints: vec![],
             },
@@ -616,20 +762,30 @@ mod tests {
                 rigid_bodies: vec![IrRigidBody {
                     name: "rb_new".into(),
                     bone_index: Some(1), // other の NewBone(1)
-                    group: 1, no_collision_mask: 0xFFFF,
+                    group: 1,
+                    no_collision_mask: 0xFFFF,
                     shape: RigidShape::Sphere { radius: 0.05 },
-                    position: Vec3::ZERO, rotation: Vec3::ZERO,
-                    mass: 0.5, linear_damping: 0.5, angular_damping: 0.5,
-                    restitution: 0.0, friction: 0.5, physics_mode: 1,
+                    position: Vec3::ZERO,
+                    rotation: Vec3::ZERO,
+                    mass: 0.5,
+                    linear_damping: 0.5,
+                    angular_damping: 0.5,
+                    restitution: 0.0,
+                    friction: 0.5,
+                    physics_mode: 1,
                 }],
                 joints: vec![IrJoint {
                     name: "joint_new".into(),
                     rigid_a: 0, // other 側の最初の剛体（ただし実際はホスト側）
                     rigid_b: 0, // other 側の剛体 (rb_new)
-                    position: Vec3::ZERO, rotation: Vec3::ZERO,
-                    move_limit_lo: Vec3::ZERO, move_limit_hi: Vec3::ZERO,
-                    rot_limit_lo: Vec3::ZERO, rot_limit_hi: Vec3::ZERO,
-                    spring_move: Vec3::ZERO, spring_rot: Vec3::ZERO,
+                    position: Vec3::ZERO,
+                    rotation: Vec3::ZERO,
+                    move_limit_lo: Vec3::ZERO,
+                    move_limit_hi: Vec3::ZERO,
+                    rot_limit_lo: Vec3::ZERO,
+                    rot_limit_hi: Vec3::ZERO,
+                    spring_move: Vec3::ZERO,
+                    spring_rot: Vec3::ZERO,
                 }],
             },
             ..Default::default()
@@ -637,7 +793,7 @@ mod tests {
 
         let (merged, new) = host.merge(other);
         assert_eq!(merged, 1); // Armature
-        assert_eq!(new, 1);    // NewBone
+        assert_eq!(new, 1); // NewBone
 
         // NewBone は self[2] に追加
         assert_eq!(host.bones[2].name, "NewBone");
@@ -680,7 +836,9 @@ mod tests {
             bones: vec![bone("Root", None, vec![])],
             materials: vec![IrMaterial::default()],
             morphs: vec![IrMorph {
-                name: "smile".into(), name_en: String::new(), panel: 3,
+                name: "smile".into(),
+                name_en: String::new(),
+                panel: 3,
                 kind: IrMorphKind::Vertex(vec![(0, Vec3::Y)]),
             }],
             ..Default::default()
@@ -691,7 +849,9 @@ mod tests {
             bones: vec![bone("Root", None, vec![])],
             materials: vec![IrMaterial::default()],
             morphs: vec![IrMorph {
-                name: "blink".into(), name_en: String::new(), panel: 2,
+                name: "blink".into(),
+                name_en: String::new(),
+                panel: 2,
                 kind: IrMorphKind::Vertex(vec![(1, Vec3::X)]),
             }],
             ..Default::default()

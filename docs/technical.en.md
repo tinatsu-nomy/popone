@@ -34,7 +34,57 @@ To display PMX/PMD files in the viewer, PMX coordinates are reverse-converted to
 | Target | Processing |
 |--------|-----------|
 | Rigid body position | Bone-relative offset → converted to absolute coordinates via `bone.position + offset` |
-| Rigid body rotation | Absolute Euler angles. Flip X if bone direction Y < 0 |
+| Rigid body rotation | Absolute Euler angles (used as-is, no conversion needed) |
+
+## Bone Display
+
+The viewer draws bones with 4 shape types based on bone flags.
+
+### Shape Determination (Priority Order)
+
+| Priority | Condition | Shape | Drawing |
+|----------|-----------|-------|---------|
+| 1 | `BONE_FLAG_IK` / PMD type=2 | ◻ IK Controller | Blue outline square + orange fill + blue center square |
+| 2 | `BONE_FLAG_AXIS_FIXED` | ⊗ Axis-fixed | Blue outer circle (thick) + ✕ (thick) |
+| 3 | `BONE_FLAG_TRANSLATABLE` / PMD type=1 | ◻ Move | Blue outer square + blue inner square + blue center fill |
+| 4 | None | ◎ Normal | Blue outer circle + blue inner circle + blue center fill |
+
+### IK-Affected Bones
+
+Bones registered in IK Link chains are displayed in orange (outline and tail triangle in orange, center fill in blue). Target bones use normal color (blue).
+
+### Drawing Direction
+
+| Source | Method |
+|--------|--------|
+| PMX/PMD | self→tail (`BoneTail::BoneIndex` / `BoneTail::Offset`) |
+| VRM/FBX | parent→self (fallback) |
+
+During animation, `tail_bone_index` (from `BoneTail::BoneIndex`) references the dynamic position from `animated_globals`, keeping the tail synced with the model.
+
+### Rendering Pipeline
+
+3-stage rendering controls overlap order.
+
+| Order | Pipeline | Content |
+|-------|----------|---------|
+| 1 | LineList | Tail triangles (backmost) |
+| 2 | TriangleList | Marker fill faces (over tail) |
+| 3 | LineList | Marker outlines (frontmost) |
+
+4 passes ensure higher-priority bones are always drawn in front: Normal(0) → IK-affected(1) → Axis-fixed(2) → IK Controller(3).
+
+### IrBone Fields
+
+| Field | Type | PMX | PMD | VRM/FBX |
+|-------|------|-----|-----|---------|
+| `tail_position` | `Option<Vec3>` | BoneTail → glTF coords | child → glTF coords | None |
+| `tail_bone_index` | `Option<usize>` | BoneTail::BoneIndex | child index | None |
+| `is_ik` | `bool` | IK Link bones | IK Chain bones | false |
+| `is_ik_bone` | `bool` | BONE_FLAG_IK | bone_type==2 | false |
+| `is_translatable` | `bool` | BONE_FLAG_TRANSLATABLE | bone_type==1 | false |
+| `is_axis_fixed` | `bool` | BONE_FLAG_AXIS_FIXED | false | false |
+| `is_visible` | `bool` | BONE_FLAG_VISIBLE | bone_type!=7 | true |
 
 ## MMD Standard Bone Insertion
 
@@ -95,6 +145,43 @@ Standard bone insertion consists of 18 steps. Each step is logged with a `[stepN
 
 After these steps, `fix_duplicate_names` (duplicate bone name resolution) and `sort_bones_topological` (deform order sorting) are executed to finalize the bone array.
 
+## PMX Grant Animation
+
+Processes rotation grants (`BONE_FLAG_ROTATION_GRANT`) and move grants (`BONE_FLAG_MOVE_GRANT`) during animation playback.
+
+### D-bones Mechanism
+
+Standard MMD models (e.g., Tda Miku) have "D-bones" (leg D, knee D, ankle D) corresponding to IK link bones (leg, knee, ankle). Vertex weights are assigned to D-bones, which copy FK bone rotations via rotation grants (ratio=1.0).
+
+```
+Lower body
+├ Left leg     ← VRMA "leftUpperLeg" rotation applied here
+├ Left leg D   ← Rotation grant copies "Left leg" rotation (ratio=1.0)
+│ └ Left knee D ← Rotation grant copies "Left knee" rotation
+│   └ Left ankle D
+```
+
+### Processing Flow
+
+```
+1. compute_animated_globals_inplace()  — Apply VRMA retargeted rotations
+2. apply_grants()                      — Apply grant deltas and recompute globals
+   Phase 1: Iterate bones in index order, extract grant parent's local rotation/
+            translation delta, apply with ratio to work buffer (work_local_mats)
+   Phase 2: Recompute all bone global matrices in index order (parent→child propagation)
+3. Delta matrix computation → vertex skinning
+```
+
+### IrGrant Data Structure
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `parent_index` | `usize` | Grant parent bone index |
+| `ratio` | `f32` | Grant ratio (1.0 = full copy, -1.0 = inverse rotation) |
+| `is_rotation` | `bool` | Rotation grant flag |
+| `is_move` | `bool` | Move grant flag |
+| `is_local` | `bool` | Local grant flag |
+
 ## PMX/PMD Loading (v0.2.1)
 
 ### PMX Reader
@@ -131,22 +218,135 @@ After these steps, `fix_duplicate_names` (duplicate bone name resolution) and `s
 5. Apply rotation to morph offsets
 6. Rigid bodies / joints: correct position and rotation of those belonging to descendants of affected bones
 
-### Rigid Body Rotation Adjustment
+### Rigid Body Rotation
 
-PMX/PMD rigid body rotation is stored as Euler angles (ZXY). X flip based on bone direction is required for viewer display:
+PMX/PMD rigid body rotation is stored as Euler angles. Following the D3DX row-major convention `v * Ry * Rx * Rz` (extrinsic ZXY), reconstructed in glam column-major as `Rz * Rx * Ry` (intrinsic YXZ). File values are used as-is (no coordinate conversion needed).
 
-```rust
-// Flip X rotation if bone direction Y component < 0
-if bone_dir.y < 0.0 {
-    rotation.x = -rotation.x;
-}
-```
+#### Rigid Body Animation Tracking Coordinate Conversion
+
+The viewer renders rigid bodies and joints in PMX space. `rb.position` and `joint.position` are kept in PMX coordinates, but `bone.position` and `bone.global_mat` are converted to glTF space during PMX/PMD extraction (`pmx_pos_to_gltf`). Therefore, the animation tracking delta computation applies glTF→PMX coordinate conversion uniformly across all formats:
+
+- **Position conversion**: PMX/PMD uses the same Z-flip as VRM 1.0 (`pmx_pos_to_gltf(v) = (x/S, y/S, -z/S)`), so `gltf_pos_to_pmx` is used for inverse conversion
+- **Rotation delta**: Z-flip `Quat(-x, -y, z, w)` is applied (same path as VRM 1.0)
 
 ### Texture Loading
 
 - PMX: Load from relative paths in the texture path table
-- PMD: Separate sphere texture from material's `texture_name` using `*`, use only the main texture
-- MIME hint: Infer MIME type from extension and explicitly specify via `image::load_from_memory_with_format` (TGA has no magic number so auto-detection fails)
+- PMD: `parse_pmd_texture_slots` separates main/sphere textures via `*` delimiter. `.sph`→multiply, `.spa`→add. Toon textures registered with file existence check, falling back to shared toon if not found
+- MIME hint: Infer MIME type from extension and explicitly specify via `image::load_from_memory_with_format` (TGA has no magic number so auto-detection fails). `.sph/.spa` treated as `image/bmp`
+- UnityPackage textures: `embed_textures_into_ir` derives MIME type from file extension via `mime_for_ext`. Without MIME hints, TGA/BMP auto-detection fails and falls back to magenta
+
+## MMD Rendering (v0.2.6)
+
+MMD rendering mode that auto-enables on PMX/PMD load.
+
+### Architecture
+
+- **RenderStyle enum** — Per-DrawCall `Standard` / `Mmd` determination (based on material's `source_format.is_pmx_pmd()`). Works correctly with append-mixed models
+- **Per-frame sRGB/Unorm switching** — PMX/PMD-only frames (all visible materials are MMD) use `Rgba8Unorm` render target for correct gamma-space alpha blending. Falls back to `Rgba8UnormSrgb` when VRM is mixed
+- **4 pipeline sets** — `(MSAA on/off) × (sRGB/Unorm)` = 4 sets created at init. Runtime cost is pipeline reference switching only
+- **Texture dual views** — `view_formats: [Rgba8Unorm]` creates both sRGB/Unorm views for the same texture. MMD reads via Unorm view (gamma space, zero memory overhead)
+
+### MMD Shaders
+
+#### Main Shader (`MMD_MAIN_SHADER_SRC` / `MMD_MAIN_SHADER_UNORM_SRC`)
+
+```
+Preshader:
+  // AmbientColor = saturate(MaterialAmbient × LightAmbient + MaterialEmissive)
+  // PMX ambient = D3D emissive, PMX diffuse = D3D ambient
+  base_color = clamp(mat.diffuse_rgb * LightAmbient + mat.ambient, 0, 1)
+  // LightAmbient = 154/255 ≈ 0.604
+
+Pixel:
+  tex = texture(Unorm)
+  out_rgb = base_color * tex.rgb
+  out_a   = tex.a * mat.alpha
+
+  // Sphere map (RGB only, no alpha influence)
+  // sphere_uv: X-inverted coord → vn_x * -0.5 + 0.5, vn_y * -0.5 + 0.5
+  sph = sphere_texture(sphere_uv).rgb
+  out_rgb += sph  // add mode
+  out_rgb *= sph  // mul mode
+
+  // Toon (NdotL-dependent sampling + multiply)
+  lightNormal = dot(N, -L)
+  toon_uv = (0, 0.5 - lightNormal * 0.5)
+  toon = toon_texture(toon_uv)
+  out_rgb *= toon.rgb
+
+  // Alpha test
+  if out_a < 0.004: discard
+
+  // Specular (added last, unaffected by toon)
+  // LightSpecular = LightAmbient (≈0.604)
+  spec_color = mat.specular * LightSpecular
+  out_rgb += spec_color * pow(NdotH, specular_power)
+
+  // sRGB version: pow(2.2) to counteract sRGB encode
+  // Unorm version: output gamma values directly
+```
+
+#### Edge Shader (`MMD_EDGE_SHADER_SRC` / `MMD_EDGE_SHADER_UNORM_SRC`)
+
+- Inverted hull method (Front cull)
+- Normal expansion: `offset = edge_scale × mat.edge_size × camera.edge_thickness × pow(dist, 0.7) × 0.003`
+- 2-slot vertex buffer: slot0=existing Vertex, slot1=edge_scale(f32)
+- sRGB version: `pow(edge_color, 2.2)` to counteract sRGB encode
+- Unorm version: output edge_color directly
+
+### Pipeline Configuration
+
+Each sRGB/Unorm set contains identical pipeline structure (2×2=4 sets total).
+
+| Pipeline | Cull | Depth Write | Purpose |
+|----------|------|-------------|---------|
+| mmd_main_cull | Back | yes | MMD opaque (single-sided) |
+| mmd_main_no_cull | none | yes | MMD opaque (double-sided) |
+| mmd_alpha_cull | Back | yes | MMD transparent (single-sided) |
+| mmd_alpha_no_cull | none | yes | MMD transparent (double-sided) |
+| mmd_edge | Front | yes | Edge |
+
+MMD transparent pipelines also write to depth (MMD-compliant). Since materials are drawn in index order, the model author's intended front-to-back order is preserved.
+
+#### MMD Draw Order
+
+MMD draws materials one by one in material index order. popone likewise uses a single loop to draw in material order, switching pipelines (opaque/alpha) based on `is_alpha`. For opaque materials, edges are drawn immediately after the main draw.
+
+```
+for each material (in index order):
+    select pipeline (opaque or alpha based on diffuse.w < 1.0)
+    draw material
+    if opaque && has_edge:
+        draw edge
+```
+
+`can_use_unorm_frame()` determines per-frame; Unorm set used only when all visible materials are MMD.
+
+### Color Space
+
+MMD (D3D9) operates in gamma space. wgpu reproduction:
+
+| Element | Standard (VRM/FBX) | MMD sRGB fallback | MMD Unorm (preferred) |
+|---------|-------|------|------|
+| Texture read | Rgba8UnormSrgb (auto sRGB→linear) | Rgba8Unorm (gamma space) | Rgba8Unorm (gamma space) |
+| Lighting | Linear space | Gamma space | Gamma space |
+| Alpha blending | Linear space (correct) | Linear space (inaccurate) | Gamma space (MMD-compliant) |
+| Output | As-is | pow(2.2) to counteract sRGB encode | As-is (gamma values directly) |
+
+### Shared Toon Textures
+
+Actual MMD standard toon01-10 pixel data (32 rows of RGB values) stored as constant arrays, uploaded as 1×32 RGBA textures to GPU. Sampler: `ClampToEdge` + `Linear`. Shader samples with NdotL-dependent UV `(0, 0.5 − NdotL × 0.5)`, reproducing toon shading based on normal-light angle.
+
+| Toon | Characteristics |
+|------|----------------|
+| toon01 | White → gray (205,205,205), 2-color step |
+| toon02 | White → pink (245,225,225), 2-color step |
+| toon03 | White → dark gray (154,154,154), 2-color step |
+| toon04 | White → warm beige (248,239,235), 2-color step |
+| toon05 | White → warm pink gradient |
+| toon06 | Yellow, center highlight band + dark yellow |
+| toon07-10 | All white (no toon effect) |
 
 ## Viewer Display Styles
 
@@ -161,16 +361,17 @@ if bone_dir.y < 0.0 {
 ### Rigid Body Display
 
 - Rendering: 1px LineList
-- Color: Collider (group=1) = red `#ff0000`, Spring (group!=1) = green `#00ff00`
+- Color (PMX/PMD): By `physics_mode` — bone-follow(0) = green `#00ff00`, physics(1) = red `#ff0000`, physics+bone(2) = blue `#0080ff`
+- Color (VRM): By `group` — collider(group=1) = red `#ff0000`, spring(group!=1) = green `#00ff00`
 - Sphere: 8 meridians (great circle arcs) + 7 parallels
-- Capsule: Top/bottom rings + 8 connecting lines
-- Box: 12 edges
+- Capsule: Top/bottom equator rings + 8 connecting lines + hemisphere wireframes (4 meridians + 3 parallels × top/bottom, PMX/PMD only)
+- Box: 12 edges (size treated as half-extent)
 
 ### Joint Display (PMX/PMD only)
 
 - Shape: Unit cube (faces = yellow `#ffff00`, edges = 1px black lines)
 - Size: 0.18 PMX units
-- Rotation: Euler ZXY → Quat for pose reflection
+- Rotation: Euler YXZ intrinsic (= ZXY extrinsic) → Quat for pose reflection
 - Animation sync: Follows via offset from rigid_a's bone
 - Opacity: Adjustable via slider
 
@@ -183,9 +384,56 @@ if bone_dir.y < 0.0 {
 
 Items drawn later appear in front:
 
-1. Joints (farthest back)
+1. Normals (farthest back)
 2. Bones
-3. Rigid bodies (frontmost)
+3. Rigid bodies
+4. Joints (frontmost)
+
+## Camera & Lighting
+
+### Camera
+
+| Item | Value |
+|------|-------|
+| FOV | 30° (MMD-compliant) |
+| Projection | Perspective (default) / Orthographic (5 key toggle) |
+| Controls | Left drag: rotate, Right/Middle drag: pan, Scroll: zoom |
+| Precision | Shift key for 1/3 speed |
+| Fit | F / Double-click (preserves yaw/pitch), R (front reset) |
+
+### Fit Calculation (compute_fit)
+
+Projects bbox 8 corners onto current camera view axes (right / up / forward) to compute projected half-width, half-height, and half-depth.
+
+```
+distance = max(half_h / tan(effective_fov_y), half_w / tan(fov_x)) + depth_offset
+```
+
+- `depth_offset`: `half_depth` in perspective (front-face frustum constraint), 0 in orthographic
+- `effective_fov_y`: Effective FOV after subtracting UI overlay (60px)
+- `fov_x`: Computed as `atan(tan(fov_y) * aspect)`
+- Final distance multiplied by `FIT_MARGIN = 1.15` (15% padding)
+
+### Lighting
+
+| Mode | Direction |
+|------|-----------|
+| Fixed | `Vec3(0.5, 1.0, -0.5).normalize()` — MMD-compliant (inversion of (-0.5,-1.0,0.5)) |
+| Camera-Follow | `(forward + right*(-0.3) + up*0.7).normalize()` — MMD-style upper-left bias |
+
+| Parameter | Value |
+|-----------|-------|
+| light_intensity | 0.6 |
+| ambient_intensity | 0.5 |
+
+### MMD Ambient Separation
+
+The `mmd_ambient_scale` field in CameraUniform separates ambient light between standard and MMD paths:
+
+- MMD mode ON: `mmd_ambient_scale = 1.0` (uses material's ambient value directly)
+- MMD mode OFF: `mmd_ambient_scale = ambient_intensity` (UI slider value)
+
+Standard shaders use `camera.ambient`, while only MMD shaders reference `camera.mmd_ambient_scale`.
 
 ## Log Output
 
@@ -884,7 +1132,7 @@ src/
 │   ├── texture.rs       Texture extraction (embedded / external file)
 │   ├── blendshape.rs    Blend shape extraction
 │   ├── animation.rs     FBX animation extraction (Stack/Layer/CurveNode/Curve hierarchy, byte array support)
-│   └── humanoid.rs      Humanoid rig auto-detection and mapping
+│   └── humanoid.rs      Humanoid rig auto-detection and mapping (namespace prefix stripping, CamelCase support)
 ├── pmx/
 │   ├── types.rs         PMX data type definitions
 │   ├── reader.rs        PMX 2.0/2.1 binary loading (UTF-16LE/UTF-8, SoftBody skip)
@@ -931,7 +1179,7 @@ For detailed per-version improvements and internal changes, see the [Changelog](
 - **Normal maps not applied** — VRM/FBX normalTexture is not reflected in shading (can be viewed in normal map display mode)
 - **Texture size limit** — Textures exceeding the GPU's `max_texture_dimension_2d` (typically 8192px) are automatically downscaled in `upload_rgba_to_gpu` (using `image::imageops::resize` with Triangle filter). Does not affect PMX conversion output (viewer display only)
 - **Extraction size limit** — Archive (ZIP / 7z) and `.unitypackage` (tar.gz) extraction is capped at 2GB total (`MAX_TOTAL_BYTES`). `.unitypackage` uses dual protection: header size pre-check + actual bytes post-check
-- **Lat-style Hatsune Miku etc.** — Models specialized for MMD rendering may not display some surfaces correctly
+- **MMD-specialized models** — Models specialized for MMD rendering may not display some surfaces correctly
 - **PMX 2.1 SoftBody** — Skipped (not supported)
 
 ## References
@@ -956,7 +1204,7 @@ For detailed per-version improvements and internal changes, see the [Changelog](
 - String encoding is UTF-16 LE (encoding=0)
 - Index sizes are variable (1/2/4 bytes, specified in header)
 - Bones support IK, grant (rotation/translation), and deform layers
-- Rigid bodies and joints are Bullet Physics compatible (Euler angles use ZXY convention)
+- Rigid bodies and joints are Bullet Physics compatible (Euler angles use D3DX row-major ZXY convention, YXZ intrinsic in glam)
 - Coordinate system is left-handed, Y-up, +Z forward, with custom scale units (1m = 12.5 in this tool)
 
 ### Key Points of the PMD Specification
@@ -967,3 +1215,33 @@ For detailed per-version improvements and internal changes, see the [Changelog](
 - IK is stored in a separate section from bones
 - Morphs use base + offset format (base morph global vertex positions + delta offsets)
 - English header, toon textures, rigid bodies, and joints are optional extensions at end of file
+
+## WGSL Shader Architecture
+
+Shaders in `gpu.rs` use `macro_rules!` + `concat!` to centrally manage common struct definitions.
+
+### Common Macros
+
+| Macro | Content | Used By |
+|-------|---------|---------|
+| `wgsl_camera_uniform!()` | `CameraUniform` struct definition | All 8 shaders |
+| `wgsl_mmd_material_uniform!()` | `MmdMaterialUniform` struct definition | 4 MMD shaders |
+| `wgsl_material_uniform!()` | `MaterialUniform` struct definition | Basic shader, wire overlay |
+| `wgsl_mmd_main_body!()` | MMD vertex shader + `compute_mmd_lighting` function | MMD main sRGB/Unorm |
+| `wgsl_mmd_edge_body!()` | MMD edge vertex shader | MMD edge sRGB/Unorm |
+| `wgsl_grid_body!()` | Grid vertex shader | Grid sRGB/Unorm |
+
+### Shader Constants
+
+| Constant | Macro Composition | Difference (Fragment Shader) |
+|----------|-------------------|------------------------------|
+| `SHADER_SRC` | camera + material + custom | Half-Lambert textured rendering |
+| `MMD_EDGE_SHADER_SRC` | camera + mmd_mat + edge_body + custom | `pow(c.rgb, 2.2)` — sRGB correction |
+| `MMD_EDGE_SHADER_UNORM_SRC` | camera + mmd_mat + edge_body + custom | `edge_color` direct output |
+| `MMD_MAIN_SHADER_SRC` | camera + mmd_mat + main_body + custom | `pow(out_rgb, 2.2)` — sRGB correction |
+| `MMD_MAIN_SHADER_UNORM_SRC` | camera + mmd_mat + main_body + custom | `clamp(out_rgb)` — gamma-space direct output |
+| `GRID_SHADER_SRC` | camera + grid_body + custom | `in.color` pass-through |
+| `GRID_SHADER_UNORM_SRC` | camera + grid_body + custom | `linear_to_srgb()` conversion |
+| `WIRE_OVERLAY_SHADER_SRC` | camera + material + custom | Fixed black `(0,0,0,1)` |
+
+The only difference between sRGB and Unorm variants is the final transform applied to `compute_mmd_lighting()` output. The core lighting, texture sampling, sphere map, and toon logic is fully shared.

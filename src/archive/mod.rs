@@ -3,8 +3,8 @@
 //! アーカイブ内のモデルファイル（VRM/FBX/PMX/PMD）を検出し、
 //! 関連テクスチャと共に展開する統一インターフェース。
 
-pub mod zip_extract;
 pub mod sevenz;
+pub mod zip_extract;
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -150,11 +150,15 @@ pub fn list_models(data: &[u8], format: ArchiveFormat) -> Result<ArchiveContents
 }
 
 /// メタデータ一覧からモデルを検出
-fn find_models_from_metas(metas: &[ArchiveEntryMeta]) -> Vec<(usize, PathBuf, String, ArchiveModelKind)> {
+fn find_models_from_metas(
+    metas: &[ArchiveEntryMeta],
+) -> Vec<(usize, PathBuf, String, ArchiveModelKind)> {
     let mut models = Vec::new();
     for (i, meta) in metas.iter().enumerate() {
         if let Some(kind) = path_to_model_kind(&meta.path) {
-            let display = meta.path.file_name()
+            let display = meta
+                .path
+                .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
@@ -165,11 +169,15 @@ fn find_models_from_metas(metas: &[ArchiveEntryMeta]) -> Vec<(usize, PathBuf, St
 }
 
 /// エントリ一覧からモデルを検出
-fn find_models_from_entries(entries: &[ArchiveEntry]) -> Vec<(usize, PathBuf, String, ArchiveModelKind)> {
+fn find_models_from_entries(
+    entries: &[ArchiveEntry],
+) -> Vec<(usize, PathBuf, String, ArchiveModelKind)> {
     let mut models = Vec::new();
     for (i, entry) in entries.iter().enumerate() {
         if let Some(kind) = path_to_model_kind(&entry.path) {
-            let display = entry.path.file_name()
+            let display = entry
+                .path
+                .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
@@ -180,7 +188,8 @@ fn find_models_from_entries(entries: &[ArchiveEntry]) -> Vec<(usize, PathBuf, St
 }
 
 fn path_to_model_kind(path: &Path) -> Option<ArchiveModelKind> {
-    let ext = path.extension()
+    let ext = path
+        .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())?;
     ArchiveModelKind::from_ext(&ext)
@@ -193,7 +202,9 @@ pub fn extract_model_bundle(
     contents: ArchiveContents,
     model_index: usize,
 ) -> Result<ModelBundle> {
-    let (_, model_path, _, kind) = contents.models.get(model_index)
+    let (_, model_path, _, kind) = contents
+        .models
+        .get(model_index)
         .ok_or_else(|| anyhow::anyhow!("モデルインデックスが範囲外: {model_index}"))?;
     let model_path = model_path.clone();
     let kind = *kind;
@@ -219,9 +230,12 @@ fn extract_bundle_from_zip(
         ArchiveModelKind::Pmx | ArchiveModelKind::Pmd => {
             // PMX/PMD: まずモデルを展開してテクスチャ参照パスを取得し、必要なファイルのみ追加展開
             let model_entries = zip_extract::extract_files(data, &[model_path], MAX_TOTAL_BYTES)?;
-            let model_entry = model_entries.into_iter()
+            let model_entry = model_entries
+                .into_iter()
                 .find(|e| e.path == model_path)
-                .ok_or_else(|| anyhow::anyhow!("モデルファイルが展開できません: {}", model_path.display()))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("モデルファイルが展開できません: {}", model_path.display())
+                })?;
 
             // テクスチャ参照パスを取得
             let tex_refs = get_texture_refs_from_model(&model_entry.data, kind)?;
@@ -253,9 +267,12 @@ fn extract_bundle_from_zip(
         ArchiveModelKind::UnityPackage => {
             // UnityPackage: 本体のみ展開（テクスチャはパッケージ内に含まれるため不要）
             let model_entries = zip_extract::extract_files(data, &[model_path], MAX_TOTAL_BYTES)?;
-            let model_entry = model_entries.into_iter()
+            let model_entry = model_entries
+                .into_iter()
                 .find(|e| e.path == model_path)
-                .ok_or_else(|| anyhow::anyhow!("モデルファイルが展開できません: {}", model_path.display()))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("モデルファイルが展開できません: {}", model_path.display())
+                })?;
             Ok(ModelBundle {
                 model: model_entry,
                 kind,
@@ -285,7 +302,9 @@ fn extract_bundle_from_zip(
                 if entry.path == model_path {
                     model_entry = Some(entry);
                 } else {
-                    let filename = entry.path.file_name()
+                    let filename = entry
+                        .path
+                        .file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
@@ -294,7 +313,8 @@ fn extract_bundle_from_zip(
             }
 
             Ok(ModelBundle {
-                model: model_entry.ok_or_else(|| anyhow::anyhow!("モデルファイルが展開できません"))?,
+                model: model_entry
+                    .ok_or_else(|| anyhow::anyhow!("モデルファイルが展開できません"))?,
                 kind,
                 textures,
                 aux_files: HashMap::new(),
@@ -321,8 +341,9 @@ fn extract_bundle_from_entries(
         }
     }
 
-    let model_entry = model_entry
-        .ok_or_else(|| anyhow::anyhow!("モデルファイルが見つかりません: {}", model_path.display()))?;
+    let model_entry = model_entry.ok_or_else(|| {
+        anyhow::anyhow!("モデルファイルが見つかりません: {}", model_path.display())
+    })?;
 
     match kind {
         ArchiveModelKind::Pmx | ArchiveModelKind::Pmd => {
@@ -345,10 +366,13 @@ fn extract_bundle_from_entries(
             })
         }
         _ => {
-            let textures: Vec<(String, Vec<u8>)> = other_entries.into_iter()
+            let textures: Vec<(String, Vec<u8>)> = other_entries
+                .into_iter()
                 .filter(|e| is_texture_in_scope(&e.path, model_dir))
                 .map(|e| {
-                    let filename = e.path.file_name()
+                    let filename = e
+                        .path
+                        .file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
@@ -428,7 +452,9 @@ fn collect_needed_paths<'a>(
             // PMD: basename のみで照合
             if ref_path.components().count() == 1 {
                 if let (Some(a_name), Some(r_name)) = (ap.file_name(), ref_path.file_name()) {
-                    if a_name.to_string_lossy().to_lowercase() == r_name.to_string_lossy().to_lowercase() {
+                    if a_name.to_string_lossy().to_lowercase()
+                        == r_name.to_string_lossy().to_lowercase()
+                    {
                         // 同ディレクトリまたはサブディレクトリ内
                         if ap.starts_with(model_dir) || model_dir == Path::new("") {
                             needed.push(ap.clone());
@@ -440,7 +466,11 @@ fn collect_needed_paths<'a>(
     }
     // .txt ファイルも収集（PMD/PMX の readme 等）
     for &ap in &archive_paths {
-        let ext = ap.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let ext = ap
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
         if ext == "txt" && (ap.starts_with(model_dir) || model_dir == Path::new("")) {
             needed.push(ap.clone());
         }
@@ -457,7 +487,9 @@ fn build_aux_files(entries: Vec<ArchiveEntry>, model_dir: &Path) -> HashMap<Path
         let rel = if model_dir == Path::new("") {
             entry.path.clone()
         } else {
-            entry.path.strip_prefix(model_dir)
+            entry
+                .path
+                .strip_prefix(model_dir)
                 .unwrap_or(&entry.path)
                 .to_path_buf()
         };
@@ -475,7 +507,9 @@ fn build_aux_from_entries_pmx(
     let mut aux = HashMap::new();
 
     for entry in entries {
-        let ext = entry.path.extension()
+        let ext = entry
+            .path
+            .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
@@ -487,13 +521,21 @@ fn build_aux_from_entries_pmx(
             tex_refs.iter().any(|tex_ref| {
                 let ref_path = PathBuf::from(tex_ref.replace('\\', "/"));
                 let resolved = normalize_relative_path(&model_dir.join(&ref_path));
-                entry.path == resolved || path_eq_ignore_case(&entry.path, &resolved)
-                    || (ref_path.components().count() == 1 && {
-                        entry.path.file_name().and_then(|n| n.to_str())
-                            .map(|n| n.to_lowercase())
-                            == ref_path.file_name().and_then(|n| n.to_str())
+                entry.path == resolved
+                    || path_eq_ignore_case(&entry.path, &resolved)
+                    || (ref_path.components().count() == 1
+                        && {
+                            entry
+                                .path
+                                .file_name()
+                                .and_then(|n| n.to_str())
                                 .map(|n| n.to_lowercase())
-                    } && (entry.path.starts_with(model_dir) || model_dir == Path::new("")))
+                                == ref_path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .map(|n| n.to_lowercase())
+                        }
+                        && (entry.path.starts_with(model_dir) || model_dir == Path::new("")))
             })
         };
 
@@ -501,7 +543,9 @@ fn build_aux_from_entries_pmx(
             let rel = if model_dir == Path::new("") {
                 entry.path.clone()
             } else {
-                entry.path.strip_prefix(model_dir)
+                entry
+                    .path
+                    .strip_prefix(model_dir)
                     .unwrap_or(&entry.path)
                     .to_path_buf()
             };
@@ -513,7 +557,8 @@ fn build_aux_from_entries_pmx(
 
 /// テクスチャがモデルと同ディレクトリ + サブディレクトリ内かどうか
 fn is_texture_in_scope(path: &Path, model_dir: &Path) -> bool {
-    let ext = path.extension()
+    let ext = path
+        .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
@@ -528,7 +573,9 @@ fn normalize_relative_path(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {
         match c {
-            Component::ParentDir => { out.pop(); }
+            Component::ParentDir => {
+                out.pop();
+            }
             Component::Normal(part) => out.push(part),
             Component::CurDir => {}
             _ => out.push(c.as_os_str()),
@@ -575,10 +622,22 @@ mod tests {
     #[test]
     fn test_find_model_list() {
         let metas = vec![
-            ArchiveEntryMeta { path: PathBuf::from("readme.txt"), size: 100 },
-            ArchiveEntryMeta { path: PathBuf::from("model/test.pmx"), size: 50000 },
-            ArchiveEntryMeta { path: PathBuf::from("model/textures/body.png"), size: 10000 },
-            ArchiveEntryMeta { path: PathBuf::from("other.fbx"), size: 20000 },
+            ArchiveEntryMeta {
+                path: PathBuf::from("readme.txt"),
+                size: 100,
+            },
+            ArchiveEntryMeta {
+                path: PathBuf::from("model/test.pmx"),
+                size: 50000,
+            },
+            ArchiveEntryMeta {
+                path: PathBuf::from("model/textures/body.png"),
+                size: 10000,
+            },
+            ArchiveEntryMeta {
+                path: PathBuf::from("other.fbx"),
+                size: 20000,
+            },
         ];
         let models = find_models_from_metas(&metas);
         assert_eq!(models.len(), 2);
@@ -589,9 +648,18 @@ mod tests {
     #[test]
     fn test_find_model_list_with_unitypackage() {
         let metas = vec![
-            ArchiveEntryMeta { path: PathBuf::from("readme.txt"), size: 100 },
-            ArchiveEntryMeta { path: PathBuf::from("avatar.unitypackage"), size: 500000 },
-            ArchiveEntryMeta { path: PathBuf::from("model.vrm"), size: 200000 },
+            ArchiveEntryMeta {
+                path: PathBuf::from("readme.txt"),
+                size: 100,
+            },
+            ArchiveEntryMeta {
+                path: PathBuf::from("avatar.unitypackage"),
+                size: 500000,
+            },
+            ArchiveEntryMeta {
+                path: PathBuf::from("model.vrm"),
+                size: 200000,
+            },
         ];
         let models = find_models_from_metas(&metas);
         assert_eq!(models.len(), 2);
@@ -625,7 +693,10 @@ mod tests {
         let bundle = extract_model_bundle(&buf, ArchiveFormat::Zip, contents, 0).unwrap();
         // モデル本体のみ展開、テクスチャは空
         assert_eq!(bundle.model.data, b"fake unitypackage data");
-        assert!(bundle.textures.is_empty(), "UnityPackage 抽出時にテクスチャを巻き込んではならない");
+        assert!(
+            bundle.textures.is_empty(),
+            "UnityPackage 抽出時にテクスチャを巻き込んではならない"
+        );
         assert!(bundle.aux_files.is_empty());
     }
 
@@ -711,10 +782,22 @@ mod tests {
     fn test_subdirectory_pmx_aux_keys() {
         // サブディレクトリ内PMXの aux_files キーが正しい相対パスか確認
         let entries = vec![
-            ArchiveEntry { path: PathBuf::from("model/sub/test.pmx"), data: Vec::new() },
-            ArchiveEntry { path: PathBuf::from("model/sub/tex/body.png"), data: vec![1, 2, 3] },
-            ArchiveEntry { path: PathBuf::from("model/sub/readme.txt"), data: vec![4, 5] },
-            ArchiveEntry { path: PathBuf::from("other/unrelated.png"), data: vec![6, 7] },
+            ArchiveEntry {
+                path: PathBuf::from("model/sub/test.pmx"),
+                data: Vec::new(),
+            },
+            ArchiveEntry {
+                path: PathBuf::from("model/sub/tex/body.png"),
+                data: vec![1, 2, 3],
+            },
+            ArchiveEntry {
+                path: PathBuf::from("model/sub/readme.txt"),
+                data: vec![4, 5],
+            },
+            ArchiveEntry {
+                path: PathBuf::from("other/unrelated.png"),
+                data: vec![6, 7],
+            },
         ];
         let model_dir = Path::new("model/sub");
         let tex_refs = vec!["tex/body.png".to_string()];

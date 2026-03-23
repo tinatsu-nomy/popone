@@ -4,19 +4,33 @@ use std::collections::HashMap;
 use std::f32::consts::PI;
 
 use crate::convert::bone_map::vrm_bone_to_pmx_name;
-use crate::convert::coord::{gltf_normal_to_pmx, gltf_normal_to_pmx_v0, gltf_pos_to_pmx, gltf_pos_to_pmx_v0};
+use crate::convert::coord::{
+    gltf_normal_to_pmx, gltf_normal_to_pmx_v0, gltf_pos_to_pmx, gltf_pos_to_pmx_v0,
+};
 use crate::convert::material::ir_material_to_pmx;
 use crate::intermediate::types::{IrModel, IrMorphKind, RigidShape};
 use crate::pmx::types::*;
 
 /// インデックスサイズ自動決定（頂点：符号なし）
 pub fn vertex_idx_size(n: usize) -> u8 {
-    if n <= 255 { 1 } else if n <= 65535 { 2 } else { 4 }
+    if n <= 255 {
+        1
+    } else if n <= 65535 {
+        2
+    } else {
+        4
+    }
 }
 
 /// インデックスサイズ自動決定（その他：符号あり）
 pub fn idx_size(n: usize) -> u8 {
-    if n <= 127 { 1 } else if n <= 32767 { 2 } else { 4 }
+    if n <= 127 {
+        1
+    } else if n <= 32767 {
+        2
+    } else {
+        4
+    }
 }
 
 pub fn build_pmx_model(ir: &IrModel) -> Result<PmxModel> {
@@ -24,10 +38,7 @@ pub fn build_pmx_model(ir: &IrModel) -> Result<PmxModel> {
 }
 
 #[allow(clippy::field_reassign_with_default)]
-pub fn build_pmx_model_with_options(
-    ir: &IrModel,
-    align_rigid_rotation: bool,
-) -> Result<PmxModel> {
+pub fn build_pmx_model_with_options(ir: &IrModel, align_rigid_rotation: bool) -> Result<PmxModel> {
     log::info!("=== PMXモデル構築開始 ===");
     log::info!("モデル名: {}", ir.name);
     log::info!("ソース形式: {}", ir.source_format.label());
@@ -41,8 +52,13 @@ pub fn build_pmx_model_with_options(
     // メッシュ詳細
     log::debug!("--- メッシュ一覧 ---");
     for (i, mesh) in ir.meshes.iter().enumerate() {
-        log::debug!("  [{:2}] 頂点={:5}, 面={:5}, 材質idx={}",
-            i, mesh.vertices.len(), mesh.indices.len() / 3, mesh.material_index);
+        log::debug!(
+            "  [{:2}] 頂点={:5}, 面={:5}, 材質idx={}",
+            i,
+            mesh.vertices.len(),
+            mesh.indices.len() / 3,
+            mesh.material_index
+        );
     }
 
     let mut model = PmxModel::default();
@@ -56,21 +72,34 @@ pub fn build_pmx_model_with_options(
     };
 
     // テクスチャパス（textures\フォルダ相対、Windows区切り）
-    model.textures = ir.textures.iter()
+    model.textures = ir
+        .textures
+        .iter()
         .map(|t| format!("textures\\{}", t.filename))
         .collect();
     log::debug!("--- テクスチャ一覧 ---");
     for (i, tex) in ir.textures.iter().enumerate() {
-        log::debug!("  [{:2}] {} ({} {}bytes)", i, tex.filename, tex.mime_type, tex.data.len());
+        log::debug!(
+            "  [{:2}] {} ({} {}bytes)",
+            i,
+            tex.filename,
+            tex.mime_type,
+            tex.data.len()
+        );
     }
 
     // 材質 → テクスチャIndexマッピング
-    let mat_to_tex: Vec<Option<i32>> = ir.materials.iter()
+    let mat_to_tex: Vec<Option<i32>> = ir
+        .materials
+        .iter()
         .map(|m| m.texture_index.map(|i| i as i32))
         .collect();
 
     // 材質
-    model.materials = ir.materials.iter().enumerate()
+    model.materials = ir
+        .materials
+        .iter()
+        .enumerate()
         .map(|(i, m)| ir_material_to_pmx(m, mat_to_tex[i]))
         .collect();
 
@@ -85,13 +114,20 @@ pub fn build_pmx_model_with_options(
     let mtoon_count = ir.materials.iter().filter(|m| m.is_mtoon).count();
     let double_count = ir.materials.iter().filter(|m| m.is_double_sided).count();
     let edge_count = ir.materials.iter().filter(|m| m.edge_size > 0.0).count();
-    log::info!("材質: {}個 (MToon={}, 両面={}, エッジ有={})", ir.materials.len(), mtoon_count, double_count, edge_count);
+    log::info!(
+        "材質: {}個 (MToon={}, 両面={}, エッジ有={})",
+        ir.materials.len(),
+        mtoon_count,
+        double_count,
+        edge_count
+    );
 
     // ボーン変換
     model.bones = build_bones(ir);
 
     // 頂点・面 統合
-    let (vertices, faces, mat_face_counts) = build_vertices_and_faces(ir, ir.source_format.is_vrm0());
+    let (vertices, faces, mat_face_counts) =
+        build_vertices_and_faces(ir, ir.source_format.is_vrm0());
     model.vertices = vertices;
     model.faces = faces;
 
@@ -103,8 +139,13 @@ pub fn build_pmx_model_with_options(
     // 材質ごとの面数ログ
     log::debug!("--- 材質別面数 ---");
     for (i, mat) in model.materials.iter().enumerate() {
-        log::debug!("  [{:2}] \"{}\" 面頂点数={} (面数={})",
-            i, mat.name, mat.face_count, mat.face_count / 3);
+        log::debug!(
+            "  [{:2}] \"{}\" 面頂点数={} (面数={})",
+            i,
+            mat.name,
+            mat.face_count,
+            mat.face_count / 3
+        );
     }
 
     // モーフ変換
@@ -126,8 +167,14 @@ pub fn build_pmx_model_with_options(
     // ソート後の最終ボーン順序をログ出力
     log::debug!("=== ソート後ボーン一覧 ({} 本) ===", model.bones.len());
     for (i, b) in model.bones.iter().enumerate() {
-        log::debug!("  [{:3}] \"{}\" (parent={:3}, layer={}, flags=0x{:04X})",
-            i, b.name, b.parent_index, b.deform_layer, b.flags);
+        log::debug!(
+            "  [{:3}] \"{}\" (parent={:3}, layer={}, flags=0x{:04X})",
+            i,
+            b.name,
+            b.parent_index,
+            b.deform_layer,
+            b.flags
+        );
     }
 
     // 表示枠はボーン挿入・ソート後（index確定後）
@@ -136,11 +183,29 @@ pub fn build_pmx_model_with_options(
     // 表示枠ログ
     log::debug!("--- 表示枠 ---");
     for (i, frame) in model.display_frames.iter().enumerate() {
-        let bone_count = frame.elements.iter().filter(|e| matches!(e, DisplayFrameElement::Bone(_))).count();
-        let morph_count = frame.elements.iter().filter(|e| matches!(e, DisplayFrameElement::Morph(_))).count();
-        let special = if frame.is_special != 0 { " [特殊]" } else { "" };
-        log::debug!("  [{:1}] \"{}\" ボーン={}, モーフ={}{}",
-            i, frame.name, bone_count, morph_count, special);
+        let bone_count = frame
+            .elements
+            .iter()
+            .filter(|e| matches!(e, DisplayFrameElement::Bone(_)))
+            .count();
+        let morph_count = frame
+            .elements
+            .iter()
+            .filter(|e| matches!(e, DisplayFrameElement::Morph(_)))
+            .count();
+        let special = if frame.is_special != 0 {
+            " [特殊]"
+        } else {
+            ""
+        };
+        log::debug!(
+            "  [{:1}] \"{}\" ボーン={}, モーフ={}{}",
+            i,
+            frame.name,
+            bone_count,
+            morph_count,
+            special
+        );
     }
 
     // 最終PMXモデル統計
@@ -171,75 +236,84 @@ fn find_bone_idx(bones: &[PmxBone], name: &str) -> Option<i32> {
 }
 
 fn apply_remap(idx: i32, remap: &[i32]) -> i32 {
-    if idx >= 0 && (idx as usize) < remap.len() { remap[idx as usize] } else { idx }
+    if idx >= 0 && (idx as usize) < remap.len() {
+        remap[idx as usize]
+    } else {
+        idx
+    }
 }
 
+/// モデル内の全ボーン参照（ボーン間参照・頂点ウェイト・剛体）を一括リマップする。
+///
+/// `f` はボーンインデックスを受け取り、新しいインデックスを返すクロージャ。
+/// 負値（-1 等）をスキップするかどうかはクロージャ側で制御する。
+fn remap_all_bone_indices(model: &mut PmxModel, f: impl Fn(i32) -> i32) {
+    for bone in &mut model.bones {
+        bone.parent_index = f(bone.parent_index);
+        if let BoneTail::BoneIndex(i) = &mut bone.tail {
+            *i = f(*i);
+        }
+        if let Some(ik) = &mut bone.ik {
+            ik.target_bone = f(ik.target_bone);
+            for link in &mut ik.links {
+                link.bone_index = f(link.bone_index);
+            }
+        }
+        if let Some(g) = &mut bone.grant {
+            g.parent_index = f(g.parent_index);
+        }
+    }
+    for vtx in &mut model.vertices {
+        match &mut vtx.weight {
+            PmxWeightType::Bdef1 { bone } => {
+                *bone = f(*bone);
+            }
+            PmxWeightType::Bdef2 { bone1, bone2, .. } => {
+                *bone1 = f(*bone1);
+                *bone2 = f(*bone2);
+            }
+            PmxWeightType::Bdef4 { bones, .. } => {
+                for b in bones.iter_mut() {
+                    *b = f(*b);
+                }
+            }
+        }
+    }
+    for rb in &mut model.rigid_bodies {
+        rb.bone_index = f(rb.bone_index);
+    }
+}
 
 /// 骨をインデックス from → to へ移動し、モデル内の全骨参照・頂点ウェイト・剛体を更新する
 fn move_bone_in_model(model: &mut PmxModel, from: usize, to: usize) {
-    if from == to { return; }
+    if from == to {
+        return;
+    }
     let n = model.bones.len();
     let mut remap: Vec<i32> = (0..n as i32).collect();
     if from < to {
-        for (i, slot) in remap[(from + 1)..=to].iter_mut().enumerate() { *slot = (from + i) as i32; }
+        for (i, slot) in remap[(from + 1)..=to].iter_mut().enumerate() {
+            *slot = (from + i) as i32;
+        }
         remap[from] = to as i32;
     } else {
-        for (i, slot) in remap[to..from].iter_mut().enumerate() { *slot = (to + i + 1) as i32; }
+        for (i, slot) in remap[to..from].iter_mut().enumerate() {
+            *slot = (to + i + 1) as i32;
+        }
         remap[from] = to as i32;
     }
 
-    for bone in &mut model.bones {
-        if bone.parent_index >= 0 { bone.parent_index = apply_remap(bone.parent_index, &remap); }
-        if let BoneTail::BoneIndex(i) = &mut bone.tail { *i = apply_remap(*i, &remap); }
-        if let Some(ik) = &mut bone.ik {
-            ik.target_bone = apply_remap(ik.target_bone, &remap);
-            for link in &mut ik.links { link.bone_index = apply_remap(link.bone_index, &remap); }
-        }
-        if let Some(g) = &mut bone.grant {
-            if g.parent_index >= 0 { g.parent_index = apply_remap(g.parent_index, &remap); }
-        }
-    }
-
-    for vtx in &mut model.vertices {
-        match &mut vtx.weight {
-            PmxWeightType::Bdef1 { bone } => { *bone = apply_remap(*bone, &remap); }
-            PmxWeightType::Bdef2 { bone1, bone2, .. } => {
-                *bone1 = apply_remap(*bone1, &remap);
-                *bone2 = apply_remap(*bone2, &remap);
-            }
-            PmxWeightType::Bdef4 { bones, .. } => {
-                for b in bones.iter_mut() { *b = apply_remap(*b, &remap); }
-            }
-        }
-    }
-
-    for rb in &mut model.rigid_bodies {
-        if rb.bone_index >= 0 { rb.bone_index = apply_remap(rb.bone_index, &remap); }
-    }
+    remap_all_bone_indices(model, |idx| apply_remap(idx, &remap));
 
     let bone = model.bones.remove(from);
     model.bones.insert(to, bone);
 }
 
-fn shift_weight(w: &mut PmxWeightType, offset: i32) {
-    match w {
-        PmxWeightType::Bdef1 { bone } => {
-            if *bone >= 0 { *bone += offset; }
-        }
-        PmxWeightType::Bdef2 { bone1, bone2, .. } => {
-            if *bone1 >= 0 { *bone1 += offset; }
-            if *bone2 >= 0 { *bone2 += offset; }
-        }
-        PmxWeightType::Bdef4 { bones, .. } => {
-            for b in bones.iter_mut() {
-                if *b >= 0 { *b += offset; }
-            }
-        }
-    }
-}
-
 fn insert_standard_bones(model: &mut PmxModel) -> Result<()> {
-    log::debug!("=== insert_standard_bones 開始 (既存ボーン数: {}) ===", model.bones.len());
+    log::debug!(
+        "=== insert_standard_bones 開始 (既存ボーン数: {}) ===",
+        model.bones.len()
+    );
 
     // ボーン名 → インデックスの逆引きマップ（O(n) 線形探索を O(1) に最適化）
     // 重複名がある場合は最初の出現を保持（position() と同じセマンティクス）
@@ -254,23 +328,36 @@ fn insert_standard_bones(model: &mut PmxModel) -> Result<()> {
     let mut bone_map = build_bone_map(&model.bones);
 
     // 1. シフト前に位置・インデックスを取得
-    let hips_y = bone_map.get("下半身").map(|&i| model.bones[i].position.y).unwrap_or(10.0);
+    let hips_y = bone_map
+        .get("下半身")
+        .map(|&i| model.bones[i].position.y)
+        .unwrap_or(10.0);
 
-    let l_ankle = bone_map.get("左足首").map(|&i| model.bones[i].position)
+    let l_ankle = bone_map
+        .get("左足首")
+        .map(|&i| model.bones[i].position)
         .unwrap_or(Vec3::new(-2.5, 2.0, 0.0));
-    let r_ankle = bone_map.get("右足首").map(|&i| model.bones[i].position)
+    let r_ankle = bone_map
+        .get("右足首")
+        .map(|&i| model.bones[i].position)
         .unwrap_or(Vec3::new(2.5, 2.0, 0.0));
 
-    let has_toes = bone_map.contains_key("左つま先")
-        && bone_map.contains_key("右つま先");
+    let has_toes = bone_map.contains_key("左つま先") && bone_map.contains_key("右つま先");
 
-    let l_toe = bone_map.get("左つま先").map(|&i| model.bones[i].position)
+    let l_toe = bone_map
+        .get("左つま先")
+        .map(|&i| model.bones[i].position)
         .unwrap_or(Vec3::new(l_ankle.x, l_ankle.y - 1.5, l_ankle.z + 3.0));
-    let r_toe = bone_map.get("右つま先").map(|&i| model.bones[i].position)
+    let r_toe = bone_map
+        .get("右つま先")
+        .map(|&i| model.bones[i].position)
         .unwrap_or(Vec3::new(r_ankle.x, r_ankle.y - 1.5, r_ankle.z + 3.0));
 
     // [B-2] 腰ボーン位置（準標準プラグイン準拠: lerp(下半身.y, 右足.y, 0.6)）
-    let r_leg_y = bone_map.get("右足").map(|&i| model.bones[i].position.y).unwrap_or(hips_y);
+    let r_leg_y = bone_map
+        .get("右足")
+        .map(|&i| model.bones[i].position.y)
+        .unwrap_or(hips_y);
     let waist_y = hips_y * 0.4 + r_leg_y * 0.6;
     let waist_z = hips_y * 0.02;
 
@@ -278,23 +365,34 @@ fn insert_standard_bones(model: &mut PmxModel) -> Result<()> {
     // IKボーンは末尾に追加（あにまさ/ミクVer2準拠）
     let n = 4i32;
 
-    log::debug!("[step1] \"下半身\".y={:.3}, \"腰\"y={:.3}(z={:.3}), つま先あり={}", hips_y, waist_y, waist_z, has_toes);
-    log::debug!("[step1] 足首L=({:.3},{:.3},{:.3}), 足首R=({:.3},{:.3},{:.3})",
-        l_ankle.x, l_ankle.y, l_ankle.z, r_ankle.x, r_ankle.y, r_ankle.z);
-    log::debug!("[step2] 標準ボーン追加数={} → 既存インデックスを+{}シフト", n, n);
+    log::debug!(
+        "[step1] \"下半身\".y={:.3}, \"腰\"y={:.3}(z={:.3}), つま先あり={}",
+        hips_y,
+        waist_y,
+        waist_z,
+        has_toes
+    );
+    log::debug!(
+        "[step1] 足首L=({:.3},{:.3},{:.3}), 足首R=({:.3},{:.3},{:.3})",
+        l_ankle.x,
+        l_ankle.y,
+        l_ankle.z,
+        r_ankle.x,
+        r_ankle.y,
+        r_ankle.z
+    );
+    log::debug!(
+        "[step2] 標準ボーン追加数={} → 既存インデックスを+{}シフト",
+        n,
+        n
+    );
 
-    // 2. 既存ボーンの全インデックスを +n シフト
-    for bone in &mut model.bones {
-        if bone.parent_index >= 0 { bone.parent_index += n; }
-        if let BoneTail::BoneIndex(i) = &mut bone.tail { *i += n; }
-        if let Some(ik) = &mut bone.ik {
-            ik.target_bone += n;
-            for link in &mut ik.links { link.bone_index += n; }
-        }
-        if let Some(g) = &mut bone.grant {
-            if g.parent_index >= 0 { g.parent_index += n; }
-        }
-    }
+    // 2,4,5. 既存ボーン・頂点ウェイト・剛体の全インデックスを +n シフト
+    remap_all_bone_indices(model, |idx| if idx >= 0 { idx + n } else { idx });
+    log::debug!(
+        "[step2,4,5] 全ボーン参照・頂点ウェイト・剛体bone_indexを +{} シフト",
+        n
+    );
 
     // 3. 下半身・上半身の親を腰(index 3)に付け替え
     log::debug!("[step3] \"下半身\"・\"上半身\" の親 → \"腰\"(idx=3)");
@@ -316,18 +414,6 @@ fn insert_standard_bones(model: &mut PmxModel) -> Result<()> {
             }
         }
     }
-
-    // 4. 頂点ウェイトを +n シフト
-    for vtx in &mut model.vertices {
-        shift_weight(&mut vtx.weight, n);
-    }
-    log::debug!("[step4] 頂点ウェイト {}個を +{} シフト", model.vertices.len(), n);
-
-    // 5. 剛体のbone_indexを +n シフト
-    for rb in &mut model.rigid_bodies {
-        if rb.bone_index >= 0 { rb.bone_index += n; }
-    }
-    log::debug!("[step5] 剛体bone_index {}個を +{} シフト", model.rigid_bodies.len(), n);
 
     // 6. 標準ボーン4本（全ての親・センター・グルーブ・腰）を構築
     // IKボーンは末尾に追加（step18）
@@ -390,8 +476,14 @@ fn insert_standard_bones(model: &mut PmxModel) -> Result<()> {
 
     log::debug!("[step6] 標準ボーン{}本を構築:", new_bones.len());
     for (i, b) in new_bones.iter().enumerate() {
-        log::debug!("  [{:2}] \"{}\" pos=({:.3},{:.3},{:.3})",
-            i, b.name, b.position.x, b.position.y, b.position.z);
+        log::debug!(
+            "  [{:2}] \"{}\" pos=({:.3},{:.3},{:.3})",
+            i,
+            b.name,
+            b.position.x,
+            b.position.y,
+            b.position.z
+        );
     }
 
     // 既存ボーンを後ろに連結して置き換え
@@ -434,13 +526,22 @@ fn insert_standard_bones(model: &mut PmxModel) -> Result<()> {
             }
             let old_pos = model.bones[li].position;
             let tail_abs = match model.bones[li].tail.clone() {
-                BoneTail::BoneIndex(ti) => {
-                    model.bones.get(ti as usize).map(|b| b.position).unwrap_or(old_pos)
-                }
+                BoneTail::BoneIndex(ti) => model
+                    .bones
+                    .get(ti as usize)
+                    .map(|b| b.position)
+                    .unwrap_or(old_pos),
                 BoneTail::Offset(off) => old_pos + off,
             };
-            log::debug!("[step10] \"下半身\"逆転: pos ({:.3},{:.3},{:.3}) ↔ tail ({:.3},{:.3},{:.3})",
-                old_pos.x, old_pos.y, old_pos.z, tail_abs.x, tail_abs.y, tail_abs.z);
+            log::debug!(
+                "[step10] \"下半身\"逆転: pos ({:.3},{:.3},{:.3}) ↔ tail ({:.3},{:.3},{:.3})",
+                old_pos.x,
+                old_pos.y,
+                old_pos.z,
+                tail_abs.x,
+                tail_abs.y,
+                tail_abs.z
+            );
             model.bones[li].position = tail_abs;
             model.bones[li].tail = BoneTail::Offset(old_pos - tail_abs);
             model.bones[li].flags &= !BONE_FLAG_TAIL_IS_BONE;
@@ -478,7 +579,16 @@ fn insert_standard_bones(model: &mut PmxModel) -> Result<()> {
     log::debug!("=== [step18] Dボーン群を末尾に整列（右→左） ===");
     {
         let d_end_order: &[&str] = if has_toes {
-            &["右足D", "右ひざD", "右足首D", "右足先EX", "左足D", "左ひざD", "左足首D", "左足先EX"]
+            &[
+                "右足D",
+                "右ひざD",
+                "右足首D",
+                "右足先EX",
+                "左足D",
+                "左ひざD",
+                "左足首D",
+                "左足先EX",
+            ]
         } else {
             &["右足D", "右ひざD", "左足D", "左ひざD"]
         };
@@ -498,8 +608,14 @@ fn insert_standard_bones(model: &mut PmxModel) -> Result<()> {
     // 最終ボーン一覧（全件）
     log::debug!("=== ボーン一覧 ({} 本) ===", model.bones.len());
     for (i, b) in model.bones.iter().enumerate() {
-        log::debug!("  [{:3}] \"{}\" (parent={:3}, layer={}, flags=0x{:04X})",
-            i, b.name, b.parent_index, b.deform_layer, b.flags);
+        log::debug!(
+            "  [{:3}] \"{}\" (parent={:3}, layer={}, flags=0x{:04X})",
+            i,
+            b.name,
+            b.parent_index,
+            b.deform_layer,
+            b.flags
+        );
     }
     log::debug!("=== insert_standard_bones 完了 ===");
     Ok(())
@@ -508,47 +624,16 @@ fn insert_standard_bones(model: &mut PmxModel) -> Result<()> {
 /// 位置 insert_at にボーンを挿入した後、insert_at 以降の全参照を +1 シフトする
 fn shift_indices_after_insert(model: &mut PmxModel, insert_at: usize) {
     let threshold = insert_at as i32;
-    for bone in &mut model.bones {
-        if bone.parent_index >= threshold { bone.parent_index += 1; }
-        if let BoneTail::BoneIndex(i) = &mut bone.tail {
-            if *i >= threshold { *i += 1; }
-        }
-        if let Some(ik) = &mut bone.ik {
-            if ik.target_bone >= threshold { ik.target_bone += 1; }
-            for link in &mut ik.links {
-                if link.bone_index >= threshold { link.bone_index += 1; }
-            }
-        }
-        if let Some(g) = &mut bone.grant {
-            if g.parent_index >= threshold { g.parent_index += 1; }
-        }
-    }
-    for vtx in &mut model.vertices {
-        match &mut vtx.weight {
-            PmxWeightType::Bdef1 { bone } => {
-                if *bone >= threshold { *bone += 1; }
-            }
-            PmxWeightType::Bdef2 { bone1, bone2, .. } => {
-                if *bone1 >= threshold { *bone1 += 1; }
-                if *bone2 >= threshold { *bone2 += 1; }
-            }
-            PmxWeightType::Bdef4 { bones, .. } => {
-                for b in bones.iter_mut() {
-                    if *b >= threshold { *b += 1; }
-                }
-            }
-        }
-    }
-    for rb in &mut model.rigid_bodies {
-        if rb.bone_index >= threshold { rb.bone_index += 1; }
-    }
+    remap_all_bone_indices(model, |idx| if idx >= threshold { idx + 1 } else { idx });
 }
 
 /// 頂点を parent→child 方向に投影した値 t を [0,1] で返す（0=親側, 1=子側）
 fn project_on_bone(vtx_pos: Vec3, start: Vec3, end: Vec3) -> f32 {
     let dir = end - start;
     let len_sq = dir.length_squared();
-    if len_sq < 1e-6 { return 0.5; }
+    if len_sq < 1e-6 {
+        return 0.5;
+    }
     ((vtx_pos - start).dot(dir) / len_sq).clamp(0.0, 1.0)
 }
 
@@ -562,11 +647,15 @@ fn redistribute_twist_weight(
 ) {
     for vtx in vertices.iter_mut() {
         let t = project_on_bone(vtx.position, parent_pos, child_pos);
-        if t <= 0.01 { continue; }
+        if t <= 0.01 {
+            continue;
+        }
 
         match &mut vtx.weight {
             PmxWeightType::Bdef1 { bone } => {
-                if *bone != arm_idx { continue; }
+                if *bone != arm_idx {
+                    continue;
+                }
                 // Bdef1{arm} → Bdef2{arm:1-t, twist:t}
                 vtx.weight = PmxWeightType::Bdef2 {
                     bone1: arm_idx,
@@ -574,7 +663,11 @@ fn redistribute_twist_weight(
                     weight1: 1.0 - t,
                 };
             }
-            PmxWeightType::Bdef2 { bone1, bone2, weight1 } => {
+            PmxWeightType::Bdef2 {
+                bone1,
+                bone2,
+                weight1,
+            } => {
                 let (w_arm, other_bone, w_other) = if *bone1 == arm_idx {
                     (*weight1, *bone2, 1.0 - *weight1)
                 } else if *bone2 == arm_idx {
@@ -589,11 +682,17 @@ fn redistribute_twist_weight(
                 };
             }
             PmxWeightType::Bdef4 { bones, weights } => {
-                let Some(arm_slot) = bones.iter().position(|&b| b == arm_idx) else { continue };
+                let Some(arm_slot) = bones.iter().position(|&b| b == arm_idx) else {
+                    continue;
+                };
                 let w = weights[arm_slot];
-                if w < 0.001 { continue; }
+                if w < 0.001 {
+                    continue;
+                }
                 // 空きスロット = bone==-1 または weight≈0（arm_slot除く）
-                let Some(empty) = (0..4).find(|&i| i != arm_slot && (bones[i] == -1 || weights[i] < 1e-6)) else {
+                let Some(empty) =
+                    (0..4).find(|&i| i != arm_slot && (bones[i] == -1 || weights[i] < 1e-6))
+                else {
                     continue; // 4本全使用 → スキップ
                 };
                 weights[arm_slot] = w * (1.0 - t);
@@ -606,12 +705,19 @@ fn redistribute_twist_weight(
 
 /// [step11] 腰キャンセルボーン（右・左）を追加し、右足/左足の直前に配置する
 fn add_waist_cancel_bones(model: &mut PmxModel) -> Result<()> {
-    let waist_idx = model.bones.iter().position(|b| b.name == "腰")
+    let waist_idx = model
+        .bones
+        .iter()
+        .position(|b| b.name == "腰")
         .map(|i| i as i32);
-    let r_leg_info = model.bones.iter()
+    let r_leg_info = model
+        .bones
+        .iter()
         .find(|b| b.name == "右足")
         .map(|b| (b.position, b.parent_index));
-    let l_leg_info = model.bones.iter()
+    let l_leg_info = model
+        .bones
+        .iter()
         .find(|b| b.name == "左足")
         .map(|b| (b.position, b.parent_index));
 
@@ -620,8 +726,12 @@ fn add_waist_cancel_bones(model: &mut PmxModel) -> Result<()> {
     {
         let cancel_flags = BONE_FLAG_ROTATABLE | BONE_FLAG_ROTATION_GRANT;
 
-        log::debug!("[step11] \"腰キャンセル右\" 追加 pos=({:.3},{:.3},{:.3})",
-            r_pos.x, r_pos.y, r_pos.z);
+        log::debug!(
+            "[step11] \"腰キャンセル右\" 追加 pos=({:.3},{:.3},{:.3})",
+            r_pos.x,
+            r_pos.y,
+            r_pos.z
+        );
         // 腰キャンセル右を末尾に追加し、右足の直前へ移動
         let r_cancel_at = model.bones.len();
         model.bones.push(PmxBone {
@@ -633,22 +743,40 @@ fn add_waist_cancel_bones(model: &mut PmxModel) -> Result<()> {
             flags: cancel_flags,
             tail: BoneTail::Offset(Vec3::ZERO),
             ik: None,
-            grant: Some(PmxGrant { parent_index: waist_idx, ratio: -1.0 }),
+            grant: Some(PmxGrant {
+                parent_index: waist_idx,
+                ratio: -1.0,
+            }),
         });
         if let Some(b) = model.bones.iter_mut().find(|b| b.name == "右足") {
             b.parent_index = r_cancel_at as i32;
         }
-        let r_leg_at = model.bones.iter().position(|b| b.name == "右足")
+        let r_leg_at = model
+            .bones
+            .iter()
+            .position(|b| b.name == "右足")
             .ok_or_else(|| anyhow::anyhow!("ボーン「右足」が見つかりません"))?;
         move_bone_in_model(model, r_cancel_at, r_leg_at);
 
-        log::debug!("[step11] \"腰キャンセル左\" 追加 pos=({:.3},{:.3},{:.3})",
-            l_pos.x, l_pos.y, l_pos.z);
+        log::debug!(
+            "[step11] \"腰キャンセル左\" 追加 pos=({:.3},{:.3},{:.3})",
+            l_pos.x,
+            l_pos.y,
+            l_pos.z
+        );
         // 腰キャンセル左を末尾に追加し、左足の直前へ移動（右移動後のindexで）
-        let waist_idx_now = model.bones.iter().position(|b| b.name == "腰")
-            .map(|i| i as i32).unwrap_or(waist_idx);
-        let l_parent_now = model.bones.iter()
-            .find(|b| b.name == "左足").map(|b| b.parent_index).unwrap_or(l_parent);
+        let waist_idx_now = model
+            .bones
+            .iter()
+            .position(|b| b.name == "腰")
+            .map(|i| i as i32)
+            .unwrap_or(waist_idx);
+        let l_parent_now = model
+            .bones
+            .iter()
+            .find(|b| b.name == "左足")
+            .map(|b| b.parent_index)
+            .unwrap_or(l_parent);
         let l_cancel_at = model.bones.len();
         model.bones.push(PmxBone {
             name: "腰キャンセル左".to_string(),
@@ -659,12 +787,18 @@ fn add_waist_cancel_bones(model: &mut PmxModel) -> Result<()> {
             flags: cancel_flags,
             tail: BoneTail::Offset(Vec3::ZERO),
             ik: None,
-            grant: Some(PmxGrant { parent_index: waist_idx_now, ratio: -1.0 }),
+            grant: Some(PmxGrant {
+                parent_index: waist_idx_now,
+                ratio: -1.0,
+            }),
         });
         if let Some(b) = model.bones.iter_mut().find(|b| b.name == "左足") {
             b.parent_index = l_cancel_at as i32;
         }
-        let l_leg_at = model.bones.iter().position(|b| b.name == "左足")
+        let l_leg_at = model
+            .bones
+            .iter()
+            .position(|b| b.name == "左足")
             .ok_or_else(|| anyhow::anyhow!("ボーン「左足」が見つかりません"))?;
         move_bone_in_model(model, l_cancel_at, l_leg_at);
     }
@@ -681,24 +815,26 @@ fn add_d_and_toe_ex_bones(model: &mut PmxModel, has_toes: bool) {
     {
         let d_pairs: &[(&str, &str, &str)] = if has_toes {
             &[
-                ("左足",   "左足D",   "leg_LD"),
+                ("左足", "左足D", "leg_LD"),
                 ("左ひざ", "左ひざD", "knee_LD"),
-                ("右足",   "右足D",   "leg_RD"),
+                ("右足", "右足D", "leg_RD"),
                 ("右ひざ", "右ひざD", "knee_RD"),
                 ("左足首", "左足首D", "ankle_LD"),
                 ("右足首", "右足首D", "ankle_RD"),
             ]
         } else {
             &[
-                ("左足",   "左足D",   "leg_LD"),
+                ("左足", "左足D", "leg_LD"),
                 ("左ひざ", "左ひざD", "knee_LD"),
-                ("右足",   "右足D",   "leg_RD"),
+                ("右足", "右足D", "leg_RD"),
                 ("右ひざ", "右ひざD", "knee_RD"),
             ]
         };
 
         for &(src_name, d_name, d_en) in d_pairs {
-            let Some(src_idx) = find_bone_idx(&model.bones, src_name) else { continue; };
+            let Some(src_idx) = find_bone_idx(&model.bones, src_name) else {
+                continue;
+            };
             let src_pos = model.bones[src_idx as usize].position;
             let src_parent = model.bones[src_idx as usize].parent_index;
 
@@ -711,8 +847,15 @@ fn add_d_and_toe_ex_bones(model: &mut PmxModel, has_toes: bool) {
                 src_parent
             };
 
-            log::debug!("[step12] \"{}\"追加 pos=({:.3},{:.3},{:.3}) grant←\"{}\"(idx={})",
-                d_name, src_pos.x, src_pos.y, src_pos.z, src_name, src_idx);
+            log::debug!(
+                "[step12] \"{}\"追加 pos=({:.3},{:.3},{:.3}) grant←\"{}\"(idx={})",
+                d_name,
+                src_pos.x,
+                src_pos.y,
+                src_pos.z,
+                src_name,
+                src_idx
+            );
             // D補助を末尾に追加（step17で末尾に整列）
             model.bones.push(PmxBone {
                 name: d_name.to_string(),
@@ -723,7 +866,10 @@ fn add_d_and_toe_ex_bones(model: &mut PmxModel, has_toes: bool) {
                 flags: BONE_FLAG_ROTATABLE | BONE_FLAG_ROTATION_GRANT,
                 tail: BoneTail::Offset(Vec3::ZERO),
                 ik: None,
-                grant: Some(PmxGrant { parent_index: src_idx, ratio: 1.0 }),
+                grant: Some(PmxGrant {
+                    parent_index: src_idx,
+                    ratio: 1.0,
+                }),
             });
         }
     }
@@ -736,10 +882,19 @@ fn add_d_and_toe_ex_bones(model: &mut PmxModel, has_toes: bool) {
             ("左足先EX", "ex toe_L", "左足首D"),
             ("右足先EX", "ex toe_R", "右足首D"),
         ] {
-            let Some(parent_idx) = find_bone_idx(&model.bones, parent_d) else { continue };
+            let Some(parent_idx) = find_bone_idx(&model.bones, parent_d) else {
+                continue;
+            };
             let pos = model.bones[parent_idx as usize].position;
-            log::debug!("[step13] \"{}\"追加 pos=({:.3},{:.3},{:.3}) parent=\"{}\"(idx={})",
-                ex_name, pos.x, pos.y, pos.z, parent_d, parent_idx);
+            log::debug!(
+                "[step13] \"{}\"追加 pos=({:.3},{:.3},{:.3}) parent=\"{}\"(idx={})",
+                ex_name,
+                pos.x,
+                pos.y,
+                pos.z,
+                parent_d,
+                parent_idx
+            );
 
             model.bones.push(PmxBone {
                 name: ex_name.to_string(),
@@ -761,31 +916,48 @@ fn add_d_and_toe_ex_bones(model: &mut PmxModel, has_toes: bool) {
 /// 変形階層を子孫へ再帰的に伝播する
 fn reparent_d_bone_children(model: &mut PmxModel) {
     let remap_pairs: &[(&str, &str)] = &[
-        ("左足",   "左足D"),
+        ("左足", "左足D"),
         ("左ひざ", "左ひざD"),
         ("左足首", "左足首D"),
-        ("右足",   "右足D"),
+        ("右足", "右足D"),
         ("右ひざ", "右ひざD"),
         ("右足首", "右足首D"),
     ];
 
     let exclude: &[&str] = &[
-        "左足", "左ひざ", "左足首", "左つま先",
-        "右足", "右ひざ", "右足首", "右つま先",
-        "左足D", "左ひざD", "左足首D",
-        "右足D", "右ひざD", "右足首D",
-        "左足先EX", "右足先EX",
+        "左足",
+        "左ひざ",
+        "左足首",
+        "左つま先",
+        "右足",
+        "右ひざ",
+        "右足首",
+        "右つま先",
+        "左足D",
+        "左ひざD",
+        "左足首D",
+        "右足D",
+        "右ひざD",
+        "右足首D",
+        "左足先EX",
+        "右足先EX",
     ];
 
     // 変形階層が実際に変化したボーンのインデックスを記録
     let mut changed: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
     for &(src_name, d_name) in remap_pairs {
-        let Some(src_idx) = find_bone_idx(&model.bones, src_name) else { continue };
-        let Some(d_idx)   = find_bone_idx(&model.bones, d_name)   else { continue };
+        let Some(src_idx) = find_bone_idx(&model.bones, src_name) else {
+            continue;
+        };
+        let Some(d_idx) = find_bone_idx(&model.bones, d_name) else {
+            continue;
+        };
 
         for (i, bone) in model.bones.iter_mut().enumerate() {
-            if exclude.contains(&bone.name.as_str()) { continue; }
+            if exclude.contains(&bone.name.as_str()) {
+                continue;
+            }
             if bone.parent_index == src_idx {
                 bone.parent_index = d_idx;
                 let old_layer = bone.deform_layer;
@@ -793,8 +965,16 @@ fn reparent_d_bone_children(model: &mut PmxModel) {
                 if new_layer != old_layer {
                     bone.deform_layer = new_layer;
                     changed.insert(i);
-                    log::debug!("[step14] \"{}\" 親変更: \"{}\"(idx={}) → \"{}\"(idx={}), layer {} → {}",
-                        bone.name, src_name, src_idx, d_name, d_idx, old_layer, new_layer);
+                    log::debug!(
+                        "[step14] \"{}\" 親変更: \"{}\"(idx={}) → \"{}\"(idx={}), layer {} → {}",
+                        bone.name,
+                        src_name,
+                        src_idx,
+                        d_name,
+                        d_idx,
+                        old_layer,
+                        new_layer
+                    );
                 } else {
                     log::debug!("[step14] \"{}\" 親変更: \"{}\"(idx={}) → \"{}\"(idx={}), layer {} (変更なし)",
                         bone.name, src_name, src_idx, d_name, d_idx, bone.deform_layer);
@@ -808,7 +988,9 @@ fn reparent_d_bone_children(model: &mut PmxModel) {
         let mut any_updated = false;
         for i in 0..model.bones.len() {
             let parent_idx = model.bones[i].parent_index;
-            if parent_idx < 0 { continue; }
+            if parent_idx < 0 {
+                continue;
+            }
             if changed.contains(&(parent_idx as usize)) {
                 let parent_layer = model.bones[parent_idx as usize].deform_layer;
                 if model.bones[i].deform_layer < parent_layer {
@@ -818,12 +1000,19 @@ fn reparent_d_bone_children(model: &mut PmxModel) {
                     model.bones[i].deform_layer = parent_layer;
                     changed.insert(i);
                     any_updated = true;
-                    log::debug!("[step14] deform_layer伝播: \"{}\" {} → {}（親: \"{}\"）",
-                        bone_name, old_layer, parent_layer, parent_name);
+                    log::debug!(
+                        "[step14] deform_layer伝播: \"{}\" {} → {}（親: \"{}\"）",
+                        bone_name,
+                        old_layer,
+                        parent_layer,
+                        parent_name
+                    );
                 }
             }
         }
-        if !any_updated { break; }
+        if !any_updated {
+            break;
+        }
     }
 }
 
@@ -838,20 +1027,23 @@ fn add_ik_bones(
 ) {
     log::debug!("=== [step17] IKボーン群を末尾に追加 ===");
 
-    let ik_bone_flags = BONE_FLAG_ROTATABLE | BONE_FLAG_VISIBLE | BONE_FLAG_OPERABLE
-        | BONE_FLAG_IK | BONE_FLAG_TRANSLATABLE;
-    let trans_flags_ik = BONE_FLAG_ROTATABLE | BONE_FLAG_VISIBLE | BONE_FLAG_OPERABLE
+    let ik_bone_flags = BONE_FLAG_ROTATABLE
+        | BONE_FLAG_VISIBLE
+        | BONE_FLAG_OPERABLE
+        | BONE_FLAG_IK
         | BONE_FLAG_TRANSLATABLE;
+    let trans_flags_ik =
+        BONE_FLAG_ROTATABLE | BONE_FLAG_VISIBLE | BONE_FLAG_OPERABLE | BONE_FLAG_TRANSLATABLE;
 
     // 全移動完了後の現在インデックスを取得
     let l_ankle_fi = find_bone_idx(&model.bones, "左足首");
     let r_ankle_fi = find_bone_idx(&model.bones, "右足首");
-    let l_knee_fi  = find_bone_idx(&model.bones, "左ひざ");
-    let r_knee_fi  = find_bone_idx(&model.bones, "右ひざ");
-    let l_leg_fi   = find_bone_idx(&model.bones, "左足");
-    let r_leg_fi   = find_bone_idx(&model.bones, "右足");
-    let l_toe_fi   = find_bone_idx(&model.bones, "左つま先");
-    let r_toe_fi   = find_bone_idx(&model.bones, "右つま先");
+    let l_knee_fi = find_bone_idx(&model.bones, "左ひざ");
+    let r_knee_fi = find_bone_idx(&model.bones, "右ひざ");
+    let l_leg_fi = find_bone_idx(&model.bones, "左足");
+    let r_leg_fi = find_bone_idx(&model.bones, "右足");
+    let l_toe_fi = find_bone_idx(&model.bones, "左つま先");
+    let r_toe_fi = find_bone_idx(&model.bones, "右つま先");
 
     // 追加ボーンの配置インデックスを事前計算
     // 左→右順: 左足IK親(+0), 左足ＩＫ(+1), 右足IK親(+2), 右足ＩＫ(+3)
@@ -859,16 +1051,16 @@ fn add_ik_bones(
     // ＩＫ先ボーン: 左足ＩＫ先, 右足ＩＫ先 [, 左つま先ＩＫ先, 右つま先ＩＫ先]
     let base = model.bones.len() as i32;
     let l_ik_parent_idx = base;
-    let l_ik_idx        = base + 1;
+    let l_ik_idx = base + 1;
     let r_ik_parent_idx = base + 2;
-    let r_ik_idx        = base + 3;
+    let r_ik_idx = base + 3;
     let (l_toe_ik_idx, r_toe_ik_idx, ik_tail_base) = if has_toes {
         (base + 4, base + 5, base + 6)
     } else {
         (-1, -1, base + 4)
     };
-    let l_ik_tail_idx     = ik_tail_base;
-    let r_ik_tail_idx     = ik_tail_base + 1;
+    let l_ik_tail_idx = ik_tail_base;
+    let r_ik_tail_idx = ik_tail_base + 1;
     let l_toe_ik_tail_idx = ik_tail_base + 2;
     let r_toe_ik_tail_idx = ik_tail_base + 3;
 
@@ -876,131 +1068,232 @@ fn add_ik_bones(
     let l_leg_ik = l_ankle_fi.map(|target| {
         let mut links = Vec::new();
         if let Some(ki) = l_knee_fi {
-            links.push(IkLink { bone_index: ki, angle_limit: true,
-                limit_min: Vec3::new(-PI, 0.0, 0.0), limit_max: Vec3::new(-0.005, 0.0, 0.0) });
+            links.push(IkLink {
+                bone_index: ki,
+                angle_limit: true,
+                limit_min: Vec3::new(-PI, 0.0, 0.0),
+                limit_max: Vec3::new(-0.005, 0.0, 0.0),
+            });
         }
         if let Some(li) = l_leg_fi {
-            links.push(IkLink { bone_index: li, angle_limit: false,
-                limit_min: Vec3::ZERO, limit_max: Vec3::ZERO });
+            links.push(IkLink {
+                bone_index: li,
+                angle_limit: false,
+                limit_min: Vec3::ZERO,
+                limit_max: Vec3::ZERO,
+            });
         }
-        PmxIk { target_bone: target, loop_count: 40, limit_angle: 2.0, links }
+        PmxIk {
+            target_bone: target,
+            loop_count: 40,
+            limit_angle: 2.0,
+            links,
+        }
     });
     let r_leg_ik = r_ankle_fi.map(|target| {
         let mut links = Vec::new();
         if let Some(ki) = r_knee_fi {
-            links.push(IkLink { bone_index: ki, angle_limit: true,
-                limit_min: Vec3::new(-PI, 0.0, 0.0), limit_max: Vec3::new(-0.005, 0.0, 0.0) });
+            links.push(IkLink {
+                bone_index: ki,
+                angle_limit: true,
+                limit_min: Vec3::new(-PI, 0.0, 0.0),
+                limit_max: Vec3::new(-0.005, 0.0, 0.0),
+            });
         }
         if let Some(li) = r_leg_fi {
-            links.push(IkLink { bone_index: li, angle_limit: false,
-                limit_min: Vec3::ZERO, limit_max: Vec3::ZERO });
+            links.push(IkLink {
+                bone_index: li,
+                angle_limit: false,
+                limit_min: Vec3::ZERO,
+                limit_max: Vec3::ZERO,
+            });
         }
-        PmxIk { target_bone: target, loop_count: 40, limit_angle: 2.0, links }
+        PmxIk {
+            target_bone: target,
+            loop_count: 40,
+            limit_angle: 2.0,
+            links,
+        }
     });
     let l_toe_ik = if has_toes {
         l_toe_fi.map(|target| {
             let mut links = Vec::new();
             if let Some(ai) = l_ankle_fi {
-                links.push(IkLink { bone_index: ai, angle_limit: false,
-                    limit_min: Vec3::ZERO, limit_max: Vec3::ZERO });
+                links.push(IkLink {
+                    bone_index: ai,
+                    angle_limit: false,
+                    limit_min: Vec3::ZERO,
+                    limit_max: Vec3::ZERO,
+                });
             }
-            PmxIk { target_bone: target, loop_count: 3, limit_angle: 4.0, links }
+            PmxIk {
+                target_bone: target,
+                loop_count: 3,
+                limit_angle: 4.0,
+                links,
+            }
         })
-    } else { None };
+    } else {
+        None
+    };
     let r_toe_ik = if has_toes {
         r_toe_fi.map(|target| {
             let mut links = Vec::new();
             if let Some(ai) = r_ankle_fi {
-                links.push(IkLink { bone_index: ai, angle_limit: false,
-                    limit_min: Vec3::ZERO, limit_max: Vec3::ZERO });
+                links.push(IkLink {
+                    bone_index: ai,
+                    angle_limit: false,
+                    limit_min: Vec3::ZERO,
+                    limit_max: Vec3::ZERO,
+                });
             }
-            PmxIk { target_bone: target, loop_count: 3, limit_angle: 4.0, links }
+            PmxIk {
+                target_bone: target,
+                loop_count: 3,
+                limit_angle: 4.0,
+                links,
+            }
         })
-    } else { None };
+    } else {
+        None
+    };
 
     // 左足IK親
     model.bones.push(PmxBone {
-        name: "左足IK親".to_string(), name_en: "leg IK parent_L".to_string(),
-        position: Vec3::new(l_ankle.x, 0.0, 0.0), parent_index: 0,
-        deform_layer: 0, flags: trans_flags_ik | BONE_FLAG_TAIL_IS_BONE,
-        tail: BoneTail::BoneIndex(l_ik_idx), ik: None, grant: None,
+        name: "左足IK親".to_string(),
+        name_en: "leg IK parent_L".to_string(),
+        position: Vec3::new(l_ankle.x, 0.0, 0.0),
+        parent_index: 0,
+        deform_layer: 0,
+        flags: trans_flags_ik | BONE_FLAG_TAIL_IS_BONE,
+        tail: BoneTail::BoneIndex(l_ik_idx),
+        ik: None,
+        grant: None,
     });
     // 左足ＩＫ（tail → 左足ＩＫ先）
     model.bones.push(PmxBone {
-        name: "左足ＩＫ".to_string(), name_en: "leg IK_L".to_string(),
-        position: l_ankle, parent_index: l_ik_parent_idx,
-        deform_layer: 1, flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
-        tail: BoneTail::BoneIndex(l_ik_tail_idx), ik: l_leg_ik, grant: None,
+        name: "左足ＩＫ".to_string(),
+        name_en: "leg IK_L".to_string(),
+        position: l_ankle,
+        parent_index: l_ik_parent_idx,
+        deform_layer: 1,
+        flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
+        tail: BoneTail::BoneIndex(l_ik_tail_idx),
+        ik: l_leg_ik,
+        grant: None,
     });
     // 右足IK親
     model.bones.push(PmxBone {
-        name: "右足IK親".to_string(), name_en: "leg IK parent_R".to_string(),
-        position: Vec3::new(r_ankle.x, 0.0, 0.0), parent_index: 0,
-        deform_layer: 0, flags: trans_flags_ik | BONE_FLAG_TAIL_IS_BONE,
-        tail: BoneTail::BoneIndex(r_ik_idx), ik: None, grant: None,
+        name: "右足IK親".to_string(),
+        name_en: "leg IK parent_R".to_string(),
+        position: Vec3::new(r_ankle.x, 0.0, 0.0),
+        parent_index: 0,
+        deform_layer: 0,
+        flags: trans_flags_ik | BONE_FLAG_TAIL_IS_BONE,
+        tail: BoneTail::BoneIndex(r_ik_idx),
+        ik: None,
+        grant: None,
     });
     // 右足ＩＫ（tail → 右足ＩＫ先）
     model.bones.push(PmxBone {
-        name: "右足ＩＫ".to_string(), name_en: "leg IK_R".to_string(),
-        position: r_ankle, parent_index: r_ik_parent_idx,
-        deform_layer: 1, flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
-        tail: BoneTail::BoneIndex(r_ik_tail_idx), ik: r_leg_ik, grant: None,
+        name: "右足ＩＫ".to_string(),
+        name_en: "leg IK_R".to_string(),
+        position: r_ankle,
+        parent_index: r_ik_parent_idx,
+        deform_layer: 1,
+        flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
+        tail: BoneTail::BoneIndex(r_ik_tail_idx),
+        ik: r_leg_ik,
+        grant: None,
     });
 
     if has_toes {
         // 左つま先ＩＫ（tail → 左つま先ＩＫ先）
         model.bones.push(PmxBone {
-            name: "左つま先ＩＫ".to_string(), name_en: "toe IK_L".to_string(),
-            position: l_toe, parent_index: l_ik_idx,
-            deform_layer: 1, flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
-            tail: BoneTail::BoneIndex(l_toe_ik_tail_idx), ik: l_toe_ik, grant: None,
+            name: "左つま先ＩＫ".to_string(),
+            name_en: "toe IK_L".to_string(),
+            position: l_toe,
+            parent_index: l_ik_idx,
+            deform_layer: 1,
+            flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
+            tail: BoneTail::BoneIndex(l_toe_ik_tail_idx),
+            ik: l_toe_ik,
+            grant: None,
         });
         // 右つま先ＩＫ（tail → 右つま先ＩＫ先）
         model.bones.push(PmxBone {
-            name: "右つま先ＩＫ".to_string(), name_en: "toe IK_R".to_string(),
-            position: r_toe, parent_index: r_ik_idx,
-            deform_layer: 1, flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
-            tail: BoneTail::BoneIndex(r_toe_ik_tail_idx), ik: r_toe_ik, grant: None,
+            name: "右つま先ＩＫ".to_string(),
+            name_en: "toe IK_R".to_string(),
+            position: r_toe,
+            parent_index: r_ik_idx,
+            deform_layer: 1,
+            flags: ik_bone_flags | BONE_FLAG_TAIL_IS_BONE,
+            tail: BoneTail::BoneIndex(r_toe_ik_tail_idx),
+            ik: r_toe_ik,
+            grant: None,
         });
     }
 
     // ＩＫ先ボーン（表示用tail・非表示非操作）
     model.bones.push(PmxBone {
-        name: "左足ＩＫ先".to_string(), name_en: "leg IK tail_L".to_string(),
-        position: l_ankle + Vec3::new(0.0, 0.0, 1.0), parent_index: l_ik_idx,
-        deform_layer: 1, flags: 0,
-        tail: BoneTail::Offset(Vec3::ZERO), ik: None, grant: None,
+        name: "左足ＩＫ先".to_string(),
+        name_en: "leg IK tail_L".to_string(),
+        position: l_ankle + Vec3::new(0.0, 0.0, 1.0),
+        parent_index: l_ik_idx,
+        deform_layer: 1,
+        flags: 0,
+        tail: BoneTail::Offset(Vec3::ZERO),
+        ik: None,
+        grant: None,
     });
     model.bones.push(PmxBone {
-        name: "右足ＩＫ先".to_string(), name_en: "leg IK tail_R".to_string(),
-        position: r_ankle + Vec3::new(0.0, 0.0, 1.0), parent_index: r_ik_idx,
-        deform_layer: 1, flags: 0,
-        tail: BoneTail::Offset(Vec3::ZERO), ik: None, grant: None,
+        name: "右足ＩＫ先".to_string(),
+        name_en: "leg IK tail_R".to_string(),
+        position: r_ankle + Vec3::new(0.0, 0.0, 1.0),
+        parent_index: r_ik_idx,
+        deform_layer: 1,
+        flags: 0,
+        tail: BoneTail::Offset(Vec3::ZERO),
+        ik: None,
+        grant: None,
     });
     if has_toes {
         model.bones.push(PmxBone {
-            name: "左つま先ＩＫ先".to_string(), name_en: "toe IK tail_L".to_string(),
-            position: l_toe + Vec3::new(0.0, -1.0, 0.0), parent_index: l_toe_ik_idx,
-            deform_layer: 1, flags: 0,
-            tail: BoneTail::Offset(Vec3::ZERO), ik: None, grant: None,
+            name: "左つま先ＩＫ先".to_string(),
+            name_en: "toe IK tail_L".to_string(),
+            position: l_toe + Vec3::new(0.0, -1.0, 0.0),
+            parent_index: l_toe_ik_idx,
+            deform_layer: 1,
+            flags: 0,
+            tail: BoneTail::Offset(Vec3::ZERO),
+            ik: None,
+            grant: None,
         });
         model.bones.push(PmxBone {
-            name: "右つま先ＩＫ先".to_string(), name_en: "toe IK tail_R".to_string(),
-            position: r_toe + Vec3::new(0.0, -1.0, 0.0), parent_index: r_toe_ik_idx,
-            deform_layer: 1, flags: 0,
-            tail: BoneTail::Offset(Vec3::ZERO), ik: None, grant: None,
+            name: "右つま先ＩＫ先".to_string(),
+            name_en: "toe IK tail_R".to_string(),
+            position: r_toe + Vec3::new(0.0, -1.0, 0.0),
+            parent_index: r_toe_ik_idx,
+            deform_layer: 1,
+            flags: 0,
+            tail: BoneTail::Offset(Vec3::ZERO),
+            ik: None,
+            grant: None,
         });
     }
-    log::debug!("[step17] IK+ＩＫ先ボーン追加 → ボーン数: {}", model.bones.len());
+    log::debug!(
+        "[step17] IK+ＩＫ先ボーン追加 → ボーン数: {}",
+        model.bones.len()
+    );
 }
 
 /// 腕捩り・手捩りボーン（4本）を追加し、ウェイトを再配分する
 fn add_twist_bones(model: &mut PmxModel) {
     let pairs = [
-        ("右腕",   "右ひじ",  "右腕捩", "arm twist_R"),
-        ("左腕",   "左ひじ",  "左腕捩", "arm twist_L"),
-        ("右ひじ", "右手首",  "右手捩", "wrist twist_R"),
-        ("左ひじ", "左手首",  "左手捩", "wrist twist_L"),
+        ("右腕", "右ひじ", "右腕捩", "arm twist_R"),
+        ("左腕", "左ひじ", "左腕捩", "arm twist_L"),
+        ("右ひじ", "右手首", "右手捩", "wrist twist_R"),
+        ("左ひじ", "左手首", "左手捩", "wrist twist_L"),
     ];
     let base_flags = BONE_FLAG_ROTATABLE | BONE_FLAG_VISIBLE | BONE_FLAG_OPERABLE;
 
@@ -1014,15 +1307,22 @@ fn add_twist_bones(model: &mut PmxModel) {
             log::warn!("[step15] \"{}\" が見つからないためスキップ", child_name);
             continue;
         };
-        let parent_pos   = model.bones[parent_idx as usize].position;
-        let child_pos    = model.bones[child_idx  as usize].position;
+        let parent_pos = model.bones[parent_idx as usize].position;
+        let child_pos = model.bones[child_idx as usize].position;
         let parent_layer = model.bones[parent_idx as usize].deform_layer;
 
         // 2. 捩りボーン位置 = 中間点
         let twist_pos = parent_pos.lerp(child_pos, 0.5);
 
-        log::debug!("[step15] \"{}\" 追加 pos=({:.3},{:.3},{:.3}) parent=\"{}\"({})",
-            twist_jp, twist_pos.x, twist_pos.y, twist_pos.z, parent_name, parent_idx);
+        log::debug!(
+            "[step15] \"{}\" 追加 pos=({:.3},{:.3},{:.3}) parent=\"{}\"({})",
+            twist_jp,
+            twist_pos.x,
+            twist_pos.y,
+            twist_pos.z,
+            parent_name,
+            parent_idx
+        );
 
         // 3. 捩りボーン生成（親=parent_idx、子なし・grant なし）
         let twist_bone = PmxBone {
@@ -1052,8 +1352,8 @@ fn add_twist_bones(model: &mut PmxModel) {
             &mut model.vertices,
             parent_pos,
             child_pos,
-            parent_idx,         // arm_idx: シフト後も変わらず parent_idx
-            insert_at as i32,   // twist_idx
+            parent_idx,       // arm_idx: シフト後も変わらず parent_idx
+            insert_at as i32, // twist_idx
         );
     }
 }
@@ -1063,8 +1363,22 @@ fn add_twist_bones(model: &mut PmxModel) {
 /// 肩C: 腕の親になり、肩Pの回転を-1倍で打ち消すgrantボーン
 fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
     let pairs = [
-        ("右肩", "右腕", "右肩P", "shoulderP_R", "右肩C", "shoulderC_R"),
-        ("左肩", "左腕", "左肩P", "shoulderP_L", "左肩C", "shoulderC_L"),
+        (
+            "右肩",
+            "右腕",
+            "右肩P",
+            "shoulderP_R",
+            "右肩C",
+            "shoulderC_R",
+        ),
+        (
+            "左肩",
+            "左腕",
+            "左肩P",
+            "shoulderP_L",
+            "左肩C",
+            "shoulderC_L",
+        ),
     ];
 
     for (shoulder_name, arm_name, p_jp, p_en, c_jp, c_en) in pairs {
@@ -1101,12 +1415,21 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
         model.bones[shoulder_idx as usize].parent_index = p_at as i32;
 
         // 肩Pを肩の直前に移動
-        let shoulder_now = model.bones.iter().position(|b| b.name == shoulder_name)
+        let shoulder_now = model
+            .bones
+            .iter()
+            .position(|b| b.name == shoulder_name)
             .ok_or_else(|| anyhow::anyhow!("ボーン「{}」が見つかりません", shoulder_name))?;
         move_bone_in_model(model, p_at, shoulder_now);
 
-        log::debug!("[step16] \"{}\" 追加 pos=({:.3},{:.3},{:.3}) parent={}",
-            p_jp, shoulder_pos.x, shoulder_pos.y, shoulder_pos.z, shoulder_original_parent);
+        log::debug!(
+            "[step16] \"{}\" 追加 pos=({:.3},{:.3},{:.3}) parent={}",
+            p_jp,
+            shoulder_pos.x,
+            shoulder_pos.y,
+            shoulder_pos.z,
+            shoulder_original_parent
+        );
 
         // 3. 肩Cを末尾に追加 → 腕の直前に移動
         //    肩Cのgrant = 肩P × (-1.0)
@@ -1126,7 +1449,10 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
             flags: c_flags,
             tail: BoneTail::Offset(Vec3::ZERO),
             ik: None,
-            grant: Some(PmxGrant { parent_index: p_idx_now, ratio: -1.0 }),
+            grant: Some(PmxGrant {
+                parent_index: p_idx_now,
+                ratio: -1.0,
+            }),
         });
 
         // 腕の親を肩Cに変更
@@ -1135,19 +1461,32 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
         model.bones[arm_idx_now as usize].parent_index = c_at as i32;
 
         // 肩Cを腕の直前に移動
-        let arm_now = model.bones.iter().position(|b| b.name == arm_name)
+        let arm_now = model
+            .bones
+            .iter()
+            .position(|b| b.name == arm_name)
             .ok_or_else(|| anyhow::anyhow!("ボーン「{}」が見つかりません", arm_name))?;
         move_bone_in_model(model, c_at, arm_now);
 
-        log::debug!("[step16] \"{}\" 追加 pos=({:.3},{:.3},{:.3}) grant←\"{}\" × -1.0",
-            c_jp, arm_pos.x, arm_pos.y, arm_pos.z, p_jp);
+        log::debug!(
+            "[step16] \"{}\" 追加 pos=({:.3},{:.3},{:.3}) grant←\"{}\" × -1.0",
+            c_jp,
+            arm_pos.x,
+            arm_pos.y,
+            arm_pos.z,
+            p_jp
+        );
     }
     Ok(())
 }
 
 fn build_bones(ir: &IrModel) -> Vec<PmxBone> {
     let mut pmx_bones = Vec::with_capacity(ir.bones.len());
-    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if ir.source_format.is_vrm0() { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
+    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if ir.source_format.is_vrm0() {
+        gltf_pos_to_pmx_v0
+    } else {
+        gltf_pos_to_pmx
+    };
 
     for bone in ir.bones.iter() {
         let pmx_pos = pos_fn(bone.position);
@@ -1194,17 +1533,32 @@ fn build_bones(ir: &IrModel) -> Vec<PmxBone> {
         });
     }
 
-    log::debug!("build_bones: VRM {} 本 → PMX {} 本", ir.bones.len(), pmx_bones.len());
+    log::debug!(
+        "build_bones: VRM {} 本 → PMX {} 本",
+        ir.bones.len(),
+        pmx_bones.len()
+    );
     pmx_bones
 }
 
-fn build_vertices_and_faces(ir: &IrModel, use_vrm0_coords: bool) -> (Vec<PmxVertex>, Vec<[u32; 3]>, Vec<u32>) {
+fn build_vertices_and_faces(
+    ir: &IrModel,
+    use_vrm0_coords: bool,
+) -> (Vec<PmxVertex>, Vec<[u32; 3]>, Vec<u32>) {
     let total_verts: usize = ir.meshes.iter().map(|m| m.vertices.len()).sum();
     let total_faces: usize = ir.meshes.iter().map(|m| m.indices.len() / 3).sum();
     let mut all_vertices: Vec<PmxVertex> = Vec::with_capacity(total_verts);
     let mut all_faces: Vec<[u32; 3]> = Vec::with_capacity(total_faces);
-    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if use_vrm0_coords { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
-    let nrm_fn: fn(glam::Vec3) -> glam::Vec3 = if use_vrm0_coords { gltf_normal_to_pmx_v0 } else { gltf_normal_to_pmx };
+    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if use_vrm0_coords {
+        gltf_pos_to_pmx_v0
+    } else {
+        gltf_pos_to_pmx
+    };
+    let nrm_fn: fn(glam::Vec3) -> glam::Vec3 = if use_vrm0_coords {
+        gltf_normal_to_pmx_v0
+    } else {
+        gltf_normal_to_pmx
+    };
 
     let mat_count = ir.materials.len().max(1);
     let mut mat_face_counts = vec![0u32; mat_count];
@@ -1218,7 +1572,7 @@ fn build_vertices_and_faces(ir: &IrModel, use_vrm0_coords: bool) -> (Vec<PmxVert
         for vtx in &mesh.vertices {
             let pmx_pos = pos_fn(vtx.position);
             let pmx_normal = nrm_fn(vtx.normal);
-            let weight = build_weight(&vtx.weights);
+            let weight = build_weight(vtx.active_weights());
 
             all_vertices.push(PmxVertex {
                 position: pmx_pos,
@@ -1235,7 +1589,9 @@ fn build_vertices_and_faces(ir: &IrModel, use_vrm0_coords: bool) -> (Vec<PmxVert
     // 両バージョンとも行列式 -1 → b,c を swap して巻き順を反転
     for (mat_idx, face_count_slot) in mat_face_counts.iter_mut().enumerate() {
         for (mesh_i, mesh) in ir.meshes.iter().enumerate() {
-            if mesh.material_index != mat_idx { continue; }
+            if mesh.material_index != mat_idx {
+                continue;
+            }
             let vertex_offset = mesh_vertex_start[mesh_i];
             let indices = &mesh.indices;
             let face_count = indices.len() / 3;
@@ -1260,7 +1616,13 @@ fn build_vertices_and_faces(ir: &IrModel, use_vrm0_coords: bool) -> (Vec<PmxVert
             PmxWeightType::Bdef4 { .. } => bdef4 += 1,
         }
     }
-    log::info!("頂点: {}個 (BDEF1={}, BDEF2={}, BDEF4={})", all_vertices.len(), bdef1, bdef2, bdef4);
+    log::info!(
+        "頂点: {}個 (BDEF1={}, BDEF2={}, BDEF4={})",
+        all_vertices.len(),
+        bdef1,
+        bdef2,
+        bdef4
+    );
     log::info!("面: {}個", all_faces.len());
 
     (all_vertices, all_faces, mat_face_counts)
@@ -1277,85 +1639,145 @@ fn build_weight(weights: &[(usize, f32)]) -> PmxWeightType {
             bone2: weights[1].0 as i32,
             weight1: weights[0].1,
         },
-        _ => {
-            // 上位4ウェイト
-            let mut sorted = weights.to_vec();
-            sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            sorted.truncate(4);
-
-            // 正規化
-            let total: f32 = sorted.iter().map(|(_, w)| w).sum();
+        3 | 4 => {
+            // 3〜4ウェイト: Vec割当不要、入力スライスをそのまま使用
+            let total: f32 = weights.iter().map(|(_, w)| w).sum();
             let total = if total > 0.0 { total } else { 1.0 };
 
             let mut bones = [-1i32; 4];
             let mut ws = [0.0f32; 4];
-            for (i, (bi, w)) in sorted.iter().enumerate() {
-                bones[i] = *bi as i32;
+            for (i, &(bi, w)) in weights.iter().enumerate() {
+                bones[i] = bi as i32;
                 ws[i] = w / total;
             }
 
-            PmxWeightType::Bdef4 {
-                bones,
-                weights: ws,
+            PmxWeightType::Bdef4 { bones, weights: ws }
+        }
+        _ => {
+            // 5ウェイト以上（稀）: 上位4ウェイトを選択
+            let mut top4 = [(0usize, 0.0f32); 4];
+            for &(bi, w) in weights {
+                // top4 内の最小ウェイトを探し、現在の値が大きければ置換
+                let mut min_idx = 0;
+                let mut min_w = top4[0].1;
+                for j in 1..4 {
+                    if top4[j].1 < min_w {
+                        min_w = top4[j].1;
+                        min_idx = j;
+                    }
+                }
+                if w > min_w {
+                    top4[min_idx] = (bi, w);
+                }
             }
+
+            // 正規化
+            let total: f32 = top4.iter().map(|(_, w)| w).sum();
+            let total = if total > 0.0 { total } else { 1.0 };
+
+            let mut bones = [-1i32; 4];
+            let mut ws = [0.0f32; 4];
+            for (i, &(bi, w)) in top4.iter().enumerate() {
+                bones[i] = bi as i32;
+                ws[i] = w / total;
+            }
+
+            PmxWeightType::Bdef4 { bones, weights: ws }
         }
     }
 }
 
 fn build_morphs(ir: &IrModel, use_vrm0_coords: bool) -> Vec<PmxMorph> {
-    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if use_vrm0_coords { gltf_pos_to_pmx_v0 } else { gltf_pos_to_pmx };
+    let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if use_vrm0_coords {
+        gltf_pos_to_pmx_v0
+    } else {
+        gltf_pos_to_pmx
+    };
 
     let panel_name = |p: u8| -> &'static str {
-        match p { 1 => "眉", 2 => "目", 3 => "口", 4 => "その他", _ => "?" }
+        match p {
+            1 => "眉",
+            2 => "目",
+            3 => "口",
+            4 => "その他",
+            _ => "?",
+        }
     };
 
     log::debug!("--- モーフ一覧 ---");
     let mut vertex_count = 0usize;
     let mut group_count = 0usize;
 
-    let morphs: Vec<PmxMorph> = ir.morphs.iter().map(|m| {
-        let (morph_type, offsets) = match &m.kind {
-            IrMorphKind::Vertex(voffs) => {
-                log::debug!("  [{}:{}] \"{}\" 頂点モーフ (対象頂点={})",
-                    panel_name(m.panel), m.panel, m.name, voffs.len());
-                vertex_count += 1;
-                let pmx_offs = voffs.iter()
-                    .map(|(vi, off)| VertexMorphOffset {
-                        vertex_index: *vi as u32,
-                        offset: pos_fn(*off),
-                    })
-                    .collect();
-                (1u8, PmxMorphOffsets::Vertex(pmx_offs))
-            }
-            IrMorphKind::Group(goffs) => {
-                if log::log_enabled!(log::Level::Debug) {
-                    let sub_names: Vec<String> = goffs.iter()
-                        .filter_map(|(mi, w)| ir.morphs.get(*mi).map(|sub| format!("{}×{:.2}", sub.name, w)))
+    let morphs: Vec<PmxMorph> = ir
+        .morphs
+        .iter()
+        .map(|m| {
+            let (morph_type, offsets) = match &m.kind {
+                IrMorphKind::Vertex(voffs) => {
+                    log::debug!(
+                        "  [{}:{}] \"{}\" 頂点モーフ (対象頂点={})",
+                        panel_name(m.panel),
+                        m.panel,
+                        m.name,
+                        voffs.len()
+                    );
+                    vertex_count += 1;
+                    let pmx_offs = voffs
+                        .iter()
+                        .map(|(vi, off)| VertexMorphOffset {
+                            vertex_index: *vi as u32,
+                            offset: pos_fn(*off),
+                        })
                         .collect();
-                    log::debug!("  [{}:{}] \"{}\" グループモーフ (子={}) [{}]",
-                        panel_name(m.panel), m.panel, m.name, goffs.len(), sub_names.join(", "));
+                    (1u8, PmxMorphOffsets::Vertex(pmx_offs))
                 }
-                group_count += 1;
-                let pmx_offs = goffs.iter()
-                    .map(|(mi, w)| GroupMorphOffset {
-                        morph_index: *mi as i32,
-                        weight: *w,
-                    })
-                    .collect();
-                (0u8, PmxMorphOffsets::Group(pmx_offs))
+                IrMorphKind::Group(goffs) => {
+                    if log::log_enabled!(log::Level::Debug) {
+                        let sub_names: Vec<String> = goffs
+                            .iter()
+                            .filter_map(|(mi, w)| {
+                                ir.morphs
+                                    .get(*mi)
+                                    .map(|sub| format!("{}×{:.2}", sub.name, w))
+                            })
+                            .collect();
+                        log::debug!(
+                            "  [{}:{}] \"{}\" グループモーフ (子={}) [{}]",
+                            panel_name(m.panel),
+                            m.panel,
+                            m.name,
+                            goffs.len(),
+                            sub_names.join(", ")
+                        );
+                    }
+                    group_count += 1;
+                    let pmx_offs = goffs
+                        .iter()
+                        .map(|(mi, w)| GroupMorphOffset {
+                            morph_index: *mi as i32,
+                            weight: *w,
+                        })
+                        .collect();
+                    (0u8, PmxMorphOffsets::Group(pmx_offs))
+                }
+            };
+
+            PmxMorph {
+                name: m.name.clone(),
+                name_en: m.name_en.clone(),
+                panel: m.panel,
+                morph_type,
+                offsets,
             }
-        };
+        })
+        .collect();
 
-        PmxMorph {
-            name: m.name.clone(),
-            name_en: m.name_en.clone(),
-            panel: m.panel,
-            morph_type,
-            offsets,
-        }
-    }).collect();
-
-    log::info!("モーフ: {}個 (頂点モーフ={}, グループモーフ={})", morphs.len(), vertex_count, group_count);
+    log::info!(
+        "モーフ: {}個 (頂点モーフ={}, グループモーフ={})",
+        morphs.len(),
+        vertex_count,
+        group_count
+    );
     morphs
 }
 
@@ -1378,33 +1800,50 @@ fn classify_bone(name: &str) -> BoneCategory {
 
     // 体(上)
     const BODY: &[&str] = &[
-        "センター", "グルーブ", "腰", "上半身", "上半身2", "上半身3",
-        "首", "頭", "両目", "左目", "右目", "下半身",
+        "センター",
+        "グルーブ",
+        "腰",
+        "上半身",
+        "上半身2",
+        "上半身3",
+        "首",
+        "頭",
+        "両目",
+        "左目",
+        "右目",
+        "下半身",
     ];
     if BODY.contains(&name) {
         return BoneCategory::Body;
     }
 
     // 指（左右の指ボーン名）
-    if name.contains("親指") || name.contains("人差指")
-        || name.contains("中指") || name.contains("薬指")
+    if name.contains("親指")
+        || name.contains("人差指")
+        || name.contains("中指")
+        || name.contains("薬指")
         || name.contains("小指")
     {
         return BoneCategory::Fingers;
     }
 
     // 腕（肩〜手首）
-    const ARM_KEYWORDS: &[&str] = &[
-        "肩P", "肩C", "肩", "腕捩", "腕", "ひじ", "手捩", "手首",
-    ];
+    const ARM_KEYWORDS: &[&str] = &["肩P", "肩C", "肩", "腕捩", "腕", "ひじ", "手捩", "手首"];
     if ARM_KEYWORDS.iter().any(|kw| name.contains(kw)) {
         return BoneCategory::Arms;
     }
 
     // 足（足〜つま先、IK含む）
     const LEG_KEYWORDS: &[&str] = &[
-        "足先EX", "足D", "ひざD", "足首D",
-        "足", "ひざ", "足首", "つま先", "ＩＫ",
+        "足先EX",
+        "足D",
+        "ひざD",
+        "足首D",
+        "足",
+        "ひざ",
+        "足首",
+        "つま先",
+        "ＩＫ",
         "腰キャンセル",
     ];
     if LEG_KEYWORDS.iter().any(|kw| name.contains(kw)) {
@@ -1520,7 +1959,12 @@ fn build_display_frames(bones: &[PmxBone], morphs: &[PmxMorph]) -> Vec<PmxDispla
 
 fn build_rigid_bodies(ir: &IrModel, align_rigid_rotation: bool) -> Vec<PmxRigidBody> {
     let mode_name = |m: u8| -> &'static str {
-        match m { 0 => "ボーン追従", 1 => "物理演算", 2 => "物理+Bone", _ => "?" }
+        match m {
+            0 => "ボーン追従",
+            1 => "物理演算",
+            2 => "物理+Bone",
+            _ => "?",
+        }
     };
 
     log::debug!("--- 剛体一覧 ---");
@@ -1567,9 +2011,16 @@ fn build_rigid_bodies(ir: &IrModel, align_rigid_rotation: bool) -> Vec<PmxRigidB
         }
     }).collect();
 
-    log::info!("剛体: {}個 (球={}, 箱={}, カプセル={}) モード: ボーン追従={}, 物理={}, 物理+Bone={}",
-        bodies.len(), sphere_count, box_count, capsule_count,
-        mode_counts[0], mode_counts[1], mode_counts[2]);
+    log::info!(
+        "剛体: {}個 (球={}, 箱={}, カプセル={}) モード: ボーン追従={}, 物理={}, 物理+Bone={}",
+        bodies.len(),
+        sphere_count,
+        box_count,
+        capsule_count,
+        mode_counts[0],
+        mode_counts[1],
+        mode_counts[2]
+    );
     bodies
 }
 
@@ -1598,7 +2049,10 @@ fn fix_duplicate_names(bones: &mut [PmxBone]) {
         }
     }
     if renamed > 0 {
-        log::info!("fix_duplicate_names: {}本のボーン名を重複回避のためリネーム", renamed);
+        log::info!(
+            "fix_duplicate_names: {}本のボーン名を重複回避のためリネーム",
+            renamed
+        );
     }
 }
 
@@ -1611,11 +2065,24 @@ fn fix_duplicate_names(bones: &mut [PmxBone]) {
 /// BFS は元の並び順を可能な限り保持する安定ソート。
 fn sort_bones_topological(model: &mut PmxModel) {
     let n = model.bones.len();
-    if n == 0 { return; }
+    if n == 0 {
+        return;
+    }
 
-    let phys: Vec<bool> = model.bones.iter()
+    let phys: Vec<bool> = model
+        .bones
+        .iter()
         .map(|b| b.flags & BONE_FLAG_PHYS_AFTER != 0)
         .collect();
+
+    // 隣接リストを事前構築（O(n) で子探索を可能にする）
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, bone) in model.bones.iter().enumerate() {
+        let p = bone.parent_index;
+        if p >= 0 && (p as usize) < n {
+            children[p as usize].push(i);
+        }
+    }
 
     let mut result: Vec<usize> = Vec::with_capacity(n);
     let mut added = vec![false; n];
@@ -1635,16 +2102,15 @@ fn sort_bones_topological(model: &mut PmxModel) {
             .collect();
 
         while let Some(std::cmp::Reverse(i)) = heap.pop() {
-            if added[i] { continue; }
+            if added[i] {
+                continue;
+            }
             added[i] = true;
             result.push(i);
 
-            // 同グループの子を最小インデックス優先でヒープに追加
-            for j in 0..n {
-                if !added[j]
-                    && phys[j] == pass_phys
-                    && model.bones[j].parent_index == i as i32
-                {
+            // 隣接リストから同グループの子を最小インデックス優先でヒープに追加
+            for &j in &children[i] {
+                if !added[j] && phys[j] == pass_phys {
                     heap.push(std::cmp::Reverse(j));
                 }
             }
@@ -1654,13 +2120,19 @@ fn sort_bones_topological(model: &mut PmxModel) {
     // 循環参照・孤立ボーンは末尾に追加（フォールバック）
     for (i, &is_added) in added.iter().enumerate() {
         if !is_added {
-            log::warn!("sort_bones_topological: \"{}\"(idx={}) が到達不能 → 末尾に追加", model.bones[i].name, i);
+            log::warn!(
+                "sort_bones_topological: \"{}\"(idx={}) が到達不能 → 末尾に追加",
+                model.bones[i].name,
+                i
+            );
             result.push(i);
         }
     }
 
     // 変化がなければ早期リターン
-    if result.iter().enumerate().all(|(new, &old)| new == old) { return; }
+    if result.iter().enumerate().all(|(new, &old)| new == old) {
+        return;
+    }
 
     // remap テーブル（旧インデックス → 新インデックス）
     let mut remap = vec![0i32; n];
@@ -1670,74 +2142,83 @@ fn sort_bones_topological(model: &mut PmxModel) {
 
     log::debug!("sort_bones_topological: {}本のボーンを並び替え", n);
 
-    // ボーン配列を並び替え
-    let old_bones: Vec<PmxBone> = std::mem::take(&mut model.bones);
-    model.bones = result.iter().map(|&i| old_bones[i].clone()).collect();
+    // ボーン配列を並び替え（clone 不要: take 済みなので所有権ベースで並べ替え）
+    let mut old_bones: Vec<Option<PmxBone>> = std::mem::take(&mut model.bones)
+        .into_iter()
+        .map(Some)
+        .collect();
+    model.bones = result
+        .iter()
+        .map(|&i| {
+            old_bones[i]
+                .take()
+                .expect("sort_bones_topological: 同一ボーンが2回参照された")
+        })
+        .collect();
 
     // 全参照を remap で更新
-    for bone in &mut model.bones {
-        if bone.parent_index >= 0 {
-            bone.parent_index = remap[bone.parent_index as usize];
-        }
-        if let BoneTail::BoneIndex(i) = &mut bone.tail {
-            if *i >= 0 { *i = remap[*i as usize]; }
-        }
-        if let Some(ik) = &mut bone.ik {
-            if ik.target_bone >= 0 { ik.target_bone = remap[ik.target_bone as usize]; }
-            for link in &mut ik.links {
-                if link.bone_index >= 0 { link.bone_index = remap[link.bone_index as usize]; }
+    remap_all_bone_indices(
+        model,
+        |idx| {
+            if idx >= 0 {
+                remap[idx as usize]
+            } else {
+                idx
             }
-        }
-        if let Some(g) = &mut bone.grant {
-            if g.parent_index >= 0 { g.parent_index = remap[g.parent_index as usize]; }
-        }
-    }
-    for vtx in &mut model.vertices {
-        match &mut vtx.weight {
-            PmxWeightType::Bdef1 { bone } => {
-                if *bone >= 0 { *bone = remap[*bone as usize]; }
-            }
-            PmxWeightType::Bdef2 { bone1, bone2, .. } => {
-                if *bone1 >= 0 { *bone1 = remap[*bone1 as usize]; }
-                if *bone2 >= 0 { *bone2 = remap[*bone2 as usize]; }
-            }
-            PmxWeightType::Bdef4 { bones, .. } => {
-                for b in bones.iter_mut() {
-                    if *b >= 0 { *b = remap[*b as usize]; }
-                }
-            }
-        }
-    }
-    for rb in &mut model.rigid_bodies {
-        if rb.bone_index >= 0 { rb.bone_index = remap[rb.bone_index as usize]; }
-    }
+        },
+    );
 }
 
 fn build_joints(ir: &IrModel) -> Vec<PmxJoint> {
     log::debug!("--- ジョイント一覧 ---");
-    let joints: Vec<PmxJoint> = ir.physics.joints.iter().enumerate().map(|(i, j)| {
-        let rb_a_name = ir.physics.rigid_bodies.get(j.rigid_a).map(|r| r.name.as_str()).unwrap_or("?");
-        let rb_b_name = ir.physics.rigid_bodies.get(j.rigid_b).map(|r| r.name.as_str()).unwrap_or("?");
-        log::debug!("  [{:2}] \"{}\" A=\"{}\"({}) ↔ B=\"{}\"({}) pos=({:.3},{:.3},{:.3})",
-            i, j.name, rb_a_name, j.rigid_a, rb_b_name, j.rigid_b,
-            j.position.x, j.position.y, j.position.z);
+    let joints: Vec<PmxJoint> = ir
+        .physics
+        .joints
+        .iter()
+        .enumerate()
+        .map(|(i, j)| {
+            let rb_a_name = ir
+                .physics
+                .rigid_bodies
+                .get(j.rigid_a)
+                .map(|r| r.name.as_str())
+                .unwrap_or("?");
+            let rb_b_name = ir
+                .physics
+                .rigid_bodies
+                .get(j.rigid_b)
+                .map(|r| r.name.as_str())
+                .unwrap_or("?");
+            log::debug!(
+                "  [{:2}] \"{}\" A=\"{}\"({}) ↔ B=\"{}\"({}) pos=({:.3},{:.3},{:.3})",
+                i,
+                j.name,
+                rb_a_name,
+                j.rigid_a,
+                rb_b_name,
+                j.rigid_b,
+                j.position.x,
+                j.position.y,
+                j.position.z
+            );
 
-        PmxJoint {
-            name: j.name.clone(),
-            name_en: j.name.clone(),
-            joint_type: 0, // スプリング6DOF
-            rigid_a: j.rigid_a as i32,
-            rigid_b: j.rigid_b as i32,
-            position: j.position,
-            rotation: j.rotation,
-            move_limit_lo: j.move_limit_lo,
-            move_limit_hi: j.move_limit_hi,
-            rot_limit_lo: j.rot_limit_lo,
-            rot_limit_hi: j.rot_limit_hi,
-            spring_move: j.spring_move,
-            spring_rot: j.spring_rot,
-        }
-    }).collect();
+            PmxJoint {
+                name: j.name.clone(),
+                name_en: j.name.clone(),
+                joint_type: 0, // スプリング6DOF
+                rigid_a: j.rigid_a as i32,
+                rigid_b: j.rigid_b as i32,
+                position: j.position,
+                rotation: j.rotation,
+                move_limit_lo: j.move_limit_lo,
+                move_limit_hi: j.move_limit_hi,
+                rot_limit_lo: j.rot_limit_lo,
+                rot_limit_hi: j.rot_limit_hi,
+                spring_move: j.spring_move,
+                spring_rot: j.spring_rot,
+            }
+        })
+        .collect();
     log::info!("ジョイント: {}個", joints.len());
     joints
 }
@@ -1746,5 +2227,9 @@ fn build_joints(ir: &IrModel) -> Vec<PmxJoint> {
 #[inline]
 fn fract_uv(v: f32) -> f32 {
     let f = v % 1.0;
-    if f < 0.0 { f + 1.0 } else { f }
+    if f < 0.0 {
+        f + 1.0
+    } else {
+        f
+    }
 }
