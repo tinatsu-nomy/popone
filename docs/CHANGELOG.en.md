@@ -3,23 +3,26 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.7](#v027)
+  - [v0.2.8](#v028)
     - [New Features](#new-features)
-    - [Bug Fixes](#bug-fixes)
     - [Improvements](#improvements)
+  - [v0.2.7](#v027)
+    - [New Features](#new-features-1)
+    - [Bug Fixes](#bug-fixes)
+    - [Improvements](#improvements-1)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
     - [Bug Fixes](#bug-fixes-1)
-    - [New Features](#new-features-1)
-    - [Improvements](#improvements-1)
+    - [New Features](#new-features-2)
+    - [Improvements](#improvements-2)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.5](#v025)
-    - [Improvements](#improvements-2)
+    - [Improvements](#improvements-3)
     - [Code Quality & Performance](#code-quality--performance-1)
   - [v0.2.4](#v024)
-    - [Improvements](#improvements-3)
-  - [v0.2.3](#v023)
     - [Improvements](#improvements-4)
+  - [v0.2.3](#v023)
+    - [Improvements](#improvements-5)
   - [v0.2.2](#v022)
     - [Code Quality & Performance](#code-quality--performance-2)
   - [FBX Support](#fbx-support)
@@ -29,6 +32,18 @@
 # Changelog
 
 [日本語](CHANGELOG.md)
+
+## v0.2.8
+
+### New Features
+
+- **Single Instance** — When the viewer is already running and launched again, the file path is forwarded to the existing window and the new process exits automatically (Windows Named Mutex + Named Pipe IPC). Restores from minimized state
+- **FPS Accuracy** — Changed from exponential moving average (EMA) to frame counting method (actual frame count over the last 1 second). Also displays average frame time (ms)
+
+### Improvements
+
+- **Log Preservation** — Single instance check runs before log initialization, preventing unnecessary log file creation and rotation by second processes. Log rotation is also skipped on fallback startup when IPC fails
+- **IPC Error Handling** — WriteFile failure or short writes now trigger FallbackStart (prevents silent loss of file-open requests). ReadFile errors (ERROR_MORE_DATA, etc.) are distinguished from intentional empty messages
 
 ## v0.2.7
 

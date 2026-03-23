@@ -47,6 +47,8 @@
     - [MMD Ambient Separation](#mmd-ambient-separation)
   - [Log Output](#log-output)
     - [Overall Log Structure](#overall-log-structure)
+  - [Single Instance](#single-instance)
+  - [FPS Measurement](#fps-measurement)
   - [Animation Playback](#animation-playback)
     - [Supported Formats](#supported-formats)
     - [Animation Playback for PMX/PMD](#animation-playback-for-pmxpmd)
@@ -608,6 +610,25 @@ Vertex weight distribution: ...       ← DEBUG: Vertex count distribution of BD
 --- Display Frames ---                ← DEBUG: Bone count, morph count per display frame
 === PMX Model Build Complete ===      ← INFO: Output PMX statistics summary
 ```
+
+## Single Instance
+
+When the viewer is already running and launched again, the file path is forwarded to the existing window and the new process exits. Windows only (`#[cfg(target_os = "windows")]`).
+
+- **Detection**: `Local\popone_viewer_single_instance` Named Mutex detects existing process
+- **Communication**: `\\.\pipe\popone_viewer_ipc` Named Pipe (MESSAGE mode) sends file path as UTF-8
+- **Reception**: Background thread listens → `mpsc::channel` → `update()` feeds into `pending.load`
+- **Focus**: `ViewportCommand::Minimized(false)` + `Focus` (restores from minimized state)
+- **Path normalization**: `std::fs::canonicalize()` before sending (CWD difference mitigation)
+- **Log preservation**: `InstanceCheck` tri-state (`Primary` / `Forwarded` / `FallbackStart`) skips log rotation when existing instance detected
+
+## FPS Measurement
+
+Displays FPS and frame time (ms) in the viewport top-right overlay.
+
+- **Method**: Frame counting (computes `FPS = (frame_count - 1) / time_span` from `VecDeque<Instant>` over the last 1 second)
+- **Update interval**: 0.5 seconds (flicker prevention)
+- **ms display**: Average frame time within the window (consistent with FPS value)
 
 ## Animation Playback
 
@@ -1316,7 +1337,8 @@ src/
     ├── grid.rs          Grid floor
     ├── ui.rs            Info panel / morph sliders / conversion button / PMX/PMD grayed out
     ├── export_filter.rs Visible materials only export filter (IrModel → filtered IrModel)
-    └── animation.rs     Animation playback / retargeting (VRMA/glTF/FBX support)
+    ├── animation.rs     Animation playback / retargeting (VRMA/glTF/FBX support)
+    └── single_instance.rs Single instance control (Named Mutex + Named Pipe IPC, Windows only)
 ```
 
 ## Library API

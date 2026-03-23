@@ -655,12 +655,27 @@ fn run_viewer_with_file(input: PathBuf) -> Result<()> {
 /// ビューア共通起動（ログ・パニックフック・NativeOptions 設定）
 #[cfg(feature = "viewer")]
 fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
+    // シングルインスタンス: ログ初期化前に判定（不要なログファイル生成・ローテーション防止）
+    #[cfg(target_os = "windows")]
+    let can_rotate = {
+        use popone::viewer::single_instance::InstanceCheck;
+        match popone::viewer::single_instance::try_send_to_existing(initial_file.as_deref()) {
+            InstanceCheck::Forwarded => return Ok(()),
+            InstanceCheck::Primary => true,
+            InstanceCheck::FallbackStart => false, // 既存検出済み→ログ削除しない
+        }
+    };
+    #[cfg(not(target_os = "windows"))]
+    let can_rotate = true;
+
     let logs_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("logs")))
         .unwrap_or_else(|| std::path::PathBuf::from("logs"));
     let _ = std::fs::create_dir_all(&logs_dir);
-    rotate_logs(&logs_dir, 5);
+    if can_rotate {
+        rotate_logs(&logs_dir, 5);
+    }
 
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
     let log_path = logs_dir.join(format!("popone_{timestamp}.log"));

@@ -5,5 +5,7 @@ pub mod export_filter;
 pub mod gpu;
 pub mod grid;
 pub mod mesh;
+#[cfg(target_os = "windows")]
+pub mod single_instance;
 pub mod texture;
 pub mod ui;

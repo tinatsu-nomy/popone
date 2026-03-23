@@ -26,6 +26,7 @@ popone.exe input.fbx
 ```
 
 In the viewer, drag & drop files or use the "Open" button to load models.
+If the viewer is already running, subsequent launches pass the file path to the existing window and exit automatically (single instance).
 
 ## Features
 

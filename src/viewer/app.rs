@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use eframe::egui_wgpu;
@@ -685,9 +685,17 @@ pub struct ViewerApp {
     pub tex: TextureState,
     /// 遅延処理の集約状態
     pub pending: PendingState,
-    /// FPS計測用
-    last_frame_time: Instant,
-    fps_smoothed: f32,
+    /// FPS計測: フレームタイムスタンプのリングバッファ（直近1秒分）
+    frame_times: VecDeque<Instant>,
+    /// FPS計測: 前回フレームからの経過時間（ms）
+    frame_dt_ms: f32,
+    /// 表示用FPS（0.25秒間隔で更新）
+    fps_display: f32,
+    /// FPS表示の最終更新時刻
+    fps_last_update: Instant,
+    /// IPC受信チャネル（シングルインスタンス用）
+    #[cfg(target_os = "windows")]
+    ipc_receiver: std::sync::mpsc::Receiver<PathBuf>,
     /// ログディレクトリパス
     pub logs_dir: PathBuf,
     /// 現在のログファイルパス
@@ -718,6 +726,14 @@ impl ViewerApp {
         // 日本語フォント読み込み
         Self::setup_japanese_font(&cc.egui_ctx);
 
+        // シングルインスタンス: IPC パイプリスナー起動
+        #[cfg(target_os = "windows")]
+        let ipc_receiver = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            super::single_instance::start_pipe_listener(tx, cc.egui_ctx.clone());
+            rx
+        };
+
         Self {
             loaded: None,
             camera: OrbitCamera::default(),
@@ -738,8 +754,12 @@ impl ViewerApp {
             last_viewport_height: 720.0,
             tex: TextureState::default(),
             pending: PendingState::default(),
-            last_frame_time: Instant::now(),
-            fps_smoothed: 0.0,
+            frame_times: VecDeque::with_capacity(120),
+            frame_dt_ms: 0.0,
+            fps_display: 0.0,
+            fps_last_update: Instant::now(),
+            #[cfg(target_os = "windows")]
+            ipc_receiver,
             logs_dir,
             log_path,
             last_model_dir: None,
@@ -5221,22 +5241,50 @@ impl ViewerApp {
 
 impl eframe::App for ViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // IPC: 別プロセスからのファイルパス受信
+        #[cfg(target_os = "windows")]
+        while let Ok(path) = self.ipc_receiver.try_recv() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            if !path.as_os_str().is_empty() {
+                self.pending.load = Some((path, false));
+            }
+        }
+
         // ウィンドウタイトル更新
         if let Some(title) = self.window_title.take() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
         }
 
-        // FPS計測（指数移動平均）
+        // FPS計測（フレームカウント方式: 直近1秒のフレーム数から算出）
         let now = Instant::now();
-        let dt = now.duration_since(self.last_frame_time).as_secs_f32();
-        self.last_frame_time = now;
-        if dt > 0.0 {
-            let fps = 1.0 / dt;
-            self.fps_smoothed = if self.fps_smoothed == 0.0 {
-                fps
-            } else {
-                self.fps_smoothed * 0.9 + fps * 0.1
-            };
+        let dt = if let Some(&last) = self.frame_times.back() {
+            now.duration_since(last).as_secs_f32()
+        } else {
+            0.0
+        };
+        self.frame_times.push_back(now);
+        // 1秒より古いエントリを除去
+        let window = Duration::from_secs(1);
+        while self
+            .frame_times
+            .front()
+            .is_some_and(|&t| now.duration_since(t) > window)
+        {
+            self.frame_times.pop_front();
+        }
+        // 表示FPS・ms更新（0.5秒ごと、ちらつき防止）
+        if now.duration_since(self.fps_last_update).as_secs_f32() >= 0.5 {
+            if self.frame_times.len() >= 2 {
+                let span = now
+                    .duration_since(*self.frame_times.front().unwrap())
+                    .as_secs_f32();
+                if span > 0.0 {
+                    self.fps_display = (self.frame_times.len() - 1) as f32 / span;
+                    self.frame_dt_ms = span / (self.frame_times.len() - 1) as f32 * 1000.0;
+                }
+            }
+            self.fps_last_update = now;
         }
 
         self.process_pending_tasks();
@@ -5541,7 +5589,7 @@ impl eframe::App for ViewerApp {
                 // FPS表示（右上オーバーレイ）
                 {
                     let rect = response.rect;
-                    let fps_text = format!("{:.0} fps", self.fps_smoothed);
+                    let fps_text = format!("{:.0} fps  {:.1} ms", self.fps_display, self.frame_dt_ms);
                     viewport.painter().text(
                         egui::pos2(rect.right() - 10.0, rect.top() + 10.0),
                         egui::Align2::RIGHT_TOP,
