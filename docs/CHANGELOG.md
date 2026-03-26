@@ -3,26 +3,31 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
-  - [v0.2.8](#v028)
+  - [v0.2.9](#v029)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
     - [改善](#%E6%94%B9%E5%96%84)
-  - [v0.2.7](#v027)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3)
+    - [実装詳細](#%E5%AE%9F%E8%A3%85%E8%A9%B3%E7%B4%B0)
+  - [v0.2.8](#v028)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
     - [改善](#%E6%94%B9%E5%96%84-1)
+  - [v0.2.7](#v027)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
+    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-1)
+    - [改善](#%E6%94%B9%E5%96%84-2)
     - [コード品質改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E6%94%B9%E5%96%84)
   - [v0.2.6](#v026)
-    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-1)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
-    - [改善](#%E6%94%B9%E5%96%84-2)
+    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-2)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
+    - [改善](#%E6%94%B9%E5%96%84-3)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84)
   - [v0.2.5](#v025)
-    - [改善](#%E6%94%B9%E5%96%84-3)
+    - [改善](#%E6%94%B9%E5%96%84-4)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-1)
   - [v0.2.4](#v024)
-    - [改善](#%E6%94%B9%E5%96%84-4)
-  - [v0.2.3](#v023)
     - [改善](#%E6%94%B9%E5%96%84-5)
+  - [v0.2.3](#v023)
+    - [改善](#%E6%94%B9%E5%96%84-6)
   - [v0.2.2](#v022)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-2)
   - [FBX 対応](#fbx-%E5%AF%BE%E5%BF%9C)
@@ -32,6 +37,160 @@
 # 更新履歴
 
 [English](CHANGELOG.en.md)
+
+## v0.2.9
+
+### 新機能
+
+- **MToon 2色トゥーンシェーディング** — VRM の MToon 材質をビューアで 2 色トゥーン（lit/shade）で表示。`shadingToonyFactor` で影境界の硬さ、`shadingShiftFactor` で影の閾値シフトを制御。VRM 1.0（`VRMC_materials_mtoon`）と VRM 0.0（`_ShadeToony` / `_ShadeShift`）の両方に対応。非 MToon 材質は従来通り Half-Lambert で描画
+  - `MaterialUniform` を 16→80 bytes に拡張し、`shade_color` / `is_mtoon` / `shading_toony` / `shading_shift` + アウトラインパラメータを格納
+  - フラグメントシェーダー内で仕様準拠の `linearstep` ベース lit/shade 補間を実装（`dot(N,L)` [-1,1] レンジ）
+  - `IrMaterial` に `shading_toony_factor` / `shading_shift_factor` フィールドを追加
+- **MToon アウトライン描画** — inverted hull 法によるアウトライン（輪郭線）描画。`outlineWidthFactor`（世界座標/スクリーン座標）と `outlineColorFactor` に対応。`outlineLightingMixFactor` でライティング混合率を制御。UI チェックボックスで ON/OFF 切替可能
+  - `PipelineSet` に `pipeline_outline`（Front cull パイプライン）を追加（sRGB / Unorm 各版）
+  - `IrMaterial` に `OutlineWidthMode` enum、`outline_width_factor`、`outline_lighting_mix` を追加
+  - VRM 1.0（`outlineWidthMode` / `outlineWidthFactor` / `outlineLightingMixFactor`）と VRM 0.0（`_OutlineWidthMode` / `_OutlineWidth` / `_OutlineLightingMix`）の両方から読み取り
+  - `DrawCall` に `has_outline` フラグを追加し、全 alphaMode 材質でアウトライン描画（BLEND は ZWrite OFF）
+- **MToon リムライティング + MatCap** — VRM 1.0 MToon のパラメトリックリムライティングと MatCap テクスチャに対応
+  - パラメトリックリム: `parametricRimColorFactor`（色）、`parametricRimFresnelPowerFactor`（フレネル指数）、`parametricRimLiftFactor`（リフト量）で形状を制御。フレネル効果で輪郭が発光する表現を実現
+  - MatCap: `matcapTexture` / `matcapFactor` に対応。ビュー空間法線から直交基底を構築して UV を算出し、MatCap テクスチャをサンプリング
+  - `rimLightingMixFactor` で周囲光との混合率を制御（0.0=放射, 1.0=完全混合）
+  - `MaterialUniform` を 80→112 bytes に拡張、パイプラインレイアウトに MatCap テクスチャ用 bind group(3) を追加
+  - 頂点シェーダーにワールド座標出力を追加し、フラグメントシェーダーで視線方向ベースのリム計算を実装
+- **MToon 追加テクスチャ対応** — VRM 1.0 MToon の補助テクスチャ 3 種に対応し、描画品質を向上
+  - `shadeMultiplyTexture`: 影色テクスチャ乗算（RGB）。ピクセルごとに影色を変化させ、より細かい影表現を実現
+  - `shadingShiftTexture`: ピクセルごとのシェーディングシフト（R チャネル × scale）。部位によって影の付き方を制御
+  - `rimMultiplyTexture`: リムライティング乗算テクスチャ（RGB）。リム効果の適用範囲をテクスチャで制御
+  - bind group(3) を MToon 補助テクスチャパック（テクスチャごとにサンプラーを持つ 16 bindings 構成）に再構成。`MaterialUniform` を 112→144 bytes に拡張
+  - テクスチャ未使用材質にはデフォルトテクスチャ（白 or 黒）を自動バインドし、パイプライン切り替え不要
+- **MToon UV アニメーション** — VRM 1.0 MToon の UV スクロール・回転アニメーションに対応
+  - `uvAnimationScrollXSpeedFactor` / `uvAnimationScrollYSpeedFactor`: UV 水平・垂直スクロール
+  - `uvAnimationRotationSpeedFactor`: UV 中心回転
+  - `uvAnimationMaskTexture`: B チャネルでアニメーション適用範囲を制御
+  - `CameraUniform` に累積時間 `time` フィールドを追加し、毎フレーム更新
+
+### 改善
+
+- **MToon アウトラインに `outlineWidthMultiplyTexture` 反映** — `outlineWidthMultiplyTexture` の G チャネルをアウトライン頂点シェーダーで `textureSampleLevel` によりサンプリングし、頂点ごとにアウトライン幅を制御。mtoon_aux bind group (binding 6) に追加し、材質固有の bind group をアウトライン描画にも適用。顔や髪で輪郭線を弱める VRM が正しく表示される
+- **`outlineWidthMultiplyTexture` への UV アニメーション適用（MToon 仕様準拠）** — UV Animation 計算を `apply_uv_animation()` 共通関数に抽出し、頂点シェーダー `vs_outline` でも UV Animation 適用済み座標で `outlineWidthMultiplyTexture` をサンプリングするよう変更。MToon 仕様の UV Animation 対象テクスチャ 5 種（shadeMultiply / shadingShift / rimMultiply / outlineWidthMultiply + glTF コア 3 種）すべてに UV Animation が反映される。`uvAnimationMaskTexture` の bind group visibility に `VERTEX` を追加
+- **MToon screenCoordinates アウトライン改善** — UniVRM 準拠の clip 空間法線変換・アスペクト比補正（`height/width` による X 方向縮小）・カメラ正面法線抑制を実装。画角やアスペクト比による輪郭線の太さのぶれを解消
+- **MToon 補助テクスチャの色空間修正** — `shadingShiftTexture` と `uvAnimationMaskTexture` を仕様通りリニア色空間（Unorm ビュー）で読み込むよう修正。sRGB ビュー使用時の二重ガンマ変換による値の歪みを解消
+- **`shadingShiftTexture` 計算式を仕様準拠に修正** — `(tex * 2.0 - 1.0) * scale` を VRM 1.0 仕様通り `tex * scale` に修正
+- **`shadingToony/shadingShift` の shading 式を仕様準拠に修正** — `half_lambert` [0,1] + `smoothstep` から仕様通りの `dot(N,L)` [-1,1] + `linearstep(-1+toony, 1-toony, shading+shift)` に変更。UniVRM と同じ影境界の硬さ・位置になる
+- **`shadeColorFactor` デフォルト値を仕様準拠に修正** — VRM 1.0 MToon で `shadeColorFactor` 未指定時のデフォルトを `Vec3::ZERO`（黒）に修正（仕様のデフォルト `[0,0,0]`）。抽出時に常に `Some(...)` を格納するよう変更し、ビューア表示と PMX 変換で `None`（shade_color 無し）と「デフォルトとしての黒」が区別されるようになった
+- **VRM 0.x `_Color` / `_MainTex` lit 色・テクスチャ正規化** — VRM 0.x MToon 正規化ブロックで `materialProperties` の `_Color` → `ir_mat.diffuse`、`_MainTex` → `ir_mat.texture_index` / `base_color_tex_info` に反映するよう追加。glTF core の `baseColorFactor` / `baseColorTexture` は VRM 0.x では近似値の場合があるため、MToon と判定した後は `materialProperties` 側を優先する（UniVRM `MigrationMToonMaterial.cs:148-164` 準拠）
+- **VRM 0.x `_MainTex` ST の Y オフセット変換追加** — VRM 0.x の `_MainTex` ST（Scale/Translation）を glTF `KHR_texture_transform` に変換する際、Y オフセットに `offset.y = 1.0 - unityOffset.y - scale.y` を適用するよう修正。Unity のテクスチャ座標系（左上原点）と glTF（左下原点）の Y 軸解釈の違いを吸収する（UniVRM `Vrm10MaterialExportUtils.ExportTextureTransform` 準拠）
+- **`renderQueueOffsetNumber` の範囲制限を仕様準拠に追加** — Opaque/Mask は常に 0、BlendWithZWrite は clamp(0,+9)、Blend は clamp(-9,0) を強制。UniVRM MToonValidator と同等の制限
+- **VRM 0.x `renderQueue` 範囲外チェック追加** — UniVRM `GetRenderQueueRequirement` 準拠の範囲検証を追加。`renderQueue` が許容範囲外（Blend: 2951~3000、BlendWithZWrite: 2501~2550）の場合は offset=0 を返す。壊れた/手編集された VRM 0.x 入力で描画順が端値に張り付く問題を解消
+- **`rimLightingMixFactor` の光量係数を N·L 非依存に修正** — UniVRM 準拠で `light_factor` から `dot(N,L) * 0.5 + 0.5`（Half-Lambert）を除去し、`light_intensity + ambient` の直接合成に変更。リムライティングは視線フレネル効果であり、背面側でも N·L 非依存で光量係数が一定になるべき。逆光・輪郭寄りのポーズでリムが過度に暗くなる問題を解消
+- **glTF sampler 情報のテクスチャ別反映** — `IrTextureInfo` に `IrSamplerInfo`（wrap_u / wrap_v / mag_filter / min_filter）を追加し、glTF の `sampler` オブジェクトからテクスチャごとの wrapS / wrapT / magFilter / minFilter を読み取り。ビューア GPU 側は `HashMap<IrSamplerInfo, wgpu::Sampler>` キャッシュで同一設定のサンプラーを共有。CPU 側の `sample_image_g_channel` も wrap mode に応じた UV 座標変換を実施。`outlineWidthMultiplyTexture` / `uvAnimationMaskTexture` 等の `CLAMP_TO_EDGE` 指定が正しく再現されるようになった
+- **MToon 補助テクスチャのサンプラー個別化** — bind group(3) のサンプラーを全テクスチャ共有（1 sampler + 8 textures）からテクスチャごとに分離（8 samplers + 8 textures = 16 bindings）に変更。glTF の texture 単位 sampler モデルに完全準拠し、補助テクスチャごとに異なる wrap / filter 設定が正しく反映されるようになった。WGSL 側も `s_mtoon_aux` 共有サンプラーを廃止し、`s_matcap` / `s_shade_multiply` / `s_normal` 等テクスチャ固有のサンプラーに分離
+- **glTF minFilter の mipmap 情報保持** — `IrFilterMode`（2 値: Nearest / Linear）を `IrMagFilter` + `IrMinFilter`（6 値: Nearest / Linear / NearestMipmapNearest / LinearMipmapNearest / NearestMipmapLinear / LinearMipmapLinear）に分離。glTF の `minFilter` が持つ mipmap 選択方式をそのまま保持し、`ensure_sampler()` で wgpu の `min_filter` と `mipmap_filter` を正しく分離して設定するようになった
+- **`CameraUniform` に `aspect` フィールド追加** — MToon screenCoordinates アウトラインのアスペクト比補正に使用
+- **MToon 透明描画順制御** — glTF `alphaMode`（OPAQUE / MASK / BLEND）と MToon 拡張の `transparentWithZWrite` / `renderQueueOffsetNumber` に対応。描画を仕様準拠の 4 段階に分離し、半透明の前髪・アクセサリの前後関係を正しく再現
+  - `IrMaterial` に `AlphaMode` enum（Opaque / Mask / BlendWithZWrite / Blend）、`alpha_cutoff`、`render_queue_offset` を追加
+  - `DrawCall` に `RenderQueue` enum を追加し、`renderQueueOffsetNumber` で BLEND カテゴリ内を安定ソート
+  - MASK モード: フラグメントシェーダーに `alphaCutoff` による `discard` を実装
+  - BlendWithZWrite: 半透明＋デプス書込ありパイプライン（`pipeline_alpha_zwrite_cull` / `pipeline_alpha_zwrite_no_cull`）を新設
+  - 描画順: OPAQUE → MASK → BlendZWrite → Blend。OPAQUE/MASK はフェーズ後にまとめてアウトライン描画、BLEND/BlendZWrite はサーフェスとアウトラインをインターリーブ描画
+- **MToon 補助テクスチャの `texCoord` / `KHR_texture_transform` 保持** — `IrTextureInfo` 構造体を導入し、MToon 補助テクスチャ 6 種（shade / matcap / shadingShift / rimMultiply / uvAnimationMask / outlineWidth）の `texCoord`・`KHR_texture_transform`（offset / scale / rotation）を IR 層で保持するよう拡張。メッシュの `TEXCOORD_1` も `IrMesh.uvs1` に読み取り。GPU シェーダー側で `resolve_mtoon_uv()` により texCoord 選択 + KHR_texture_transform を適用
+- **テクスチャ pruning の全 MToon テクスチャ対応** — エクスポートフィルタのテクスチャ pruning を `IrTextureInfo` ベースに書き換え、matcap / shadingShift / rimMultiply / uvAnimationMask テクスチャも収集・リマップ対象に追加
+- **MToon ScreenCoordinates アウトライン計算式を UniVRM 完全準拠に修正** — (1) 法線の正規化順序を UniVRM と一致（normalize → aspect 乗算）に修正。(2) `CameraUniform` に射影行列の `proj_11`（= 1/tan(fov/2)）を追加し、UniVRM の `MToon_GetOutlineVertex_ScreenCoordinatesWidthMultiplier` と同等の距離クランプ（`min(clip.w, maxDistance)`）を実装。広角カメラ・遠距離での太すぎを抑制
+- **MToon 補助テクスチャの `texCoord` / `KHR_texture_transform` をシェーダーに接続** — `MaterialUniform` に 5 補助テクスチャ分の UV パラメータ（texCoord・offset・scale・rotation）を追加（144→304 bytes）。`Vertex` に `uv1`（TEXCOORD_1）を追加。WGSL に `resolve_mtoon_uv()` / `apply_texture_transform()` / `apply_uv_anim_core()` ヘルパ関数を追加し、各補助テクスチャで texCoord 選択 + KHR_texture_transform 適用を実行。UV Animation 対象（shade / shift / rim / outline_width）と非対象（uv_mask / matcap）を UniVRM 準拠で区別
+- **`baseColorTexture` の `texCoord` / `KHR_texture_transform` 対応** — `IrMaterial` に `base_color_tex_info: Option<IrTextureInfo>` を追加し、ベースカラーテクスチャの `texCoord` / `KHR_texture_transform`（offset / scale / rotation）を保持。`MaterialUniform` に `base_uv_a` / `base_uv_b` を追加（304→336 bytes）し、フラグメントシェーダーで `resolve_mtoon_uv()` によりベースカラーテクスチャにも texCoord 選択 + KHR_texture_transform を適用。補助テクスチャと同一の UV パイプラインに統一
+- **アウトライン頂点シェーダーの UV1 対応** — `apply_uv_animation()` を `apply_uv_animation_pair(uv0, uv1)` に変更し、`vec4` で UV0/UV1 ペアを返す形に統一。アウトライン頂点シェーダーで `uv1_in` が無視されていた問題を修正し、`outlineWidthMultiplyTexture` と `uvAnimationMaskTexture` の `texCoord=1` が正しく機能するようになった
+- **BLEND 材質のカメラ距離ソート** — `DrawCall` に重心位置 `center` を追加し、同一 `renderQueueOffsetNumber` 内の `RenderQueue::Blend` 材質をカメラ距離（`distance_squared`）で back-to-front ソート。半透明メッシュ同士の前後関係が改善
+- **BLEND/BlendZWrite アウトライン描画順のインターリーブ化** — 透明フェーズ（BLEND / BlendZWrite）ではサーフェスとアウトラインを各 draw ごとに連続発行するよう変更。ZWrite OFF の透明アウトラインが手前サーフェスの上に浮く問題を解消（UniVRM のマルチパス描画と同等の合成順）。OPAQUE / MASK は従来通り深度バッファで保護されるため 2 パス構造を維持
+- **透明ソート距離キーの動的更新** — アニメーション再生中に BLEND / BlendZWrite draw の重心を `current_vertices()` から毎フレーム再計算。rest pose 固定の重心では動的シーンで back-to-front ソートが破綻する問題を解消。不透明 draw はビルド時の固定重心を維持（再計算不要）
+- **glTF emissive（発光）対応** — `emissiveFactor` + `emissiveTexture` を glTF 標準プロパティとして全形式（VRM / FBX / PMX / PMD）に対応。MToon シェーダーでは UniVRM 準拠の `baseCol = lighting + emissive + rim` で加算。非 MToon でも `lit += emissive` で発光表現を反映。アウトラインの `compute_mtoon_surface_lighting()` にも emissive を含め、`outlineLightingMixFactor` 経由でアウトライン色に反映。`IrMaterial` に `emissive_factor` / `emissive_texture` / `normal_texture` / `normal_texture_scale` フィールドを追加。法線マップは screen-space derivative による tangent 構築で適用
+- **VRM 0.x MToon 全プロパティ正規化** — VRM 0.x の `materialProperties` から未実装だった主要プロパティを VRM 1.0 系 `IrMaterial` に正規化。UniVRM `MigrationMToonMaterial.cs` / `MToon10Migrator.cs` の変換式に準拠。対象:
+  - 描画モード: `_BlendMode` → `AlphaMode`、`_Cutoff` → `alpha_cutoff`、`_CullMode` → `is_double_sided`
+  - テクスチャ: `_ShadeTexture`（未設定時は `_MainTex` を使用: UniVRM 破壊的マイグレーション準拠）、`_RimTexture`、`_EmissionMap`、`_UvAnimMaskTexture`、`_SphereAdd`（→ matcapTexture）、`_BumpMap`（→ normalTexture）
+  - リム: `_RimColor`、`_RimFresnelPower`、`_RimLift`、`rimLightingMixFactor` = 1.0（UniVRM 破壊的マイグレーション準拠）
+  - エミッション: `_EmissionColor`
+  - UV アニメーション: `_UvAnimScrollX`、`_UvAnimScrollY`（Y 反転 × -1）、`_UvAnimRotation`（× 2π rad/s 変換）
+  - Shading: `_ShadeToony` / `_ShadeShift` → UniVRM `GetShadingRange0X` + `MigrateToShadingToony/Shift` 変換式
+  - アウトライン: `_OutlineColorMode` → `outlineLightingMixFactor`（FixedColor = 0.0、MixedLighting = 元値）
+- **`KHR_texture_transform.texCoord` override 対応** — `read_texture_info()` で `extensions.KHR_texture_transform.texCoord` が存在する場合、TextureInfo 本体の `texCoord` より優先するよう修正。glTF 仕様準拠
+- **VRM 0.x `renderQueue` → `render_queue_offset` 移行** — UniVRM `MigrationMToonMaterial.cs` 準拠の順位圧縮（rank compression）を実装。透明材質の source offset（`renderQueue - DefaultValue`）を `BTreeSet` に集約し、Blend は降順・BlendWithZWrite は昇順で連番を振ることで、相対順序を保持したまま VRM 1.0 仕様範囲（Blend: -9..0, BlendWithZWrite: 0..+9）に圧縮。単純な clamp では値が同一に潰れて相対順序が失われる問題を解消。範囲外の `renderQueue` は offset=0 を返す
+- **VRM 0.x `_MainTex` ST（Scale/Translation）を MToon テクスチャに伝播** — VRM 0.x の `vectorProperties._MainTex`（`[offsetX, offsetY, scaleX, scaleY]` 順）を MToon テクスチャの `IrTextureInfo.offset` / `.scale` に反映（UniVRM `Vrm0XMToonValue.cs` 準拠）。`baseColorTexture` にも同一 ST を適用。MatCap（`_SphereAdd`）は例外として ST 非適用（UniVRM `MigrationMToonMaterial.cs:255-260` 準拠: "Texture transform is not required"）。identity transform（scale=1, offset=0）の場合はスキップ
+- **VRM 0.x `ScreenCoordinates` アウトライン幅を UniVRM 準拠に正規化** — `outline_width_factor` を `w * 0.01 * 0.5` に修正（旧: 縦半分の%値 → 新: 縦全体の比率、1/200 換算）。VRM 0.x の ScreenCoordinates アウトラインが Unity と一致するようになった
+- **VRM 0.x 色プロパティの sRGB→Linear 変換** — VRM 0.x MToon の `_ShadeColor`・`_RimColor`・`_OutlineColor` を抽出時に sRGB→Linear 変換するよう修正。UniVRM `MigrationMToonMaterial.cs` の `.ToFloat3(ColorSpace.sRGB, ColorSpace.Linear)` と同等。`_EmissionColor` は UniVRM 準拠で Linear→Linear のため変換対象外
+- **MASK 材質の alpha_to_coverage 有効化** — `RenderQueue::Mask` 材質に専用パイプライン（`pipeline_mask_cull` / `pipeline_mask_no_cull`）を追加し、MSAA 有効時（sample_count > 1）に `alpha_to_coverage_enabled = true` を設定。UniVRM `MToonValidator.cs` の `UnityAlphaToMask = On` と同等。まつ毛・髪カード等の cutout 材質で MSAA によるジャギーが軽減される
+- **`giEqualizationFactor` GI 実装（UniVRM 準拠）** — VRM 仕様準拠の `lerp(passthroughGi, uniformedGi, giEqualizationFactor)` を実装。SH/IBL 非搭載のため `passthroughGi` = `uniformedGi` = ambient とし、direct light を GI に混入させない（UniVRM の `indirectLight` / `indirectLightEqualized` と同等の分離構造）。VRM 1.0 `giEqualizationFactor`、VRM 0.x `_IndirectLightIntensity`（`1.0 - value` で変換）の両方に対応
+- **アウトラインパイプラインに depth bias 追加** — MToon アウトラインの `pipeline_outline` / `pipeline_outline_blend` に UniVRM `Offset 1, 1` 相当の `DepthBiasState`（`constant: 1, slope_scale: 1.0`）を設定。inverted hull 法で本体とアウトラインの深度が近接することによる Z-fighting（輪郭の欠け・ちらつき）を防止。髪や薄い板ポリ、視線に平行な面で特に効果がある
+- **MASK 材質アウトラインの AlphaToCoverage 有効化** — `pipeline_outline_mask`（MASK 材質専用アウトラインパイプライン）を新設し、MSAA 有効時に `alpha_to_coverage_enabled = true` を設定。本体パスだけでなくアウトラインパスでも cutout 境界が滑らかになり、髪カード・まつ毛等でサーフェスとアウトラインのエッジ品質が一致するようになった。UniVRM の `AlphaToMask = On` と同等
+- **`shadingShiftTexture` に UV Animation を適用（UniVRM 準拠）** — `shadingShiftTexture` のサンプリング UV が生 UV（`in.uv`）を使用していたのをアニメーション済み UV（`anim_uv`）に修正。UniVRM では `GetMToonGeometry_Uv()` で一括変換した UV を全テクスチャに適用しており、`shadingShiftTexture` も例外ではない。UV スクロール・回転を使うマテリアルで影境界が正しく追従するようになった。フォワードパスとアウトラインパスの両方を修正
+- **モーフターゲットの法線・接線デルタ追従** — `IrMorphTarget` に `normal_offsets` / `tangent_offsets` を追加し、glTF モーフターゲットの法線・接線デルタを疎表現（閾値 1e-7 フィルタ）で保持するよう拡張。ビューアの GPU モーフ適用（`apply_gpu_morph_recursive`）で位置だけでなく法線・接線にも weight × delta を加算。表情変形時に MToon の陰影境界・アウトライン押し出し方向・法線マップが変形後の面方向に追従するようになった。Aスタンス変換・頂点分割・エクスポートフィルタでも法線・接線デルタを正しく伝搬
+- **NORMAL/TANGENT のみモーフの end-to-end 対応** — POSITION デルタを持たず NORMAL/TANGENT デルタのみのモーフターゲットが、抽出→エクスポートフィルタ→GPU 反映の全段で脱落していた問題を修正。(1) `extract.rs`: `IrMorph` 生成条件を `positions` のみから `positions || normals || tangents` の OR に拡張。(2) `export_filter.rs`: モーフ生存判定を 3 系統の和集合に変更。(3) `mesh.rs`: GPU モーフの影響頂点を `BTreeSet` で positions/normals/tangents の和集合から収集し、各属性を `HashMap` lookup（glTF 2.0 仕様で POSITION なしの morph target は合法）
+- **モーフ適用時の CPU 側頂点キャッシュ同期** — `apply_morphs()` が GPU バッファのみ更新し `animated_vertices`（CPU 側キャッシュ）を更新していなかったため、モーフのみ変更されたフレームで `current_vertices()` がレスト形状を返し、MToon 半透明（Blend / BlendZWrite）の距離ソートがレスト形状基準になっていた問題を修正。`apply_morphs()` の末尾で `morph_work` を `animated_vertices` にも反映し、CPU 側と GPU 側の頂点データを常に同期
+
+- **法線マップの接線空間を MikkTSpace で構築（UniVRM 準拠）** — screen-space derivative（`dpdxCoarse`/`dpdyCoarse`）による近似 TBN を廃止し、`mikktspace` crate による MikkTSpace アルゴリズムで頂点接線を生成。glTF に `TANGENT` 属性がある場合はスキニング変換して使用し、ない場合（VRM 仕様: TANGENT はエクスポートしない）は MikkTSpace で自動生成。`IrVertex` に `tangent: Vec4`（xyz=方向, w=handedness）を追加し、GPU 頂点にも `tangent: [f32; 4]` を追加。シェーダーは UniVRM `MToon_GetTangentToWorld()` 準拠の TBN 構築に変更し、`tangent.w` を二値化（NaN 回避）。ミラー UV・tangent seam での法線マップ破綻を解消
+- **`CullMode` enum 導入（VRM 0.x Front cull 対応）** — `is_double_sided: bool` を `CullMode` enum（`Back` / `None` / `Front`）に置換。VRM 0.x `_CullMode=1`（Front cull）を `doubleSided` にフォールバックせず、`wgpu::Face::Front` パイプラインで正確に再現。全レンダーキュー（Opaque / Mask / BlendZWrite / Blend）に Front cull パイプラインを追加。PMX エクスポートでは `Front` も `None` と同様に両面描画フラグ（0x01）を設定（PMX に Front cull 概念がないため）
+- **`texCoord >= 2` の graceful degradation** — `read_texture_info()` で `texCoord > 1` の場合、テクスチャ無効化（`None`）ではなく `texCoord=0` へフォールバックし `warn` ログを出力するよう変更。テクスチャ UV は不正確になるが描画自体は維持される。設計根拠をソース・ドキュメントに記載（UniVRM 実装確認含む）
+
+### バグ修正
+
+- **GI 計算から direct light を分離（UniVRM 準拠）** — `passthrough_gi` に `light_intensity * max(dot(N, light_dir), 0)` が含まれており、direct light が direct 項と GI 項で二重加算されていた問題を修正。UniVRM では `indirectLight` は SH サンプリング結果（環境光のみ）であり、direct light は別系統で処理される。SH/IBL 非搭載のビューアでは `passthrough_gi = ambient` のみが正しい近似。`gi_equalized` の CPU 側計算（`CameraUniform`）も同様に ambient のみに修正。正面を向いた面の過剰な白飛びと `giEqualizationFactor` / `rimLightingMixFactor` の光量係数異常を解消。本体シェーダーとアウトライン共有関数の両方を修正
+- **MASK 材質の AlphaToCoverage 後に alpha=1.0 を復帰（UniVRM 準拠）** — MASK 分岐で `fwidth` ベース A2C 計算後、`out_alpha = a2c_alpha` としていたため discard を通過したピクセルが半透明の中間値を持ち、egui オフスクリーン合成で cutout 材質の縁がにじむ問題を修正。UniVRM `vrmc_materials_mtoon_geometry_alpha.hlsl` は `clip()` 後に `return 1.0` で不透明に戻す。A2C はカバレッジ制御にのみ使い、最終 alpha は不透明に固定するよう修正。本体シェーダーとアウトライン共有関数の両方を修正
+- **接線 `tangent.w` のミラー座標変換反転修正** — ビューアの座標変換（VRM 1.0: Z反転、VRM 0.0: X反転）は行列式 -1 のミラー変換であり、`cross(M*N, M*T) = -M*cross(N,T)` となるため bitangent の向きが反転する。`tangent.w` を反転して接空間の handedness を維持するよう修正。法線マップの凹凸方向が左右反転する問題を解消
+- **MikkTSpace 接線生成の `normalTexture.texCoord` 対応** — `generate_tangents()` に `normal_tex_coord` 引数を追加し、`normalTexture.texCoord=1` の場合は UV1 で接線を生成するよう修正。VRM 材質からは `normalTexture` の `texCoord` を渡し、FBX/PMX/PMD は texCoord=0 を使用。法線マップが UV1 を参照するモデルで接線と法線マップの UV セットが不一致になる問題を解消
+- **glTF sampler デフォルト `min_filter` を `LinearMipmapLinear` に修正** — `IrSamplerInfo::default()` の `min_filter` を `Linear`（mipmap なし）から `LinearMipmapLinear` に変更。UniVRM の `SamplerParam.Default`（Bilinear + EnableMipMap=true）および `TextureSamplerUtil` の `glFilter.NONE` → mipmap 有効のデフォルト挙動に準拠。sampler 未指定テクスチャの遠景・斜め視点でのチラつきを軽減
+- **MToon ScreenCoordinates アウトラインのアスペクト補正修正** — `projected.x *= camera.aspect`（`width/height`）を `projected.x /= camera.aspect` に修正。UniVRM は `height/width` を乗算しており、従来の実装では横長ウィンドウでアウトラインの X 方向が過剰に膨張していた
+- **MToon sRGB アウトラインの二重ガンマ補正除去** — sRGB 版 `fs_outline` の `pow(2.2)` を除去。MToon は線形空間で計算するため、sRGB レンダーターゲットの自動変換に任せるのが正しい。`pow(2.2)` が必要なのは MMD（ガンマ空間計算）のシェーダーのみ。アウトラインだけ暗く表示される問題を解消
+- **UV1 不在時のフォールバック値修正** — GPU 側（`viewer/mesh.rs`）の UV1 不在時フォールバックを UV0 コピーからゼロ（`[0.0, 0.0]`）に変更。CPU 側（`resolve_cpu_uv`）と挙動を一致させ、UniVRM `MeshData.cs` 準拠のゼロフォールバックに統一した
+- **VRM 0.x `outlineWidthTexture` の参照チャネル修正** — VRM 0.x の `_OutlineWidthTexture` は R チャネルを参照する（UniVRM `MToonCore.cginc:86` 準拠）が、VRM 1.0 の G チャネルで読み込んでいた。`IrMaterial` に `ColorChannel` enum を追加し、VRM 0.x=R / VRM 1.0=G を CPU 側（`sample_image_channel`）と GPU 側（WGSL `select_channel`）で動的に切り替えるよう修正
+- **VRM 0.x `uvAnimationMaskTexture` の参照チャネル修正** — VRM 0.x の `_UvAnimMaskTexture` は R チャネルを参照する（UniVRM `MToonCore.cginc:129` 準拠）が、VRM 1.0 の B チャネルで読み込んでいた。同様に `ColorChannel` でバージョン別チャネル選択を実装
+- **`texCoord=1` 共有材質の書き換え廃止** — UV1 を持たないメッシュが参照する材質の `texCoord=1` を一括で `texCoord=0` に書き換える処理を削除。同じ材質を共有する UV1 付きメッシュが巻き込まれる問題を解消。tangent 生成側のフォールバックを UV0 から zero UV に変更し、描画側（`mesh.rs`）と一致させた
+- **MToon 本体パスの GI 半球補間が元の頂点法線を参照していた問題を修正** — GI の半球補間で `in.normal.y`（頂点法線）を使用していたため、normalMap 適用後の凹凸・`doubleSided` 背面反転が indirect lighting に反映されなかった。アウトラインパスは既に最終法線 `n.y` を使用しており、本体とアウトラインでシェーディングが不一致になっていた。本体パスも `n.y` に統一し、UniVRM の `MToon_SampleSH(normalWS)` 準拠に修正
+- **`rimLightingMixFactor` が GI 均一化済みの値を使用していた問題を修正（UniVRM 準拠）** — リムライティングの光量係数 `light_factor` に `giEqualizationFactor` 適用後の `gi` が含まれていたため、GI 均一化を強くした材質ほどリムの光量まで平坦化されていた。UniVRM では `rimLightingMixFactor` に `unityLight.indirectLight`（未均一化 raw indirect）を使用する。`raw_indirect` と `gi`（equalized）を分離し、リムには `rim_light_factor = direct_light + raw_indirect` を使用するよう修正。本体パス・アウトラインパス両方を修正
+- **テクスチャ差し替え時に `base_color_tex_info.index` が未同期だった問題を修正** — `assign_texture_to_material` / `assign_texture_data_to_material` で `texture_index` のみ更新し `base_color_tex_info.index` を同期していなかったため、GPU 描画は正しいが IR ベースの後続処理（エクスポートフィルタ・再読み込み）で古いテクスチャ参照が残るリスクがあった。同名材質連動割り当てパスも含め全4箇所を修正。`base_color_tex_info` が `None` の場合は `IrTextureInfo::from_index()` で新規作成
+- **MikkTSpace 接線の handedness (w) 不一致による頂点分割** — `set_tangent_encoded()` の出力をコーナー単位（`face * 3 + vert`）で保持するよう変更。同一頂点を共有するコーナー間で `tangent.w`（handedness ±1）が異なる場合、少数派コーナーの頂点を自動分割し indices / morph targets / UV1 を連動更新。mirrored UV 境界で法線マップの凹凸方向がねじれる問題を解消。Seed-san.vrm では hair(70)/head(88)/wear(44) 計 202 頂点が分割される
+- **Gram-Schmidt 再直交化後の退化 tangent 検出** — `extract.rs` のスキニング・非スキンメッシュ両経路で、Gram-Schmidt 後に `t_ortho` の長さが閾値未満または非有限値の場合は `Vec4::ZERO` にフォールバックし、MikkTSpace 再生成ルートへ流すよう修正。tangent が normal とほぼ平行なケース（非一様スケールや bad tangent）で退化 tangent `[0,0,0,w]` が有効と誤判定される問題を解消
+- **tangent 有効判定を `length_squared` ベースに変更** — `generate_tangents()` の「既に有効な tangent を持つか」の判定を `v.tangent == Vec4::ZERO`（完全一致）から `v.tangent.truncate().length_squared() < 1e-8`（xyz 長さベース）に変更。w 成分が非ゼロの退化 tangent（`[0,0,0,1]` 等）も再生成対象になるよう修正
+- **シェーダーのゼロ tangent ガード** — `apply_normal_map()` の冒頭で `dot(tangent.xyz, tangent.xyz) < 1e-6` をチェックし、退化 tangent では法線マップをスキップして基底法線を返す二重防御を追加。`normalize(vec3(0))` の WGSL 未定義動作を回避。本体・アウトライン両シェーダーに適用
+- **GI 間接光の乗算先を `litColor` に修正（VRM 仕様準拠）** — GI（間接光）項が `base_color.rgb * gi` と baseColor を使用していたため、間接光下でトゥーン境界が崩れていた。VRM 1.0 仕様では `giLighting = gi(n) * litColor` と定義されており、UniVRM も `input.litColor * lerp(indirectLight, indirectLightEqualized, _GiEqualization)` で litColor を使用する。`lit * gi`（本体）/ `toon_color * gi`（アウトライン）に修正し、日陰・逆光・弱照明でも陰色のトゥーン境界が維持されるようになった
+
+### 実装詳細
+
+- **法線マップ（ノーマルマップ）対応** — glTF `normalTexture` をシェーディングに反映。頂点接線（`tangent: Vec4`）から TBN 行列を構築し、tangent-space 法線をワールド空間に変換（UniVRM `MToon_GetTangentToWorld()` 準拠）。glTF `TANGENT` 属性がなければ `mikktspace` crate で MikkTSpace 接線を自動生成（VRM 仕様準拠）。MToon・非 MToon 両方で適用。`normalTexture.scale` による強度制御、`texCoord` / `KHR_texture_transform` / UV Animation にも対応。法線マップなしの材質にはフラット法線テクスチャ（RGB=(0.5, 0.5, 1.0)）を自動バインド
+- **`alphaMode` シェーダー処理** — `alpha_cutoff` フィールドに alphaMode を sentinel 値でエンコード（`-1.0`=OPAQUE, `-0.5`=BLEND, `>=0.0`=MASK cutoff）。OPAQUE は出力アルファ 1.0 固定、MASK は UniVRM 準拠の `fwidth` ベース AlphaToCoverage 計算で cutoff 境界を平滑化（パイプラインは blend なし）、BLEND は完全透明ピクセル `discard`。アウトラインパスにも同一のアルファ処理を適用
+- **`outlineLightingMixFactor` UniVRM 完全準拠** — 本体と同等の MToon ライティング計算を `compute_mtoon_surface_lighting()` 関数として共有。アウトライン色は UniVRM と同一の `outlineColor * lerp(1, baseCol, mix)` で合成
+- **glTF テクスチャ index の image index 正規化** — `read_texture_info()` で glTF texture index を `document.textures().nth(i).source().index()` により image index に変換。`textures[]` と `images[]` の並びが異なる glTF/VRM で正しい画像を参照
+- **`outlineWidthMultiplyTexture` GPU 専用サンプリング** — アウトライン頂点シェーダーで GPU サンプリング結果のみ使用（CPU 側 `edge_scale` は PMX エクスポート用に維持）。CPU 側 `resolve_cpu_uv()` で GPU と同一の texCoord 選択 + KHR_texture_transform を適用
+- **`doubleSided` 背面法線反転（UniVRM 準拠）** — `@builtin(front_facing)` で背面法線を反転し、法線マップ適用前に処理。UniVRM の `MTOON_IS_FRONT_VFACE` と同等。全シェーダーバリアントに適用
+- **UV アニメーション回転角精度** — UniVRM 準拠で `fract(turns) * 2π` による角度ラップを実装し、長時間再生時の浮動小数点精度低下を防止
+- **制限事項: テクスチャ UV セットは `TEXCOORD_0` / `TEXCOORD_1` のみ対応** — glTF 仕様では任意数の UV セットを許容するが、VRM/MToon で使用する UV は UV0/UV1 の 2 系統のみ（UniVRM 実装確認済み）。`texCoord >= 2` のテクスチャは `texCoord=0` にフォールバックされる（`warn` ログ出力）
+- **VRM 0.x MatCap（`_SphereAdd`）への `_MainTex` ST 非適用修正** — `resolve_tex()` ヘルパーが全テクスチャに一律 `_MainTex` ST を適用していた問題を修正。MatCap は `inherit_st=false` で ST 伝播を除外するよう変更（UniVRM `MigrationMToonMaterial.cs:255-260` 準拠: "Texture transform is not required"）。将来 MatCap の UV パラメータを使用した際に VRM 0.x で MatCap が誤変換される潜在バグを解消
+- **`base_color_tex_info` の merge / export_filter 同期漏れ修正** — `IrModel::merge()` と `build_filtered_ir()` で `base_color_tex_info` のテクスチャ index がオフセット・リマップされていなかった問題を修正。merge 時の `offset_index()` と export_filter 時の `remap_index()` を追加し、`texture_index` との不整合を解消
+- **export_filter の `sphere_texture_index` / `toon_texture_index` pruning 漏れ修正** — `used_tex_indices` の収集とリマップに `sphere_texture_index` / `toon_texture_index` が含まれていなかったため、エクスポートフィルタ適用後にこれらのテクスチャ参照が壊れる可能性があった問題を修正
+- **`doubleSided` MToon 材質の背面法線反転（UniVRM 準拠）** — `fs_main` / `fs_outline`（sRGB / Unorm 両版）に `@builtin(front_facing)` を追加し、背面フラグメントの法線を法線マップ適用前に反転。UniVRM の `MTOON_IS_FRONT_VFACE(facing, normalWS, -normalWS)` と同等。髪カード・まつげ・薄い布等の `doubleSided` 材質で陰影・リム・MatCap・法線マップの方向が Unity と一致するようになった
+- **法線マップ TBN 構築の退化 UV フォールバック** — `apply_normal_map()` で `det ≈ 0`（ゼロ面積 UV / 同一点 UV / 極端に細い三角形）や tangent/bitangent がゼロベクトル近傍の場合に基底法線にフォールバックするよう修正。`normalize(vec3(0))` の WGSL 未定義動作を回避し、法線マップ由来のちらつき・色飛びを防止。本体・アウトライン両シェーダーに適用
+- **`read_texture_info()` の `None` 時先行設定クリア** — `read_texture_info()` が `None` を返した場合（テクスチャ未参照等）、core glTF API で先に設定された `texture_index` / `emissive_texture` / `normal_texture` がクリアされず UV0 で誤描画される問題を修正。raw JSON の判定結果を authoritative とし、`None` 時は先行設定を明示的にクリアするよう変更
+- **法線マップ TBN 構築の bitangent 符号二重反転修正** — `apply_normal_map()` の screen-space derivative TBN 構築で、`inv_det = 1.0 / det` に既に含まれる handedness 符号に対し、さらに `sign(det)` を bitangent に乗算していた問題を修正。mirrored UV アイランドで法線マップの陰影方向が崩れる問題を解消。本体・アウトライン両シェーダーを修正
+- **UV アニメーション回転角の長時間稼働時精度劣化防止** — `apply_uv_anim_core()` で `camera.time * rotation_speed` をそのまま `sin/cos` に渡していたため、長時間稼働時に float 精度が低下し UV 回転がジッターする問題を修正。UniVRM 準拠で `fract(turns) * 2π` により角度を周期内に折り返すよう変更。本体・アウトライン両シェーダーを修正
+- **VRM 0.x `_OutlineWidthTexture` への `_MainTex` ST 伝播漏れ修正** — `_OutlineWidthTexture` が `resolve_tex()` ヘルパー定義前に `IrTextureInfo::from_index()` で直接設定されていたため、`_MainTex` の tiling/offset（ST）が伝播されていなかった問題を修正。`resolve_tex()` 経由に統一し、他の MToon テクスチャと同様に ST を適用（UniVRM `MigrationMToonMaterial.cs` 準拠）。CPU 側 `edge_scale` 計算にも影響するため、PMX 出力のエッジ倍率も修正される
+- **UV1 不在時のゼロフォールバック** — `texCoord=1` を要求するテクスチャに対し、メッシュに `TEXCOORD_1` が存在しないとき `[0.0, 0.0]` をフォールバック値として使用（UniVRM `MeshData.cs` 準拠）。GPU 側・CPU 側で統一
+- **スキニング/法線再計算後の TBN 同期** — アニメーション再生時のスキニング処理で法線のみ変換し接線（tangent）が未更新だった問題を修正。スキニング行列で tangent.xyz を変換後、Gram-Schmidt 再直交化で法線に対する直交性を維持。法線平滑化（`smooth_normals`）/カスタム法線クリア（`clear_custom_normals`）後も同様に tangent を再直交化。法線マップ付き材質でアニメーション中や法線再計算時に陰影・リム・ハイライトの方向がずれる問題を解消
+- **VRM 0.x `_MainTex` が raw JSON `baseColorTexture` で上書きされる問題を修正** — VRM 0.x MToon で `materialProperties._MainTex` を authoritative source として設定した後、glTF core の `pbrMetallicRoughness.baseColorTexture` が無条件に再適用されて `_MainTex` の設定を上書きしていた問題を修正。`_MainTex` 解決済みフラグ（`v0_main_tex_resolved`）を導入し、VRM 0.x MToon で `_MainTex` が設定済みの場合は raw JSON 反映をスキップするよう変更
+- **法線平滑化 + 法線マップ併用時の警告追加** — `smooth_normals` ON かつ法線マップ付き材質が含まれる場合に `warn` ログを出力するよう追加。法線平滑化は `PosUvKey`（位置+UV）のみで頂点を統合するため、UV seam 境界で tangent basis が不正確になる可能性がある（MikkTSpace 再生成が理想だがリアルタイム操作にはコスト大）
+- **shade 色合成式を仕様・UniVRM 準拠に修正** — `shade = base_color.rgb * shade_color * shade_mul` を `shade = shade_color * shade_mul` に修正。VRM 1.0 仕様の擬似コードでは `shadeColorTerm = shadeColorFactor * texture(shadeMultiplyTexture)` であり、`baseColorFactor * baseColorTexture` は lit 側にのみ適用される。従来は陰色が `baseColor` に二重従属し、影が過剰に暗くなっていた。本体シェーダーとアウトラインシェーダーの両方を修正
+- **正射影時の view direction を UniVRM 準拠に修正** — 正射影カメラ時の view direction を `normalize(camera_pos - world_pos)` から `normalize(camera_forward)` に変更。`CameraUniform` に `is_perspective` と `camera_forward` を追加。透視投影時は従来通り。MToon リムライティング・MatCap・MMD スペキュラの3箇所を修正。UniVRM `MToon_GetWorldSpaceNormalizedViewDir()` 準拠
+- **法線平滑化・カスタム法線クリアのビルド層強制無効化** — `build_gpu_model` / `build_gpu_model_from_ir` の入口で法線マップ付き材質の有無を判定し、`smooth_normals` / `clear_custom_normals` を強制 `false` にフォールバック。UI 側の無効化に加えてビルド層でも二重に防御し、CLI・テスト・ベンチ等の UI 非経由呼び出し経路でも不変条件を保証
+- **法線平滑化を法線マップ付き材質で UI 無効化** — `normal_texture` を持つ材質が含まれる場合、法線平滑化チェックボックスをグレーアウトし、UV seam 境界での tangent basis 破綻を防止。ホバーテキストで理由を表示
+- **MatCap UV 基底の X 軸反転修正（UniVRM 準拠）** — MatCap UV 算出の `world_view_x` が UniVRM と符号逆（`(v.z, 0, -v.x)` → `(-v.z, 0, v.x)`）で、`world_view_y` の cross 積順も不一致だった問題を修正。`right = cross(viewDir, worldUp)`, `up = cross(right, viewDir)` に統一（UniVRM `vrmc_materials_mtoon_lighting_mtoon.hlsl` 準拠）。非対称 MatCap テクスチャの左右ミラーを解消。本体シェーダーとアウトラインシェーダーの両方を修正
+- **カスタム法線クリアを法線マップ付き材質で UI 無効化** — `normal_texture` を持つ材質が含まれる場合、法線平滑化に加えカスタム法線クリアのチェックボックスもグレーアウトするよう修正。`recalculate_normals_from_geometry` 後の Gram-Schmidt 再直交化では UV seam 境界で tangent basis が不正確になる問題は `smooth_normals` と同一
+- **glTF tangent 初期ロード時の Gram-Schmidt 再直交化追加** — `extract.rs` のスキニング・非スキンメッシュ両経路で、tangent 変換後に `t_ortho = (t - n * dot(n, t)).normalize()` による再直交化を追加。`animation.rs` のスキニング更新パスでは既に実装済みだったが、初期ロード経路では未実施だった。非一様スケールを含むスキン行列で法線と接線の直交性が崩れる問題を解消
+- **`texCoord=1` かつ TEXCOORD_1 不在時のフォールバック統一** — extract 完了後に全メッシュの UV1 有無を確認し、UV1 が存在しない場合は全材質テクスチャの `tex_coord=1` を `tex_coord=0` に正規化するステップを追加。tangent 生成（UV0 フォールバック）と描画（zero フォールバック）で UV セットが乖離する問題を根本解消
+- **`texCoord=1` フォールバックをメッシュ単位判定に変更** — UV1 フォールバックの判定をモデル全体（`any_mesh_has_uv1`）からメッシュ単位に変更。UV1 を持たないメッシュが参照する材質のみ `texCoord=1` → `texCoord=0` に正規化し、一部メッシュだけ UV1 を持つモデルでも正しく動作するよう改善。`base_color_tex_info` もフォールバック対象に追加
+- **テクスチャ差し替え時の per-texture sampler 維持** — UI からテクスチャを差し替える際、`default_sampler`（Linear + Repeat 固定）ではなく材質の `IrSamplerInfo` を使用してサンプラーを再生成するよう修正。`ClampToEdge` / `MirroredRepeat` / `Nearest` 等のテクスチャ固有サンプラー設定が差し替え後も維持される。同名材質連動・パッケージテクスチャ割り当ての両経路で修正
+- **VRM 0.x `_MainTex` 採用時の `source_texture_name` 同期** — VRM 0.x MToon の `_MainTex` を authoritative source として `texture_index` / `base_color_tex_info` を上書きする際、`source_texture_name` も同一テクスチャ元から再取得するよう修正。UnityPackage テクスチャ自動割り当て（`embed_textures_into_ir`）で glTF core 側のテクスチャ名が残り、`_MainTex` 側と一致しない問題を解消
+- **MToon `dot(N,L)` の光方向符号修正** — `camera.light_dir`（光の進行方向: 光源→表面）を MToon / 非MToon の `dot(N,L)` でそのまま使用していた問題を修正。`dot(n, -camera.light_dir)` に変更し、仕様の「表面→光源方向」に統一。MMD シェーダーは既に `-camera.light_dir` で正しく反転していた。toon shading の lit/shade 境界と Half-Lambert ライティングの方向が正しくなり、正面が影になる問題を解消。本体・アウトライン・非 MToon の3箇所を修正
+- **`matcapTexture` の `KHR_texture_transform` 適用** — `matcapTexture` は `read_texture_info()` で `texCoord` / `offset` / `scale` / `rotation` を抽出済みだが、シェーダーでは生の matcap UV をそのまま使用していた問題を修正。`MaterialUniform` に `matcap_uv_a` / `matcap_uv_b` を追加し、`apply_texture_transform()` を適用。本体・アウトライン両シェーダーを修正
+- **ライトカラー対応** — `CameraUniform` に `light_color: vec3<f32>` を追加し、direct light を `light_intensity * light_color` で計算するよう変更。UI にカラーピッカーを追加。暖色・冷色の照明表現が可能に
+- **半球 ambient（Sky/Ground 2色補間）** — 一様な灰色 ambient を法線Y成分による Sky/Ground 2色補間に変更（`mix(ground, sky, normal.y * 0.5 + 0.5)`）。SH9 の L1 成分（上下明暗差）を近似し、VRoidHub / UniVRM の `SampleSH(normal)` に近い環境光を実現。`gi_equalized` も `(sky + ground) / 2` に更新（UniVRM `(SH(up) + SH(down)) / 2` 準拠）。UI に Sky/Ground 各色のカラーピッカーを追加
+- **デフォルトライトモードを固定に変更** — `LightMode::CameraFollow` から `LightMode::Fixed` に変更。VRoidHub と同じ固定ディレクショナルライト環境がデフォルトに
+- **`KHR_materials_emissive_strength` 対応** — glTF の `emissiveFactor` は [0,1] 範囲に制限されるため、HDR emissive は `KHR_materials_emissive_strength` 拡張の `emissiveStrength` で倍率を指定する。UniVRM は `maxComponent > 1.0` 時にこの拡張を書き出すが、読み取り側で未対応だった。`extract.rs` で `emissiveStrength` を読み取り `emissive_factor` に乗算するよう修正
 
 ## v0.2.8
 

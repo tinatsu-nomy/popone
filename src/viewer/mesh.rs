@@ -9,14 +9,17 @@ use crate::convert::coord::{
     flip_face_winding, gltf_normal_to_pmx, gltf_normal_to_pmx_v0, gltf_pos_to_pmx,
     gltf_pos_to_pmx_v0,
 };
-use crate::intermediate::types::{IrModel, IrMorphKind};
+use crate::intermediate::types::{
+    AlphaMode, CullMode, IrMagFilter, IrMinFilter, IrModel, IrMorphKind, IrSamplerInfo,
+    IrTextureInfo, IrWrapMode, OutlineWidthMode,
+};
 
 use super::gpu::{self, Vertex};
 
 /// GPU空間で重複排除・座標変換済みのモーフデータ
 enum GpuMorphEntry {
-    /// 頂点モーフ: (gpu_vi, 変換済みオフセット)
-    Vertex(Vec<(u32, [f32; 3])>),
+    /// 頂点モーフ: (gpu_vi, pos_delta, normal_delta, tangent_delta)
+    Vertex(Vec<(u32, [f32; 3], [f32; 3], [f32; 3])>),
     /// グループモーフ: (サブモーフIndex, ウェイト)
     Group(Vec<(usize, f32)>),
 }
@@ -28,17 +31,42 @@ pub enum RenderStyle {
     Mmd,
 }
 
+/// MToon 仕様に基づくレンダーキュー（描画順序カテゴリ）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RenderQueue {
+    /// 不透明（デプス書込あり）
+    Opaque = 0,
+    /// alphaCutoff でカットアウト（デプス書込あり）
+    Mask = 1,
+    /// 半透明・デプス書込あり（MToon transparentWithZWrite）
+    BlendZWrite = 2,
+    /// 半透明・デプス書込なし
+    Blend = 3,
+}
+
 /// 材質ごとの描画情報
 pub struct DrawCall {
     pub index_offset: u32,
     pub index_count: u32,
-    pub double_sided: bool,
+    pub cull_mode: CullMode,
     pub is_alpha: bool,
+    /// MToon 仕様準拠レンダーキュー
+    pub render_queue: RenderQueue,
+    /// renderQueueOffsetNumber（BLEND 内ソート用）
+    pub render_queue_offset: i32,
+    /// MASK モード時の alphaCutoff
+    pub alpha_cutoff: f32,
     pub texture_bind_group: Option<wgpu::BindGroup>,
     pub material_bind_group: wgpu::BindGroup,
     pub material_index: usize,
     pub render_style: RenderStyle,
     pub has_edge: bool,
+    /// MToon アウトライン描画対象
+    pub has_outline: bool,
+    /// MToon 補助テクスチャ bind group（group 3: matcap + shade + shift + rim + uvMask）
+    pub mtoon_aux_bind_group: Option<wgpu::BindGroup>,
+    /// 描画メッシュの重心位置（半透明距離ソート用）
+    pub center: glam::Vec3,
     // MMD 用 BindGroup（prepare_mmd_resources で設定）
     pub mmd_material_buf: Option<wgpu::Buffer>,
     pub mmd_material_bind_group: Option<wgpu::BindGroup>,
@@ -79,21 +107,43 @@ pub struct GpuModel {
 
 impl GpuModel {
     /// 指定材質にテクスチャを割り当て（DrawCall の bind group を更新）
+    /// sampler_info から材質固有のサンプラーを生成して使用する
     pub fn assign_texture_to_material(
         &mut self,
         material_index: usize,
         texture_view: &wgpu::TextureView,
         device: &wgpu::Device,
         texture_bgl: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
+        sampler_info: &IrSamplerInfo,
     ) {
+        let (min_filter, mipmap_filter) = ir_min_filter_to_wgpu(sampler_info.min_filter);
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("assign_sampler"),
+            mag_filter: match sampler_info.mag_filter {
+                IrMagFilter::Nearest => wgpu::FilterMode::Nearest,
+                IrMagFilter::Linear => wgpu::FilterMode::Linear,
+            },
+            min_filter,
+            mipmap_filter,
+            address_mode_u: match sampler_info.wrap_u {
+                IrWrapMode::Repeat => wgpu::AddressMode::Repeat,
+                IrWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
+                IrWrapMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
+            },
+            address_mode_v: match sampler_info.wrap_v {
+                IrWrapMode::Repeat => wgpu::AddressMode::Repeat,
+                IrWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
+                IrWrapMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
+            },
+            ..Default::default()
+        });
         for draw in &mut self.draws {
             if draw.material_index == material_index {
                 draw.texture_bind_group = Some(gpu::create_texture_bind_group(
                     device,
                     texture_bgl,
                     texture_view,
-                    sampler,
+                    &sampler,
                 ));
             }
         }
@@ -198,6 +248,17 @@ impl GpuModel {
             Self::apply_gpu_morph_to(&self.gpu_morphs, morph_idx, w, &mut self.morph_work);
         }
 
+        // CPU 側の現在頂点も同期（半透明ソート等が morphed 頂点を参照できるようにする）
+        match self.animated_vertices {
+            Some(ref mut verts) => {
+                verts.clear();
+                verts.extend_from_slice(&self.morph_work);
+            }
+            None => {
+                self.animated_vertices = Some(self.morph_work.clone());
+            }
+        }
+
         queue.write_buffer(&self.vertex_buf, 0, bytemuck::cast_slice(&self.morph_work));
     }
 
@@ -247,12 +308,18 @@ impl GpuModel {
         }
         match &gpu_morphs[morph_idx] {
             GpuMorphEntry::Vertex(voffs) => {
-                for &(gpu_vi, offset) in voffs {
+                for &(gpu_vi, pos_d, nrm_d, tan_d) in voffs {
                     let vi = gpu_vi as usize;
                     if vi < vertices.len() {
-                        vertices[vi].position[0] += offset[0] * weight;
-                        vertices[vi].position[1] += offset[1] * weight;
-                        vertices[vi].position[2] += offset[2] * weight;
+                        vertices[vi].position[0] += pos_d[0] * weight;
+                        vertices[vi].position[1] += pos_d[1] * weight;
+                        vertices[vi].position[2] += pos_d[2] * weight;
+                        vertices[vi].normal[0] += nrm_d[0] * weight;
+                        vertices[vi].normal[1] += nrm_d[1] * weight;
+                        vertices[vi].normal[2] += nrm_d[2] * weight;
+                        vertices[vi].tangent[0] += tan_d[0] * weight;
+                        vertices[vi].tangent[1] += tan_d[1] * weight;
+                        vertices[vi].tangent[2] += tan_d[2] * weight;
                     }
                 }
             }
@@ -291,14 +358,72 @@ pub fn build_gpu_model(
     smooth_normals: bool,
     clear_custom_normals: bool,
 ) -> Result<GpuModel> {
+    // 法線マップ付き材質がある場合、smooth_normals / clear_custom_normals を強制無効化
+    // （UV seam 境界で tangent basis が壊れるため。UI 側でも無効化しているが、ビルド層でも防御）
+    let has_normal_map = ir.materials.iter().any(|m| m.normal_texture.is_some());
+    let smooth_normals = if has_normal_map {
+        false
+    } else {
+        smooth_normals
+    };
+    let clear_custom_normals = if has_normal_map {
+        false
+    } else {
+        clear_custom_normals
+    };
+
     let gpu_textures = super::texture::upload_textures(ir, images, device, queue)?;
     build_gpu_model_inner(
         ir,
         gpu_textures,
         device,
+        queue,
         smooth_normals,
         clear_custom_normals,
     )
+}
+
+/// IrMinFilter を wgpu の (min_filter, mipmap_filter) ペアに変換する
+fn ir_min_filter_to_wgpu(mode: IrMinFilter) -> (wgpu::FilterMode, wgpu::FilterMode) {
+    match mode {
+        IrMinFilter::Nearest => (wgpu::FilterMode::Nearest, wgpu::FilterMode::Nearest),
+        IrMinFilter::Linear => (wgpu::FilterMode::Linear, wgpu::FilterMode::Nearest),
+        IrMinFilter::NearestMipmapNearest => (wgpu::FilterMode::Nearest, wgpu::FilterMode::Nearest),
+        IrMinFilter::LinearMipmapNearest => (wgpu::FilterMode::Linear, wgpu::FilterMode::Nearest),
+        IrMinFilter::NearestMipmapLinear => (wgpu::FilterMode::Nearest, wgpu::FilterMode::Linear),
+        IrMinFilter::LinearMipmapLinear => (wgpu::FilterMode::Linear, wgpu::FilterMode::Linear),
+    }
+}
+
+/// IrSamplerInfo に対応する wgpu::Sampler をキャッシュから取得（なければ作成）
+fn ensure_sampler<'a>(
+    cache: &'a mut HashMap<IrSamplerInfo, wgpu::Sampler>,
+    device: &wgpu::Device,
+    info: &IrSamplerInfo,
+) -> &'a wgpu::Sampler {
+    cache.entry(*info).or_insert_with(|| {
+        let (min_filter, mipmap_filter) = ir_min_filter_to_wgpu(info.min_filter);
+        device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("ir_sampler"),
+            mag_filter: match info.mag_filter {
+                IrMagFilter::Nearest => wgpu::FilterMode::Nearest,
+                IrMagFilter::Linear => wgpu::FilterMode::Linear,
+            },
+            min_filter,
+            mipmap_filter,
+            address_mode_u: match info.wrap_u {
+                IrWrapMode::Repeat => wgpu::AddressMode::Repeat,
+                IrWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
+                IrWrapMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
+            },
+            address_mode_v: match info.wrap_v {
+                IrWrapMode::Repeat => wgpu::AddressMode::Repeat,
+                IrWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
+                IrWrapMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
+            },
+            ..Default::default()
+        })
+    })
 }
 
 /// IrModel のみから GPU バッファを構築（FBX 用）
@@ -309,11 +434,25 @@ pub fn build_gpu_model_from_ir(
     smooth_normals: bool,
     clear_custom_normals: bool,
 ) -> Result<GpuModel> {
+    // 法線マップ付き材質がある場合、smooth_normals / clear_custom_normals を強制無効化
+    let has_normal_map = ir.materials.iter().any(|m| m.normal_texture.is_some());
+    let smooth_normals = if has_normal_map {
+        false
+    } else {
+        smooth_normals
+    };
+    let clear_custom_normals = if has_normal_map {
+        false
+    } else {
+        clear_custom_normals
+    };
+
     let gpu_textures = super::texture::upload_textures_from_ir(ir, device, queue)?;
     build_gpu_model_inner(
         ir,
         gpu_textures,
         device,
+        queue,
         smooth_normals,
         clear_custom_normals,
     )
@@ -323,6 +462,7 @@ fn build_gpu_model_inner(
     ir: &IrModel,
     gpu_textures_dual: Vec<(wgpu::TextureView, wgpu::TextureView)>,
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
     smooth_normals: bool,
     clear_custom_normals: bool,
 ) -> Result<GpuModel> {
@@ -354,17 +494,19 @@ fn build_gpu_model_inner(
     let mut normal_accum: Vec<([f32; 3], u32)> = Vec::with_capacity(total_verts);
 
     let texture_bgl = gpu::create_texture_bind_group_layout(device);
-    let tex_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("build_sampler"),
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::FilterMode::Linear,
-        address_mode_u: wgpu::AddressMode::Repeat,
-        address_mode_v: wgpu::AddressMode::Repeat,
-        ..Default::default()
-    });
+    // サンプラーキャッシュ: IrSamplerInfo → wgpu::Sampler（重複生成を回避）
+    let mut sampler_cache: HashMap<IrSamplerInfo, wgpu::Sampler> = HashMap::new();
+    // デフォルトサンプラー（sampler 情報がないテクスチャ用）
+    let default_sampler_info = IrSamplerInfo::default();
+    ensure_sampler(&mut sampler_cache, device, &default_sampler_info);
 
     let material_bgl = gpu::create_material_bind_group_layout(device);
+    let mtoon_aux_bgl = gpu::create_mtoon_aux_bind_group_layout_pub(device);
+
+    // デフォルトテクスチャビュー（MToon 補助 bind group 用）
+    let default_white_view = gpu::create_white_texture_view_srgb(device, queue);
+    let default_black_view = gpu::create_black_texture_view_pub(device, queue);
+    let default_flat_normal_view = gpu::create_flat_normal_texture_view(device, queue);
 
     // 各メッシュのグローバル頂点オフセット（メッシュ元順序）
     let mut mesh_global_offsets = Vec::with_capacity(ir.meshes.len());
@@ -399,19 +541,34 @@ fn build_gpu_model_inner(
             let global_offset = mesh_global_offsets[mi];
 
             // 頂点変換 + マッピング構築
+            let has_uv1 = !mesh.uvs1.is_empty();
             for (local_vi, v) in mesh.vertices.iter().enumerate() {
                 let pos = pos_fn(v.position);
                 let normal = normal_fn(v.normal);
+                // UV1: 存在すれば使用、なければゼロ（UniVRM MeshData.cs 準拠）
+                let uv1 = if has_uv1 {
+                    mesh.uvs1[local_vi]
+                } else {
+                    [0.0, 0.0]
+                };
+
+                // ミラー変換(det=-1)では cross(M*N, M*T) = -M*cross(N,T) となるため
+                // bitangent の向きを維持するには tangent.w を反転する必要がある
+                let tangent = normal_fn(v.tangent.truncate())
+                    .normalize_or_zero()
+                    .extend(-v.tangent.w);
 
                 let gpu_vi = if smooth_normals {
                     // 位置+UVで統合、法線は累積して後で平均化
-                    let key = PosUvKey::new(pos.to_array(), v.uv.to_array());
+                    let key = PosUvKey::new(pos.to_array(), v.uv.to_array(), uv1);
                     *vertex_dedup.entry(key).or_insert_with(|| {
                         let idx = all_vertices.len() as u32;
                         all_vertices.push(Vertex {
                             position: pos.to_array(),
                             normal: [0.0; 3],
                             uv: v.uv.to_array(),
+                            uv1,
+                            tangent: tangent.to_array(),
                         });
                         normal_accum.push(([0.0; 3], 0));
                         idx
@@ -422,6 +579,8 @@ fn build_gpu_model_inner(
                         position: pos.to_array(),
                         normal: normal.to_array(),
                         uv: v.uv.to_array(),
+                        uv1,
+                        tangent: tangent.to_array(),
                     });
                     idx
                 };
@@ -453,21 +612,200 @@ fn build_gpu_model_inner(
         let index_count = all_indices.len() as u32 - index_offset;
 
         // テクスチャ bind group（sRGB ビューを使用 — 標準描画用）
+        // 材質の base_color_tex_info からサンプラー情報を取得
+        let base_sampler_info = mat
+            .base_color_tex_info
+            .as_ref()
+            .map(|ti| &ti.sampler)
+            .unwrap_or(&default_sampler_info);
+        // 材質用サンプラーを事前にキャッシュに登録
+        ensure_sampler(&mut sampler_cache, device, base_sampler_info);
         let tex_bg = mat.texture_index.and_then(|ti| {
             gpu_textures_dual.get(ti).map(|(srgb_view, _)| {
-                gpu::create_texture_bind_group(device, &texture_bgl, srgb_view, &tex_sampler)
+                let sampler = sampler_cache.get(base_sampler_info).unwrap();
+                gpu::create_texture_bind_group(device, &texture_bgl, srgb_view, sampler)
             })
         });
 
         // 材質 bind group
         let diffuse = mat.diffuse;
-        let mat_bg = gpu::create_material_bind_group(device, &material_bgl, diffuse.to_array());
+        let shade_color = mat.shade_color.unwrap_or(Vec3::ZERO).to_array();
+        let outline_mode = match mat.outline_width_mode {
+            OutlineWidthMode::None => 0.0,
+            OutlineWidthMode::WorldCoordinates => 1.0,
+            OutlineWidthMode::ScreenCoordinates => 2.0,
+        };
+        let mat_bg = gpu::create_material_bind_group(
+            device,
+            &material_bgl,
+            diffuse.to_array(),
+            shade_color,
+            mat.is_mtoon,
+            mat.shading_toony_factor,
+            mat.shading_shift_factor,
+            mat.outline_width_factor,
+            outline_mode,
+            mat.edge_color.to_array(),
+            mat.outline_lighting_mix,
+            mat.parametric_rim_color.to_array(),
+            mat.parametric_rim_fresnel_power,
+            mat.parametric_rim_lift,
+            mat.rim_lighting_mix,
+            mat.matcap_texture.is_some(),
+            mat.matcap_factor.to_array(),
+            mat.shade_texture.is_some(),
+            mat.shading_shift_texture.is_some(),
+            mat.shading_shift_texture_scale,
+            mat.rim_multiply_texture.is_some(),
+            mat.uv_animation_scroll_x_speed,
+            mat.uv_animation_scroll_y_speed,
+            mat.uv_animation_rotation_speed,
+            mat.uv_animation_mask_texture.is_some(),
+            // alphaMode エンコーディング: OPAQUE=-1.0, MASK=cutoff(>=0.0), BLEND=-0.5
+            match mat.alpha_mode {
+                AlphaMode::Opaque => -1.0,
+                AlphaMode::Mask => mat.alpha_cutoff, // 0.0 も合法値
+                _ => -0.5,                           // Blend / BlendZWrite
+            },
+            gpu::pack_uv_params(mat.base_color_tex_info.as_ref()),
+            gpu::pack_uv_params(mat.shade_texture.as_ref()),
+            gpu::pack_uv_params(mat.shading_shift_texture.as_ref()),
+            gpu::pack_uv_params(mat.rim_multiply_texture.as_ref()),
+            gpu::pack_uv_params(mat.outline_width_texture.as_ref()),
+            gpu::pack_uv_params(mat.uv_animation_mask_texture.as_ref()),
+            mat.emissive_factor.to_array(),
+            mat.emissive_texture.is_some(),
+            gpu::pack_uv_params(mat.emissive_texture.as_ref()),
+            mat.normal_texture.is_some(),
+            mat.normal_texture_scale,
+            gpu::pack_uv_params(mat.normal_texture.as_ref()),
+            mat.gi_equalization_factor,
+            mat.outline_width_tex_channel.to_f32(),
+            mat.uv_anim_mask_tex_channel.to_f32(),
+            gpu::pack_uv_params(mat.matcap_texture.as_ref()),
+        );
 
-        if diffuse.w < 1.0 {
+        // MToon 補助テクスチャ bind group（group 3）
+        // MToon 材質だけでなく emissiveTexture を持つ非 MToon 材質にも必要
+        let needs_aux =
+            mat.is_mtoon || mat.emissive_texture.is_some() || mat.normal_texture.is_some();
+        let mtoon_aux_bg = if needs_aux {
+            let get_srgb = |idx: Option<usize>| -> Option<&wgpu::TextureView> {
+                idx.and_then(|ti| gpu_textures_dual.get(ti).map(|(srgb, _)| srgb))
+            };
+            let get_linear = |idx: Option<usize>| -> Option<&wgpu::TextureView> {
+                idx.and_then(|ti| gpu_textures_dual.get(ti).map(|(_, unorm)| unorm))
+            };
+            let default_white = &default_white_view;
+            let default_black = &default_black_view;
+            let matcap_view =
+                get_srgb(mat.matcap_texture.as_ref().map(|t| t.index)).unwrap_or(default_black);
+            let shade_mul_view =
+                get_srgb(mat.shade_texture.as_ref().map(|t| t.index)).unwrap_or(default_white);
+            // shadingShiftTexture: 仕様でリニア色空間と規定（Unorm ビュー使用）
+            let shift_view = get_linear(mat.shading_shift_texture.as_ref().map(|t| t.index))
+                .unwrap_or(default_white);
+            let rim_mul_view = get_srgb(mat.rim_multiply_texture.as_ref().map(|t| t.index))
+                .unwrap_or(default_white);
+            // uvAnimationMaskTexture: 仕様でリニア色空間と規定（Unorm ビュー使用）
+            let uv_mask_view = get_linear(mat.uv_animation_mask_texture.as_ref().map(|t| t.index))
+                .unwrap_or(default_white);
+            // outlineWidthMultiplyTexture: 仕様でリニア色空間と規定（Gチャンネル参照）
+            let outline_width_view =
+                get_linear(mat.outline_width_texture.as_ref().map(|t| t.index))
+                    .unwrap_or(default_white);
+            // emissiveTexture: sRGB 色空間
+            let emissive_view =
+                get_srgb(mat.emissive_texture.as_ref().map(|t| t.index)).unwrap_or(default_white);
+            // normalTexture: リニア色空間（Unorm ビュー使用）
+            let normal_view = get_linear(mat.normal_texture.as_ref().map(|t| t.index))
+                .unwrap_or(&default_flat_normal_view);
+            // テクスチャごとに sampler を事前登録（glTF texture 単位 sampler に準拠）
+            let sampler_of = |ti: Option<&IrTextureInfo>| -> IrSamplerInfo {
+                ti.map(|t| t.sampler).unwrap_or_default()
+            };
+            let matcap_si = sampler_of(mat.matcap_texture.as_ref());
+            let shade_si = sampler_of(mat.shade_texture.as_ref());
+            let shift_si = sampler_of(mat.shading_shift_texture.as_ref());
+            let rim_si = sampler_of(mat.rim_multiply_texture.as_ref());
+            let uv_mask_si = sampler_of(mat.uv_animation_mask_texture.as_ref());
+            let outline_si = sampler_of(mat.outline_width_texture.as_ref());
+            let emissive_si = sampler_of(mat.emissive_texture.as_ref());
+            let normal_si = sampler_of(mat.normal_texture.as_ref());
+            for si in [
+                &matcap_si,
+                &shade_si,
+                &shift_si,
+                &rim_si,
+                &uv_mask_si,
+                &outline_si,
+                &emissive_si,
+                &normal_si,
+            ] {
+                ensure_sampler(&mut sampler_cache, device, si);
+            }
+            let matcap_sampler = sampler_cache.get(&matcap_si).unwrap();
+            let shade_sampler = sampler_cache.get(&shade_si).unwrap();
+            let shift_sampler = sampler_cache.get(&shift_si).unwrap();
+            let rim_sampler = sampler_cache.get(&rim_si).unwrap();
+            let uv_mask_sampler = sampler_cache.get(&uv_mask_si).unwrap();
+            let outline_sampler = sampler_cache.get(&outline_si).unwrap();
+            let emissive_sampler = sampler_cache.get(&emissive_si).unwrap();
+            let normal_sampler = sampler_cache.get(&normal_si).unwrap();
+            Some(gpu::create_mtoon_aux_bind_group(
+                device,
+                &mtoon_aux_bgl,
+                gpu::AuxTexEntry {
+                    view: matcap_view,
+                    sampler: matcap_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: shade_mul_view,
+                    sampler: shade_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: shift_view,
+                    sampler: shift_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: rim_mul_view,
+                    sampler: rim_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: uv_mask_view,
+                    sampler: uv_mask_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: outline_width_view,
+                    sampler: outline_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: emissive_view,
+                    sampler: emissive_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: normal_view,
+                    sampler: normal_sampler,
+                },
+            ))
+        } else {
+            None
+        };
+
+        // alphaMode ベースでレンダーキューを決定
+        let render_queue = match mat.alpha_mode {
+            AlphaMode::Opaque => RenderQueue::Opaque,
+            AlphaMode::Mask => RenderQueue::Mask,
+            AlphaMode::BlendWithZWrite => RenderQueue::BlendZWrite,
+            AlphaMode::Blend => RenderQueue::Blend,
+        };
+        // is_alpha は後方互換（BLEND 系 or diffuse.w < 1.0）
+        let is_alpha = matches!(render_queue, RenderQueue::Blend | RenderQueue::BlendZWrite)
+            || diffuse.w < 1.0;
+
+        if is_alpha {
             has_alpha = true;
         }
-
-        let is_alpha = diffuse.w < 1.0;
 
         let render_style = if mat.source_format.is_pmx_pmd() {
             RenderStyle::Mmd
@@ -475,17 +813,39 @@ fn build_gpu_model_inner(
             RenderStyle::Standard
         };
         let has_edge = mat.edge_size > 0.0;
+        let has_outline =
+            mat.outline_width_mode != OutlineWidthMode::None && mat.outline_width_factor > 0.0;
+
+        // 描画メッシュの重心を計算（半透明距離ソート用）
+        let center = if index_count > 0 {
+            let mut sum = glam::Vec3::ZERO;
+            let start = index_offset as usize;
+            let end = start + index_count as usize;
+            for &idx in &all_indices[start..end] {
+                let p = all_vertices[idx as usize].position;
+                sum += glam::Vec3::from(p);
+            }
+            sum / index_count as f32
+        } else {
+            glam::Vec3::ZERO
+        };
 
         draws.push(DrawCall {
             index_offset,
             index_count,
-            double_sided: mat.is_double_sided,
+            cull_mode: mat.cull_mode,
             is_alpha,
+            render_queue,
+            render_queue_offset: mat.render_queue_offset,
+            alpha_cutoff: mat.alpha_cutoff,
             texture_bind_group: tex_bg,
             material_bind_group: mat_bg,
             material_index: mat_idx,
             render_style,
             has_edge,
+            has_outline,
+            center,
+            mtoon_aux_bind_group: mtoon_aux_bg,
             mmd_material_buf: None,
             mmd_material_bind_group: None,
             mmd_aux_bind_group: None,
@@ -510,19 +870,59 @@ fn build_gpu_model_inner(
         recalculate_normals_from_geometry(&mut all_vertices, &all_indices);
     }
 
+    // normal 再計算後の tangent 再直交化（Gram-Schmidt）
+    // smooth_normals / clear_custom_normals で normal が変わると TBN 行列が不整合になるため
+    if smooth_normals || clear_custom_normals {
+        reorthogonalize_tangents(&mut all_vertices);
+
+        // normal map 付き材質では Gram-Schmidt 再直交化だけでは UV seam 境界で
+        // tangent basis が壊れる可能性がある（MikkTSpace 再生成が理想だがコスト大）
+        if smooth_normals && ir.materials.iter().any(|m| m.normal_texture.is_some()) {
+            log::warn!(
+                "法線平滑化が有効ですが、normal map 付き材質が含まれています。\
+                 UV seam 境界で tangent が不正確になる場合があります"
+            );
+        }
+    }
+
     // GPU空間モーフデータを事前計算（重複排除 + 座標変換済み）
     let gpu_morphs: Vec<GpuMorphEntry> = ir
         .morphs
         .iter()
         .map(|morph| match &morph.kind {
-            IrMorphKind::Vertex(voffs) => {
-                let mut seen = HashSet::with_capacity(voffs.len());
-                let mut deduped = Vec::with_capacity(voffs.len());
-                for &(global_vi, offset) in voffs {
-                    if let Some(&gpu_vi) = global_to_gpu.get(global_vi) {
+            IrMorphKind::Vertex {
+                ref positions,
+                ref normals,
+                ref tangents,
+            } => {
+                let pos_map: HashMap<usize, Vec3> = positions.iter().copied().collect();
+                let nrm_map: HashMap<usize, Vec3> = normals.iter().copied().collect();
+                let tan_map: HashMap<usize, Vec3> = tangents.iter().copied().collect();
+                // positions / normals / tangents の和集合で影響頂点を収集
+                let affected: std::collections::BTreeSet<usize> = positions
+                    .iter()
+                    .map(|(vi, _)| *vi)
+                    .chain(normals.iter().map(|(vi, _)| *vi))
+                    .chain(tangents.iter().map(|(vi, _)| *vi))
+                    .collect();
+                let mut seen = HashSet::with_capacity(affected.len());
+                let mut deduped = Vec::with_capacity(affected.len());
+                for global_vi in &affected {
+                    if let Some(&gpu_vi) = global_to_gpu.get(*global_vi) {
                         if seen.insert(gpu_vi) {
-                            let t = pos_fn(offset);
-                            deduped.push((gpu_vi, t.to_array()));
+                            let p = pos_map
+                                .get(global_vi)
+                                .map(|&v| pos_fn(v))
+                                .unwrap_or(Vec3::ZERO);
+                            let n = nrm_map
+                                .get(global_vi)
+                                .map(|&v| normal_fn(v))
+                                .unwrap_or(Vec3::ZERO);
+                            let t = tan_map
+                                .get(global_vi)
+                                .map(|&v| normal_fn(v))
+                                .unwrap_or(Vec3::ZERO);
+                            deduped.push((gpu_vi, p.to_array(), n.to_array(), t.to_array()));
                         }
                     }
                 }
@@ -557,7 +957,8 @@ fn build_gpu_model_inner(
         usage: wgpu::BufferUsages::INDEX,
     });
 
-    // エッジスケールバッファ（MMD draw がある場合のみ）
+    // エッジスケールバッファ（MMD エッジ専用）
+    // MToon アウトラインは GPU 側で outlineWidthMultiplyTexture をサンプリングするため不要
     // 注意: smooth_normals ON 時は同一位置の頂点が統合され、異なる material の
     // edge_scale が混在しうるが、UI 側で MMD draw 存在時は smooth_normals を
     // 無効化しているため、実用上は material 境界を越えた干渉は発生しない
@@ -675,18 +1076,34 @@ fn recalculate_normals_from_geometry(vertices: &mut [Vertex], indices: &[u32]) {
     }
 }
 
-/// 頂点統合用キー（位置+UVのビット表現で比較、法線は平均化するため含めない）
+/// normal 再計算後の tangent 再直交化（Gram-Schmidt）
+/// tangent.w（handedness）は変更せず、tangent.xyz を normal に対して直交射影する
+fn reorthogonalize_tangents(vertices: &mut [Vertex]) {
+    for v in vertices.iter_mut() {
+        let n = Vec3::from(v.normal);
+        let t = Vec3::from_slice(&v.tangent[..3]);
+        let t_ortho = (t - n * n.dot(t)).normalize_or_zero();
+        v.tangent[0] = t_ortho.x;
+        v.tangent[1] = t_ortho.y;
+        v.tangent[2] = t_ortho.z;
+        // tangent[3] (handedness) は変更しない
+    }
+}
+
+/// 頂点統合用キー（位置+UV0+UV1のビット表現で比較、法線は平均化するため含めない）
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct PosUvKey {
     pos: [u32; 3],
-    uv: [u32; 2],
+    uv0: [u32; 2],
+    uv1: [u32; 2],
 }
 
 impl PosUvKey {
-    fn new(pos: [f32; 3], uv: [f32; 2]) -> Self {
+    fn new(pos: [f32; 3], uv0: [f32; 2], uv1: [f32; 2]) -> Self {
         Self {
             pos: [pos[0].to_bits(), pos[1].to_bits(), pos[2].to_bits()],
-            uv: [uv[0].to_bits(), uv[1].to_bits()],
+            uv0: [uv0[0].to_bits(), uv0[1].to_bits()],
+            uv1: [uv1[0].to_bits(), uv1[1].to_bits()],
         }
     }
 }

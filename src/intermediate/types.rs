@@ -1,5 +1,118 @@
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
+/// テクスチャの UV ラッピングモード
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IrWrapMode {
+    Repeat,
+    ClampToEdge,
+    MirroredRepeat,
+}
+
+/// テクスチャの拡大フィルタリングモード（mag_filter）
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IrMagFilter {
+    Nearest,
+    Linear,
+}
+
+/// テクスチャの縮小フィルタリングモード（min_filter + mipmap_filter）
+/// glTF の minFilter 6 値をそのまま保持する
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IrMinFilter {
+    Nearest,
+    Linear,
+    NearestMipmapNearest,
+    LinearMipmapNearest,
+    NearestMipmapLinear,
+    LinearMipmapLinear,
+}
+
+/// glTF sampler に対応するサンプラー情報
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct IrSamplerInfo {
+    pub wrap_u: IrWrapMode,
+    pub wrap_v: IrWrapMode,
+    pub mag_filter: IrMagFilter,
+    pub min_filter: IrMinFilter,
+}
+
+impl Default for IrSamplerInfo {
+    fn default() -> Self {
+        Self {
+            wrap_u: IrWrapMode::Repeat,
+            wrap_v: IrWrapMode::Repeat,
+            mag_filter: IrMagFilter::Linear,
+            min_filter: IrMinFilter::LinearMipmapLinear,
+        }
+    }
+}
+
+/// MToon 補助テクスチャ情報（texCoord + KHR_texture_transform + sampler）
+#[derive(Clone, Debug)]
+pub struct IrTextureInfo {
+    pub index: usize,
+    /// TEXCOORD セット番号（デフォルト 0）
+    pub tex_coord: u32,
+    /// KHR_texture_transform offset（デフォルト (0,0)）
+    pub offset: Vec2,
+    /// KHR_texture_transform scale（デフォルト (1,1)）
+    pub scale: Vec2,
+    /// KHR_texture_transform rotation（デフォルト 0）
+    pub rotation: f32,
+    /// glTF sampler 情報（デフォルト Repeat / Linear）
+    pub sampler: IrSamplerInfo,
+}
+
+impl IrTextureInfo {
+    /// テクスチャインデックスのみ指定（デフォルト texCoord=0, transform なし）
+    pub fn from_index(index: usize) -> Self {
+        Self {
+            index,
+            tex_coord: 0,
+            offset: Vec2::ZERO,
+            scale: Vec2::ONE,
+            rotation: 0.0,
+            sampler: IrSamplerInfo::default(),
+        }
+    }
+
+    /// テクスチャインデックスをオフセットする（merge 時に使用）
+    pub fn offset_index(&mut self, offset: usize) {
+        self.index += offset;
+    }
+
+    /// テクスチャインデックスをリマップする（export_filter 時に使用）
+    pub fn remap_index(self, remap: &std::collections::HashMap<usize, usize>) -> Option<Self> {
+        remap.get(&self.index).map(|&new_idx| Self {
+            index: new_idx,
+            ..self
+        })
+    }
+}
+
+/// MToon アウトライン幅モード
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum OutlineWidthMode {
+    #[default]
+    None,
+    WorldCoordinates,
+    ScreenCoordinates,
+}
+
+/// glTF alphaMode + MToon transparentWithZWrite を統合したアルファモード
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AlphaMode {
+    /// 完全不透明（デプス書込あり）
+    #[default]
+    Opaque,
+    /// alphaCutoff でピクセル単位切り抜き（デプス書込あり）
+    Mask,
+    /// 半透明・デプス書込あり（MToon transparentWithZWrite=true）
+    BlendWithZWrite,
+    /// 半透明・デプス書込なし（通常 BLEND）
+    Blend,
+}
+
 /// ソースファイル形式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SourceFormat {
@@ -216,11 +329,32 @@ impl IrModel {
             if let Some(ref mut idx) = mat.texture_index {
                 *idx += tex_offset;
             }
-            if let Some(ref mut idx) = mat.shade_texture_index {
-                *idx += tex_offset;
+            if let Some(ref mut ti) = mat.base_color_tex_info {
+                ti.offset_index(tex_offset);
             }
-            if let Some(ref mut idx) = mat.outline_width_texture_index {
-                *idx += tex_offset;
+            if let Some(ref mut ti) = mat.shade_texture {
+                ti.offset_index(tex_offset);
+            }
+            if let Some(ref mut ti) = mat.outline_width_texture {
+                ti.offset_index(tex_offset);
+            }
+            if let Some(ref mut ti) = mat.matcap_texture {
+                ti.offset_index(tex_offset);
+            }
+            if let Some(ref mut ti) = mat.shading_shift_texture {
+                ti.offset_index(tex_offset);
+            }
+            if let Some(ref mut ti) = mat.rim_multiply_texture {
+                ti.offset_index(tex_offset);
+            }
+            if let Some(ref mut ti) = mat.uv_animation_mask_texture {
+                ti.offset_index(tex_offset);
+            }
+            if let Some(ref mut ti) = mat.emissive_texture {
+                ti.offset_index(tex_offset);
+            }
+            if let Some(ref mut ti) = mat.normal_texture {
+                ti.offset_index(tex_offset);
             }
             if let Some(ref mut idx) = mat.sphere_texture_index {
                 *idx += tex_offset;
@@ -246,8 +380,18 @@ impl IrModel {
         // ── モーフ: グローバル頂点Indexをオフセット ──
         for morph in &mut other.morphs {
             match &mut morph.kind {
-                IrMorphKind::Vertex(entries) => {
-                    for (global_idx, _) in entries.iter_mut() {
+                IrMorphKind::Vertex {
+                    positions,
+                    normals,
+                    tangents,
+                } => {
+                    for (global_idx, _) in positions.iter_mut() {
+                        *global_idx += vtx_offset;
+                    }
+                    for (global_idx, _) in normals.iter_mut() {
+                        *global_idx += vtx_offset;
+                    }
+                    for (global_idx, _) in tangents.iter_mut() {
                         *global_idx += vtx_offset;
                     }
                 }
@@ -375,6 +519,8 @@ pub struct IrMesh {
     pub morph_targets: Vec<IrMorphTarget>,
     /// このメッシュが属するglTFノードIndex
     pub node_index: usize,
+    /// TEXCOORD_1（セカンダリUV）。空なら UV1 なし。
+    pub uvs1: Vec<[f32; 2]>,
 }
 
 /// 中間頂点
@@ -383,6 +529,9 @@ pub struct IrVertex {
     pub position: Vec3,
     pub normal: Vec3,
     pub uv: Vec2,
+    /// 接線ベクトル（xyz=tangent方向, w=handedness ±1）。
+    /// glTF TANGENT 属性から読み込むか、MikkTSpace で生成する。
+    pub tangent: Vec4,
     /// ボーンウェイト固定配列 (ボーンIndex, ウェイト)。有効要素数は weight_count。
     pub weights: [(usize, f32); 4],
     /// 有効なウェイト数 (0..=4)
@@ -428,6 +577,41 @@ pub struct IrMorphTarget {
     pub name: String,
     /// 影響のある頂点の位置オフセット（疎表現: 頂点Index昇順）
     pub position_offsets: Vec<(u32, Vec3)>,
+    /// 影響のある頂点の法線オフセット（疎表現: 頂点Index昇順）
+    pub normal_offsets: Vec<(u32, Vec3)>,
+    /// 影響のある頂点の接線オフセット（疎表現: 頂点Index昇順）
+    pub tangent_offsets: Vec<(u32, Vec3)>,
+}
+
+/// カリングモード
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CullMode {
+    /// 背面カリング（デフォルト、片面描画）
+    Back,
+    /// カリングなし（両面描画）
+    None,
+    /// 前面カリング（VRM 0.x _CullMode=1 用。glTF 仕様に存在しないため UniVRM では
+    /// doubleSided=true にフォールバックするが、ランタイムレンダラでは再現可能）
+    Front,
+}
+
+/// テクスチャマスクの参照カラーチャネル
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorChannel {
+    R,
+    G,
+    B,
+}
+
+impl ColorChannel {
+    /// GPU uniform 用の f32 値（0.0=R, 1.0=G, 2.0=B）
+    pub fn to_f32(self) -> f32 {
+        match self {
+            Self::R => 0.0,
+            Self::G => 1.0,
+            Self::B => 2.0,
+        }
+    }
 }
 
 /// 中間材質
@@ -439,18 +623,33 @@ pub struct IrMaterial {
     pub specular_power: f32,
     pub ambient: Vec3,
     pub texture_index: Option<usize>,
-    pub is_double_sided: bool,
+    /// ベースカラーテクスチャの texCoord + KHR_texture_transform 情報（ビューア描画用）
+    pub base_color_tex_info: Option<IrTextureInfo>,
+    /// カリングモード（Back=片面, None=両面, Front=前面カリング）
+    pub cull_mode: CullMode,
     pub is_mtoon: bool,
     /// エッジ（輪郭線）
     pub edge_color: Vec4,
     pub edge_size: f32,
     /// MToon固有
     pub shade_color: Option<Vec3>,
-    pub shade_texture_index: Option<usize>,
+    pub shade_texture: Option<IrTextureInfo>,
+    /// MToon shadingToonyFactor (0.0~1.0, 影境界の硬さ)
+    pub shading_toony_factor: f32,
+    /// MToon shadingShiftFactor (-1.0~1.0, 影の閾値シフト)
+    pub shading_shift_factor: f32,
     /// アウトライン幅テクスチャ（glTFテクスチャIndex）
     /// VRM 1.0: outlineWidthMultiplyTexture (Gチャネル)
-    /// VRM 0.0: _OutlineWidthTexture
-    pub outline_width_texture_index: Option<usize>,
+    /// VRM 0.0: _OutlineWidthTexture (Rチャネル)
+    pub outline_width_texture: Option<IrTextureInfo>,
+    /// outlineWidthTexture の参照チャネル（VRM 1.0=G, VRM 0.x=R）
+    pub outline_width_tex_channel: ColorChannel,
+    /// MToon アウトライン幅モード（ビューア描画用）
+    pub outline_width_mode: OutlineWidthMode,
+    /// MToon アウトライン幅の生値（world=メートル, screen=比率）
+    pub outline_width_factor: f32,
+    /// MToon outlineLightingMixFactor (0.0=純色, 1.0=ライト混合)
+    pub outline_lighting_mix: f32,
     /// FBX元テクスチャファイル名（一括割り当て用）
     pub source_texture_name: Option<String>,
     /// 材質の出自（RenderStyle 決定に使用）
@@ -463,6 +662,50 @@ pub struct IrMaterial {
     pub toon_texture_index: Option<usize>,
     /// 共有トゥーン番号 (0-9 = toon01-10)
     pub toon_shared_index: Option<u8>,
+    /// MToon parametricRimColorFactor (デフォルト [0,0,0])
+    pub parametric_rim_color: Vec3,
+    /// MToon parametricRimFresnelPowerFactor (デフォルト 5.0)
+    pub parametric_rim_fresnel_power: f32,
+    /// MToon parametricRimLiftFactor (デフォルト 0.0)
+    pub parametric_rim_lift: f32,
+    /// MToon rimLightingMixFactor (0.0=放射, 1.0=ライト混合, デフォルト 1.0)
+    pub rim_lighting_mix: f32,
+    /// MToon giEqualizationFactor (0.0~1.0, GI均一化係数, デフォルト 0.9)
+    pub gi_equalization_factor: f32,
+    /// MToon matcapFactor (デフォルト [1,1,1])
+    pub matcap_factor: Vec3,
+    /// MToon matcapTexture (glTFテクスチャIndex)
+    pub matcap_texture: Option<IrTextureInfo>,
+    /// MToon shadingShiftTexture (glTFテクスチャIndex、Rチャネル)
+    pub shading_shift_texture: Option<IrTextureInfo>,
+    /// MToon shadingShiftTexture.scale (デフォルト 1.0)
+    pub shading_shift_texture_scale: f32,
+    /// MToon rimMultiplyTexture (glTFテクスチャIndex)
+    pub rim_multiply_texture: Option<IrTextureInfo>,
+    /// MToon uvAnimationScrollXSpeedFactor (デフォルト 0.0)
+    pub uv_animation_scroll_x_speed: f32,
+    /// MToon uvAnimationScrollYSpeedFactor (デフォルト 0.0)
+    pub uv_animation_scroll_y_speed: f32,
+    /// MToon uvAnimationRotationSpeedFactor (デフォルト 0.0)
+    pub uv_animation_rotation_speed: f32,
+    /// MToon uvAnimationMaskTexture (glTFテクスチャIndex)
+    pub uv_animation_mask_texture: Option<IrTextureInfo>,
+    /// uvAnimationMaskTexture の参照チャネル（VRM 1.0=B, VRM 0.x=R）
+    pub uv_anim_mask_tex_channel: ColorChannel,
+    /// アルファモード（glTF alphaMode + MToon transparentWithZWrite）
+    pub alpha_mode: AlphaMode,
+    /// MASK モード時のカットオフ閾値（glTF alphaCutoff, デフォルト 0.5）
+    pub alpha_cutoff: f32,
+    /// MToon renderQueueOffsetNumber（BLEND 内描画順オフセット）
+    pub render_queue_offset: i32,
+    /// glTF emissiveFactor (デフォルト [0,0,0])
+    pub emissive_factor: Vec3,
+    /// glTF emissiveTexture
+    pub emissive_texture: Option<IrTextureInfo>,
+    /// glTF normalTexture
+    pub normal_texture: Option<IrTextureInfo>,
+    /// glTF normalTexture.scale (デフォルト 1.0)
+    pub normal_texture_scale: f32,
 }
 
 impl IrMaterial {
@@ -485,19 +728,48 @@ impl Default for IrMaterial {
             specular_power: 0.0,
             ambient: Vec3::new(0.4, 0.4, 0.4),
             texture_index: None,
-            is_double_sided: false,
+            base_color_tex_info: None,
+            cull_mode: CullMode::Back,
             is_mtoon: false,
             edge_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
             edge_size: 0.0,
             shade_color: None,
-            shade_texture_index: None,
-            outline_width_texture_index: None,
+            shade_texture: None,
+            shading_toony_factor: 0.9,
+            shading_shift_factor: 0.0,
+            outline_width_texture: None,
+            outline_width_tex_channel: ColorChannel::G,
+            outline_width_mode: OutlineWidthMode::None,
+            outline_width_factor: 0.0,
+            outline_lighting_mix: 1.0,
             source_texture_name: None,
             source_format: SourceFormat::Vrm1,
             sphere_texture_index: None,
             sphere_mode: 0,
             toon_texture_index: None,
             toon_shared_index: None,
+            parametric_rim_color: Vec3::ZERO,
+            parametric_rim_fresnel_power: 5.0,
+            parametric_rim_lift: 0.0,
+            rim_lighting_mix: 1.0,
+            gi_equalization_factor: 0.9,
+            matcap_factor: Vec3::ONE,
+            matcap_texture: None,
+            shading_shift_texture: None,
+            shading_shift_texture_scale: 1.0,
+            rim_multiply_texture: None,
+            uv_animation_scroll_x_speed: 0.0,
+            uv_animation_scroll_y_speed: 0.0,
+            uv_animation_rotation_speed: 0.0,
+            uv_animation_mask_texture: None,
+            uv_anim_mask_tex_channel: ColorChannel::B,
+            alpha_mode: AlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            render_queue_offset: 0,
+            emissive_factor: Vec3::ZERO,
+            emissive_texture: None,
+            normal_texture: None,
+            normal_texture_scale: 1.0,
         }
     }
 }
@@ -534,8 +806,12 @@ pub struct IrMorph {
 
 #[derive(Debug, Clone)]
 pub enum IrMorphKind {
-    /// 頂点モーフ: (グローバル頂点Index, オフセット)
-    Vertex(Vec<(usize, Vec3)>),
+    /// 頂点モーフ: position=(グローバル頂点Index, オフセット), normal/tangent も同形式
+    Vertex {
+        positions: Vec<(usize, Vec3)>,
+        normals: Vec<(usize, Vec3)>,
+        tangents: Vec<(usize, Vec3)>,
+    },
     /// グループモーフ: (モーフIndex, 率)
     Group(Vec<(usize, f32)>),
 }
@@ -624,6 +900,7 @@ mod tests {
                 position: Vec3::ZERO,
                 normal: Vec3::Y,
                 uv: Vec2::ZERO,
+                tangent: Vec4::new(1.0, 0.0, 0.0, 1.0),
                 weights: [(bi, 1.0), (0, 0.0), (0, 0.0), (0, 0.0)],
                 weight_count: 1,
                 edge_scale: 1.0,
@@ -636,6 +913,7 @@ mod tests {
             material_index: mat_idx,
             morph_targets: vec![],
             node_index: 0,
+            uvs1: Vec::new(),
         }
     }
 
@@ -842,7 +1120,11 @@ mod tests {
                 name: "smile".into(),
                 name_en: String::new(),
                 panel: 3,
-                kind: IrMorphKind::Vertex(vec![(0, Vec3::Y)]),
+                kind: IrMorphKind::Vertex {
+                    positions: vec![(0, Vec3::Y)],
+                    normals: Vec::new(),
+                    tangents: Vec::new(),
+                },
             }],
             ..Default::default()
         };
@@ -855,7 +1137,11 @@ mod tests {
                 name: "blink".into(),
                 name_en: String::new(),
                 panel: 2,
-                kind: IrMorphKind::Vertex(vec![(1, Vec3::X)]),
+                kind: IrMorphKind::Vertex {
+                    positions: vec![(1, Vec3::X)],
+                    normals: Vec::new(),
+                    tangents: Vec::new(),
+                },
             }],
             ..Default::default()
         };
@@ -863,10 +1149,77 @@ mod tests {
         host.merge(other);
 
         // other のモーフの頂点Index は +3 (host の頂点数) されるべき
-        if let IrMorphKind::Vertex(ref entries) = host.morphs[1].kind {
-            assert_eq!(entries[0].0, 4, "vtx_offset=3, 元Index=1 → 4");
+        if let IrMorphKind::Vertex { ref positions, .. } = host.morphs[1].kind {
+            assert_eq!(positions[0].0, 4, "vtx_offset=3, 元Index=1 → 4");
         } else {
             panic!("頂点モーフであるべき");
         }
+    }
+
+    /// merge で base_color_tex_info の index がテクスチャオフセット分加算されることを確認
+    #[test]
+    fn test_merge_base_color_tex_info_offset() {
+        let mut host = IrModel {
+            name: "Host".into(),
+            bones: vec![bone("Root", None, vec![])],
+            meshes: vec![mesh_with_weights("m0", 0, &[0, 0, 0])],
+            materials: vec![IrMaterial {
+                name: "mat0".into(),
+                texture_index: Some(0),
+                ..Default::default()
+            }],
+            textures: vec![IrTexture {
+                filename: "host_tex.png".into(),
+                data: vec![0],
+                mime_type: "image/png".into(),
+            }],
+            ..Default::default()
+        };
+
+        let other = IrModel {
+            name: "Other".into(),
+            bones: vec![bone("Root", None, vec![])],
+            meshes: vec![mesh_with_weights("m1", 0, &[0, 0, 0])],
+            materials: vec![IrMaterial {
+                name: "mat1".into(),
+                texture_index: Some(0),
+                base_color_tex_info: Some(IrTextureInfo {
+                    index: 0,
+                    tex_coord: 1,
+                    offset: Vec2::new(0.1, 0.2),
+                    scale: Vec2::new(2.0, 3.0),
+                    rotation: 0.5,
+                    sampler: IrSamplerInfo::default(),
+                }),
+                ..Default::default()
+            }],
+            textures: vec![IrTexture {
+                filename: "other_tex.png".into(),
+                data: vec![1],
+                mime_type: "image/png".into(),
+            }],
+            ..Default::default()
+        };
+
+        host.merge(other);
+
+        // テクスチャ2つ
+        assert_eq!(host.textures.len(), 2);
+
+        // other の材質の texture_index: 0 → 1 (host のテクスチャ数=1 でオフセット)
+        let mat1 = &host.materials[1];
+        assert_eq!(mat1.texture_index, Some(1));
+
+        // base_color_tex_info の index も同様に 0 → 1
+        let ti = mat1.base_color_tex_info.as_ref().unwrap();
+        assert_eq!(
+            ti.index, 1,
+            "base_color_tex_info.index がオフセットされるべき"
+        );
+        // UV transform 情報は維持
+        assert_eq!(ti.tex_coord, 1);
+        assert!((ti.offset.x - 0.1).abs() < 1e-6);
+        assert!((ti.scale.y - 3.0).abs() < 1e-6);
+        assert!((ti.rotation - 0.5).abs() < 1e-6);
     }
 }

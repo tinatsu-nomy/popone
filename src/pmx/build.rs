@@ -8,7 +8,7 @@ use crate::convert::coord::{
     gltf_normal_to_pmx, gltf_normal_to_pmx_v0, gltf_pos_to_pmx, gltf_pos_to_pmx_v0,
 };
 use crate::convert::material::ir_material_to_pmx;
-use crate::intermediate::types::{IrModel, IrMorphKind, RigidShape};
+use crate::intermediate::types::{CullMode, IrModel, IrMorphKind, RigidShape};
 use crate::pmx::types::*;
 
 /// インデックスサイズ自動決定（頂点：符号なし）
@@ -120,10 +120,14 @@ pub fn build_pmx_model_with_options(ir: &IrModel, options: &PmxBuildOptions) -> 
         log::debug!("  [{:2}] \"{}\" diffuse=({:.2},{:.2},{:.2},{:.2}) tex={:?} double={} mtoon={} edge={:.3}",
             i, mat.name,
             mat.diffuse.x, mat.diffuse.y, mat.diffuse.z, mat.diffuse.w,
-            mat.texture_index, mat.is_double_sided, mat.is_mtoon, mat.edge_size);
+            mat.texture_index, mat.cull_mode != CullMode::Back, mat.is_mtoon, mat.edge_size);
     }
     let mtoon_count = ir.materials.iter().filter(|m| m.is_mtoon).count();
-    let double_count = ir.materials.iter().filter(|m| m.is_double_sided).count();
+    let double_count = ir
+        .materials
+        .iter()
+        .filter(|m| m.cull_mode != CullMode::Back)
+        .count();
     let edge_count = ir.materials.iter().filter(|m| m.edge_size > 0.0).count();
     log::info!(
         "材質: {}個 (MToon={}, 両面={}, エッジ有={})",
@@ -1770,16 +1774,16 @@ fn build_morphs(ir: &IrModel, use_vrm0_coords: bool) -> Vec<PmxMorph> {
         .iter()
         .map(|m| {
             let (morph_type, offsets) = match &m.kind {
-                IrMorphKind::Vertex(voffs) => {
+                IrMorphKind::Vertex { ref positions, .. } => {
                     log::debug!(
                         "  [{}:{}] \"{}\" 頂点モーフ (対象頂点={})",
                         panel_name(m.panel),
                         m.panel,
                         m.name,
-                        voffs.len()
+                        positions.len()
                     );
                     vertex_count += 1;
-                    let pmx_offs = voffs
+                    let pmx_offs = positions
                         .iter()
                         .map(|(vi, off)| VertexMorphOffset {
                             vertex_index: *vi as u32,

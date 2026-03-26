@@ -4,8 +4,8 @@ use glam::Vec3;
 use wgpu::util::DeviceExt;
 
 use super::camera::OrbitCamera;
-use super::mesh::GpuModel;
-use crate::intermediate::types::IrModel;
+use super::mesh::{GpuModel, RenderQueue};
+use crate::intermediate::types::{CullMode, IrModel};
 
 /// 材質用 BindGroupLayout を作成（共通定義、gpu.rs と mesh.rs で共有）
 pub fn create_material_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -13,7 +13,7 @@ pub fn create_material_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGro
         label: Some("material_bgl"),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
@@ -64,6 +64,26 @@ pub struct CameraUniform {
     pub _pad1: f32,
     pub view_row1: [f32; 3],
     pub mmd_ambient_scale: f32,
+    /// 累積時間（秒、UVアニメーション用）
+    pub time: f32,
+    /// アスペクト比 (width / height)（MToon アウトライン: 1/aspect で X 補正）
+    pub aspect: f32,
+    /// 射影行列 [1][1] = 1/tan(halfFov)（MToon アウトライン距離クランプ用）
+    pub proj_11: f32,
+    pub _pad2: f32,
+    /// SH ベース GI の均一化値: (rawGi(up) + rawGi(down)) / 2（CPU 事前計算）
+    pub gi_equalized: [f32; 3],
+    /// 透視投影フラグ（1.0 = 透視, 0.0 = 正射影）
+    pub is_perspective: f32,
+    /// カメラ前方ベクトル（正射影時の view direction 用）
+    pub camera_forward: [f32; 3],
+    pub _pad3: f32,
+    /// ライト色 RGB (linear)
+    pub light_color: [f32; 3],
+    pub _pad4: f32,
+    /// 環境光 Ground 色 RGB (linear, 半球 ambient 補間用)
+    pub ambient_ground: [f32; 3],
+    pub _pad5: f32,
 }
 
 /// MMD 材質 uniform バッファ
@@ -81,11 +101,69 @@ pub struct MmdMaterialUniform {
     pub _pad: [f32; 3],
 }
 
-/// 材質 uniform バッファ
+/// 材質 uniform バッファ（MToon パラメータ含む）
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct MaterialUniform {
     pub diffuse: [f32; 4],
+    pub shade_color: [f32; 3],
+    pub is_mtoon: f32,
+    pub shading_toony: f32,
+    pub shading_shift: f32,
+    pub outline_width: f32,
+    pub outline_mode: f32, // 0=none, 1=world, 2=screen
+    pub outline_color: [f32; 4],
+    pub outline_lighting_mix: f32,
+    pub rim_fresnel_power: f32,
+    pub rim_lift: f32,
+    pub rim_lighting_mix: f32,
+    pub rim_color: [f32; 3],
+    pub has_matcap: f32,
+    pub matcap_factor: [f32; 3],
+    pub has_shade_multiply_tex: f32,
+    pub has_shading_shift_tex: f32,
+    pub shading_shift_tex_scale: f32,
+    pub has_rim_multiply_tex: f32,
+    pub uv_anim_scroll_x: f32,
+    pub uv_anim_scroll_y: f32,
+    pub uv_anim_rotation: f32,
+    pub has_uv_anim_mask: f32,
+    /// MASK モード時の alphaCutoff（0.0 = 無効）
+    pub alpha_cutoff: f32,
+    // --- テクスチャ UV パラメータ（texCoord + KHR_texture_transform）---
+    // 各テクスチャ: [tex_coord, offset.x, offset.y, rotation] + [scale.x, scale.y, 0, 0]
+    pub base_uv_a: [f32; 4],
+    pub base_uv_b: [f32; 4],
+    pub shade_uv_a: [f32; 4],
+    pub shade_uv_b: [f32; 4],
+    pub shift_uv_a: [f32; 4],
+    pub shift_uv_b: [f32; 4],
+    pub rim_uv_a: [f32; 4],
+    pub rim_uv_b: [f32; 4],
+    pub outline_uv_a: [f32; 4],
+    pub outline_uv_b: [f32; 4],
+    pub uv_mask_uv_a: [f32; 4],
+    pub uv_mask_uv_b: [f32; 4],
+    pub emissive_factor: [f32; 3],
+    pub has_emissive_tex: f32,
+    pub emissive_uv_a: [f32; 4],
+    pub emissive_uv_b: [f32; 4],
+    // --- 法線マップパラメータ ---
+    pub has_normal_tex: f32,
+    pub normal_scale: f32,
+    pub gi_equalization_factor: f32,
+    /// outlineWidthTexture 参照チャネル（0.0=R, 1.0=G, 2.0=B）
+    pub outline_width_channel: f32,
+    pub normal_uv_a: [f32; 4],
+    pub normal_uv_b: [f32; 4],
+    /// uvAnimationMaskTexture 参照チャネル（0.0=R, 1.0=G, 2.0=B）
+    pub uv_anim_mask_channel: f32,
+    pub _pad_ch1: f32,
+    pub _pad_ch2: f32,
+    pub _pad_ch3: f32,
+    // --- matcapTexture UV パラメータ（KHR_texture_transform）---
+    pub matcap_uv_a: [f32; 4],
+    pub matcap_uv_b: [f32; 4],
 }
 
 /// 頂点フォーマット
@@ -95,6 +173,10 @@ pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
+    /// TEXCOORD_1（セカンダリUV、MToon 補助テクスチャ用）。UV1 なしなら UV0 コピー。
+    pub uv1: [f32; 2],
+    /// 接線ベクトル（xyz=tangent方向, w=handedness ±1）
+    pub tangent: [f32; 4],
 }
 
 impl Vertex {
@@ -120,6 +202,18 @@ impl Vertex {
                     offset: 24,
                     shader_location: 2,
                     format: wgpu::VertexFormat::Float32x2,
+                },
+                // uv1
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                // tangent
+                wgpu::VertexAttribute {
+                    offset: 40,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x4,
                 },
             ],
         }
@@ -170,6 +264,18 @@ macro_rules! wgsl_camera_uniform {
     _pad1: f32,
     view_row1: vec3<f32>,
     mmd_ambient_scale: f32,
+    time: f32,
+    aspect: f32,
+    proj_11: f32,
+    _pad2: f32,
+    gi_equalized: vec3<f32>,
+    is_perspective: f32,
+    camera_forward: vec3<f32>,
+    _pad3: f32,
+    light_color: vec3<f32>,
+    _pad4: f32,
+    ambient_ground: vec3<f32>,
+    _pad5: f32,
 };"#
     };
 }
@@ -198,6 +304,57 @@ macro_rules! wgsl_material_uniform {
     () => {
         r#"struct MaterialUniform {
     diffuse: vec4<f32>,
+    shade_color: vec3<f32>,
+    is_mtoon: f32,
+    shading_toony: f32,
+    shading_shift: f32,
+    outline_width: f32,
+    outline_mode: f32,
+    outline_color: vec4<f32>,
+    outline_lighting_mix: f32,
+    rim_fresnel_power: f32,
+    rim_lift: f32,
+    rim_lighting_mix: f32,
+    rim_color: vec3<f32>,
+    has_matcap: f32,
+    matcap_factor: vec3<f32>,
+    has_shade_multiply_tex: f32,
+    has_shading_shift_tex: f32,
+    shading_shift_tex_scale: f32,
+    has_rim_multiply_tex: f32,
+    uv_anim_scroll_x: f32,
+    uv_anim_scroll_y: f32,
+    uv_anim_rotation: f32,
+    has_uv_anim_mask: f32,
+    alpha_cutoff: f32,
+    base_uv_a: vec4<f32>,
+    base_uv_b: vec4<f32>,
+    shade_uv_a: vec4<f32>,
+    shade_uv_b: vec4<f32>,
+    shift_uv_a: vec4<f32>,
+    shift_uv_b: vec4<f32>,
+    rim_uv_a: vec4<f32>,
+    rim_uv_b: vec4<f32>,
+    outline_uv_a: vec4<f32>,
+    outline_uv_b: vec4<f32>,
+    uv_mask_uv_a: vec4<f32>,
+    uv_mask_uv_b: vec4<f32>,
+    emissive_factor: vec3<f32>,
+    has_emissive_tex: f32,
+    emissive_uv_a: vec4<f32>,
+    emissive_uv_b: vec4<f32>,
+    has_normal_tex: f32,
+    normal_scale: f32,
+    gi_equalization_factor: f32,
+    outline_width_channel: f32,
+    normal_uv_a: vec4<f32>,
+    normal_uv_b: vec4<f32>,
+    uv_anim_mask_channel: f32,
+    _pad_ch1: f32,
+    _pad_ch2: f32,
+    _pad_ch3: f32,
+    matcap_uv_a: vec4<f32>,
+    matcap_uv_b: vec4<f32>,
 };"#
     };
 }
@@ -212,29 +369,158 @@ const SHADER_SRC: &str = concat!(
 @group(1) @binding(0) var t_diffuse: texture_2d<f32>;
 @group(1) @binding(1) var s_diffuse: sampler;
 @group(2) @binding(0) var<uniform> material: MaterialUniform;
+@group(3) @binding(0) var s_matcap: sampler;
+@group(3) @binding(1) var t_matcap: texture_2d<f32>;
+@group(3) @binding(2) var s_shade_multiply: sampler;
+@group(3) @binding(3) var t_shade_multiply: texture_2d<f32>;
+@group(3) @binding(4) var s_shading_shift: sampler;
+@group(3) @binding(5) var t_shading_shift: texture_2d<f32>;
+@group(3) @binding(6) var s_rim_multiply: sampler;
+@group(3) @binding(7) var t_rim_multiply: texture_2d<f32>;
+@group(3) @binding(8) var s_uv_anim_mask: sampler;
+@group(3) @binding(9) var t_uv_anim_mask: texture_2d<f32>;
+@group(3) @binding(10) var s_outline_width: sampler;
+@group(3) @binding(11) var t_outline_width: texture_2d<f32>;
+@group(3) @binding(12) var s_emissive: sampler;
+@group(3) @binding(13) var t_emissive: texture_2d<f32>;
+@group(3) @binding(14) var s_normal: sampler;
+@group(3) @binding(15) var t_normal: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) uv: vec2<f32>,
+    @location(2) world_pos: vec3<f32>,
+    @location(3) uv1: vec2<f32>,
+    @location(4) tangent: vec4<f32>,
 };
+
+/// KHR_texture_transform 適用（uv_a = [texCoord, offset.x, offset.y, rotation], uv_b = [scale.x, scale.y, 0, 0]）
+fn apply_texture_transform(uv: vec2<f32>, uv_a: vec4<f32>, uv_b: vec4<f32>) -> vec2<f32> {
+    let offset = vec2<f32>(uv_a.y, uv_a.z);
+    let rotation = uv_a.w;
+    let scale = vec2<f32>(uv_b.x, uv_b.y);
+    // scale/rotation が既定値なら早期リターン
+    if abs(rotation) < 0.00001 && abs(scale.x - 1.0) < 0.00001 && abs(scale.y - 1.0) < 0.00001
+       && abs(offset.x) < 0.00001 && abs(offset.y) < 0.00001 {
+        return uv;
+    }
+    let scaled = uv * scale;
+    let c = cos(rotation);
+    let s = sin(rotation);
+    let rotated = vec2<f32>(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c);
+    return rotated + offset;
+}
+
+/// MToon 補助テクスチャ用 UV 解決: texCoord 選択 → KHR_texture_transform
+/// UVアニメーション対象テクスチャは animated UV を渡し、非対象は raw UV を渡す
+fn resolve_mtoon_uv(uv0: vec2<f32>, uv1: vec2<f32>, uv_a: vec4<f32>, uv_b: vec4<f32>) -> vec2<f32> {
+    let base_uv = select(uv0, uv1, u32(uv_a.x) == 1u);
+    return apply_texture_transform(base_uv, uv_a, uv_b);
+}
+
+/// UVアニメーション（スクロール+回転）の計算本体（マスク値は呼び出し元で決定）
+/// UniVRM互換順序: scroll → pivot(-0.5) → rotation → pivot(+0.5)
+/// ※ VRM仕様書は rotate→scroll だが、UniVRM 実装は scroll→rotate。互換性を優先
+/// UniVRM: vrmc_materials_mtoon_geometry_uv.hlsl — rotate(uv + translate - pivot) + pivot
+fn apply_uv_anim_core(uv: vec2<f32>, anim_mask: f32) -> vec2<f32> {
+    let translate = vec2<f32>(
+        camera.time * material.uv_anim_scroll_x,
+        camera.time * material.uv_anim_scroll_y,
+    ) * anim_mask;
+
+    // 2π 周期で wrap して長時間稼働時の float 精度劣化を防止（UniVRM 準拠）
+    let tau = 6.28318530718;
+    let turns = (camera.time * material.uv_anim_rotation * anim_mask) / tau;
+    let angle = fract(turns) * tau;
+    let cos_a = cos(angle);
+    let sin_a = sin(angle);
+    let centered = (uv + translate) - vec2<f32>(0.5);
+
+    return vec2<f32>(
+        centered.x * cos_a - centered.y * sin_a,
+        centered.x * sin_a + centered.y * cos_a,
+    ) + vec2<f32>(0.5);
+}
 
 @vertex
 fn vs_main(
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(3) uv1_in: vec2<f32>,
+    @location(4) tangent_in: vec4<f32>,
 ) -> VertexOutput {
     var out: VertexOutput;
     out.clip_position = camera.view_proj * vec4<f32>(position, 1.0);
     out.normal = normal;
     out.uv = uv;
+    out.world_pos = position;
+    out.uv1 = uv1_in;
+    out.tangent = tangent_in;
     return out;
 }
 
+/// テクセルからチャネル選択（0=R, 1=G, 2=B）
+fn select_channel_main(texel: vec4<f32>, ch: f32) -> f32 {
+    if ch < 0.5 {
+        return texel.r;
+    } else if ch < 1.5 {
+        return texel.g;
+    }
+    return texel.b;
+}
+
+/// 頂点接線から TBN 行列を構築して法線マップを適用（UniVRM MToon_GetTangentToWorld 準拠）
+/// tangent.w の符号で bitangent の向きを制御（ミラー UV 対応）
+fn apply_normal_map(base_n: vec3<f32>, tangent: vec4<f32>, normal_uv: vec2<f32>) -> vec3<f32> {
+    // ゼロ接線ガード: 退化した tangent では法線マップをスキップし基底法線を返す
+    if dot(tangent.xyz, tangent.xyz) < 1e-6 {
+        return normalize(base_n);
+    }
+    let normal_sample = textureSample(t_normal, s_normal, normal_uv).xyz * 2.0 - 1.0;
+    let n = normalize(base_n);
+    let t = normalize(tangent.xyz);
+    // UniVRM 準拠: tangent.w を二値化して NaN 回避（vrmc_materials_mtoon_utility.hlsl:64）
+    let tangent_sign = select(-1.0, 1.0, tangent.w > 0.0);
+    let b = normalize(cross(n, t) * tangent_sign);
+    let scaled_normal = vec3<f32>(
+        normal_sample.x * material.normal_scale,
+        normal_sample.y * material.normal_scale,
+        normal_sample.z,
+    );
+    return normalize(t * scaled_normal.x + b * scaled_normal.y + n * scaled_normal.z);
+}
+
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let n = normalize(in.normal);
+fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    // doubleSided 材質の背面法線反転（UniVRM 準拠: 法線マップ適用前に反転）
+    let face_sign = select(-1.0, 1.0, is_front);
+    var n = normalize(in.normal) * face_sign;
+
+    // --- MToon UVアニメーション事前計算（normalTexture にも適用: 仕様準拠）---
+    var anim_uv = in.uv;
+    var anim_uv1 = in.uv1;
+    if material.is_mtoon > 0.5 {
+        let has_uv_anim = material.uv_anim_scroll_x != 0.0
+            || material.uv_anim_scroll_y != 0.0
+            || material.uv_anim_rotation != 0.0;
+        if has_uv_anim {
+            let uv_mask_uv = resolve_mtoon_uv(in.uv, in.uv1, material.uv_mask_uv_a, material.uv_mask_uv_b);
+            var anim_mask = 1.0;
+            if material.has_uv_anim_mask > 0.5 {
+                anim_mask = select_channel_main(textureSample(t_uv_anim_mask, s_uv_anim_mask, uv_mask_uv), material.uv_anim_mask_channel);
+            }
+            anim_uv = apply_uv_anim_core(in.uv, anim_mask);
+            anim_uv1 = apply_uv_anim_core(in.uv1, anim_mask);
+        }
+    }
+
+    // 法線マップ適用（MToon: animated UV, 非MToon: raw UV）
+    if material.has_normal_tex > 0.5 {
+        let normal_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.normal_uv_a, material.normal_uv_b);
+        n = apply_normal_map(n, in.tangent, normal_uv);
+    }
 
     // 法線マップ表示: 法線ベクトル → RGB
     if camera.show_normal_map > 0.5 {
@@ -242,13 +528,139 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(rgb, 1.0);
     }
 
-    // Half-Lambert: 裏面にも柔らかく光が回る
-    let ndotl = dot(n, camera.light_dir) * 0.5 + 0.5;
-    let light = camera.ambient + vec3<f32>(camera.light_intensity) * ndotl;
+    var lit: vec3<f32>;
+    var out_alpha: f32 = 1.0;
+    if material.is_mtoon > 0.5 {
 
-    let tex_color = textureSample(t_diffuse, s_diffuse, in.uv);
-    let color = tex_color * material.diffuse;
-    return vec4<f32>(color.rgb * light, color.a);
+        // テクスチャサンプリング（UVアニメーション + texCoord/KHR_texture_transform 適用）
+        let base_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.base_uv_a, material.base_uv_b);
+        let tex_color = textureSample(t_diffuse, s_diffuse, base_uv);
+        let base_color = tex_color * material.diffuse;
+        out_alpha = base_color.a;
+
+        // dot(N,L) — 仕様準拠: [-1, 1] レンジ（half-lambert ではない）
+        // camera.light_dir は光の進行方向（光源→表面）なので反転して表面→光源方向にする
+        let dot_nl = dot(n, -camera.light_dir);
+
+        // shadeMultiplyTexture 適用（UV Animation 対象）
+        var shade_mul = vec3<f32>(1.0);
+        if material.has_shade_multiply_tex > 0.5 {
+            let shade_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.shade_uv_a, material.shade_uv_b);
+            shade_mul = textureSample(t_shade_multiply, s_shade_multiply, shade_uv).rgb;
+        }
+        let shade = material.shade_color * shade_mul;
+
+        // shadingShiftTexture 適用（UV Animation 対象、UniVRM 準拠）
+        var shading = dot_nl + material.shading_shift;
+        if material.has_shading_shift_tex > 0.5 {
+            let shift_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.shift_uv_a, material.shift_uv_b);
+            let shift_tex = textureSample(t_shading_shift, s_shading_shift, shift_uv).r;
+            shading += shift_tex * material.shading_shift_tex_scale;
+        }
+
+        // MToon 2色トゥーン: linearstep で lit/shade を補間（仕様準拠）
+        let edge0 = -1.0 + material.shading_toony;
+        let edge1 = 1.0 - material.shading_toony;
+        let t = clamp((shading - edge0) / max(edge1 - edge0, 0.001), 0.0, 1.0);
+        lit = mix(shade, base_color.rgb, t);
+
+        // ライティング: direct と GI（indirect）を分離（UniVRM 準拠）
+        // direct = toon_color * directLightColor（ForwardBase: shadow=1）
+        // indirect = litColor * lerp(passthroughGi, uniformedGi, giEqualizationFactor)
+        // 半球 ambient: sky/ground を最終法線Y成分で補間（SH 近似）
+        let hemi_t = n.y * 0.5 + 0.5;
+        let raw_indirect = mix(camera.ambient_ground, camera.ambient, vec3<f32>(hemi_t));
+        let gi = mix(raw_indirect, camera.gi_equalized, material.gi_equalization_factor);
+        let direct_light = camera.light_intensity * camera.light_color;
+        let lighting = lit * direct_light + lit * gi;
+
+        // --- リムライティング + MatCap ---
+        // 透視投影: camera_pos → world_pos、正射影: camera_forward（UniVRM 準拠）
+        var v: vec3<f32>;
+        if camera.is_perspective > 0.5 {
+            v = normalize(camera.camera_pos - in.world_pos);
+        } else {
+            v = normalize(camera.camera_forward);
+        }
+        var rim = vec3<f32>(0.0);
+
+        // MatCap: ビュー空間法線からUV算出（UV Animation 非対象）
+        // UniVRM 準拠: right = cross(viewDir, worldUp), up = cross(right, viewDir)
+        // KHR_texture_transform は最終 matcap UV に適用
+        if material.has_matcap > 0.5 {
+            let world_view_x = normalize(vec3<f32>(-v.z, 0.0, v.x));
+            let world_view_y = cross(world_view_x, v);
+            let raw_matcap_uv = vec2<f32>(dot(world_view_x, n), dot(world_view_y, n)) * 0.495 + 0.5;
+            let matcap_uv = apply_texture_transform(raw_matcap_uv, material.matcap_uv_a, material.matcap_uv_b);
+            rim = material.matcap_factor * textureSample(t_matcap, s_matcap, matcap_uv).rgb;
+        }
+
+        // パラメトリックリム: フレネル効果
+        let ndotv = dot(n, v);
+        let parametric_rim = pow(
+            saturate(1.0 - ndotv + material.rim_lift),
+            max(material.rim_fresnel_power, 0.00001)
+        );
+        rim = rim + parametric_rim * material.rim_color;
+
+        // rimMultiplyTexture 適用（UV Animation 対象）
+        if material.has_rim_multiply_tex > 0.5 {
+            let rim_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.rim_uv_a, material.rim_uv_b);
+            rim *= textureSample(t_rim_multiply, s_rim_multiply, rim_uv).rgb;
+        }
+
+        // リムのライティング混合（VRM 1.0 仕様: rim * lerp(white, lighting, mix)）
+        // UniVRM 準拠: rim には未均一化の raw indirect を使用（GI equalization 非適用）
+        let rim_light_factor = direct_light + raw_indirect;
+        let rim_lit = rim * mix(vec3<f32>(1.0), rim_light_factor, material.rim_lighting_mix);
+
+        // emissive（glTF 標準 + MToon 仕様: baseCol = lighting + emissive + rim）
+        var emissive = material.emissive_factor;
+        if material.has_emissive_tex > 0.5 {
+            let emissive_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.emissive_uv_a, material.emissive_uv_b);
+            emissive *= textureSample(t_emissive, s_emissive, emissive_uv).rgb;
+        }
+
+        lit = lighting + rim_lit + emissive;
+    } else {
+        // 非MToon: 既存 Half-Lambert（texCoord + KHR_texture_transform 適用）
+        let half_lambert = dot(n, -camera.light_dir) * 0.5 + 0.5;
+        let base_uv = resolve_mtoon_uv(in.uv, in.uv1, material.base_uv_a, material.base_uv_b);
+        let tex_color = textureSample(t_diffuse, s_diffuse, base_uv);
+        let base_color = tex_color * material.diffuse;
+        let hemi_t_hl = n.y * 0.5 + 0.5;
+        let hemi_ambient = mix(camera.ambient_ground, camera.ambient, vec3<f32>(hemi_t_hl));
+        let light = hemi_ambient + camera.light_intensity * camera.light_color * half_lambert;
+        lit = base_color.rgb * light;
+        out_alpha = base_color.a;
+
+        // 非 MToon でも emissive は glTF 標準として適用（texCoord + KHR_texture_transform 適用）
+        var emissive = material.emissive_factor;
+        if material.has_emissive_tex > 0.5 {
+            let emissive_uv = resolve_mtoon_uv(in.uv, in.uv1, material.emissive_uv_a, material.emissive_uv_b);
+            emissive *= textureSample(t_emissive, s_emissive, emissive_uv).rgb;
+        }
+        lit += emissive;
+    }
+
+    // alphaMode 処理（alpha_cutoff エンコーディング: <-0.75=OPAQUE, >=−0.25=MASK, else=BLEND）
+    if material.alpha_cutoff < -0.75 {
+        // OPAQUE (-1.0): アルファ無視、常に不透明
+        out_alpha = 1.0;
+    } else if material.alpha_cutoff >= -0.25 {
+        // MASK + AlphaToCoverage（UniVRM vrmc_materials_mtoon_geometry_alpha.hlsl 準拠）
+        // fwidth ベースの勾配計算で cutoff 境界の alpha を 0→1 にスムーズ化し、
+        // MSAA サンプルカバレッジによるエッジ平滑化を有効にする
+        let a2c_alpha = (out_alpha - material.alpha_cutoff)
+            / max(fwidth(out_alpha), 1e-5) + 0.5;
+        if a2c_alpha < material.alpha_cutoff { discard; }
+        out_alpha = 1.0; // UniVRM 準拠: A2C はカバレッジ制御のみ、最終 alpha は不透明
+    } else {
+        // BLEND (-0.5) / BlendZWrite: 完全透明ピクセルを破棄（深度汚染防止）
+        if out_alpha <= 0.001 { discard; }
+    }
+
+    return vec4<f32>(lit, out_alpha);
 }
 "#
 );
@@ -334,7 +746,12 @@ fn compute_mmd_lighting(in: MmdVertexOutput) -> vec4<f32> {
     // スペキュラ (最後に加算、トゥーンの影響を受けない)
     // LightSpecular = mmd_ambient_scale (≈0.604)
     let spec_color = material.specular * vec3<f32>(camera.mmd_ambient_scale);
-    let eye_dir = normalize(camera.camera_pos - in.world_pos);
+    var eye_dir: vec3<f32>;
+    if camera.is_perspective > 0.5 {
+        eye_dir = normalize(camera.camera_pos - in.world_pos);
+    } else {
+        eye_dir = normalize(camera.camera_forward);
+    }
     let half_vec = normalize(eye_dir - camera.light_dir);
     let spec_factor = pow(max(dot(n, half_vec), 0.0), max(0.000001, material.specular_power));
     out_rgb += spec_color * spec_factor;
@@ -361,7 +778,9 @@ fn vs_edge(
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
-    @location(3) edge_scale: f32,
+    @location(3) _uv1: vec2<f32>,
+    @location(4) _tangent: vec4<f32>,
+    @location(5) edge_scale: f32,
 ) -> EdgeVertexOutput {
     var out: EdgeVertexOutput;
     let dist = max(length(position - camera.camera_pos), 5.0);
@@ -521,6 +940,390 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 "#
 );
 
+/// MToon アウトラインシェーダー共通部（inverted hull 法）
+/// 本体と同等の MToon ライティング計算を行い、outlineLightingMixFactor で混合する
+macro_rules! wgsl_outline_body {
+    () => {
+        r#"
+@group(0) @binding(0) var<uniform> camera: CameraUniform;
+@group(1) @binding(0) var t_diffuse: texture_2d<f32>;
+@group(1) @binding(1) var s_diffuse: sampler;
+@group(2) @binding(0) var<uniform> material: MaterialUniform;
+@group(3) @binding(0) var s_matcap: sampler;
+@group(3) @binding(1) var t_matcap: texture_2d<f32>;
+@group(3) @binding(2) var s_shade_multiply: sampler;
+@group(3) @binding(3) var t_shade_multiply: texture_2d<f32>;
+@group(3) @binding(4) var s_shading_shift: sampler;
+@group(3) @binding(5) var t_shading_shift: texture_2d<f32>;
+@group(3) @binding(6) var s_rim_multiply: sampler;
+@group(3) @binding(7) var t_rim_multiply: texture_2d<f32>;
+@group(3) @binding(8) var s_uv_anim_mask: sampler;
+@group(3) @binding(9) var t_uv_anim_mask: texture_2d<f32>;
+@group(3) @binding(10) var s_outline_width: sampler;
+@group(3) @binding(11) var t_outline_width: texture_2d<f32>;
+@group(3) @binding(12) var s_emissive: sampler;
+@group(3) @binding(13) var t_emissive: texture_2d<f32>;
+@group(3) @binding(14) var s_normal: sampler;
+@group(3) @binding(15) var t_normal: texture_2d<f32>;
+
+struct OutlineVertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) world_pos: vec3<f32>,
+    @location(3) uv1: vec2<f32>,
+    @location(4) tangent: vec4<f32>,
+};
+
+/// KHR_texture_transform 適用（アウトラインシェーダー用、本体と同一ロジック）
+fn apply_texture_transform(uv: vec2<f32>, uv_a: vec4<f32>, uv_b: vec4<f32>) -> vec2<f32> {
+    let offset = vec2<f32>(uv_a.y, uv_a.z);
+    let rotation = uv_a.w;
+    let scale = vec2<f32>(uv_b.x, uv_b.y);
+    if abs(rotation) < 0.00001 && abs(scale.x - 1.0) < 0.00001 && abs(scale.y - 1.0) < 0.00001
+       && abs(offset.x) < 0.00001 && abs(offset.y) < 0.00001 {
+        return uv;
+    }
+    let scaled = uv * scale;
+    let c = cos(rotation);
+    let s = sin(rotation);
+    let rotated = vec2<f32>(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c);
+    return rotated + offset;
+}
+
+/// MToon 補助テクスチャ用 UV 解決（アウトラインシェーダー用）
+fn resolve_mtoon_uv(uv0: vec2<f32>, uv1: vec2<f32>, uv_a: vec4<f32>, uv_b: vec4<f32>) -> vec2<f32> {
+    let base_uv = select(uv0, uv1, u32(uv_a.x) == 1u);
+    return apply_texture_transform(base_uv, uv_a, uv_b);
+}
+
+/// UVアニメーション（スクロール+回転）の計算本体（マスク値は呼び出し元で決定）
+/// UniVRM互換順序: scroll → pivot(-0.5) → rotation → pivot(+0.5)
+/// ※ VRM仕様書は rotate→scroll だが、UniVRM 実装は scroll→rotate。互換性を優先
+/// UniVRM: vrmc_materials_mtoon_geometry_uv.hlsl — rotate(uv + translate - pivot) + pivot
+fn apply_uv_anim_core(uv: vec2<f32>, anim_mask: f32) -> vec2<f32> {
+    let translate = vec2<f32>(
+        camera.time * material.uv_anim_scroll_x,
+        camera.time * material.uv_anim_scroll_y,
+    ) * anim_mask;
+
+    // 2π 周期で wrap して長時間稼働時の float 精度劣化を防止（UniVRM 準拠）
+    let tau = 6.28318530718;
+    let turns = (camera.time * material.uv_anim_rotation * anim_mask) / tau;
+    let angle = fract(turns) * tau;
+    let cos_a = cos(angle);
+    let sin_a = sin(angle);
+    let centered = (uv + translate) - vec2<f32>(0.5);
+
+    return vec2<f32>(
+        centered.x * cos_a - centered.y * sin_a,
+        centered.x * sin_a + centered.y * cos_a,
+    ) + vec2<f32>(0.5);
+}
+
+/// テクセルからチャネル選択（0=R, 1=G, 2=B）
+fn select_channel(texel: vec4<f32>, ch: f32) -> f32 {
+    if ch < 0.5 {
+        return texel.r;
+    } else if ch < 1.5 {
+        return texel.g;
+    }
+    return texel.b;
+}
+
+/// UV Animation を適用（頂点シェーダー用、UV0/UV1 ペア対応）
+/// 戻り値: vec4(anim_uv0.xy, anim_uv1.zw)
+fn apply_uv_animation_pair(uv0: vec2<f32>, uv1: vec2<f32>) -> vec4<f32> {
+    let has_uv_anim = material.uv_anim_scroll_x != 0.0
+        || material.uv_anim_scroll_y != 0.0
+        || material.uv_anim_rotation != 0.0;
+    if !has_uv_anim { return vec4<f32>(uv0, uv1); }
+    // マスクテクスチャ用UV（texCoord+transform、UV Animation 非対象）
+    let uv_mask_uv = resolve_mtoon_uv(uv0, uv1, material.uv_mask_uv_a, material.uv_mask_uv_b);
+    var mask = 1.0;
+    if material.has_uv_anim_mask > 0.5 {
+        mask = select_channel(textureSampleLevel(t_uv_anim_mask, s_uv_anim_mask, uv_mask_uv, 0.0), material.uv_anim_mask_channel);
+    }
+    return vec4<f32>(apply_uv_anim_core(uv0, mask), apply_uv_anim_core(uv1, mask));
+}
+
+@vertex
+fn vs_outline(
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) uv1_in: vec2<f32>,
+    @location(4) tangent_in: vec4<f32>,
+) -> OutlineVertexOutput {
+    var out: OutlineVertexOutput;
+    let n = normalize(normal);
+    // outlineWidthMultiplyTexture: UV Animation 対象、texCoord+transform 適用（UV0/UV1 ペア）
+    let anim_pair = apply_uv_animation_pair(uv, uv1_in);
+    let width_uv = resolve_mtoon_uv(anim_pair.xy, anim_pair.zw, material.outline_uv_a, material.outline_uv_b);
+    let width_tex = select_channel(textureSampleLevel(t_outline_width, s_outline_width, width_uv, 0.0), material.outline_width_channel);
+    let width = material.outline_width * width_tex;
+    if material.outline_mode > 1.5 {
+        // screenCoordinates: clip 空間で法線方向にオフセット（UniVRM 準拠）
+        let clip = camera.view_proj * vec4<f32>(position, 1.0);
+        // ビュー空間法線
+        let nv_x = dot(camera.view_row0, n);
+        let nv_y = dot(camera.view_row1, n);
+        let view_row2 = cross(camera.view_row0, camera.view_row1);
+        let nv_z = dot(view_row2, n);
+        // UniVRM 準拠: 先に正規化 → 後から aspect で X 引き伸ばし
+        let raw = vec2<f32>(nv_x, nv_y);
+        let len = length(raw);
+        var projected = select(vec2<f32>(0.0), raw / len, len > 0.0001);
+        // 距離クランプ: 広角カメラでの太すぎ防止（UniVRM MToon_GetOutlineVertex_ScreenCoordinatesWidthMultiplier 準拠）
+        let max_view_frustum_plane_height = 2.0;
+        let width_scaled_max_distance = max_view_frustum_plane_height * camera.proj_11 * 0.5;
+        let width_multiplier = min(clip.w, width_scaled_max_distance);
+        projected *= 2.0 * width * width_multiplier;
+        projected.x /= camera.aspect;
+        // カメラ正面法線の抑制（正面向き頂点の XY ずれを防ぐ）
+        projected *= saturate(1.0 - nv_z * nv_z);
+        out.clip_position = vec4<f32>(clip.xy + projected, clip.zw);
+    } else {
+        // worldCoordinates: ワールド空間でメートル単位
+        let expanded = position + n * width;
+        out.clip_position = camera.view_proj * vec4<f32>(expanded, 1.0);
+    }
+    out.normal = n;
+    out.uv = uv;
+    out.world_pos = position;
+    out.uv1 = uv1_in;
+    out.tangent = tangent_in;
+    return out;
+}
+
+/// 頂点接線から TBN 行列を構築して法線マップを適用（UniVRM MToon_GetTangentToWorld 準拠、アウトライン用）
+fn apply_normal_map(base_n: vec3<f32>, tangent: vec4<f32>, normal_uv: vec2<f32>) -> vec3<f32> {
+    // ゼロ接線ガード: 退化した tangent では法線マップをスキップし基底法線を返す
+    if dot(tangent.xyz, tangent.xyz) < 1e-6 {
+        return normalize(base_n);
+    }
+    let normal_sample = textureSample(t_normal, s_normal, normal_uv).xyz * 2.0 - 1.0;
+    let n = normalize(base_n);
+    let t = normalize(tangent.xyz);
+    let tangent_sign = select(-1.0, 1.0, tangent.w > 0.0);
+    let b = normalize(cross(n, t) * tangent_sign);
+    let scaled_normal = vec3<f32>(
+        normal_sample.x * material.normal_scale,
+        normal_sample.y * material.normal_scale,
+        normal_sample.z,
+    );
+    return normalize(t * scaled_normal.x + b * scaled_normal.y + n * scaled_normal.z);
+}
+
+/// 本体シェーダーと同等の MToon ライティング計算（アウトライン用）
+/// 返り値: vec4(表面シェーディング結果 RGB, 処理済みアルファ)
+/// alphaMode に基づく discard もここで実行（UniVRM 準拠: アウトラインにも適用）
+fn compute_mtoon_surface_lighting(n: vec3<f32>, uv: vec2<f32>, uv1: vec2<f32>, world_pos: vec3<f32>) -> vec4<f32> {
+    // --- UVアニメーション ---
+    let has_uv_anim = material.uv_anim_scroll_x != 0.0
+        || material.uv_anim_scroll_y != 0.0
+        || material.uv_anim_rotation != 0.0;
+    // マスクテクスチャ用UV（texCoord+transform、UV Animation 非対象）
+    let uv_mask_uv = resolve_mtoon_uv(uv, uv1, material.uv_mask_uv_a, material.uv_mask_uv_b);
+    var anim_mask = 1.0;
+    if has_uv_anim && material.has_uv_anim_mask > 0.5 {
+        anim_mask = select_channel(textureSample(t_uv_anim_mask, s_uv_anim_mask, uv_mask_uv), material.uv_anim_mask_channel);
+    }
+    let anim_uv = select(uv, apply_uv_anim_core(uv, anim_mask), has_uv_anim);
+    let anim_uv1 = select(uv1, apply_uv_anim_core(uv1, anim_mask), has_uv_anim);
+
+    // テクスチャサンプリング（UVアニメーション + texCoord/KHR_texture_transform 適用）
+    let base_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.base_uv_a, material.base_uv_b);
+    let tex_color = textureSample(t_diffuse, s_diffuse, base_uv);
+    let base_color = tex_color * material.diffuse;
+
+    // alphaMode 処理（本体 fs_main と同一ロジック）
+    var out_alpha = base_color.a;
+    if material.alpha_cutoff < -0.75 {
+        out_alpha = 1.0;
+    } else if material.alpha_cutoff >= -0.25 {
+        // MASK + AlphaToCoverage（UniVRM 準拠、fs_main と同一）
+        let a2c_alpha = (out_alpha - material.alpha_cutoff)
+            / max(fwidth(out_alpha), 1e-5) + 0.5;
+        if a2c_alpha < material.alpha_cutoff { discard; }
+        out_alpha = 1.0; // UniVRM 準拠: A2C はカバレッジ制御のみ、最終 alpha は不透明
+    } else {
+        if out_alpha <= 0.001 { discard; }
+    }
+
+    // dot(N,L) — 仕様準拠: [-1, 1] レンジ
+    // camera.light_dir は光の進行方向（光源→表面）なので反転して表面→光源方向にする
+    let dot_nl = dot(n, -camera.light_dir);
+
+    // shadeMultiplyTexture 適用（UV Animation 対象）
+    var shade_mul = vec3<f32>(1.0);
+    if material.has_shade_multiply_tex > 0.5 {
+        let shade_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.shade_uv_a, material.shade_uv_b);
+        shade_mul = textureSample(t_shade_multiply, s_shade_multiply, shade_uv).rgb;
+    }
+    let shade = material.shade_color * shade_mul;
+
+    // shadingShiftTexture 適用（UV Animation 対象、UniVRM 準拠）
+    var shading = dot_nl + material.shading_shift;
+    if material.has_shading_shift_tex > 0.5 {
+        let shift_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.shift_uv_a, material.shift_uv_b);
+        let shift_tex = textureSample(t_shading_shift, s_shading_shift, shift_uv).r;
+        shading += shift_tex * material.shading_shift_tex_scale;
+    }
+
+    // MToon 2色トゥーン: linearstep で lit/shade を補間（仕様準拠）
+    let edge0 = -1.0 + material.shading_toony;
+    let edge1 = 1.0 - material.shading_toony;
+    let t = clamp((shading - edge0) / max(edge1 - edge0, 0.001), 0.0, 1.0);
+    let toon_color = mix(shade, base_color.rgb, t);
+
+    // ライティング: direct と GI（indirect）を分離（UniVRM 準拠）
+    // 半球 ambient: sky/ground を最終法線Y成分で補間（SH 近似）
+    let hemi_t_o = n.y * 0.5 + 0.5;
+    let raw_indirect = mix(camera.ambient_ground, camera.ambient, vec3<f32>(hemi_t_o));
+    let gi = mix(raw_indirect, camera.gi_equalized, material.gi_equalization_factor);
+    let direct_light = camera.light_intensity * camera.light_color;
+    let lighting = toon_color * direct_light + toon_color * gi;
+
+    // --- リムライティング + MatCap ---
+    // 透視投影: camera_pos → world_pos、正射影: camera_forward（UniVRM 準拠）
+    var v: vec3<f32>;
+    if camera.is_perspective > 0.5 {
+        v = normalize(camera.camera_pos - world_pos);
+    } else {
+        v = normalize(camera.camera_forward);
+    }
+    var rim = vec3<f32>(0.0);
+
+    // MatCap: ビュー空間法線からUV算出（UV Animation 非対象）
+    // UniVRM 準拠: right = cross(viewDir, worldUp), up = cross(right, viewDir)
+    // KHR_texture_transform は最終 matcap UV に適用
+    if material.has_matcap > 0.5 {
+        let world_view_x = normalize(vec3<f32>(-v.z, 0.0, v.x));
+        let world_view_y = cross(world_view_x, v);
+        let raw_matcap_uv = vec2<f32>(dot(world_view_x, n), dot(world_view_y, n)) * 0.495 + 0.5;
+        let matcap_uv = apply_texture_transform(raw_matcap_uv, material.matcap_uv_a, material.matcap_uv_b);
+        rim = material.matcap_factor * textureSample(t_matcap, s_matcap, matcap_uv).rgb;
+    }
+
+    // パラメトリックリム: フレネル効果
+    let ndotv = dot(n, v);
+    let parametric_rim = pow(
+        saturate(1.0 - ndotv + material.rim_lift),
+        max(material.rim_fresnel_power, 0.00001)
+    );
+    rim = rim + parametric_rim * material.rim_color;
+
+    // rimMultiplyTexture 適用（UV Animation 対象）
+    if material.has_rim_multiply_tex > 0.5 {
+        let rim_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.rim_uv_a, material.rim_uv_b);
+        rim *= textureSample(t_rim_multiply, s_rim_multiply, rim_uv).rgb;
+    }
+
+    // リムのライティング混合（VRM 1.0 仕様: rim * lerp(white, lighting, mix)）
+    // UniVRM 準拠: rim には未均一化の raw indirect を使用（GI equalization 非適用）
+    let rim_light_factor = direct_light + raw_indirect;
+    let rim_lit = rim * mix(vec3<f32>(1.0), rim_light_factor, material.rim_lighting_mix);
+
+    // emissive（UniVRM 準拠: baseCol = lighting + emissive + rim）
+    var emissive_out = material.emissive_factor;
+    if material.has_emissive_tex > 0.5 {
+        let emissive_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.emissive_uv_a, material.emissive_uv_b);
+        emissive_out *= textureSample(t_emissive, s_emissive, emissive_uv).rgb;
+    }
+
+    return vec4<f32>(lighting + rim_lit + emissive_out, out_alpha);
+}
+"#
+    };
+}
+
+/// MToon アウトラインシェーダー（sRGB版）
+/// 本体と同等の MToon ライティングを計算し、outlineLightingMixFactor で混合
+const OUTLINE_SHADER_SRC: &str = concat!(
+    wgsl_camera_uniform!(),
+    "\n",
+    wgsl_material_uniform!(),
+    wgsl_outline_body!(),
+    r#"
+@fragment
+fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    let base = material.outline_color;
+    // doubleSided 背面法線反転（UniVRM 準拠）
+    let face_sign = select(-1.0, 1.0, is_front);
+    var n = normalize(in.normal) * face_sign;
+    // UVアニメーション事前計算（normalTexture にも適用: 仕様準拠）
+    var anim_uv_o = in.uv;
+    var anim_uv1_o = in.uv1;
+    let has_uv_anim_o = material.uv_anim_scroll_x != 0.0
+        || material.uv_anim_scroll_y != 0.0
+        || material.uv_anim_rotation != 0.0;
+    if has_uv_anim_o {
+        let uv_mask_uv = resolve_mtoon_uv(in.uv, in.uv1, material.uv_mask_uv_a, material.uv_mask_uv_b);
+        var anim_mask_o = 1.0;
+        if material.has_uv_anim_mask > 0.5 {
+            anim_mask_o = select_channel(textureSample(t_uv_anim_mask, s_uv_anim_mask, uv_mask_uv), material.uv_anim_mask_channel);
+        }
+        anim_uv_o = apply_uv_anim_core(in.uv, anim_mask_o);
+        anim_uv1_o = apply_uv_anim_core(in.uv1, anim_mask_o);
+    }
+    // 法線マップ適用（animated UV）
+    if material.has_normal_tex > 0.5 {
+        let normal_uv = resolve_mtoon_uv(anim_uv_o, anim_uv1_o, material.normal_uv_a, material.normal_uv_b);
+        n = apply_normal_map(n, in.tangent, normal_uv);
+    }
+    // 本体と同等の MToon ライティング計算結果を取得（アルファ処理・discard 含む）
+    let surface = compute_mtoon_surface_lighting(n, in.uv, in.uv1, in.world_pos);
+    // UniVRM 準拠: outlineColor * lerp(1, baseCol, outlineLightingMix)
+    let lit = base.rgb * mix(vec3<f32>(1.0), surface.rgb, material.outline_lighting_mix);
+    return vec4<f32>(lit, surface.a);
+}
+"#
+);
+
+/// MToon アウトラインシェーダー Unorm版（pow(2.2) 除去）
+/// 本体と同等の MToon ライティングを計算し、outlineLightingMixFactor で混合
+const OUTLINE_SHADER_UNORM_SRC: &str = concat!(
+    wgsl_camera_uniform!(),
+    "\n",
+    wgsl_material_uniform!(),
+    wgsl_outline_body!(),
+    r#"
+@fragment
+fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    let base = material.outline_color;
+    // doubleSided 背面法線反転（UniVRM 準拠）
+    let face_sign = select(-1.0, 1.0, is_front);
+    var n = normalize(in.normal) * face_sign;
+    // UVアニメーション事前計算（normalTexture にも適用: 仕様準拠）
+    var anim_uv_o = in.uv;
+    var anim_uv1_o = in.uv1;
+    let has_uv_anim_o = material.uv_anim_scroll_x != 0.0
+        || material.uv_anim_scroll_y != 0.0
+        || material.uv_anim_rotation != 0.0;
+    if has_uv_anim_o {
+        let uv_mask_uv = resolve_mtoon_uv(in.uv, in.uv1, material.uv_mask_uv_a, material.uv_mask_uv_b);
+        var anim_mask_o = 1.0;
+        if material.has_uv_anim_mask > 0.5 {
+            anim_mask_o = select_channel(textureSample(t_uv_anim_mask, s_uv_anim_mask, uv_mask_uv), material.uv_anim_mask_channel);
+        }
+        anim_uv_o = apply_uv_anim_core(in.uv, anim_mask_o);
+        anim_uv1_o = apply_uv_anim_core(in.uv1, anim_mask_o);
+    }
+    // 法線マップ適用（animated UV）
+    if material.has_normal_tex > 0.5 {
+        let normal_uv = resolve_mtoon_uv(anim_uv_o, anim_uv1_o, material.normal_uv_a, material.normal_uv_b);
+        n = apply_normal_map(n, in.tangent, normal_uv);
+    }
+    // 本体と同等の MToon ライティング計算結果を取得（アルファ処理・discard 含む）
+    let surface = compute_mtoon_surface_lighting(n, in.uv, in.uv1, in.world_pos);
+    // UniVRM 準拠: outlineColor * lerp(1, baseCol, outlineLightingMix)
+    let lit = base.rgb * mix(vec3<f32>(1.0), surface.rgb, material.outline_lighting_mix);
+    return vec4<f32>(clamp(lit, vec3<f32>(0.0), vec3<f32>(1.0)), surface.a);
+}
+"#
+);
+
 const GRID_SHADER_SRC: &str = concat!(
     wgsl_camera_uniform!(),
     wgsl_grid_body!(),
@@ -543,6 +1346,8 @@ pub struct RenderParams<'a> {
     pub animated_bone_globals: Option<&'a [glam::Mat4]>,
     /// VRM 0.0 かどうか（座標変換用）
     pub is_vrm0: bool,
+    /// 累積時間（秒、UVアニメーション用）
+    pub time: f32,
 }
 
 /// 描画モード
@@ -567,8 +1372,18 @@ struct PipelineSet {
     pipeline_wireframe: Option<wgpu::RenderPipeline>,
     /// ワイヤーフレームオーバーレイ（Solid+Wire用、depth bias付き）
     pipeline_wire_overlay: Option<wgpu::RenderPipeline>,
+    pipeline_mask_cull: wgpu::RenderPipeline,
+    pipeline_mask_no_cull: wgpu::RenderPipeline,
     pipeline_alpha_cull: wgpu::RenderPipeline,
     pipeline_alpha_no_cull: wgpu::RenderPipeline,
+    /// 半透明 + デプス書込あり（MToon transparentWithZWrite）
+    pipeline_alpha_zwrite_cull: wgpu::RenderPipeline,
+    pipeline_alpha_zwrite_no_cull: wgpu::RenderPipeline,
+    /// VRM 0.x _CullMode=Front 用（前面カリング）
+    pipeline_front_cull: wgpu::RenderPipeline,
+    pipeline_mask_front_cull: wgpu::RenderPipeline,
+    pipeline_alpha_front_cull: wgpu::RenderPipeline,
+    pipeline_alpha_zwrite_front_cull: wgpu::RenderPipeline,
     pipeline_grid: wgpu::RenderPipeline,
     pipeline_bone: wgpu::RenderPipeline,
     pipeline_line_overlay: wgpu::RenderPipeline,
@@ -578,6 +1393,12 @@ struct PipelineSet {
     pipeline_mmd_alpha_cull: Option<wgpu::RenderPipeline>,
     pipeline_mmd_alpha_no_cull: Option<wgpu::RenderPipeline>,
     pipeline_mmd_edge: Option<wgpu::RenderPipeline>,
+    // MToon アウトラインパイプライン（inverted hull 法、Front cull）
+    pipeline_outline: wgpu::RenderPipeline,
+    // MToon アウトラインパイプライン（BLEND 用、ZWrite OFF）
+    pipeline_outline_blend: wgpu::RenderPipeline,
+    // MToon アウトラインパイプライン（MASK 用、AlphaToCoverage 有効）
+    pipeline_outline_mask: wgpu::RenderPipeline,
 }
 
 pub struct GpuRenderer {
@@ -602,6 +1423,10 @@ pub struct GpuRenderer {
     material_bgl: wgpu::BindGroupLayout,
     /// デフォルト白テクスチャ bind group
     default_tex_bind_group: wgpu::BindGroup,
+    /// MToon 補助テクスチャ bind group layout (group 3)
+    mtoon_aux_bgl: wgpu::BindGroupLayout,
+    /// デフォルト MToon 補助 bind group（matcap=黒、他=白）
+    default_mtoon_aux_bind_group: wgpu::BindGroup,
     /// 共通テクスチャサンプラー（毎回生成を回避）
     default_sampler: wgpu::Sampler,
     /// グリッド頂点バッファ
@@ -739,6 +1564,57 @@ impl GpuRenderer {
         // Default white texture
         let default_tex_bind_group = create_white_texture_bind_group(device, queue, &texture_bgl);
 
+        // MToon 補助テクスチャ bind group layout (group 3)
+        let mtoon_aux_bgl = create_mtoon_aux_bind_group_layout(device);
+
+        // Default MToon 補助 bind group（matcap=黒、他=白、normal=フラット）
+        let black_view = create_black_texture_view(device, queue);
+        let (white_srgb_view, _white_unorm_view) = create_white_texture_view(device, queue);
+        let flat_normal_view = create_flat_normal_texture_view(device, queue);
+        let mtoon_aux_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("mtoon_aux_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let s = &mtoon_aux_sampler;
+        let default_mtoon_aux_bind_group = create_mtoon_aux_bind_group(
+            device,
+            &mtoon_aux_bgl,
+            AuxTexEntry {
+                view: &black_view,
+                sampler: s,
+            }, // matcap: 黒
+            AuxTexEntry {
+                view: &white_srgb_view,
+                sampler: s,
+            }, // shade_multiply: 白
+            AuxTexEntry {
+                view: &white_srgb_view,
+                sampler: s,
+            }, // shading_shift: 白
+            AuxTexEntry {
+                view: &white_srgb_view,
+                sampler: s,
+            }, // rim_multiply: 白
+            AuxTexEntry {
+                view: &white_srgb_view,
+                sampler: s,
+            }, // uv_anim_mask: 白
+            AuxTexEntry {
+                view: &white_srgb_view,
+                sampler: s,
+            }, // outline_width: 白
+            AuxTexEntry {
+                view: &white_srgb_view,
+                sampler: s,
+            }, // emissive: 白
+            AuxTexEntry {
+                view: &flat_normal_view,
+                sampler: s,
+            }, // normal: フラット
+        );
+
         // Shader modules
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mesh_shader"),
@@ -757,7 +1633,7 @@ impl GpuRenderer {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mesh_pipeline_layout"),
-            bind_group_layouts: &[&camera_bgl, &texture_bgl, &material_bgl],
+            bind_group_layouts: &[&camera_bgl, &texture_bgl, &material_bgl, &mtoon_aux_bgl],
             push_constant_ranges: &[],
         });
 
@@ -840,6 +1716,16 @@ impl GpuRenderer {
             source: wgpu::ShaderSource::Wgsl(MMD_MAIN_SHADER_UNORM_SRC.into()),
         });
 
+        // MToon アウトラインシェーダー（sRGB 版 / Unorm 版）
+        let outline_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("outline_shader"),
+            source: wgpu::ShaderSource::Wgsl(OUTLINE_SHADER_SRC.into()),
+        });
+        let outline_shader_unorm = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("outline_shader_unorm"),
+            source: wgpu::ShaderSource::Wgsl(OUTLINE_SHADER_UNORM_SRC.into()),
+        });
+
         // グリッドシェーダー（Unorm 版: linear_to_srgb 付き）
         let grid_shader_unorm = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("grid_shader_unorm"),
@@ -912,6 +1798,7 @@ impl GpuRenderer {
             &wire_overlay_shader,
             &mmd_edge_shader,
             &mmd_main_shader,
+            &outline_shader,
             &pipeline_layout,
             &grid_pipeline_layout,
             &mmd_edge_pipeline_layout,
@@ -927,6 +1814,7 @@ impl GpuRenderer {
             &wire_overlay_shader,
             &mmd_edge_shader,
             &mmd_main_shader,
+            &outline_shader,
             &pipeline_layout,
             &grid_pipeline_layout,
             &mmd_edge_pipeline_layout,
@@ -943,6 +1831,7 @@ impl GpuRenderer {
             &wire_overlay_shader,
             &mmd_edge_shader_unorm,
             &mmd_main_shader_unorm,
+            &outline_shader_unorm,
             &pipeline_layout,
             &grid_pipeline_layout,
             &mmd_edge_pipeline_layout,
@@ -958,6 +1847,7 @@ impl GpuRenderer {
             &wire_overlay_shader,
             &mmd_edge_shader_unorm,
             &mmd_main_shader_unorm,
+            &outline_shader_unorm,
             &pipeline_layout,
             &grid_pipeline_layout,
             &mmd_edge_pipeline_layout,
@@ -997,6 +1887,8 @@ impl GpuRenderer {
             texture_bgl,
             material_bgl,
             default_tex_bind_group,
+            mtoon_aux_bgl,
+            default_mtoon_aux_bind_group,
             default_sampler,
             bone_tail_buf: None,
             bone_tail_buf_capacity: 0,
@@ -1075,6 +1967,7 @@ impl GpuRenderer {
         wire_overlay_shader: &wgpu::ShaderModule,
         mmd_edge_shader: &wgpu::ShaderModule,
         mmd_main_shader: &wgpu::ShaderModule,
+        outline_shader: &wgpu::ShaderModule,
         pipeline_layout: &wgpu::PipelineLayout,
         grid_pipeline_layout: &wgpu::PipelineLayout,
         mmd_edge_pipeline_layout: &wgpu::PipelineLayout,
@@ -1087,10 +1980,22 @@ impl GpuRenderer {
             count: sample_count,
             ..Default::default()
         };
+        let ms_mask = wgpu::MultisampleState {
+            count: sample_count,
+            alpha_to_coverage_enabled: sample_count > 1,
+            ..Default::default()
+        };
 
         let color_target = wgpu::ColorTargetState {
             format: target_format,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        };
+        // MASK 用: blend なし（UniVRM MToonValidator 準拠: SrcBlend=One, DstBlend=Zero）
+        // AlphaToCoverage がカバレッジマスクを制御するため、アルファブレンドは不要
+        let color_target_mask = wgpu::ColorTargetState {
+            format: target_format,
+            blend: None,
             write_mask: wgpu::ColorWrites::ALL,
         };
         let depth_write = wgpu::DepthStencilState {
@@ -1106,6 +2011,26 @@ impl GpuRenderer {
             depth_compare: wgpu::CompareFunction::Less,
             stencil: Default::default(),
             bias: Default::default(),
+        };
+        // アウトライン用 depth bias（UniVRM Offset 1,1 相当）— Z-fighting 防止
+        let outline_bias = wgpu::DepthBiasState {
+            constant: 1,
+            slope_scale: 1.0,
+            clamp: 0.0,
+        };
+        let depth_outline_write = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: Default::default(),
+            bias: outline_bias,
+        };
+        let depth_outline_no_write = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: false,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: Default::default(),
+            bias: outline_bias,
         };
 
         let mmd_color_target = wgpu::ColorTargetState {
@@ -1175,6 +2100,61 @@ impl GpuRenderer {
             multiview: None,
             cache: None,
         });
+
+        let pipeline_mask_cull = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&format!("mesh_mask_cull{suffix}")),
+            layout: Some(pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_main"),
+                buffers: &[Vertex::layout()],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
+                front_face: wgpu::FrontFace::Cw,
+                ..Default::default()
+            },
+            depth_stencil: Some(depth_write.clone()),
+            multisample: ms_mask,
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(color_target_mask.clone())],
+                compilation_options: Default::default(),
+            }),
+            multiview: None,
+            cache: None,
+        });
+
+        let pipeline_mask_no_cull =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!("mesh_mask_no_cull{suffix}")),
+                layout: Some(pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Vertex::layout()],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    front_face: wgpu::FrontFace::Cw,
+                    ..Default::default()
+                },
+                depth_stencil: Some(depth_write.clone()),
+                multisample: ms_mask,
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(color_target_mask.clone())],
+                    compilation_options: Default::default(),
+                }),
+                multiview: None,
+                cache: None,
+            });
 
         let pipeline_wireframe = if supports_wireframe {
             Some(
@@ -1317,6 +2297,158 @@ impl GpuRenderer {
                 cache: None,
             });
 
+        // BLEND + ZWrite On パイプライン（MToon transparentWithZWrite 用）
+        let pipeline_alpha_zwrite_cull =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!("mesh_alpha_zwrite_cull{suffix}")),
+                layout: Some(pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Vertex::layout()],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: Some(wgpu::Face::Back),
+                    front_face: wgpu::FrontFace::Cw,
+                    ..Default::default()
+                },
+                depth_stencil: Some(depth_write.clone()),
+                multisample: ms,
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(color_target.clone())],
+                    compilation_options: Default::default(),
+                }),
+                multiview: None,
+                cache: None,
+            });
+
+        let pipeline_alpha_zwrite_no_cull =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!("mesh_alpha_zwrite_no_cull{suffix}")),
+                layout: Some(pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Vertex::layout()],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    front_face: wgpu::FrontFace::Cw,
+                    ..Default::default()
+                },
+                depth_stencil: Some(depth_write.clone()),
+                multisample: ms,
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(color_target.clone())],
+                    compilation_options: Default::default(),
+                }),
+                multiview: None,
+                cache: None,
+            });
+
+        // VRM 0.x _CullMode=Front 用パイプライン（前面カリング）
+        let front_cull_primitive = wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: Some(wgpu::Face::Front),
+            front_face: wgpu::FrontFace::Cw,
+            ..Default::default()
+        };
+        let pipeline_front_cull = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&format!("mesh_front_cull{suffix}")),
+            layout: Some(pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_main"),
+                buffers: &[Vertex::layout()],
+                compilation_options: Default::default(),
+            },
+            primitive: front_cull_primitive,
+            depth_stencil: Some(depth_write.clone()),
+            multisample: ms,
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(color_target.clone())],
+                compilation_options: Default::default(),
+            }),
+            multiview: None,
+            cache: None,
+        });
+        let pipeline_mask_front_cull =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!("mesh_mask_front_cull{suffix}")),
+                layout: Some(pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Vertex::layout()],
+                    compilation_options: Default::default(),
+                },
+                primitive: front_cull_primitive,
+                depth_stencil: Some(depth_write.clone()),
+                multisample: ms_mask,
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(color_target_mask.clone())],
+                    compilation_options: Default::default(),
+                }),
+                multiview: None,
+                cache: None,
+            });
+        let pipeline_alpha_front_cull =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!("mesh_alpha_front_cull{suffix}")),
+                layout: Some(pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Vertex::layout()],
+                    compilation_options: Default::default(),
+                },
+                primitive: front_cull_primitive,
+                depth_stencil: Some(depth_no_write.clone()),
+                multisample: ms,
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(color_target.clone())],
+                    compilation_options: Default::default(),
+                }),
+                multiview: None,
+                cache: None,
+            });
+        let pipeline_alpha_zwrite_front_cull =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!("mesh_alpha_zwrite_front_cull{suffix}")),
+                layout: Some(pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Vertex::layout()],
+                    compilation_options: Default::default(),
+                },
+                primitive: front_cull_primitive,
+                depth_stencil: Some(depth_write.clone()),
+                multisample: ms,
+                fragment: Some(wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(color_target.clone())],
+                    compilation_options: Default::default(),
+                }),
+                multiview: None,
+                cache: None,
+            });
+
         let pipeline_grid = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(&format!("grid{suffix}")),
             layout: Some(grid_pipeline_layout),
@@ -1426,7 +2558,7 @@ impl GpuRenderer {
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[wgpu::VertexAttribute {
                     offset: 0,
-                    shader_location: 3,
+                    shader_location: 5, // location 4 = tangent (Vertex), location 5 = edge_scale
                     format: wgpu::VertexFormat::Float32,
                 }],
             },
@@ -1574,13 +2706,107 @@ impl GpuRenderer {
             },
         ));
 
+        // MToon アウトラインパイプライン: Front cull (inverted hull)
+        // edge_scale は GPU 側で outlineWidthMultiplyTexture をサンプリングするため不要
+        let outline_vertex_buffers = &[Vertex::layout()];
+        let pipeline_outline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&format!("outline{suffix}")),
+            layout: Some(pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: outline_shader,
+                entry_point: Some("vs_outline"),
+                buffers: outline_vertex_buffers,
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Front),
+                front_face: wgpu::FrontFace::Cw,
+                ..Default::default()
+            },
+            depth_stencil: Some(depth_outline_write.clone()),
+            multisample: ms,
+            fragment: Some(wgpu::FragmentState {
+                module: outline_shader,
+                entry_point: Some("fs_outline"),
+                targets: &[Some(color_target.clone())],
+                compilation_options: Default::default(),
+            }),
+            multiview: None,
+            cache: None,
+        });
+        // BLEND 用アウトラインパイプライン（ZWrite OFF）
+        let pipeline_outline_blend =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!("outline_blend{suffix}")),
+                layout: Some(pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: outline_shader,
+                    entry_point: Some("vs_outline"),
+                    buffers: outline_vertex_buffers,
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: Some(wgpu::Face::Front),
+                    front_face: wgpu::FrontFace::Cw,
+                    ..Default::default()
+                },
+                depth_stencil: Some(depth_outline_no_write.clone()),
+                multisample: ms,
+                fragment: Some(wgpu::FragmentState {
+                    module: outline_shader,
+                    entry_point: Some("fs_outline"),
+                    targets: &[Some(color_target.clone())],
+                    compilation_options: Default::default(),
+                }),
+                multiview: None,
+                cache: None,
+            });
+        // MASK 用アウトラインパイプライン（AlphaToCoverage 有効）
+        let pipeline_outline_mask =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!("outline_mask{suffix}")),
+                layout: Some(pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: outline_shader,
+                    entry_point: Some("vs_outline"),
+                    buffers: outline_vertex_buffers,
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: Some(wgpu::Face::Front),
+                    front_face: wgpu::FrontFace::Cw,
+                    ..Default::default()
+                },
+                depth_stencil: Some(depth_outline_write.clone()),
+                multisample: ms_mask,
+                fragment: Some(wgpu::FragmentState {
+                    module: outline_shader,
+                    entry_point: Some("fs_outline"),
+                    targets: &[Some(color_target_mask.clone())],
+                    compilation_options: Default::default(),
+                }),
+                multiview: None,
+                cache: None,
+            });
+
         PipelineSet {
             pipeline_cull,
             pipeline_no_cull,
             pipeline_wireframe,
             pipeline_wire_overlay,
+            pipeline_mask_cull,
+            pipeline_mask_no_cull,
             pipeline_alpha_cull,
             pipeline_alpha_no_cull,
+            pipeline_alpha_zwrite_cull,
+            pipeline_alpha_zwrite_no_cull,
+            pipeline_front_cull,
+            pipeline_mask_front_cull,
+            pipeline_alpha_front_cull,
+            pipeline_alpha_zwrite_front_cull,
             pipeline_grid,
             pipeline_bone,
             pipeline_line_overlay,
@@ -1589,6 +2815,9 @@ impl GpuRenderer {
             pipeline_mmd_alpha_cull,
             pipeline_mmd_alpha_no_cull,
             pipeline_mmd_edge,
+            pipeline_outline,
+            pipeline_outline_blend,
+            pipeline_outline_mask,
         }
     }
 
@@ -1615,6 +2844,11 @@ impl GpuRenderer {
     /// 材質 bind group layout への参照
     pub fn material_bgl(&self) -> &wgpu::BindGroupLayout {
         &self.material_bgl
+    }
+
+    /// MToon 補助テクスチャ bind group layout への参照
+    pub fn mtoon_aux_bgl(&self) -> &wgpu::BindGroupLayout {
+        &self.mtoon_aux_bgl
     }
 
     /// 共通サンプラーへの参照
@@ -1983,7 +3217,11 @@ impl GpuRenderer {
             view_proj: params.camera.view_proj(aspect).to_cols_array_2d(),
             light_dir: light_dir.to_array(),
             light_intensity: params.display.light_intensity,
-            ambient: [params.display.ambient_intensity; 3],
+            ambient: [
+                params.display.ambient_sky_color[0] * params.display.ambient_intensity,
+                params.display.ambient_sky_color[1] * params.display.ambient_intensity,
+                params.display.ambient_sky_color[2] * params.display.ambient_intensity,
+            ],
             show_normal_map: if params.display.show_normal_map {
                 1.0
             } else {
@@ -1999,6 +3237,35 @@ impl GpuRenderer {
             } else {
                 params.display.ambient_intensity
             },
+            time: params.time,
+            aspect,
+            proj_11: params.camera.proj_11(),
+            _pad2: 0.0,
+            // GI 均一化（UniVRM 準拠: (indirectLight(up) + indirectLight(down)) / 2）
+            // 半球 ambient の sky/ground 平均値を uniformedGi として使用
+            gi_equalized: {
+                let ai = params.display.ambient_intensity;
+                let s = &params.display.ambient_sky_color;
+                let g = &params.display.ambient_ground_color;
+                [
+                    (s[0] + g[0]) * 0.5 * ai,
+                    (s[1] + g[1]) * 0.5 * ai,
+                    (s[2] + g[2]) * 0.5 * ai,
+                ]
+            },
+            is_perspective: if params.camera.perspective { 1.0 } else { 0.0 },
+            camera_forward: (params.camera.target - params.camera.eye())
+                .normalize()
+                .to_array(),
+            _pad3: 0.0,
+            light_color: params.display.light_color,
+            _pad4: 0.0,
+            ambient_ground: [
+                params.display.ambient_ground_color[0] * params.display.ambient_intensity,
+                params.display.ambient_ground_color[1] * params.display.ambient_intensity,
+                params.display.ambient_ground_color[2] * params.display.ambient_intensity,
+            ],
+            _pad5: 0.0,
         };
         queue.write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&cam_uniform));
 
@@ -2102,97 +3369,244 @@ impl GpuRenderer {
                 let use_solid_wire = params.display.draw_mode == DrawMode::SolidWireframe
                     && ps.pipeline_wire_overlay.is_some();
 
-                // Standard 不透明材質（デプス書き込みあり）
-                for (draw_idx, draw) in model.draws.iter().enumerate() {
-                    if !params
-                        .material_visibility
-                        .get(draw_idx)
-                        .copied()
-                        .unwrap_or(true)
-                    {
-                        continue;
-                    }
-                    if draw.is_alpha {
-                        continue;
-                    }
-                    // MMD 材質は Pass 2 で描画するのでスキップ
-                    let is_mmd_draw = mmd_solid
-                        && draw.render_style == super::mesh::RenderStyle::Mmd
-                        && draw.mmd_material_bind_group.is_some();
-                    if is_mmd_draw {
-                        continue;
-                    }
+                // --- renderQueueOffsetNumber + カメラ距離による描画順インデックス構築 ---
+                // BLEND/BlendZWrite カテゴリ内: renderQueueOffsetNumber → カメラ距離(遠→近)で安定ソート
+                // アニメーション済み頂点から重心を再計算（rest pose 固定だと動的シーンで破綻するため）
+                let eye = params.camera.eye();
+                let verts = model.current_vertices();
+                let indices = model.base_indices();
+                let draw_centers: Vec<glam::Vec3> = model
+                    .draws
+                    .iter()
+                    .map(|draw| {
+                        if !matches!(
+                            draw.render_queue,
+                            RenderQueue::Blend | RenderQueue::BlendZWrite
+                        ) || draw.index_count == 0
+                        {
+                            return draw.center; // 不透明は固定重心で十分
+                        }
+                        let start = draw.index_offset as usize;
+                        let end = start + draw.index_count as usize;
+                        let mut sum = glam::Vec3::ZERO;
+                        for &idx in &indices[start..end] {
+                            sum += glam::Vec3::from(verts[idx as usize].position);
+                        }
+                        sum / draw.index_count as f32
+                    })
+                    .collect();
 
-                    if use_wireframe {
-                        pass.set_pipeline(
-                            ps.pipeline_wireframe
-                                .as_ref()
-                                .expect("wireframe パイプラインは supports_wireframe チェック済み"),
+                let mut sorted_indices: Vec<usize> = (0..model.draws.len()).collect();
+                sorted_indices.sort_by(|&a, &b| {
+                    let da = &model.draws[a];
+                    let db = &model.draws[b];
+                    da.render_queue
+                        .cmp(&db.render_queue)
+                        .then(da.render_queue_offset.cmp(&db.render_queue_offset))
+                        .then_with(|| {
+                            if matches!(
+                                da.render_queue,
+                                RenderQueue::Blend | RenderQueue::BlendZWrite
+                            ) {
+                                // back-to-front: 遠いものを先に描画
+                                let za = draw_centers[a].distance_squared(eye);
+                                let zb = draw_centers[b].distance_squared(eye);
+                                zb.partial_cmp(&za).unwrap_or(std::cmp::Ordering::Equal)
+                            } else {
+                                std::cmp::Ordering::Equal
+                            }
+                        })
+                });
+
+                // --- MToon 4段階描画: OPAQUE → MASK → BlendZWrite → Blend ---
+                let queue_phases: &[RenderQueue] = &[
+                    RenderQueue::Opaque,
+                    RenderQueue::Mask,
+                    RenderQueue::BlendZWrite,
+                    RenderQueue::Blend,
+                ];
+
+                for target_queue in queue_phases {
+                    // BLEND/BlendZWrite: draw ごとに surface→outline を連続発行（ZWrite OFF で
+                    // 描画順=合成順のため、分離すると奥のアウトラインが手前サーフェスに浮く）
+                    // OPAQUE/MASK: 深度バッファで保護されるため従来通り2パス
+                    let interleave_outline =
+                        matches!(target_queue, RenderQueue::Blend | RenderQueue::BlendZWrite);
+
+                    // メッシュ描画
+                    for &draw_idx in &sorted_indices {
+                        let draw = &model.draws[draw_idx];
+                        if draw.render_queue != *target_queue {
+                            continue;
+                        }
+                        if !params
+                            .material_visibility
+                            .get(draw_idx)
+                            .copied()
+                            .unwrap_or(true)
+                        {
+                            continue;
+                        }
+                        // MMD 材質は Pass 2 で描画するのでスキップ
+                        let is_mmd_draw = mmd_solid
+                            && draw.render_style == super::mesh::RenderStyle::Mmd
+                            && draw.mmd_material_bind_group.is_some();
+                        if is_mmd_draw {
+                            continue;
+                        }
+
+                        if use_wireframe {
+                            pass.set_pipeline(ps.pipeline_wireframe.as_ref().expect(
+                                "wireframe パイプラインは supports_wireframe チェック済み",
+                            ));
+                        } else {
+                            // レンダーキュー × カリングモードに応じたパイプライン選択
+                            match (draw.render_queue, draw.cull_mode) {
+                                (RenderQueue::Opaque, CullMode::Back) => {
+                                    pass.set_pipeline(&ps.pipeline_cull)
+                                }
+                                (RenderQueue::Opaque, CullMode::None) => {
+                                    pass.set_pipeline(&ps.pipeline_no_cull)
+                                }
+                                (RenderQueue::Opaque, CullMode::Front) => {
+                                    pass.set_pipeline(&ps.pipeline_front_cull)
+                                }
+                                (RenderQueue::Mask, CullMode::Back) => {
+                                    pass.set_pipeline(&ps.pipeline_mask_cull)
+                                }
+                                (RenderQueue::Mask, CullMode::None) => {
+                                    pass.set_pipeline(&ps.pipeline_mask_no_cull)
+                                }
+                                (RenderQueue::Mask, CullMode::Front) => {
+                                    pass.set_pipeline(&ps.pipeline_mask_front_cull)
+                                }
+                                (RenderQueue::BlendZWrite, CullMode::Back) => {
+                                    pass.set_pipeline(&ps.pipeline_alpha_zwrite_cull)
+                                }
+                                (RenderQueue::BlendZWrite, CullMode::None) => {
+                                    pass.set_pipeline(&ps.pipeline_alpha_zwrite_no_cull)
+                                }
+                                (RenderQueue::BlendZWrite, CullMode::Front) => {
+                                    pass.set_pipeline(&ps.pipeline_alpha_zwrite_front_cull)
+                                }
+                                (RenderQueue::Blend, CullMode::Back) => {
+                                    pass.set_pipeline(&ps.pipeline_alpha_cull)
+                                }
+                                (RenderQueue::Blend, CullMode::None) => {
+                                    pass.set_pipeline(&ps.pipeline_alpha_no_cull)
+                                }
+                                (RenderQueue::Blend, CullMode::Front) => {
+                                    pass.set_pipeline(&ps.pipeline_alpha_front_cull)
+                                }
+                            }
+                        }
+                        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                        let tex_bg = draw
+                            .texture_bind_group
+                            .as_ref()
+                            .unwrap_or(&self.default_tex_bind_group);
+                        pass.set_bind_group(1, tex_bg, &[]);
+                        pass.set_bind_group(2, &draw.material_bind_group, &[]);
+                        let mtoon_aux_bg = draw
+                            .mtoon_aux_bind_group
+                            .as_ref()
+                            .unwrap_or(&self.default_mtoon_aux_bind_group);
+                        pass.set_bind_group(3, mtoon_aux_bg, &[]);
+
+                        pass.draw_indexed(
+                            draw.index_offset..(draw.index_offset + draw.index_count),
+                            0,
+                            0..1,
                         );
-                    } else if draw.double_sided {
-                        pass.set_pipeline(&ps.pipeline_no_cull);
-                    } else {
-                        pass.set_pipeline(&ps.pipeline_cull);
-                    }
-                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                    let tex_bg = draw
-                        .texture_bind_group
-                        .as_ref()
-                        .unwrap_or(&self.default_tex_bind_group);
-                    pass.set_bind_group(1, tex_bg, &[]);
-                    pass.set_bind_group(2, &draw.material_bind_group, &[]);
 
-                    pass.draw_indexed(
-                        draw.index_offset..(draw.index_offset + draw.index_count),
-                        0,
-                        0..1,
-                    );
-                }
-
-                // Standard 半透明材質（デプス書き込みなし）
-                for (draw_idx, draw) in model.draws.iter().enumerate() {
-                    if !params
-                        .material_visibility
-                        .get(draw_idx)
-                        .copied()
-                        .unwrap_or(true)
-                    {
-                        continue;
-                    }
-                    if !draw.is_alpha {
-                        continue;
-                    }
-                    let is_mmd_draw = mmd_solid
-                        && draw.render_style == super::mesh::RenderStyle::Mmd
-                        && draw.mmd_material_bind_group.is_some();
-                    if is_mmd_draw {
-                        continue;
-                    }
-
-                    if use_wireframe {
-                        pass.set_pipeline(
-                            ps.pipeline_wireframe
+                        // BLEND/BlendZWrite: サーフェス直後にアウトライン描画（インターリーブ）
+                        if interleave_outline
+                            && params.display.outline_enabled
+                            && draw.render_style == super::mesh::RenderStyle::Standard
+                            && draw.has_outline
+                        {
+                            let outline_pipeline = match draw.render_queue {
+                                RenderQueue::Blend => &ps.pipeline_outline_blend,
+                                RenderQueue::Mask => &ps.pipeline_outline_mask,
+                                _ => &ps.pipeline_outline,
+                            };
+                            pass.set_pipeline(outline_pipeline);
+                            pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
+                            pass.set_index_buffer(
+                                model.index_buf.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                            let tex_bg = draw
+                                .texture_bind_group
                                 .as_ref()
-                                .expect("wireframe パイプラインは supports_wireframe チェック済み"),
-                        );
-                    } else if draw.double_sided {
-                        pass.set_pipeline(&ps.pipeline_alpha_no_cull);
-                    } else {
-                        pass.set_pipeline(&ps.pipeline_alpha_cull);
+                                .unwrap_or(&self.default_tex_bind_group);
+                            pass.set_bind_group(1, tex_bg, &[]);
+                            pass.set_bind_group(2, &draw.material_bind_group, &[]);
+                            let outline_aux_bg = draw
+                                .mtoon_aux_bind_group
+                                .as_ref()
+                                .unwrap_or(&self.default_mtoon_aux_bind_group);
+                            pass.set_bind_group(3, outline_aux_bg, &[]);
+                            pass.draw_indexed(
+                                draw.index_offset..(draw.index_offset + draw.index_count),
+                                0,
+                                0..1,
+                            );
+                        }
                     }
-                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                    let tex_bg = draw
-                        .texture_bind_group
-                        .as_ref()
-                        .unwrap_or(&self.default_tex_bind_group);
-                    pass.set_bind_group(1, tex_bg, &[]);
-                    pass.set_bind_group(2, &draw.material_bind_group, &[]);
 
-                    pass.draw_indexed(
-                        draw.index_offset..(draw.index_offset + draw.index_count),
-                        0,
-                        0..1,
-                    );
+                    // OPAQUE/MASK: アウトラインをフェーズ後にまとめて描画
+                    if !interleave_outline && params.display.outline_enabled {
+                        for &draw_idx in &sorted_indices {
+                            let draw = &model.draws[draw_idx];
+                            if draw.render_queue != *target_queue {
+                                continue;
+                            }
+                            if !params
+                                .material_visibility
+                                .get(draw_idx)
+                                .copied()
+                                .unwrap_or(true)
+                            {
+                                continue;
+                            }
+                            if draw.render_style != super::mesh::RenderStyle::Standard {
+                                continue;
+                            }
+                            if !draw.has_outline {
+                                continue;
+                            }
+
+                            let outline_pipeline = match draw.render_queue {
+                                RenderQueue::Mask => &ps.pipeline_outline_mask,
+                                _ => &ps.pipeline_outline,
+                            };
+                            pass.set_pipeline(outline_pipeline);
+                            pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
+                            pass.set_index_buffer(
+                                model.index_buf.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                            let tex_bg = draw
+                                .texture_bind_group
+                                .as_ref()
+                                .unwrap_or(&self.default_tex_bind_group);
+                            pass.set_bind_group(1, tex_bg, &[]);
+                            pass.set_bind_group(2, &draw.material_bind_group, &[]);
+                            let outline_aux_bg = draw
+                                .mtoon_aux_bind_group
+                                .as_ref()
+                                .unwrap_or(&self.default_mtoon_aux_bind_group);
+                            pass.set_bind_group(3, outline_aux_bg, &[]);
+                            pass.draw_indexed(
+                                draw.index_offset..(draw.index_offset + draw.index_count),
+                                0,
+                                0..1,
+                            );
+                        }
+                    }
                 }
 
                 // Solid+Wire オーバーレイ
@@ -2218,6 +3632,7 @@ impl GpuRenderer {
                             .unwrap_or(&self.default_tex_bind_group);
                         pass.set_bind_group(1, tex_bg, &[]);
                         pass.set_bind_group(2, &draw.material_bind_group, &[]);
+                        pass.set_bind_group(3, &self.default_mtoon_aux_bind_group, &[]);
                         pass.draw_indexed(
                             draw.index_offset..(draw.index_offset + draw.index_count),
                             0,
@@ -2252,14 +3667,16 @@ impl GpuRenderer {
                         continue;
                     }
 
-                    // 不透明 / 半透明でパイプラインを切り替え
+                    // 不透明 / 半透明 × カリングモードでパイプラインを切り替え
+                    // MMD は Front cull 未対応のため Back 以外は no_cull
+                    let is_no_cull = draw.cull_mode != CullMode::Back;
                     if draw.is_alpha {
-                        if draw.double_sided {
+                        if is_no_cull {
                             pass.set_pipeline(ps.pipeline_mmd_alpha_no_cull.as_ref().unwrap());
                         } else {
                             pass.set_pipeline(ps.pipeline_mmd_alpha_cull.as_ref().unwrap());
                         }
-                    } else if draw.double_sided {
+                    } else if is_no_cull {
                         pass.set_pipeline(ps.pipeline_mmd_main_no_cull.as_ref().unwrap());
                     } else {
                         pass.set_pipeline(ps.pipeline_mmd_main_cull.as_ref().unwrap());
@@ -2653,12 +4070,118 @@ pub fn create_texture_bind_group(
 }
 
 /// 材質 bind group を作成
+/// IrTextureInfo から MaterialUniform 用 UV パラメータをパック
+/// 返り値: ([tex_coord, offset.x, offset.y, rotation], [scale.x, scale.y, 0, 0])
+pub fn pack_uv_params(
+    info: Option<&crate::intermediate::types::IrTextureInfo>,
+) -> ([f32; 4], [f32; 4]) {
+    match info {
+        Some(ti) => (
+            [ti.tex_coord as f32, ti.offset.x, ti.offset.y, ti.rotation],
+            [ti.scale.x, ti.scale.y, 0.0, 0.0],
+        ),
+        None => ([0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0]),
+    }
+}
+
 pub fn create_material_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     diffuse: [f32; 4],
+    shade_color: [f32; 3],
+    is_mtoon: bool,
+    shading_toony: f32,
+    shading_shift: f32,
+    outline_width: f32,
+    outline_mode: f32,
+    outline_color: [f32; 4],
+    outline_lighting_mix: f32,
+    rim_color: [f32; 3],
+    rim_fresnel_power: f32,
+    rim_lift: f32,
+    rim_lighting_mix: f32,
+    has_matcap: bool,
+    matcap_factor: [f32; 3],
+    has_shade_multiply_tex: bool,
+    has_shading_shift_tex: bool,
+    shading_shift_tex_scale: f32,
+    has_rim_multiply_tex: bool,
+    uv_anim_scroll_x: f32,
+    uv_anim_scroll_y: f32,
+    uv_anim_rotation: f32,
+    has_uv_anim_mask: bool,
+    alpha_cutoff: f32,
+    base_uv: ([f32; 4], [f32; 4]),
+    shade_uv: ([f32; 4], [f32; 4]),
+    shift_uv: ([f32; 4], [f32; 4]),
+    rim_uv: ([f32; 4], [f32; 4]),
+    outline_uv: ([f32; 4], [f32; 4]),
+    uv_mask_uv: ([f32; 4], [f32; 4]),
+    emissive_factor: [f32; 3],
+    has_emissive_tex: bool,
+    emissive_uv: ([f32; 4], [f32; 4]),
+    has_normal_tex: bool,
+    normal_scale: f32,
+    normal_uv: ([f32; 4], [f32; 4]),
+    gi_equalization_factor: f32,
+    outline_width_channel: f32,
+    uv_anim_mask_channel: f32,
+    matcap_uv: ([f32; 4], [f32; 4]),
 ) -> wgpu::BindGroup {
-    let uniform = MaterialUniform { diffuse };
+    let uniform = MaterialUniform {
+        diffuse,
+        shade_color,
+        is_mtoon: if is_mtoon { 1.0 } else { 0.0 },
+        shading_toony,
+        shading_shift,
+        outline_width,
+        outline_mode,
+        outline_color,
+        outline_lighting_mix,
+        rim_color,
+        rim_fresnel_power,
+        rim_lift,
+        rim_lighting_mix,
+        has_matcap: if has_matcap { 1.0 } else { 0.0 },
+        matcap_factor,
+        has_shade_multiply_tex: if has_shade_multiply_tex { 1.0 } else { 0.0 },
+        has_shading_shift_tex: if has_shading_shift_tex { 1.0 } else { 0.0 },
+        shading_shift_tex_scale,
+        has_rim_multiply_tex: if has_rim_multiply_tex { 1.0 } else { 0.0 },
+        uv_anim_scroll_x,
+        uv_anim_scroll_y,
+        uv_anim_rotation,
+        has_uv_anim_mask: if has_uv_anim_mask { 1.0 } else { 0.0 },
+        alpha_cutoff,
+        base_uv_a: base_uv.0,
+        base_uv_b: base_uv.1,
+        shade_uv_a: shade_uv.0,
+        shade_uv_b: shade_uv.1,
+        shift_uv_a: shift_uv.0,
+        shift_uv_b: shift_uv.1,
+        rim_uv_a: rim_uv.0,
+        rim_uv_b: rim_uv.1,
+        outline_uv_a: outline_uv.0,
+        outline_uv_b: outline_uv.1,
+        uv_mask_uv_a: uv_mask_uv.0,
+        uv_mask_uv_b: uv_mask_uv.1,
+        emissive_factor,
+        has_emissive_tex: if has_emissive_tex { 1.0 } else { 0.0 },
+        emissive_uv_a: emissive_uv.0,
+        emissive_uv_b: emissive_uv.1,
+        has_normal_tex: if has_normal_tex { 1.0 } else { 0.0 },
+        normal_scale,
+        gi_equalization_factor,
+        outline_width_channel,
+        normal_uv_a: normal_uv.0,
+        normal_uv_b: normal_uv.1,
+        uv_anim_mask_channel,
+        _pad_ch1: 0.0,
+        _pad_ch2: 0.0,
+        _pad_ch3: 0.0,
+        matcap_uv_a: matcap_uv.0,
+        matcap_uv_b: matcap_uv.1,
+    };
     let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("material_uniform"),
         contents: bytemuck::bytes_of(&uniform),
@@ -2673,6 +4196,166 @@ pub fn create_material_bind_group(
             resource: buf.as_entire_binding(),
         }],
     })
+}
+
+/// MToon 補助テクスチャ bind group layout (group 3) を作成
+/// テクスチャごとに sampler を持つ（glTF の texture 単位 sampler に準拠）
+/// binding 2n: sampler, binding 2n+1: texture_2d（8 テクスチャ × 2 = 16 bindings）
+fn create_mtoon_aux_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let frag = wgpu::ShaderStages::FRAGMENT;
+    let vert_frag = wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX;
+    let vert = wgpu::ShaderStages::VERTEX;
+
+    let sampler_entry = |binding: u32, vis: wgpu::ShaderStages| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: vis,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    };
+    let tex_entry = |binding: u32, vis: wgpu::ShaderStages| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: vis,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    };
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("mtoon_aux_bgl"),
+        entries: &[
+            sampler_entry(0, frag),      // s_matcap
+            tex_entry(1, frag),          // t_matcap
+            sampler_entry(2, frag),      // s_shade_multiply
+            tex_entry(3, frag),          // t_shade_multiply
+            sampler_entry(4, frag),      // s_shading_shift
+            tex_entry(5, frag),          // t_shading_shift
+            sampler_entry(6, frag),      // s_rim_multiply
+            tex_entry(7, frag),          // t_rim_multiply
+            sampler_entry(8, vert_frag), // s_uv_anim_mask（頂点シェーダーからも参照）
+            tex_entry(9, vert_frag),     // t_uv_anim_mask
+            sampler_entry(10, vert),     // s_outline_width（頂点シェーダーのみ）
+            tex_entry(11, vert),         // t_outline_width
+            sampler_entry(12, frag),     // s_emissive
+            tex_entry(13, frag),         // t_emissive
+            sampler_entry(14, frag),     // s_normal
+            tex_entry(15, frag),         // t_normal
+        ],
+    })
+}
+
+/// 補助テクスチャ 1 枚分（テクスチャビュー + サンプラー）
+pub struct AuxTexEntry<'a> {
+    pub view: &'a wgpu::TextureView,
+    pub sampler: &'a wgpu::Sampler,
+}
+
+/// MToon 補助テクスチャ bind group を作成（テクスチャごとに sampler を持つ）
+pub fn create_mtoon_aux_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    matcap: AuxTexEntry<'_>,
+    shade_multiply: AuxTexEntry<'_>,
+    shading_shift: AuxTexEntry<'_>,
+    rim_multiply: AuxTexEntry<'_>,
+    uv_anim_mask: AuxTexEntry<'_>,
+    outline_width: AuxTexEntry<'_>,
+    emissive: AuxTexEntry<'_>,
+    normal: AuxTexEntry<'_>,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("mtoon_aux_bg"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Sampler(matcap.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(matcap.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(shade_multiply.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(shade_multiply.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(shading_shift.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(shading_shift.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::Sampler(rim_multiply.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::TextureView(rim_multiply.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::Sampler(uv_anim_mask.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 9,
+                resource: wgpu::BindingResource::TextureView(uv_anim_mask.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 10,
+                resource: wgpu::BindingResource::Sampler(outline_width.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 11,
+                resource: wgpu::BindingResource::TextureView(outline_width.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 12,
+                resource: wgpu::BindingResource::Sampler(emissive.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 13,
+                resource: wgpu::BindingResource::TextureView(emissive.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 14,
+                resource: wgpu::BindingResource::Sampler(normal.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 15,
+                resource: wgpu::BindingResource::TextureView(normal.view),
+            },
+        ],
+    })
+}
+
+/// MToon 補助テクスチャ bind group layout を公開で作成
+pub fn create_mtoon_aux_bind_group_layout_pub(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    create_mtoon_aux_bind_group_layout(device)
+}
+
+/// 1x1 白テクスチャの sRGB TextureView を作成（MToon 補助 bind group デフォルト用）
+pub fn create_white_texture_view_srgb(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> wgpu::TextureView {
+    let (srgb, _) = create_white_texture_view(device, queue);
+    srgb
+}
+
+/// 1x1 黒テクスチャの TextureView を作成（公開版）
+pub fn create_black_texture_view_pub(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> wgpu::TextureView {
+    create_black_texture_view(device, queue)
 }
 
 /// 1x1 白テクスチャの TextureView を作成（MMD デフォルト用）
@@ -2720,6 +4403,86 @@ fn create_white_texture_view(
         ..Default::default()
     });
     (srgb_view, unorm_view)
+}
+
+/// 1x1 黒テクスチャの TextureView を作成（MatCap デフォルト用: RGB=0 で無効化）
+fn create_black_texture_view(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("black_1x1_view"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &[0u8, 0, 0, 255],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: None,
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    tex.create_view(&Default::default())
+}
+
+/// 1x1 フラット法線テクスチャの Unorm TextureView を作成
+/// tangent-space (0,0,1) = RGBA(128,128,255,255) — 法線マップなしと等価
+pub fn create_flat_normal_texture_view(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> wgpu::TextureView {
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("flat_normal_1x1"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &[128u8, 128, 255, 255],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: None,
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    tex.create_view(&Default::default())
 }
 
 /// 共有トゥーンテクスチャ (toon01-10) を CPU で生成し GPU にアップロード

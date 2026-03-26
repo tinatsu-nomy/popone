@@ -73,6 +73,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
                     position: v.position,
                     normal: v.normal,
                     uv: v.uv,
+                    tangent: v.tangent,
                     weights: v.weights,
                     weight_count: v.weight_count,
                     edge_scale: v.edge_scale,
@@ -82,6 +83,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
             material_index: new_mat_idx,
             morph_targets: mesh.morph_targets.clone(),
             node_index: mesh.node_index,
+            uvs1: mesh.uvs1.clone(),
         });
 
         new_vtx_offset += mesh.vertices.len();
@@ -94,10 +96,18 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
     let mut morph_alive: Vec<bool> = vec![false; morph_count];
 
     // まず頂点モーフの有効性を判定（checked access で範囲外は無視）
+    // positions / normals / tangents いずれかに有効な頂点があれば生存
     for (i, morph) in ir.morphs.iter().enumerate() {
-        if let IrMorphKind::Vertex(voffs) = &morph.kind {
-            morph_alive[i] = voffs
+        if let IrMorphKind::Vertex {
+            ref positions,
+            ref normals,
+            ref tangents,
+        } = morph.kind
+        {
+            morph_alive[i] = positions
                 .iter()
+                .chain(normals.iter())
+                .chain(tangents.iter())
                 .any(|&(vi, _)| vtx_remap.get(vi).copied().flatten().is_some());
         }
     }
@@ -131,7 +141,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
     for (i, morph) in ir.morphs.iter().enumerate() {
         if !morph_alive[i] {
             let kind_label = match &morph.kind {
-                IrMorphKind::Vertex(_) => "頂点",
+                IrMorphKind::Vertex { .. } => "頂点",
                 IrMorphKind::Group(_) => "グループ",
             };
             log::warn!(
@@ -159,18 +169,27 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
             continue;
         }
         let new_kind = match &morph.kind {
-            IrMorphKind::Vertex(voffs) => {
-                let remapped: Vec<(usize, Vec3)> = voffs
-                    .iter()
-                    .filter_map(|&(vi, off)| {
-                        vtx_remap
-                            .get(vi)
-                            .copied()
-                            .flatten()
-                            .map(|new_vi| (new_vi, off))
-                    })
-                    .collect();
-                IrMorphKind::Vertex(remapped)
+            IrMorphKind::Vertex {
+                ref positions,
+                ref normals,
+                ref tangents,
+            } => {
+                let remap_vec = |src: &[(usize, Vec3)]| -> Vec<(usize, Vec3)> {
+                    src.iter()
+                        .filter_map(|&(vi, off)| {
+                            vtx_remap
+                                .get(vi)
+                                .copied()
+                                .flatten()
+                                .map(|new_vi| (new_vi, off))
+                        })
+                        .collect()
+                };
+                IrMorphKind::Vertex {
+                    positions: remap_vec(positions),
+                    normals: remap_vec(normals),
+                    tangents: remap_vec(tangents),
+                }
             }
             IrMorphKind::Group(goffs) => {
                 let remapped: Vec<(usize, f32)> = goffs
@@ -206,12 +225,53 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
     let used_tex_indices: HashSet<usize> = new_materials
         .iter()
         .filter_map(|m| m.texture_index)
-        .chain(new_materials.iter().filter_map(|m| m.shade_texture_index))
         .chain(
             new_materials
                 .iter()
-                .filter_map(|m| m.outline_width_texture_index),
+                .filter_map(|m| m.base_color_tex_info.as_ref().map(|t| t.index)),
         )
+        .chain(
+            new_materials
+                .iter()
+                .filter_map(|m| m.shade_texture.as_ref().map(|t| t.index)),
+        )
+        .chain(
+            new_materials
+                .iter()
+                .filter_map(|m| m.outline_width_texture.as_ref().map(|t| t.index)),
+        )
+        .chain(
+            new_materials
+                .iter()
+                .filter_map(|m| m.matcap_texture.as_ref().map(|t| t.index)),
+        )
+        .chain(
+            new_materials
+                .iter()
+                .filter_map(|m| m.shading_shift_texture.as_ref().map(|t| t.index)),
+        )
+        .chain(
+            new_materials
+                .iter()
+                .filter_map(|m| m.rim_multiply_texture.as_ref().map(|t| t.index)),
+        )
+        .chain(
+            new_materials
+                .iter()
+                .filter_map(|m| m.uv_animation_mask_texture.as_ref().map(|t| t.index)),
+        )
+        .chain(
+            new_materials
+                .iter()
+                .filter_map(|m| m.emissive_texture.as_ref().map(|t| t.index)),
+        )
+        .chain(
+            new_materials
+                .iter()
+                .filter_map(|m| m.normal_texture.as_ref().map(|t| t.index)),
+        )
+        .chain(new_materials.iter().filter_map(|m| m.sphere_texture_index))
+        .chain(new_materials.iter().filter_map(|m| m.toon_texture_index))
         .collect();
 
     let mut tex_remap: HashMap<usize, usize> = HashMap::new();
@@ -226,11 +286,47 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
     // 材質の texture_index をリマップ
     for mat in &mut new_materials {
         mat.texture_index = mat.texture_index.and_then(|i| tex_remap.get(&i).copied());
-        mat.shade_texture_index = mat
-            .shade_texture_index
+        mat.base_color_tex_info = mat
+            .base_color_tex_info
+            .take()
+            .and_then(|t| t.remap_index(&tex_remap));
+        mat.shade_texture = mat
+            .shade_texture
+            .take()
+            .and_then(|t| t.remap_index(&tex_remap));
+        mat.outline_width_texture = mat
+            .outline_width_texture
+            .take()
+            .and_then(|t| t.remap_index(&tex_remap));
+        mat.matcap_texture = mat
+            .matcap_texture
+            .take()
+            .and_then(|t| t.remap_index(&tex_remap));
+        mat.shading_shift_texture = mat
+            .shading_shift_texture
+            .take()
+            .and_then(|t| t.remap_index(&tex_remap));
+        mat.rim_multiply_texture = mat
+            .rim_multiply_texture
+            .take()
+            .and_then(|t| t.remap_index(&tex_remap));
+        mat.uv_animation_mask_texture = mat
+            .uv_animation_mask_texture
+            .take()
+            .and_then(|t| t.remap_index(&tex_remap));
+        mat.emissive_texture = mat
+            .emissive_texture
+            .take()
+            .and_then(|t| t.remap_index(&tex_remap));
+        mat.normal_texture = mat
+            .normal_texture
+            .take()
+            .and_then(|t| t.remap_index(&tex_remap));
+        mat.sphere_texture_index = mat
+            .sphere_texture_index
             .and_then(|i| tex_remap.get(&i).copied());
-        mat.outline_width_texture_index = mat
-            .outline_width_texture_index
+        mat.toon_texture_index = mat
+            .toon_texture_index
             .and_then(|i| tex_remap.get(&i).copied());
     }
 
@@ -259,7 +355,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
 mod tests {
     use super::*;
     use crate::intermediate::types::IrBone;
-    use glam::{Mat4, Vec2};
+    use glam::{Mat4, Vec2, Vec4};
 
     fn make_bone(name: &str) -> IrBone {
         IrBone {
@@ -290,6 +386,7 @@ mod tests {
                 position: Vec3::ZERO,
                 normal: Vec3::Y,
                 uv: Vec2::ZERO,
+                tangent: Vec4::new(1.0, 0.0, 0.0, 1.0),
                 weights: [(0, 1.0), (0, 0.0), (0, 0.0), (0, 0.0)],
                 weight_count: 1,
                 edge_scale: 1.0,
@@ -307,6 +404,7 @@ mod tests {
             material_index: mat_idx,
             morph_targets: Vec::new(),
             node_index: 0,
+            uvs1: Vec::new(),
         }
     }
 
@@ -339,11 +437,15 @@ mod tests {
                 name: "blink".into(),
                 name_en: String::new(),
                 panel: 2,
-                kind: IrMorphKind::Vertex(vec![
-                    (1, Vec3::Y),  // mesh0 の頂点1
-                    (7, Vec3::X),  // mesh1 の頂点1（除外対象）
-                    (10, Vec3::Z), // mesh2 の頂点1
-                ]),
+                kind: IrMorphKind::Vertex {
+                    positions: vec![
+                        (1, Vec3::Y),  // mesh0 の頂点1
+                        (7, Vec3::X),  // mesh1 の頂点1（除外対象）
+                        (10, Vec3::Z), // mesh2 の頂点1
+                    ],
+                    normals: Vec::new(),
+                    tangents: Vec::new(),
+                },
             }],
             ..Default::default()
         };
@@ -364,7 +466,8 @@ mod tests {
 
         // モーフ: mesh1 の頂点(7)が除外され、残り2エントリ
         assert_eq!(filtered.morphs.len(), 1);
-        if let IrMorphKind::Vertex(ref entries) = filtered.morphs[0].kind {
+        if let IrMorphKind::Vertex { ref positions, .. } = filtered.morphs[0].kind {
+            let entries = positions;
             assert_eq!(entries.len(), 2);
             // mesh0 の頂点1 → new index 1（そのまま）
             assert_eq!(entries[0].0, 1);
@@ -397,18 +500,26 @@ mod tests {
                     name: "smile".into(),
                     name_en: String::new(),
                     panel: 3,
-                    kind: IrMorphKind::Vertex(vec![
-                        (3, Vec3::Y), // mesh1 の頂点0 のみ
-                        (4, Vec3::X), // mesh1 の頂点1 のみ
-                    ]),
+                    kind: IrMorphKind::Vertex {
+                        positions: vec![
+                            (3, Vec3::Y), // mesh1 の頂点0 のみ
+                            (4, Vec3::X), // mesh1 の頂点1 のみ
+                        ],
+                        normals: Vec::new(),
+                        tangents: Vec::new(),
+                    },
                 },
                 IrMorph {
                     name: "blink".into(),
                     name_en: String::new(),
                     panel: 2,
-                    kind: IrMorphKind::Vertex(vec![
-                        (0, Vec3::Y), // mesh0 の頂点0（残る）
-                    ]),
+                    kind: IrMorphKind::Vertex {
+                        positions: vec![
+                            (0, Vec3::Y), // mesh0 の頂点0（残る）
+                        ],
+                        normals: Vec::new(),
+                        tangents: Vec::new(),
+                    },
                 },
             ],
             ..Default::default()
@@ -447,14 +558,22 @@ mod tests {
                     name: "smile".into(),
                     name_en: String::new(),
                     panel: 3,
-                    kind: IrMorphKind::Vertex(vec![(3, Vec3::Y)]),
+                    kind: IrMorphKind::Vertex {
+                        positions: vec![(3, Vec3::Y)],
+                        normals: Vec::new(),
+                        tangents: Vec::new(),
+                    },
                 },
                 // [1] blink: mesh0 → 残る（new index 0）
                 IrMorph {
                     name: "blink".into(),
                     name_en: String::new(),
                     panel: 2,
-                    kind: IrMorphKind::Vertex(vec![(0, Vec3::Y)]),
+                    kind: IrMorphKind::Vertex {
+                        positions: vec![(0, Vec3::Y)],
+                        normals: Vec::new(),
+                        tangents: Vec::new(),
+                    },
                 },
                 // [2] group: smile(0) + blink(1) → smile除外後 blink(new 0) のみ
                 IrMorph {
@@ -509,14 +628,22 @@ mod tests {
                     name: "vtx_alive".into(),
                     name_en: String::new(),
                     panel: 2,
-                    kind: IrMorphKind::Vertex(vec![(0, Vec3::Y)]),
+                    kind: IrMorphKind::Vertex {
+                        positions: vec![(0, Vec3::Y)],
+                        normals: Vec::new(),
+                        tangents: Vec::new(),
+                    },
                 },
                 // [1] vtx_dead: mesh1 のみ → 除外
                 IrMorph {
                     name: "vtx_dead".into(),
                     name_en: String::new(),
                     panel: 2,
-                    kind: IrMorphKind::Vertex(vec![(3, Vec3::Y)]),
+                    kind: IrMorphKind::Vertex {
+                        positions: vec![(3, Vec3::Y)],
+                        normals: Vec::new(),
+                        tangents: Vec::new(),
+                    },
                 },
                 // [2] inner: vtx_dead(1) のみ → 子が全滅で除外
                 IrMorph {
@@ -569,7 +696,11 @@ mod tests {
                 name: "blink".into(),
                 name_en: String::new(),
                 panel: 2,
-                kind: IrMorphKind::Vertex(vec![(0, Vec3::Y)]),
+                kind: IrMorphKind::Vertex {
+                    positions: vec![(0, Vec3::Y)],
+                    normals: Vec::new(),
+                    tangents: Vec::new(),
+                },
             }],
             ..Default::default()
         };
@@ -631,5 +762,68 @@ mod tests {
 
         // 材質の texture_index がリマップされている
         assert_eq!(filtered.materials[0].texture_index, Some(0));
+    }
+
+    /// base_color_tex_info がフィルタ後にリマップされることを確認
+    #[test]
+    fn test_base_color_tex_info_remap() {
+        use crate::intermediate::types::{IrSamplerInfo, IrTexture, IrTextureInfo};
+
+        let ir = IrModel {
+            name: "test".into(),
+            bones: vec![make_bone("Root")],
+            meshes: vec![make_mesh("mesh0", 0, 3), make_mesh("mesh1", 1, 3)],
+            materials: vec![
+                IrMaterial {
+                    name: "mat0".into(),
+                    texture_index: Some(0),
+                    base_color_tex_info: Some(IrTextureInfo {
+                        index: 0,
+                        tex_coord: 1,
+                        offset: Vec2::new(0.1, 0.2),
+                        scale: Vec2::new(2.0, 2.0),
+                        rotation: 0.5,
+                        sampler: IrSamplerInfo::default(),
+                    }),
+                    ..Default::default()
+                },
+                IrMaterial {
+                    name: "mat1".into(),
+                    texture_index: Some(1),
+                    base_color_tex_info: Some(IrTextureInfo::from_index(1)),
+                    ..Default::default()
+                },
+            ],
+            textures: vec![
+                IrTexture {
+                    filename: "tex0.png".into(),
+                    data: vec![0],
+                    mime_type: "image/png".into(),
+                },
+                IrTexture {
+                    filename: "tex1.png".into(),
+                    data: vec![1],
+                    mime_type: "image/png".into(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        // 材質0のみ表示（材質1のテクスチャ tex1 が除外される）
+        let visible: HashSet<usize> = [0].iter().copied().collect();
+        let filtered = build_filtered_ir(&ir, &visible);
+
+        assert_eq!(filtered.textures.len(), 1);
+
+        // texture_index と base_color_tex_info.index が一致してリマップされている
+        let mat = &filtered.materials[0];
+        assert_eq!(mat.texture_index, Some(0));
+        let ti = mat.base_color_tex_info.as_ref().unwrap();
+        assert_eq!(ti.index, 0);
+        // UV transform 情報が維持されている
+        assert_eq!(ti.tex_coord, 1);
+        assert!((ti.offset.x - 0.1).abs() < 1e-6);
+        assert!((ti.scale.x - 2.0).abs() < 1e-6);
+        assert!((ti.rotation - 0.5).abs() < 1e-6);
     }
 }

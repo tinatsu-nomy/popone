@@ -6,7 +6,7 @@ A 3D viewer for VRM / FBX / PMX / PMD / UnityPackage / ZIP / 7z files.
 
 ## Download
 
-Latest release: **[popone-v0.2.8.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.8/popone-v0.2.8.exe)**
+Latest release: **[popone-v0.2.9.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.9/popone-v0.2.9.exe)**
 
 All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -37,6 +37,7 @@ See [Usage](docs/usage.en.md) for details.
 | glam | 3D math (Vec3, Quat, Mat4) |
 | byteorder | PMX binary read/write (little-endian) |
 | image | Texture PNG/JPEG/BMP/TGA decode/encode |
+| mikktspace | MikkTSpace tangent vector generation (for normal maps) |
 | encoding_rs | PMD Shift_JIS text conversion |
 | flate2 | zlib compression/decompression |
 | tar | .unitypackage (tar.gz) extraction |
@@ -72,6 +73,7 @@ See [Usage](docs/usage.en.md) for details.
 | [glam](https://github.com/bitshifter/glam-rs) | MIT OR Apache-2.0 |
 | [byteorder](https://github.com/BurntSushi/byteorder) | Unlicense OR MIT |
 | [image](https://github.com/image-rs/image) | MIT OR Apache-2.0 |
+| [mikktspace](https://github.com/gltf-rs/mikktspace) | MIT OR Apache-2.0 |
 | [encoding_rs](https://github.com/nickel-org/encoding_rs) | MIT OR Apache-2.0 |
 | [flate2](https://github.com/rust-lang/flate2-rs) | MIT OR Apache-2.0 |
 | [tar](https://github.com/alexcrichton/tar-rs) | MIT OR Apache-2.0 |

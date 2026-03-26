@@ -421,7 +421,8 @@ fn extract_materials(pmd: &PmdModel, textures: &[IrTexture]) -> Vec<IrMaterial> 
                 specular_power: m.specular_power,
                 ambient: m.ambient,
                 texture_index,
-                is_double_sided: false,
+                base_color_tex_info: None,
+                cull_mode: CullMode::Back,
                 is_mtoon: false,
                 edge_color: if has_edge {
                     Vec4::new(0.0, 0.0, 0.0, 1.0)
@@ -430,14 +431,42 @@ fn extract_materials(pmd: &PmdModel, textures: &[IrTexture]) -> Vec<IrMaterial> 
                 },
                 edge_size: if has_edge { 1.0 } else { 0.0 },
                 shade_color: None,
-                shade_texture_index: None,
-                outline_width_texture_index: None,
+                shade_texture: None,
+                shading_toony_factor: 0.9,
+                shading_shift_factor: 0.0,
+                outline_width_texture: None,
+                outline_width_tex_channel: ColorChannel::G,
+                outline_width_mode: OutlineWidthMode::None,
+                outline_width_factor: 0.0,
+                outline_lighting_mix: 1.0,
                 source_texture_name: None,
                 source_format: SourceFormat::Pmd,
                 sphere_texture_index,
                 sphere_mode,
                 toon_texture_index,
                 toon_shared_index,
+                parametric_rim_color: Vec3::ZERO,
+                parametric_rim_fresnel_power: 5.0,
+                parametric_rim_lift: 0.0,
+                rim_lighting_mix: 1.0,
+                gi_equalization_factor: 0.9,
+                matcap_factor: Vec3::ONE,
+                matcap_texture: None,
+                shading_shift_texture: None,
+                shading_shift_texture_scale: 1.0,
+                rim_multiply_texture: None,
+                uv_animation_scroll_x_speed: 0.0,
+                uv_animation_scroll_y_speed: 0.0,
+                uv_animation_rotation_speed: 0.0,
+                uv_animation_mask_texture: None,
+                uv_anim_mask_tex_channel: ColorChannel::B,
+                alpha_mode: AlphaMode::Opaque,
+                alpha_cutoff: 0.5,
+                render_queue_offset: 0,
+                emissive_factor: Vec3::ZERO,
+                emissive_texture: None,
+                normal_texture: None,
+                normal_texture_scale: 1.0,
             }
         })
         .collect()
@@ -492,6 +521,7 @@ fn extract_meshes(pmd: &PmdModel, _materials: &[IrMaterial]) -> (Vec<IrMesh>, Ha
                         position: pmx_pos_to_gltf(v.position),
                         normal: pmx_normal_to_gltf(v.normal),
                         uv: v.uv,
+                        tangent: Vec4::ZERO, // MikkTSpace で後から生成
                         weights: w_arr,
                         weight_count: w_cnt,
                         // PMD 頂点: edge_flag=0 はエッジ有効、1 はエッジ無効（材質の edge_flag とは逆）
@@ -507,14 +537,17 @@ fn extract_meshes(pmd: &PmdModel, _materials: &[IrMaterial]) -> (Vec<IrMesh>, Ha
 
         let name = format!("材質{}", mat_idx + 1);
 
-        meshes.push(IrMesh {
+        let mut ir_mesh = IrMesh {
             name,
             vertices: local_vertices,
             indices: local_indices,
             material_index: mat_idx,
             morph_targets: Vec::new(),
             node_index: 0,
-        });
+            uvs1: Vec::new(),
+        };
+        crate::intermediate::tangent::generate_tangents(&mut ir_mesh, 0);
+        meshes.push(ir_mesh);
 
         face_offset += face_count;
     }
@@ -570,7 +603,11 @@ fn extract_morphs(pmd: &PmdModel, pmd_to_ir_vertex: &HashMap<u32, usize>) -> Vec
                 name: m.name.clone(),
                 name_en,
                 panel,
-                kind: IrMorphKind::Vertex(entries),
+                kind: IrMorphKind::Vertex {
+                    positions: entries,
+                    normals: Vec::new(),
+                    tangents: Vec::new(),
+                },
             }
         })
         .collect()

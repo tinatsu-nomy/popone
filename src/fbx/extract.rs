@@ -271,6 +271,7 @@ pub fn extract_ir_model_from_fbx_with_options(
                     position: Vec3::from(vert_positions[i]),
                     normal: Vec3::from(vert_normals[i]),
                     uv: Vec2::from(vert_uvs[i]),
+                    tangent: Vec4::ZERO, // MikkTSpace で後から生成
                     weights: w_arr,
                     weight_count: w_cnt,
                     edge_scale: 1.0,
@@ -285,14 +286,17 @@ pub fn extract_ir_model_from_fbx_with_options(
             let mat_index = mat_base + mat_local;
             global_vertex_offset += ir_vertices.len();
 
-            ir_meshes.push(IrMesh {
+            let mut ir_mesh = IrMesh {
                 name: geom_obj.name.clone(),
                 vertices: ir_vertices,
                 indices,
                 material_index: mat_index,
                 morph_targets: Vec::new(),
                 node_index: 0,
-            });
+                uvs1: Vec::new(),
+            };
+            crate::intermediate::tangent::generate_tangents(&mut ir_mesh, 0);
+            ir_meshes.push(ir_mesh);
         }
 
         // ブレンドシェイプ
@@ -321,7 +325,11 @@ pub fn extract_ir_model_from_fbx_with_options(
                     name: shape.name.clone(),
                     name_en: shape.name.clone(),
                     panel: 4,
-                    kind: IrMorphKind::Vertex(deltas),
+                    kind: IrMorphKind::Vertex {
+                        positions: deltas,
+                        normals: Vec::new(),
+                        tangents: Vec::new(),
+                    },
                 });
             }
         }

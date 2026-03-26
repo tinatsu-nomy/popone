@@ -6,7 +6,7 @@ VRM / FBX / PMX / PMD / UnityPackage / ZIP / 7z を 3D 表示します。
 
 ## ダウンロード
 
-最新リリース: **[popone-v0.2.8.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.8/popone-v0.2.8.exe)**
+最新リリース: **[popone-v0.2.9.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.9/popone-v0.2.9.exe)**
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -37,6 +37,7 @@ VRM / FBX / PMX / PMD / UnityPackage / ZIP / 7z を 3D 表示します。
 | glam | 3D 数学（Vec3, Quat, Mat4） |
 | byteorder | PMX バイナリ読み書き |
 | image | テクスチャ PNG/JPEG/BMP/TGA デコード・エンコード |
+| mikktspace | MikkTSpace 接線ベクトル生成（法線マップ用） |
 | encoding_rs | PMD Shift_JIS テキスト変換 |
 | flate2 | zlib 圧縮・展開 |
 | tar | .unitypackage (tar.gz) 展開 |
@@ -72,6 +73,7 @@ VRM / FBX / PMX / PMD / UnityPackage / ZIP / 7z を 3D 表示します。
 | [glam](https://github.com/bitshifter/glam-rs) | MIT OR Apache-2.0 |
 | [byteorder](https://github.com/BurntSushi/byteorder) | Unlicense OR MIT |
 | [image](https://github.com/image-rs/image) | MIT OR Apache-2.0 |
+| [mikktspace](https://github.com/gltf-rs/mikktspace) | MIT OR Apache-2.0 |
 | [encoding_rs](https://github.com/nickel-org/encoding_rs) | MIT OR Apache-2.0 |
 | [flate2](https://github.com/rust-lang/flate2-rs) | MIT OR Apache-2.0 |
 | [tar](https://github.com/alexcrichton/tar-rs) | MIT OR Apache-2.0 |

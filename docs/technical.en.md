@@ -34,11 +34,21 @@
     - [Pipeline Configuration](#pipeline-configuration)
     - [Color Space](#color-space)
     - [Shared Toon Textures](#shared-toon-textures)
+  - [MToon Shading](#mtoon-shading)
+    - [MaterialUniform](#materialuniform)
+    - [lit/shade Interpolation Formula](#litshade-interpolation-formula)
+    - [Outline Rendering](#outline-rendering)
+    - [Rim Lighting](#rim-lighting)
+    - [MatCap Texture](#matcap-texture)
+    - [VRM Parameter Mapping](#vrm-parameter-mapping)
+    - [UV Animation](#uv-animation)
+    - [Transparent Draw Order Control (alphaMode / transparentWithZWrite / renderQueueOffsetNumber)](#transparent-draw-order-control-alphamode--transparentwithzwrite--renderqueueoffsetnumber)
   - [Viewer Display Styles](#viewer-display-styles)
     - [Bone Display](#bone-display-1)
     - [Rigid Body Display](#rigid-body-display)
     - [Joint Display (PMX/PMD only)](#joint-display-pmxpmd-only)
     - [Normal Map Display](#normal-map-display)
+    - [Normal Map Tangent Space (TBN)](#normal-map-tangent-space-tbn)
     - [Render Order](#render-order)
   - [Camera & Lighting](#camera--lighting)
     - [Camera](#camera)
@@ -142,7 +152,8 @@ To display PMX/PMD files in the viewer, PMX coordinates are reverse-converted to
 |--------|------------|
 | Position | `(x, y, -z) / 12.5` |
 | Normal | `(x, y, -z)` |
-| Morph offset | `(x, y, -z) / 12.5` (displacement vector, scale required) |
+| Morph offset (position) | `(x, y, -z) / 12.5` (displacement vector, scale required) |
+| Morph offset (normal/tangent) | `(x, y, -z)` (direction vector, no scale) |
 | Face winding | b↔c swap (reversed in inverse conversion) |
 | Rigid body / Joint position | Kept in PMX coordinates as-is (viewer renders in PMX coordinates) |
 
@@ -363,7 +374,7 @@ Lower body
 2. Calculate angle from arm direction to horizontal and generate inverse rotation correction quaternion
 3. Correct bone positions and global matrices
 4. Rotate mesh vertices and normals based on skin weights
-5. Apply rotation to morph offsets
+5. Apply rotation to morph offsets (position, normal, tangent)
 6. Rigid bodies / joints: correct position and rotation of those belonging to descendants of affected bones
 
 ### Rigid Body Rotation
@@ -496,6 +507,353 @@ Actual MMD standard toon01-10 pixel data (32 rows of RGB values) stored as const
 | toon06 | Yellow, center highlight band + dark yellow |
 | toon07-10 | All white (no toon effect) |
 
+## MToon Shading
+
+VRM MToon materials use a fragment shader branch within the Standard pipeline for 2-color toon shading + rim lighting + MatCap, and a dedicated pipeline for outline rendering.
+
+### MaterialUniform
+
+```rust
+// 448 bytes (gpu.rs)
+pub struct MaterialUniform {
+    pub diffuse: [f32; 4],              // Base color (16 bytes)
+    pub shade_color: [f32; 3],          // MToon shade color (12 bytes)
+    pub is_mtoon: f32,                  // 0.0 or 1.0 (4 bytes)
+    pub shading_toony: f32,             // Shadow boundary sharpness 0.0~1.0 (4 bytes)
+    pub shading_shift: f32,             // Shadow threshold shift -1.0~1.0 (4 bytes)
+    pub outline_width: f32,             // Outline width (4 bytes)
+    pub outline_mode: f32,              // 0=none, 1=world, 2=screen (4 bytes)
+    pub outline_color: [f32; 4],        // Outline color (16 bytes)
+    pub outline_lighting_mix: f32,      // Lighting mix ratio 0~1 (4 bytes)
+    pub rim_fresnel_power: f32,         // Rim Fresnel exponent (4 bytes)
+    pub rim_lift: f32,                  // Rim lift amount (4 bytes)
+    pub rim_lighting_mix: f32,          // Rim lighting mix ratio (4 bytes)
+    pub rim_color: [f32; 3],            // Rim color (12 bytes)
+    pub has_matcap: f32,                // MatCap enabled flag 0.0/1.0 (4 bytes)
+    pub matcap_factor: [f32; 3],        // MatCap multiply color (12 bytes)
+    pub has_shade_multiply_tex: f32,    // shadeMultiplyTexture present (4 bytes)
+    pub has_shading_shift_tex: f32,     // shadingShiftTexture present (4 bytes)
+    pub shading_shift_tex_scale: f32,   // shadingShiftTexture scale (4 bytes)
+    pub has_rim_multiply_tex: f32,      // rimMultiplyTexture present (4 bytes)
+    pub uv_anim_scroll_x: f32,         // UV scroll X speed (4 bytes)
+    pub uv_anim_scroll_y: f32,         // UV scroll Y speed (4 bytes)
+    pub uv_anim_rotation: f32,         // UV rotation speed (4 bytes)
+    pub has_uv_anim_mask: f32,          // uvAnimationMaskTexture present (4 bytes)
+    pub alpha_cutoff: f32,              // alphaMode sentinel (4 bytes: -1.0=OPAQUE, -0.5=BLEND, >=0.0=MASK cutoff)
+    // --- Texture UV parameters ---
+    pub base_uv_a: [f32; 4],            // baseColor texCoord+transform (16 bytes)
+    pub base_uv_b: [f32; 4],            // baseColor texCoord+transform (16 bytes)
+    pub shade_uv_a: [f32; 4],           // shade texCoord+transform (16 bytes)
+    pub shade_uv_b: [f32; 4],           // shade texCoord+transform (16 bytes)
+    pub shift_uv_a: [f32; 4],           // shift texCoord+transform (16 bytes)
+    pub shift_uv_b: [f32; 4],           // shift texCoord+transform (16 bytes)
+    pub rim_uv_a: [f32; 4],             // rim texCoord+transform (16 bytes)
+    pub rim_uv_b: [f32; 4],             // rim texCoord+transform (16 bytes)
+    pub outline_uv_a: [f32; 4],         // outline texCoord+transform (16 bytes)
+    pub outline_uv_b: [f32; 4],         // outline texCoord+transform (16 bytes)
+    pub uv_mask_uv_a: [f32; 4],         // uv_mask texCoord+transform (16 bytes)
+    pub uv_mask_uv_b: [f32; 4],         // uv_mask texCoord+transform (16 bytes)
+    pub emissive_factor: [f32; 3],      // glTF emissiveFactor (12 bytes)
+    pub has_emissive_tex: f32,          // emissiveTexture presence (4 bytes)
+    pub emissive_uv_a: [f32; 4],       // emissive texCoord+transform (16 bytes)
+    pub emissive_uv_b: [f32; 4],       // emissive texCoord+transform (16 bytes)
+    // --- Normal map + GI ---
+    pub has_normal_tex: f32,            // normalTexture presence (4 bytes)
+    pub normal_scale: f32,              // normalTexture.scale (4 bytes)
+    pub gi_equalization_factor: f32,    // GI equalization factor 0.0~1.0 (4 bytes)
+    pub outline_width_channel: f32,    // outlineWidthTexture channel 0=R,1=G,2=B (4 bytes)
+    pub normal_uv_a: [f32; 4],         // normal texCoord+transform (16 bytes)
+    pub normal_uv_b: [f32; 4],         // normal texCoord+transform (16 bytes)
+    pub uv_anim_mask_channel: f32,     // uvAnimMaskTexture channel 0=R,1=G,2=B (4 bytes)
+    pub _pad: [f32; 3],               // Padding (12 bytes)
+    // --- matcap UV parameters ---
+    pub matcap_uv_a: [f32; 4],        // matcap texCoord+transform (16 bytes)
+    pub matcap_uv_b: [f32; 4],        // matcap texCoord+transform (16 bytes)
+}
+```
+
+### lit/shade Interpolation Formula
+
+```wgsl
+// Spec-compliant: dot(N,L) [-1,1] range (not half-lambert)
+// camera.light_dir is light travel direction (light→surface), negate to get surface→light
+let dot_nl = dot(n, -light_dir);
+
+// shadeMultiplyTexture: multiply shade color by texture
+var shade_mul = vec3(1.0);
+if has_shade_multiply_tex > 0.5 { shade_mul = textureSample(t_shade_multiply, ...).rgb; }
+let shade = shade_color * shade_mul;
+
+// shadingShiftTexture: per-pixel shadow threshold shift (VRM 1.0 spec: tex.r * scale)
+var shading = dot_nl + shading_shift;
+if has_shading_shift_tex > 0.5 {
+    shading += textureSample(t_shading_shift, ...).r * shading_shift_tex_scale;
+}
+
+// Spec-compliant linearstep: clamp((x - edge0) / (edge1 - edge0), 0, 1)
+let edge0 = -1.0 + shading_toony;
+let edge1 = 1.0 - shading_toony;
+let t = clamp((shading - edge0) / max(edge1 - edge0, 0.001), 0.0, 1.0);
+lit = mix(shade, base_color.rgb, t);
+
+// GI Equalization (UniVRM-compliant: indirect light only, no direct light)
+// Hemisphere ambient: interpolate sky/ground by final normal Y (SH approximation, using n after normal map)
+let raw_indirect = mix(ambient_ground, ambient, n.y * 0.5 + 0.5);
+// uniformedGi = ambient (uniform when no SH/IBL, CameraUniform.gi_equalized)
+let gi = mix(raw_indirect, gi_equalized, gi_equalization_factor);
+// Rim light factor uses raw (non-equalized) indirect (UniVRM-compliant)
+let rim_light_factor = light_intensity + raw_indirect;
+
+// Final lighting composition (VRM spec: giLighting = gi(n) * litColor)
+let direct_light = light_intensity * light_color;
+let lighting = lit * direct_light + lit * gi;
+```
+
+- Uses `dot(N,L)` [-1,1] as input per spec (not half-lambert [0,1])
+- `linearstep` interpolation (linear, not `smoothstep` cubic)
+- `shading_toony = 0.9` (default) → `edge0 = -0.1, edge1 = 0.1` → very sharp shadow boundary (anime-style)
+- `shading_toony = 0.0` → `edge0 = -1.0, edge1 = 1.0` → soft gradient
+- `shading_shift` shifts the overall shadow position (negative = more shadow)
+- Default `shadeColorFactor` when unspecified is `[0,0,0]` (black) — per spec
+
+### Outline Rendering
+
+Outlines are rendered using the inverted hull method via `pipeline_outline` (front-cull pipeline), expanding vertices along their normals. `outlineWidthMultiplyTexture` is sampled in the vertex shader via `textureSampleLevel` for region-specific outline width control (channel: VRM 1.0=G, VRM 0.x=R, dynamically selected via `ColorChannel` enum). Stored in mtoon_aux bind group binding 6, with material-specific bind groups used in outline draw calls. The `edge_scale` vertex attribute is not used (GPU sampling only), so the pipeline vertex layout uses a single `Vertex` buffer. `edge_scale_buf` is MMD edge-only.
+
+```wgsl
+// Vertex shader: sample outlineWidthMultiplyTexture with UV Animation applied (spec-compliant)
+// No edge_scale vertex input (GPU samples texture directly, CPU-side edge_scale is for PMX export)
+let width_uv = apply_uv_animation(uv);
+let width_tex = select_channel(textureSampleLevel(t_outline_width, ..., width_uv, 0.0), material.outline_width_channel);
+let width = outline_width * width_tex;
+if outline_mode > 1.5 {
+    // screenCoordinates: full UniVRM-compliant clip-space offset
+    let clip = view_proj * vec4(position, 1.0);
+    let nv = vec3(dot(view_row0, n), dot(view_row1, n), dot(cross(view_row0, view_row1), n));
+    var projected = normalize(vec2(nv.x, nv.y));      // normalize first (UniVRM order)
+    let max_dist = proj_11;                           // 1/tan(fov/2) — UniVRM maxDistance equivalent
+    let clamped_w = min(clip.w, max_dist);            // distance clamp (suppress thick outlines at wide FOV/far)
+    projected *= 2.0 * width * clamped_w;
+    projected.x /= aspect;                            // divide by aspect(=w/h) for X correction (UniVRM multiplies h/w)
+    projected *= saturate(1.0 - nv.z * nv.z);        // camera-facing suppression
+    clip_position = vec4(clip.xy + projected, clip.zw);
+} else {
+    // worldCoordinates: world-space width in meters
+    let expanded = position + n * width;
+    clip_position = view_proj * vec4(expanded, 1.0);
+}
+```
+
+```wgsl
+// Fragment shader: compute full MToon lighting and mix with outline color
+// via outlineLightingMixFactor (UniVRM-compliant)
+let surface = compute_mtoon_surface_lighting(n, uv, world_pos);  // vec4: .rgb=color, .a=processed alpha
+// Outline pass also discards based on base texture alpha (UniVRM-compliant)
+// MASK material: surface.a < alpha_cutoff → discard, BLEND material: surface.a ≤ 0.001 → discard
+// UniVRM-compliant: outlineColor * lerp(1, baseCol, outlineLightingMix)
+let lit = outline_color.rgb * mix(vec3(1.0), surface.rgb, outline_lighting_mix);
+```
+
+- `compute_mtoon_surface_lighting()` is defined as a WGSL function within `wgsl_outline_body!()` macro. Performs the same calculation as the main fragment shader (2-color toon, shadeMultiply, shadingShift, rim, MatCap, rimMultiply, UV animation) and returns `vec4` (.rgb = surface shading color, .a = processed alpha). The outline pass also discards based on base texture alpha (UniVRM-compliant)
+- Outline rendering binds the same `texture_bind_group` as the main pass, ensuring `baseColorTexture` is correctly referenced
+- `OutlineVertexOutput` extended with `uv` and `world_pos` for texture sampling and rim calculation in the fragment shader
+- Draw order: outlines are rendered after each render queue phase (OPAQUE / MASK / BlendZWrite / Blend). BLEND materials use `pipeline_outline_blend` (ZWrite OFF), rendering outlines for transparent hair and accessories per UniVRM behavior
+- Togglable via "Outline Rendering" UI checkbox
+
+### Rim Lighting
+
+Parametric rim lighting creates glowing silhouette edges via the Fresnel effect. World position is passed from the vertex shader, and view direction V is computed in the fragment shader.
+
+```wgsl
+let v = normalize(camera_pos - world_pos);
+let parametric_rim = pow(
+    saturate(1.0 - dot(n, v) + rim_lift),
+    max(rim_fresnel_power, 0.00001)
+);
+rim = parametric_rim * rim_color;
+```
+
+### MatCap Texture
+
+Following the VRM spec, an orthonormal basis is constructed from the view direction to compute MatCap UV coordinates.
+
+```wgsl
+// UniVRM compliant: right = cross(viewDir, worldUp), up = cross(right, viewDir)
+let world_view_x = normalize(vec3(-v.z, 0.0, v.x));
+let world_view_y = cross(world_view_x, v);
+let raw_matcap_uv = vec2(dot(world_view_x, n), dot(world_view_y, n)) * 0.495 + 0.5;
+// Apply KHR_texture_transform (matcap_uv_a/b for offset/scale/rotation)
+let matcap_uv = apply_texture_transform(raw_matcap_uv, matcap_uv_a, matcap_uv_b);
+rim += matcap_factor * textureSample(t_matcap, matcap_uv).rgb;
+```
+
+- Bind group(3) is the MToon auxiliary texture pack (8 samplers + 8 textures = 16 bindings). Each texture has its own sampler, fully compliant with glTF's per-texture sampler model. Binding layout uses 2n = sampler, 2n+1 = texture pairs:
+  - binding 0-1: s_matcap / t_matcap (FRAGMENT)
+  - binding 2-3: s_shade_multiply / t_shade_multiply (FRAGMENT)
+  - binding 4-5: s_shading_shift / t_shading_shift (FRAGMENT)
+  - binding 6-7: s_rim_multiply / t_rim_multiply (FRAGMENT)
+  - binding 8-9: s_uv_anim_mask / t_uv_anim_mask (VERTEX + FRAGMENT)
+  - binding 10-11: s_outline_width / t_outline_width (VERTEX)
+  - binding 12-13: s_emissive / t_emissive (FRAGMENT)
+  - binding 14-15: s_normal / t_normal (FRAGMENT)
+- Bind group(3) is also created for non-MToon materials that have `emissiveTexture` / `normalTexture` (MToon-specific textures fall back to defaults)
+- emissiveTexture is a glTF standard property, used by both MToon and non-MToon materials
+- glTF standard `emissiveTexture` / `normalTexture` also preserve `texCoord` / `KHR_texture_transform` via `read_texture_info()`
+- normalTexture (binding 14-15) has FRAGMENT visibility, linear color space (Unorm view). Constructs TBN matrix from MikkTSpace-generated vertex tangents and transforms tangent-space normals to world space (per UniVRM `MToon_GetTangentToWorld()`). `normalTexture.scale` controls intensity. Materials without normal maps automatically bind a flat normal texture (1x1, RGBA=(128,128,255,255) = tangent-space (0,0,1)). Falls back to the base normal for degenerate UVs (`det ≈ 0` or near-zero vectors) to avoid undefined behavior from `normalize(vec3(0))`
+- `doubleSided` materials flip back-face normals before normal map application using `@builtin(front_facing)` (equivalent to UniVRM's `MTOON_IS_FRONT_VFACE`). Applied to `fs_main` / `fs_outline` (both sRGB and Unorm variants)
+- Materials without textures automatically bind default textures (matcap=black, others=white)
+- `rimMultiplyTexture` applies texture-based masking to rim effect
+- `rimLightingMixFactor` controls mix ratio between rim and light factor (0.0 = emission, 1.0 = fully mixed). Uses material-color-free `light_factor` (`light_intensity + ambient`, N·L independent) per UniVRM (`lerp(white, light_factor, mix)`)
+- `shadingShiftTexture` / `uvAnimationMaskTexture` are loaded in linear color space (Unorm view). Color space is managed separately from sRGB textures (shadeMultiply / rimMultiply / matcap)
+
+### VRM Parameter Mapping
+
+| VRM 1.0 (`VRMC_materials_mtoon`) | VRM 0.0 (float_properties) | IrMaterial Field |
+|---|---|---|
+| `shadeColorFactor` | `_ShadeColor` (vector) | `shade_color` |
+| `shadingToonyFactor` | `_ShadeToony` | `shading_toony_factor` |
+| `shadingShiftFactor` | `_ShadeShift` | `shading_shift_factor` |
+| `outlineWidthMode` | `_OutlineWidthMode` | `outline_width_mode` |
+| `outlineWidthFactor` | `_OutlineWidth` | `outline_width_factor` |
+| `outlineColorFactor` | `_OutlineColor` | `edge_color` |
+| `outlineLightingMixFactor` | `_OutlineLightingMix` | `outline_lighting_mix` |
+| `parametricRimColorFactor` | `_RimColor` (vector) | `parametric_rim_color` |
+| `parametricRimFresnelPowerFactor` | `_RimFresnelPower` | `parametric_rim_fresnel_power` |
+| `parametricRimLiftFactor` | `_RimLift` | `parametric_rim_lift` |
+| `rimLightingMixFactor` | Always 1.0 (destructive migration) | `rim_lighting_mix` |
+| `matcapFactor` | `_SphereAdd` present→[1,1,1], absent→[0,0,0] | `matcap_factor` |
+| `matcapTexture` | `_SphereAdd` | `matcap_texture: Option<IrTextureInfo>` |
+| `shadeMultiplyTexture` | `_ShadeTexture` (falls back to `_MainTex`) | `shade_texture: Option<IrTextureInfo>` |
+| `shadingShiftTexture` + `scale` | — | `shading_shift_texture: Option<IrTextureInfo>` + `shading_shift_texture_scale` |
+| `rimMultiplyTexture` | `_RimTexture` | `rim_multiply_texture: Option<IrTextureInfo>` |
+| `uvAnimationScrollXSpeedFactor` | `_UvAnimScrollX` | `uv_animation_scroll_x_speed` |
+| `uvAnimationScrollYSpeedFactor` | `_UvAnimScrollY` (Y inverted × -1) | `uv_animation_scroll_y_speed` |
+| `uvAnimationRotationSpeedFactor` | `_UvAnimRotation` (× 2π) | `uv_animation_rotation_speed` |
+| `uvAnimationMaskTexture` | `_UvAnimMaskTexture` | `uv_animation_mask_texture: Option<IrTextureInfo>` |
+| glTF `emissiveFactor` | `_EmissionColor` (vector) | `emissive_factor` |
+| glTF `emissiveTexture` | `_EmissionMap` | `emissive_texture: Option<IrTextureInfo>` |
+| glTF `normalTexture` | `_BumpMap` | `normal_texture: Option<IrTextureInfo>` |
+| glTF `normalTexture.scale` | `_BumpScale` | `normal_texture_scale` |
+| `alphaMode` | `_BlendMode` (0=OPAQUE,1=MASK,2=BLEND,3=BlendZWrite) | `alpha_mode` |
+| glTF `alphaCutoff` | `_Cutoff` | `alpha_cutoff` |
+| glTF `doubleSided` | `_CullMode` (0=Off→None, 1=Front→Front, 2=Back→Back) | `cull_mode: CullMode` |
+| — | `renderQueue` | `render_queue_offset` (computed in post-pass) |
+| glTF `baseColorFactor` | `_Color` (vector, sRGB→Linear) | `diffuse` |
+| glTF `baseColorTexture` | `_MainTex` | `texture_index` / `base_color_tex_info` |
+| — | `_MainTex` ST | All textures' `IrTextureInfo.offset` / `.scale` |
+| `giEqualizationFactor` | `_IndirectLightIntensity` (`1.0 - value`) | `gi_equalization_factor` |
+
+VRM 0.x-specific additional migration:
+
+- **`_Color` / `_MainTex` lit color/texture normalization**: For VRM 0.x MToon, the glTF core `baseColorFactor` / `baseColorTexture` may be approximate values, so after MToon detection, `materialProperties._Color` (sRGB→Linear) → `diffuse` and `_MainTex` → `texture_index` / `base_color_tex_info` take priority (per UniVRM `MigrationMToonMaterial.cs:148-164`)
+- **`renderQueue` → `render_queue_offset`**: Per UniVRM `MigrationMToonMaterial.cs` rank compression. Collects transparent material source offsets (`renderQueue - DefaultValue`) into a `BTreeSet`, assigns sequential ranks (Blend: descending 0, -1, -2, ...; BlendWithZWrite: ascending 0, 1, 2, ...) to compress into VRM 1.0 spec range (Blend: -9..0, BlendWithZWrite: 0..+9) while preserving relative order. Returns offset=0 when `renderQueue` falls outside the permitted range (Blend: 2951–3000, BlendWithZWrite: 2501–2550)
+- **`_MainTex` ST (texture Scale/Translation) propagation**: VRM 0.x `vectorProperties._MainTex` stores `[offsetX, offsetY, scaleX, scaleY]`. Since Unity's texture coordinate system (top-left origin) and glTF `KHR_texture_transform` (bottom-left origin) have different Y-axis conventions, the offset is converted via `offset.y = 1.0 - unityOffset.y - scale.y` (per UniVRM `Vrm10MaterialExportUtils.ExportTextureTransform`). UniVRM migrates `_MainTex` ST to all MToon textures as `KHR_texture_transform`, **except MatCap (`_SphereAdd`)** which does not require texture transform in VRM 1.0 (per UniVRM `MigrationMToonMaterial.cs:255-260`: "Texture transform is not required"). Identity transforms (scale=1, offset=0) are skipped. `_OutlineWidthTexture` also propagates ST via the `resolve_tex()` helper (per UniVRM `MigrationMToonMaterial.cs`)
+- **`ScreenCoordinates` outline width normalization**: `outline_width_factor = w * 0.01 * 0.5` (UniVRM-compliant: old half-height percent → new full-height ratio, 1/200 conversion)
+- **Color property sRGB→Linear conversion**: VRM 0.x `_ShadeColor`, `_RimColor`, and `_OutlineColor` are stored in sRGB gamma space, so IEC 61966-2-1 compliant sRGB→Linear conversion is applied during extraction (equivalent to UniVRM `MigrationMToonMaterial.cs` `.ToFloat3(ColorSpace.sRGB, ColorSpace.Linear)`). `_EmissionColor` is excluded as it is Linear→Linear per UniVRM
+- **`_IndirectLightIntensity` → `gi_equalization_factor`**: Applies UniVRM-compliant conversion formula `gi_equalization_factor = (1.0 - gi_intensity).clamp(0.0, 1.0)`. Sent to GPU shader via `MaterialUniform` and applies `lerp(passthroughGi, uniformedGi, giEqualizationFactor)` for GI equalization. Without SH/IBL, `passthroughGi` = `uniformedGi` = ambient (equivalent to UniVRM's `indirectLight` / `indirectLightEqualized`, excludes direct light)
+
+`IrTextureInfo` holds texture index plus `tex_coord` (TEXCOORD set number), `KHR_texture_transform` (offset / scale / rotation), and `IrSamplerInfo` (wrap_u / wrap_v / mag_filter: `IrMagFilter` / min_filter: `IrMinFilter`). `IrMinFilter` preserves all 6 glTF `minFilter` values (Nearest / Linear / NearestMipmapNearest / LinearMipmapNearest / NearestMipmapLinear / LinearMipmapLinear), which are correctly split into wgpu's `min_filter` and `mipmap_filter`. The glTF `sampler` object's wrapS / wrapT / magFilter / minFilter are read per-texture, and the viewer GPU side uses a `HashMap<IrSamplerInfo, wgpu::Sampler>` cache to share samplers. Bind group(3) assigns individual samplers per texture, fully compliant with glTF's per-texture sampler model. CPU-side sampling (`sample_image_g_channel`) also applies wrap mode-aware UV transformation. Both the base color texture (`base_color_tex_info`) and all MToon auxiliary textures use the `resolve_mtoon_uv()` helper for unified texCoord selection + KHR_texture_transform application. Non-MToon materials also apply `resolve_mtoon_uv()` to `baseColorTexture` / `emissiveTexture` for `texCoord` / `KHR_texture_transform` support. UV Animation targets (baseColor / shade / rim / outline_width / emissive / normalTexture) and non-targets (shift / uv_mask / matcap) are distinguished per spec. When `KHR_texture_transform.texCoord` is present, it takes priority over the TextureInfo-level `texCoord` (glTF spec compliant). When a texture requires `texCoord=1` but the mesh has no `TEXCOORD_1`, both GPU and CPU sides fall back to `Vec2::ZERO` (per UniVRM `MeshData.cs`). After extraction, UV1 presence is checked per-mesh and all textures (including `base_color_tex_info`) on materials referenced by UV1-absent meshes have their `texCoord=1` normalized to `texCoord=0`, preventing UV set divergence between tangent generation and rendering. Texture replacement via UI also recreates samplers from the material's `IrSamplerInfo`, preserving `ClampToEdge` / `Nearest` and other per-texture sampler settings.
+
+#### Texture Index Normalization
+
+In glTF, `textures[]` and `images[]` are separate arrays, and `TextureInfo.index` refers to a texture index. Since `IrModel.textures` is built by image array order, `read_texture_info()` normalizes glTF texture indices to **image indices** via `document.textures().nth(i).source().index()` before storing in `IrTextureInfo.index`. This ensures all downstream consumers (viewer bind groups, export_filter pruning, merge offset) safely operate on image indices. VRM 0.0 `_OutlineWidthTexture` is similarly resolved to image index. `texCoord >= 2` is unsupported; an error is logged and the texture is disabled (`None` is returned) to prevent silent misrendering. Texture references previously set via core glTF API are also explicitly cleared by the raw JSON result, ensuring fail-close behavior.
+
+### UV Animation
+
+Cumulative `time` is added to `CameraUniform`, and the shader transforms texture UVs every frame.
+
+```wgsl
+// Spec-compliant order: scroll → pivot(-0.5) → rotation → pivot(+0.5)
+// UniVRM: vrmc_materials_mtoon_geometry_uv.hlsl — rotate(uv + translate - pivot) + pivot
+let translate = vec2(time * scroll_x, time * scroll_y) * mask;
+// Wrap within 2π period to prevent float precision degradation during long runtime (UniVRM-compliant)
+let tau = 6.28318530718;
+let turns = (time * uv_anim_rotation * mask) / tau;
+let angle = fract(turns) * tau;
+let centered = (uv + translate) - vec2(0.5);
+anim_uv = vec2(centered.x * cos(angle) - centered.y * sin(angle),
+               centered.x * sin(angle) + centered.y * cos(angle)) + vec2(0.5);
+```
+
+- UV Animation calculation uses the shared `apply_uv_anim_core()` function for both main and outline shaders. Hoisted before the MToon branch to also apply to normal maps
+- Rotation angle is wrapped via `fract(turns) * 2π` to prevent float precision degradation during long runtime (UniVRM-compliant)
+- Application order: scroll → rotation (per VRM spec: `scroll → pivot → rotation → pivot back`)
+- `uvAnimationMaskTexture` controls application area (0.0–1.0) (channel: VRM 1.0=B, VRM 0.x=R, dynamically selected via `ColorChannel` enum)
+- Affected textures: baseColor / shadeMultiply / **shadingShiftTexture** / rimMultiply / outlineWidthMultiply / emissive / **normalTexture** UV coordinates (UniVRM-compliant: all textures use `GetMToonGeometry_Uv()`-applied UV; matcap excluded)
+
+### Transparent Draw Order Control (alphaMode / transparentWithZWrite / renderQueueOffsetNumber)
+
+MToon spec-compliant 4-phase render queue controls draw order.
+
+#### AlphaMode
+
+`AlphaMode` enum unifying glTF `alphaMode` and MToon `transparentWithZWrite`:
+
+| AlphaMode | glTF alphaMode | transparentWithZWrite | depth write | Description |
+|-----------|---------------|----------------------|-------------|-------------|
+| Opaque | OPAQUE | — | on | Fully opaque |
+| Mask | MASK | — | on | alphaCutoff-based discard |
+| BlendWithZWrite | BLEND | true | on | Transparent + depth write |
+| Blend | BLEND | false | off | Standard transparent |
+
+#### Draw Order
+
+```
+1. OPAQUE (depth write on)
+   → outline rendering
+2. MASK (depth write on, alphaCutoff discard)
+   → outline rendering
+3. BlendZWrite (depth write on, alpha blend)
+   → outline rendering
+4. Blend (depth write off, alpha blend)
+   → outline rendering (ZWrite OFF)
+```
+
+- MASK pipeline: `alpha_to_coverage_enabled = true` (when MSAA active) reduces jaggies at cutout boundaries. Equivalent to UniVRM `MToonValidator.cs` `UnityAlphaToMask = On`. The MASK outline pipeline (`pipeline_outline_mask`) also enables AlphaToCoverage, ensuring consistent edge quality between surface and outline
+
+Within each category, materials are stable-sorted by `renderQueueOffsetNumber`. Only effective for BLEND modes (Opaque/Mask forced to 0). BlendZWrite clamped to `[0, +9]`, Blend clamped to `[-9, 0]` (per UniVRM MToonValidator). Additionally, `RenderQueue::Blend` / `RenderQueue::BlendZWrite` materials with the same `renderQueueOffsetNumber` are sorted back-to-front by camera distance (`distance_squared`) to improve depth ordering for overlapping transparent meshes. Distance keys are recalculated from `current_vertices()` every frame during animation (opaque draws retain build-time fixed centroids).
+
+BLEND / BlendZWrite phases issue surface and outline draws interleaved per draw call (since ZWrite OFF means draw order = compositing order). OPAQUE / MASK phases retain the traditional 2-pass structure as depth buffer protection is sufficient.
+
+#### alphaMode Shader Processing
+
+The `MaterialUniform.alpha_cutoff` field encodes alphaMode using sentinel values, with branching in the fragment shader:
+
+| alphaMode | sentinel value | condition |
+|-----------|---------------|-----------|
+| OPAQUE | `-1.0` | `< -0.75` |
+| BLEND | `-0.5` | `-0.75` ≤ x `< -0.25` |
+| MASK | `>=0.0` (actual cutoff) | `>= -0.25` |
+
+```wgsl
+// alphaMode processing (alpha_cutoff encoding: <-0.75=OPAQUE, >=-0.25=MASK, else=BLEND)
+if material.alpha_cutoff < -0.75 {
+    // OPAQUE (-1.0): ignore alpha, always fully opaque
+    out_alpha = 1.0;
+} else if material.alpha_cutoff >= -0.25 {
+    // MASK (>=0.0): discard below cutoff, then force opaque
+    if out_alpha < material.alpha_cutoff { discard; }
+    out_alpha = 1.0;
+} else {
+    // BLEND (-0.5) / BlendZWrite: discard fully transparent pixels (prevent depth pollution)
+    if out_alpha <= 0.001 { discard; }
+}
+```
+
+- OPAQUE / MASK: Output alpha fixed to 1.0, preventing unintended transparency from texture alpha values
+- BLEND / BlendZWrite: `discard` of fully transparent pixels prevents depth buffer pollution (avoids invisible pixels from `transparentWithZWrite` occluding subsequent meshes)
+
+#### Pipelines
+
+| Pipeline | cull | depth write | Purpose |
+|----------|------|-------------|---------|
+| cull / no_cull | Back / none | on | OPAQUE / MASK |
+| alpha_zwrite_cull / alpha_zwrite_no_cull | Back / none | on | BlendZWrite |
+| alpha_cull / alpha_no_cull | Back / none | off | Blend |
+| outline | Front | on | MToon outline (OPAQUE / BlendZWrite). With depth bias (UniVRM `Offset 1, 1` equivalent) |
+| outline_mask | Front | on | MToon outline (MASK). With depth bias + AlphaToCoverage |
+| outline_blend | Front | off | MToon outline (Blend). With depth bias |
+
 ## Viewer Display Styles
 
 ### Bone Display
@@ -527,6 +885,28 @@ Actual MMD standard toon01-10 pixel data (32 rows of RGB values) stored as const
 
 - In-shader normal vector → RGB conversion: `rgb = (normalize(normal) + 1.0) * 0.5`
 - Toggled via CameraUniform's `show_normal_map` flag
+
+### Normal Map Tangent Space (TBN)
+
+- Vertex tangent stored as `IrVertex.tangent: Vec4` (xyz=direction, w=handedness ±1)
+- If glTF `TANGENT` attribute is present, it is skinning-transformed and used directly; otherwise, MikkTSpace tangents are auto-generated via `mikktspace` crate (VRM spec: TANGENT is not exported, compute MikkTSpace on import)
+- MikkTSpace generation uses the UV set corresponding to `normalTexture.texCoord` (generates from UV1 when texCoord=1 and UV1 is available)
+- MikkTSpace corner tangent handling: `set_tangent_encoded()` output is stored per-corner (`face * 3 + vert`). When corners sharing the same vertex have differing `tangent.w` (handedness), minority corners are automatically split into new vertices (indices / morph targets / UV1 updated accordingly). After splitting, xyz values within the same w-group are averaged and normalized into the vertex tangent
+- Imported tangent degeneration detection: After Gram-Schmidt re-orthogonalization of skinning-transformed glTF TANGENT attributes, if `t_ortho` length falls below threshold or is non-finite, it is reset to `Vec4::ZERO` to route through MikkTSpace regeneration. Tangent validity is checked via `xyz.length_squared() > 1e-8` (not exact `Vec4::ZERO` match — degenerate tangents with non-zero w like `[0,0,0,1]` are also regenerated)
+- The viewer's coordinate transform (VRM 1.0: Z-flip, VRM 0.0: X-flip) is a mirror transform with determinant -1. Since `cross(M*N, M*T) = det(M) * M * cross(N,T) = -M * cross(N,T)`, `tangent.w` must be negated to preserve bitangent direction
+- Shader TBN construction (per UniVRM `MToon_GetTangentToWorld()`):
+  - Zero tangent guard: if `dot(tangent.xyz, tangent.xyz) < 1e-6`, skip normal map and return base normal
+  - `T = normalize(tangent.xyz)`
+  - `tangent_sign = tangent.w > 0 ? 1.0 : -1.0` (binarized to avoid interpolation NaN)
+  - `B = normalize(cross(N, T) * tangent_sign)`
+  - `normal_ws = T * sample.x * scale + B * sample.y * scale + N * sample.z`
+- Same logic applied to both main and outline shaders
+- Skinning TBN sync: `animation.rs` transforms tangent.xyz alongside normals using the skinning matrix, then applies Gram-Schmidt re-orthogonalization (`t' = normalize(t - n * dot(n, t))`) to maintain orthogonality with the normal. tangent.w (handedness) is preserved
+- Normal recalculation TBN sync: When `smooth_normals` / `clear_custom_normals` modifies normals, all vertex tangent.xyz are Gram-Schmidt re-orthogonalized against the new normals
+- Morph normal/tangent tracking: `IrMorphTarget` holds `normal_offsets` / `tangent_offsets` in sparse representation (threshold 1e-7) alongside `position_offsets`. GPU morph application (`apply_gpu_morph_recursive`) adds weight × delta to position, normal, and tangent. tangent.w (handedness) is preserved. Normal and tangent deltas are correctly propagated through A-stance conversion (`pose.rs`), vertex splitting (`tangent.rs`), and export filter (`export_filter.rs`)
+- NORMAL/TANGENT-only morph support: Morph targets with only NORMAL/TANGENT deltas (no POSITION, legal per glTF 2.0) are supported end-to-end. `IrMorph` generation, export filter liveness check, and GPU morph conversion all collect affected vertices as the union (`BTreeSet`) of positions/normals/tangents
+- Morph CPU vertex sync: `apply_morphs()` updates `animated_vertices` (CPU-side cache) alongside the GPU buffer. `current_vertices()` returns morphed vertices even on morph-only frames, ensuring accurate transparent distance sorting
+- Default `min_filter` for unspecified glTF samplers is `LinearMipmapLinear` (per UniVRM `SamplerParam.Default`: Bilinear + mipmap enabled)
 
 ### Render Order
 
@@ -566,22 +946,38 @@ distance = max(half_h / tan(effective_fov_y), half_w / tan(fov_x)) + depth_offse
 
 | Mode | Direction |
 |------|-----------|
-| Fixed | `Vec3(0.5, 1.0, -0.5).normalize()` — MMD-compliant (inversion of (-0.5,-1.0,0.5)) |
+| Fixed (default) | `Vec3(0.5, 1.0, -0.5).normalize()` — MMD-compliant (inversion of (-0.5,-1.0,0.5)) |
 | Camera-Follow | `(forward + right*(-0.3) + up*0.7).normalize()` — MMD-style upper-left bias |
 
-| Parameter | Value |
-|-----------|-------|
-| light_intensity | 0.6 |
+| Parameter | Default |
+|-----------|---------|
+| light_intensity | 0.7 |
+| light_color | `[1.0, 1.0, 1.0]` (white) |
 | ambient_intensity | 0.5 |
+| ambient_sky_color | `[1.0, 1.0, 1.0]` (white) |
+| ambient_ground_color | `[0.6, 0.55, 0.5]` (warm dark) |
+
+Direct light is computed as `light_intensity * light_color`.
+
+#### Hemisphere Ambient
+
+Ambient light uses a hemisphere model interpolating Sky/Ground colors by the normal Y component:
+
+```
+hemi_t = normal.y * 0.5 + 0.5
+passthrough_gi = mix(ambient_ground, ambient_sky, hemi_t)
+```
+
+`gi_equalized` (UniVRM's `uniformedGi`) is CPU-precomputed as `(sky + ground) / 2`. Approximates the L1 component of SH9 (vertical brightness gradient), closely matching VRoidHub / UniVRM's `SampleSH(normal)`.
 
 ### MMD Ambient Separation
 
 The `mmd_ambient_scale` field in CameraUniform separates ambient light between standard and MMD paths:
 
-- MMD mode ON: `mmd_ambient_scale = 1.0` (uses material's ambient value directly)
+- MMD mode ON: `mmd_ambient_scale = 154.0 / 255.0` (fixed value)
 - MMD mode OFF: `mmd_ambient_scale = ambient_intensity` (UI slider value)
 
-Standard shaders use `camera.ambient`, while only MMD shaders reference `camera.mmd_ambient_scale`.
+Standard shaders use `camera.ambient` / `camera.ambient_ground` (hemisphere ambient) and `camera.light_color`, while only MMD shaders reference `camera.mmd_ambient_scale`. When MMD mode is ON, changes to `light_color` / `ambient_sky_color` / `ambient_ground_color` have no effect.
 
 ## Log Output
 
@@ -1257,7 +1653,7 @@ Converges in worst case O(depth) iterations (at least 1 candidate is finalized p
 
 ### Texture Pruning
 
-Collect `texture_index` / `shade_texture_index` / `outline_width_texture_index` referenced by post-filter materials, and keep only used textures. Remap each material's indices. If all materials are hidden, textures are also emptied.
+Collect `texture_index` and all `IrTextureInfo` fields (shade / outline_width / matcap / shading_shift / rim_multiply / uv_animation_mask) referenced by post-filter materials, keeping only used textures. Remap each material's indices via `IrTextureInfo::remap_index()`. If all materials are hidden, textures are also emptied.
 
 ### Specification
 
@@ -1317,7 +1713,8 @@ src/
 ├── unity/
 │   └── animation.rs     Unity .anim Muscle conversion (SwingTwist decomposition)
 ├── intermediate/
-│   ├── types.rs         Intermediate representation (IrModel / IrBone / IrMesh etc., SourceFormat / merge 2-pass method)
+│   ├── types.rs         Intermediate representation (IrModel / IrBone / IrMesh / CullMode etc., SourceFormat / merge 2-pass method)
+│   ├── tangent.rs       MikkTSpace tangent generation (mikktspace crate)
 │   ├── animation.rs     Animation intermediate representation (VrmaAnimation / BoneChannel)
 │   └── pose.rs          Stance conversion (T→A / A→T, physics sync support)
 ├── convert/
@@ -1390,11 +1787,16 @@ For detailed per-version improvements and internal changes, see the [Changelog](
 ## Limitations
 
 - **PMX/PMD is view-only** — PMX conversion (re-export) is not supported. Only viewer display and UV map output
-- **Normal maps not applied** — VRM/FBX normalTexture is not reflected in shading (can be viewed in normal map display mode)
 - **Texture size limit** — Textures exceeding the GPU's `max_texture_dimension_2d` (typically 8192px) are automatically downscaled in `upload_rgba_to_gpu` (using `image::imageops::resize` with Triangle filter). Does not affect PMX conversion output (viewer display only)
 - **Extraction size limit** — Archive (ZIP / 7z) and `.unitypackage` (tar.gz) extraction is capped at 2GB total (`MAX_TOTAL_BYTES`). `.unitypackage` uses dual protection: header size pre-check + actual bytes post-check
 - **MMD-specialized models** — Models specialized for MMD rendering may not display some surfaces correctly
 - **PMX 2.1 SoftBody** — Skipped (not supported)
+- **Only `TEXCOORD_0` / `TEXCOORD_1` are supported** — When glTF `TextureInfo.texCoord` is 2 or higher, it falls back to `texCoord=0` (`warn` log emitted). Texture UV will be inaccurate but rendering is preserved (graceful degradation). Rationale:
+  - VRM 1.0 / MToon spec only uses `TEXCOORD_0` and `TEXCOORD_1`
+  - UniVRM's MToon implementation (`vrmc_materials_mtoon_geometry_uv.hlsl`) only uses UV0/UV1
+  - While glTF allows arbitrary UV sets, VRM models using `TEXCOORD_2+` are virtually nonexistent
+  - Future support would require variable-length UV sets in `IrMesh` + GPU vertex format extension
+
 
 ## References
 
@@ -1449,7 +1851,7 @@ Shaders in `gpu.rs` use `macro_rules!` + `concat!` to centrally manage common st
 
 | Constant | Macro Composition | Difference (Fragment Shader) |
 |----------|-------------------|------------------------------|
-| `SHADER_SRC` | camera + material + custom | Half-Lambert textured rendering |
+| `SHADER_SRC` | camera + material + custom | Half-Lambert / MToon 2-color toon branching |
 | `MMD_EDGE_SHADER_SRC` | camera + mmd_mat + edge_body + custom | `pow(c.rgb, 2.2)` — sRGB correction |
 | `MMD_EDGE_SHADER_UNORM_SRC` | camera + mmd_mat + edge_body + custom | `edge_color` direct output |
 | `MMD_MAIN_SHADER_SRC` | camera + mmd_mat + main_body + custom | `pow(out_rgb, 2.2)` — sRGB correction |

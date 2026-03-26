@@ -284,11 +284,19 @@ impl AnimationState {
                 // 法線
                 let pmx_normal = Vec3::from(work[vi].normal);
                 let gltf_normal = pmx_normal_to_gltf(pmx_normal, is_vrm0);
-                let new_pmx_n = gltf_normal_to_pmx_unified(
-                    blended.transform_vector3(gltf_normal).normalize_or_zero(),
-                    is_vrm0,
-                );
+                let skinned_n = blended.transform_vector3(gltf_normal).normalize_or_zero();
+                let new_pmx_n = gltf_normal_to_pmx_unified(skinned_n, is_vrm0);
                 work[vi].normal = new_pmx_n.to_array();
+
+                // 接線（tangent.w = handedness は変更しない）
+                let pmx_tangent = Vec3::from_slice(&work[vi].tangent[..3]);
+                let gltf_tangent = pmx_normal_to_gltf(pmx_tangent, is_vrm0);
+                let skinned_t = blended.transform_vector3(gltf_tangent).normalize_or_zero();
+                // Gram-Schmidt 再直交化: normal に対して tangent を直交射影
+                let t_ortho =
+                    (skinned_t - skinned_n * skinned_n.dot(skinned_t)).normalize_or_zero();
+                let new_pmx_t = gltf_normal_to_pmx_unified(t_ortho, is_vrm0);
+                work[vi].tangent = [new_pmx_t.x, new_pmx_t.y, new_pmx_t.z, work[vi].tangent[3]];
             }
         } // work の可変借用をここでドロップ
 

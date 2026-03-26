@@ -395,8 +395,14 @@ pub struct PendingTexMatch {
 pub struct DisplaySettings {
     /// ライト明るさ (0.0〜2.0)
     pub light_intensity: f32,
+    /// ライト色 RGB (linear)
+    pub light_color: [f32; 3],
     /// 環境光 (0.0〜1.0)
     pub ambient_intensity: f32,
+    /// 環境光 Sky 色 RGB (linear)
+    pub ambient_sky_color: [f32; 3],
+    /// 環境光 Ground 色 RGB (linear)
+    pub ambient_ground_color: [f32; 3],
     /// 背景明るさ (0.0〜1.0)
     pub bg_brightness: f32,
     /// グリッド表示
@@ -433,6 +439,8 @@ pub struct DisplaySettings {
     pub show_normal_map: bool,
     /// MMD レンダリングモード
     pub mmd_mode: bool,
+    /// MToon アウトライン描画
+    pub outline_enabled: bool,
     /// MMD エッジ描画
     pub mmd_edge_enabled: bool,
     /// MMD エッジ太さ全体スケール (0.1〜3.0)
@@ -443,7 +451,10 @@ impl Default for DisplaySettings {
     fn default() -> Self {
         Self {
             light_intensity: 0.7,
+            light_color: [1.0, 1.0, 1.0],
             ambient_intensity: 0.5,
+            ambient_sky_color: [1.0, 1.0, 1.0],
+            ambient_ground_color: [0.6, 0.55, 0.5],
             bg_brightness: 0.19,
             show_grid: true,
             show_bones: false,
@@ -453,7 +464,7 @@ impl Default for DisplaySettings {
             show_joints: false,
             joint_opacity: 0.75,
             draw_mode: DrawMode::Solid,
-            light_mode: LightMode::CameraFollow,
+            light_mode: LightMode::Fixed,
             align_rigid_rotation: false,
             msaa: true,
             smooth_normals: false,
@@ -461,6 +472,7 @@ impl Default for DisplaySettings {
             show_normals: false,
             normal_length: 0.1,
             show_normal_map: false,
+            outline_enabled: true,
             mmd_mode: false,
             mmd_edge_enabled: true,
             mmd_edge_thickness: 1.0,
@@ -714,6 +726,8 @@ pub struct ViewerApp {
     pub suppress_tex_match: bool,
     /// D&D一時ファイルの先読みデータ（ロードチェーン中のみ使用）
     preloaded: Option<PreloadedData>,
+    /// 起動時刻（UVアニメーション用累積時間の基準）
+    start_time: Instant,
 }
 
 impl ViewerApp {
@@ -769,6 +783,7 @@ impl ViewerApp {
             window_title: None,
             suppress_tex_match: false,
             preloaded: None,
+            start_time: Instant::now(),
         }
     }
 
@@ -2622,19 +2637,32 @@ impl ViewerApp {
             });
         let mat = &mut loaded.ir.materials[material_index];
         mat.texture_index = Some(tex_idx);
+        match mat.base_color_tex_info.as_mut() {
+            Some(info) => info.index = tex_idx,
+            None => {
+                mat.base_color_tex_info = Some(
+                    crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
+                )
+            }
+        }
         mat.apply_textured_defaults();
 
-        // GPU DrawCall 更新
-        let (texture_bgl, sampler) = match self.renderer {
-            Some(ref r) => (r.texture_bgl(), r.sampler()),
+        // GPU DrawCall 更新（材質固有のサンプラー情報を維持）
+        let texture_bgl = match self.renderer {
+            Some(ref r) => r.texture_bgl(),
             None => return,
         };
+        let sampler_info = loaded.ir.materials[material_index]
+            .base_color_tex_info
+            .as_ref()
+            .map(|ti| ti.sampler)
+            .unwrap_or_default();
         loaded.gpu_model.assign_texture_to_material(
             material_index,
             &texture_view,
             device,
             texture_bgl,
-            sampler,
+            &sampler_info,
         );
 
         log::info!(
@@ -2661,14 +2689,28 @@ impl ViewerApp {
                 .map(|(i, _)| i)
                 .collect();
             for sib_idx in siblings {
-                loaded.ir.materials[sib_idx].texture_index = Some(tex_idx);
-                loaded.ir.materials[sib_idx].apply_textured_defaults();
+                let sib_mat = &mut loaded.ir.materials[sib_idx];
+                sib_mat.texture_index = Some(tex_idx);
+                match sib_mat.base_color_tex_info.as_mut() {
+                    Some(info) => info.index = tex_idx,
+                    None => {
+                        sib_mat.base_color_tex_info = Some(
+                            crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
+                        )
+                    }
+                }
+                sib_mat.apply_textured_defaults();
+                let sib_sampler_info = loaded.ir.materials[sib_idx]
+                    .base_color_tex_info
+                    .as_ref()
+                    .map(|ti| ti.sampler)
+                    .unwrap_or_default();
                 loaded.gpu_model.assign_texture_to_material(
                     sib_idx,
                     &texture_view,
                     device,
                     texture_bgl,
-                    sampler,
+                    &sib_sampler_info,
                 );
                 self.tex.assignments.insert(sib_idx, tex_source.clone());
                 log::info!("  連動割り当て: 材質[{}] '{}'", sib_idx, target_name);
@@ -2740,19 +2782,32 @@ impl ViewerApp {
             });
         let mat = &mut loaded.ir.materials[material_index];
         mat.texture_index = Some(tex_idx);
+        match mat.base_color_tex_info.as_mut() {
+            Some(info) => info.index = tex_idx,
+            None => {
+                mat.base_color_tex_info = Some(
+                    crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
+                )
+            }
+        }
         mat.apply_textured_defaults();
 
-        // GPU DrawCall 更新
-        let (texture_bgl, sampler) = match self.renderer {
-            Some(ref r) => (r.texture_bgl(), r.sampler()),
+        // GPU DrawCall 更新（材質固有のサンプラー情報を維持）
+        let texture_bgl = match self.renderer {
+            Some(ref r) => r.texture_bgl(),
             None => return,
         };
+        let sampler_info = loaded.ir.materials[material_index]
+            .base_color_tex_info
+            .as_ref()
+            .map(|ti| ti.sampler)
+            .unwrap_or_default();
         loaded.gpu_model.assign_texture_to_material(
             material_index,
             &texture_view,
             device,
             texture_bgl,
-            sampler,
+            &sampler_info,
         );
 
         log::info!(
@@ -2774,14 +2829,28 @@ impl ViewerApp {
                 .map(|(i, _)| i)
                 .collect();
             for sib_idx in siblings {
-                loaded.ir.materials[sib_idx].texture_index = Some(tex_idx);
-                loaded.ir.materials[sib_idx].apply_textured_defaults();
+                let sib_mat = &mut loaded.ir.materials[sib_idx];
+                sib_mat.texture_index = Some(tex_idx);
+                match sib_mat.base_color_tex_info.as_mut() {
+                    Some(info) => info.index = tex_idx,
+                    None => {
+                        sib_mat.base_color_tex_info = Some(
+                            crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
+                        )
+                    }
+                }
+                sib_mat.apply_textured_defaults();
+                let sib_sampler_info = loaded.ir.materials[sib_idx]
+                    .base_color_tex_info
+                    .as_ref()
+                    .map(|ti| ti.sampler)
+                    .unwrap_or_default();
                 loaded.gpu_model.assign_texture_to_material(
                     sib_idx,
                     &texture_view,
                     device,
                     texture_bgl,
-                    sampler,
+                    &sib_sampler_info,
                 );
                 log::info!("  連動割り当て: 材質[{}] '{}'", sib_idx, target_name);
             }
@@ -5451,6 +5520,7 @@ impl eframe::App for ViewerApp {
                                 display: &self.display,
                                 animated_bone_globals: animated_globals,
                                 is_vrm0,
+                                time: self.start_time.elapsed().as_secs_f32(),
                             };
 
                             let (texture_id, _) = renderer.render_to_texture(

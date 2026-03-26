@@ -127,6 +127,12 @@ impl OrbitCamera {
         Mat4::look_at_lh(self.eye(), self.target, self.up_vector())
     }
 
+    /// 射影行列の [1][1] 成分（= 1/tan(fov_y/2)）
+    /// MToon ScreenCoordinates アウトラインの距離クランプ用
+    pub fn proj_11(&self) -> f32 {
+        1.0 / (FOV_DEGREES.to_radians() * 0.5).tan()
+    }
+
     /// View-Projection 行列（左手系、wgpu NDC: Z∈[0,1]）
     /// near/far はカメラ距離に応じて動的調整
     pub fn view_proj(&self, aspect: f32) -> Mat4 {

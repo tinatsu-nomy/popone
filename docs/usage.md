@@ -1,3 +1,25 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [使い方](#%E4%BD%BF%E3%81%84%E6%96%B9)
+  - [対応形式](#%E5%AF%BE%E5%BF%9C%E5%BD%A2%E5%BC%8F)
+  - [クイックスタート](#%E3%82%AF%E3%82%A4%E3%83%83%E3%82%AF%E3%82%B9%E3%82%BF%E3%83%BC%E3%83%88)
+  - [機能一覧](#%E6%A9%9F%E8%83%BD%E4%B8%80%E8%A6%A7)
+    - [ビューア](#%E3%83%93%E3%83%A5%E3%83%BC%E3%82%A2)
+    - [PMX / PMD ロード](#pmx--pmd-%E3%83%AD%E3%83%BC%E3%83%89)
+    - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
+  - [おまけ](#%E3%81%8A%E3%81%BE%E3%81%91)
+    - [アニメーション再生](#%E3%82%A2%E3%83%8B%E3%83%A1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E5%86%8D%E7%94%9F)
+    - [PMX（MikuMikuDance）形式に変換](#pmxmikumikudance%E5%BD%A2%E5%BC%8F%E3%81%AB%E5%A4%89%E6%8F%9B)
+  - [制限事項](#%E5%88%B6%E9%99%90%E4%BA%8B%E9%A0%85)
+  - [ビルド](#%E3%83%93%E3%83%AB%E3%83%89)
+  - [CLI オプション](#cli-%E3%82%AA%E3%83%97%E3%82%B7%E3%83%A7%E3%83%B3)
+  - [出力ファイル](#%E5%87%BA%E5%8A%9B%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB)
+  - [変換例](#%E5%A4%89%E6%8F%9B%E4%BE%8B)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # 使い方
 
 [English](usage.en.md)
@@ -32,7 +54,7 @@ popone.exe input.fbx
 
 ### ビューア
 
-- **3D 表示** — egui + wgpu によるリアルタイムレンダリング。テクスチャ付き Lambert シェーディング、両面描画、アルファブレンド。PMX/PMD は MMD レンダリングモード（NdotL 依存トゥーンシェーディング・エッジ・スフィアマップ）で表示
+- **3D 表示** — egui + wgpu によるリアルタイムレンダリング。テクスチャ付き Lambert シェーディング、両面描画、アルファブレンド。VRM の MToon 材質は 2 色トゥーンシェーディング（lit/shade smoothstep 補間）+ アウトライン描画（inverted hull 法）+ リムライティング（パラメトリックリム + MatCap テクスチャ）+ 補助テクスチャ（shadeMultiply / shadingShift / rimMultiply、texCoord / KHR_texture_transform 対応）+ UV アニメーション（スクロール・回転）+ emissive（発光）+ 法線マップ（MikkTSpace 接線生成による TBN 構築、doubleSided 背面法線反転対応）+ MToon 仕様準拠 4 段階描画順制御（OPAQUE → MASK → BlendZWrite → Blend、`transparentWithZWrite` / `renderQueueOffsetNumber` + BLEND 内カメラ距離動的ソート対応）で表示。VRM 0.x MToon の全プロパティを VRM 1.0 に正規化（UniVRM マイグレーション準拠）。ベースカラーテクスチャを含む全テクスチャで `texCoord` / `KHR_texture_transform` に対応。glTF sampler のアドレスモード（Repeat / ClampToEdge / MirroredRepeat）・フィルタモード（minFilter の mipmap 選択方式を含む 6 値保持）をテクスチャごとに個別のサンプラーで反映。PMX/PMD は MMD レンダリングモード（NdotL 依存トゥーンシェーディング・エッジ・スフィアマップ）で表示。ライティングはライトカラー + 半球 ambient（Sky/Ground 2色補間）で VRoidHub に近い環境光を再現
 - **カメラ操作** — 左ドラッグ:回転、右ドラッグ:パン、ホイール:ズーム。F:フィット、R:リセット、ダブルクリック:フィット、Shift:精密操作（1/3速度）。FOV 30°（MMD準拠）
 - **表情モーフ** — スライダで Expression を調整（0/1 ボタン・直接入力対応）
 - **材質表示切替** — 材質ごとの ON/OFF、検索フィルタ
@@ -44,8 +66,8 @@ popone.exe input.fbx
 - **物理可視化** — 剛体（球体・カプセル・ボックス）を 1px ワイヤーフレームで表示。PMX/PMD は physics_mode 色分け（ボーン追従=グリーン、物理演算=レッド、物理+ボーン=ブルー）、VRM は group 色分け（コライダー=レッド、スプリング=グリーン）。カプセルは半球ワイヤーフレーム付き（PMX/PMD）
 - **ジョイント表示** — PMX/PMD のジョイントをイエロー立方体（回転反映・アニメ同期）で可視化。濃さ調整可能
 - **法線マップ表示** — 法線ベクトルを RGB カラーに変換して表示（デバッグ・確認用）
-- **法線ツール** — 法線平滑化、カスタム法線クリア、法線方向の可視化
-- **MSAA** — 4x アンチエイリアシング（ON/OFF 切替可能）
+- **法線ツール** — 法線平滑化・カスタム法線クリア（いずれも法線マップ付き材質がある場合は自動無効化）、法線方向の可視化
+- **MSAA** — 4x アンチエイリアシング（ON/OFF 切替可能）。MASK（cutout）材質ではサーフェスとアウトラインの両パスで alpha_to_coverage を有効化し、まつ毛・髪カード等のジャギーを軽減
 - **UVマップ出力** — 材質レイヤー分けの PSD として出力（1024〜8192 解像度）。UV 境界をまたぐ三角形のラップ描画対応。複数モデルマージ時はモデル別にレイヤーグループフォルダに格納
 
 <details>
@@ -129,7 +151,6 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 
 - **PMX/PMD は閲覧専用** — PMX 変換（再出力）は非対応。ビューア表示と UVマップ出力のみ
 - **スフィアモード 3（サブテクスチャ）未対応** — 追加 UV が必要なため未実装。検出時は警告ログを出力し無効化
-- **法線マップ（ノーマルマップ）未適用** — VRM/FBX の normalTexture はシェーディングに反映されない（法線マップ表示モードで確認は可能）
 - **テクスチャサイズ制限** — GPU の `max_texture_dimension_2d`（一般的に 8192px）を超えるテクスチャは自動的に縮小される。画質が若干低下する場合がある。PMX 変換出力には影響しない（ビューア表示のみ）
 - **展開サイズ上限** — アーカイブ（ZIP / 7z）および `.unitypackage` の展開サイズは合計 2GB が上限。これを超えるファイルはエラーとなる
 - **MMD 特化モデル** — MMD レンダリングに特化したモデルは一部サーフェイスが正しく表示されない場合がある

@@ -32,8 +32,8 @@ fn select_toon(ir: &IrMaterial) -> PmxToonRef {
 pub fn ir_material_to_pmx(ir: &IrMaterial, texture_index: Option<i32>) -> PmxMaterial {
     let draw_flags: u8 = {
         let mut f = 0u8;
-        if ir.is_double_sided {
-            f |= 0x01;
+        if ir.cull_mode != crate::intermediate::types::CullMode::Back {
+            f |= 0x01; // 両面描画（None, Front ともに PMX では両面扱い）
         }
         f |= 0x02; // 地面影
         f |= 0x04; // セルフシャドウマップへの描画
@@ -90,11 +90,11 @@ mod tests {
             edge_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
             edge_size: 0.5,
             texture_index: Some(0),
-            is_double_sided: true,
+            cull_mode: crate::intermediate::types::CullMode::None,
             is_mtoon: true,
             shade_color: None,
-            shade_texture_index: None,
-            outline_width_texture_index: None,
+            shade_texture: None,
+            outline_width_texture: None,
             source_texture_name: None,
             ..Default::default()
         }
@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn test_single_sided_no_flag() {
         let mut ir = make_test_material();
-        ir.is_double_sided = false;
+        ir.cull_mode = crate::intermediate::types::CullMode::Back;
         let pmx = ir_material_to_pmx(&ir, None);
         assert_eq!(pmx.draw_flags & 0x01, 0, "片面描画はフラグなし");
     }

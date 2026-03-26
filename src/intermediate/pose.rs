@@ -231,8 +231,27 @@ fn apply_mesh_corrections(
 /// モーフオフセットにAスタンス回転を適用
 fn apply_morph_corrections(morphs: &mut [IrMorph], vertex_rot3s: &[glam::Mat3]) {
     for morph in morphs.iter_mut() {
-        if let IrMorphKind::Vertex(ref mut voffs) = morph.kind {
-            for (global_vi, offset) in voffs.iter_mut() {
+        if let IrMorphKind::Vertex {
+            ref mut positions,
+            ref mut normals,
+            ref mut tangents,
+        } = morph.kind
+        {
+            for (global_vi, offset) in positions.iter_mut() {
+                if let Some(rot3) = vertex_rot3s.get(*global_vi) {
+                    if *rot3 != glam::Mat3::IDENTITY {
+                        *offset = rot3.mul_vec3(*offset);
+                    }
+                }
+            }
+            for (global_vi, offset) in normals.iter_mut() {
+                if let Some(rot3) = vertex_rot3s.get(*global_vi) {
+                    if *rot3 != glam::Mat3::IDENTITY {
+                        *offset = rot3.mul_vec3(*offset);
+                    }
+                }
+            }
+            for (global_vi, offset) in tangents.iter_mut() {
                 if let Some(rot3) = vertex_rot3s.get(*global_vi) {
                     if *rot3 != glam::Mat3::IDENTITY {
                         *offset = rot3.mul_vec3(*offset);

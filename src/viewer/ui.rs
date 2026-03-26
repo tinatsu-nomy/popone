@@ -2,10 +2,12 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use eframe::egui;
+use egui::epaint::{Color32, Mesh, Vertex};
 
 use super::app::{ConvertMessage, DisplaySettings, PendingOverlay, SidePanelTab, ViewerApp};
 use super::export_filter::build_filtered_ir;
 use super::gpu::{DrawMode, LightMode};
+use crate::intermediate::types::CullMode;
 
 /// 材質パネルからのテクスチャ割り当てリクエスト
 enum TexAssignRequest {
@@ -975,11 +977,24 @@ fn show_tab_display(
     if ui.small_button("ライト初期値").clicked() {
         let d = DisplaySettings::default();
         app.display.light_intensity = d.light_intensity;
+        app.display.light_color = d.light_color;
         app.display.ambient_intensity = d.ambient_intensity;
+        app.display.ambient_sky_color = d.ambient_sky_color;
+        app.display.ambient_ground_color = d.ambient_ground_color;
         app.display.bg_brightness = d.bg_brightness;
     }
-    ui.add(egui::Slider::new(&mut app.display.light_intensity, 0.0..=2.0).text("ライト"));
-    ui.add(egui::Slider::new(&mut app.display.ambient_intensity, 0.0..=1.0).text("環境光"));
+    ui.horizontal(|ui| {
+        ui.add(egui::Slider::new(&mut app.display.light_intensity, 0.0..=2.0).text("ライト"));
+        color_wheel_button_rgb(ui, "light_color", &mut app.display.light_color);
+    });
+    ui.horizontal(|ui| {
+        ui.add(egui::Slider::new(&mut app.display.ambient_intensity, 0.0..=1.0).text("環境光"));
+        color_wheel_button_rgb(ui, "ambient_sky", &mut app.display.ambient_sky_color);
+    });
+    ui.horizontal(|ui| {
+        ui.label("  Ground");
+        color_wheel_button_rgb(ui, "ambient_ground", &mut app.display.ambient_ground_color);
+    });
     ui.add(egui::Slider::new(&mut app.display.bg_brightness, 0.0..=1.0).text("背景"));
     ui.checkbox(&mut app.display.show_grid, "グリッド表示 (G)");
 
@@ -1054,8 +1069,10 @@ fn show_tab_display(
             .iter()
             .any(|d| d.mmd_material_bind_group.is_some())
     });
+    ui.separator();
+    ui.checkbox(&mut app.display.outline_enabled, "アウトライン描画");
+
     if has_mmd_capability {
-        ui.separator();
         ui.checkbox(&mut app.display.mmd_mode, "MMD レンダリング");
         if app.display.mmd_mode {
             ui.checkbox(&mut app.display.mmd_edge_enabled, "エッジ描画");
@@ -1081,16 +1098,44 @@ fn show_tab_display(
             .iter()
             .any(|d| d.render_style == super::mesh::RenderStyle::Mmd)
     });
+    let has_normal_map = app
+        .loaded
+        .as_ref()
+        .is_some_and(|l| l.ir.materials.iter().any(|m| m.normal_texture.is_some()));
     ui.add_enabled_ui(!has_mmd_normals, |ui| {
+        let smooth_disabled = has_normal_map;
         let old_smooth = app.display.smooth_normals;
-        ui.checkbox(&mut app.display.smooth_normals, "法線平滑化")
-            .on_disabled_hover_text("PMX/PMD の法線は変更できません");
+        let resp = ui.add_enabled(
+            !smooth_disabled,
+            egui::Checkbox::new(&mut app.display.smooth_normals, "法線平滑化"),
+        );
+        if smooth_disabled {
+            resp.on_disabled_hover_text(
+                "法線マップ付き材質があるため無効（UV seam 境界で tangent が不正確になります）",
+            );
+        } else {
+            resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
+        }
+        // smooth_normals が強制無効化された場合、値もリセット
+        if smooth_disabled && app.display.smooth_normals {
+            app.display.smooth_normals = false;
+        }
         if app.display.smooth_normals != old_smooth && app.loaded.is_some() {
             app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
         }
         let old_clear = app.display.clear_custom_normals;
-        ui.checkbox(&mut app.display.clear_custom_normals, "カスタム法線クリア")
-            .on_disabled_hover_text("PMX/PMD の法線は変更できません");
+        let clear_resp = ui.add_enabled(
+            !smooth_disabled,
+            egui::Checkbox::new(&mut app.display.clear_custom_normals, "カスタム法線クリア"),
+        );
+        if smooth_disabled {
+            clear_resp.on_disabled_hover_text(
+                "法線マップ付き材質があるため無効（UV seam 境界で tangent が不正確になります）",
+            );
+            app.display.clear_custom_normals = false;
+        } else {
+            clear_resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
+        }
         if app.display.clear_custom_normals != old_clear && app.loaded.is_some() {
             app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
         }
@@ -1765,7 +1810,11 @@ fn write_convert_log(
         let _ = writeln!(
             file,
             "  [{:2}] {} (tex:{:?} double:{} mtoon:{})",
-            i, mat.name, mat.texture_index, mat.is_double_sided, mat.is_mtoon,
+            i,
+            mat.name,
+            mat.texture_index,
+            mat.cull_mode != CullMode::Back,
+            mat.is_mtoon,
         );
     }
 
@@ -2110,4 +2159,365 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
             }
         }
     }
+}
+
+// ─── HSV カラーホイールウィジェット ───
+
+/// Hue リング + SV 四角のカラーホイールをポップアップで表示するボタン。
+/// `rgb` は linear [f32; 3]。
+fn color_wheel_button_rgb(ui: &mut egui::Ui, label: &str, rgb: &mut [f32; 3]) {
+    let popup_id = ui.make_persistent_id(label);
+    let open = ui.memory(|mem| mem.is_popup_open(popup_id));
+
+    let color32 = Color32::from_rgb(
+        linear_to_srgb_u8(rgb[0]),
+        linear_to_srgb_u8(rgb[1]),
+        linear_to_srgb_u8(rgb[2]),
+    );
+    let size = egui::vec2(18.0, 18.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        let rounding = visuals.corner_radius;
+        ui.painter()
+            .rect_filled(rect.expand(1.0), rounding, visuals.bg_fill);
+        ui.painter().rect_filled(rect, rounding, color32);
+        if open {
+            ui.painter().rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(1.0, Color32::WHITE),
+                egui::StrokeKind::Outside,
+            );
+        }
+    }
+
+    if response.clicked() {
+        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+    }
+
+    if ui.memory(|mem| mem.is_popup_open(popup_id)) {
+        let area_response = egui::Area::new(popup_id)
+            .kind(egui::UiKind::Picker)
+            .order(egui::Order::Foreground)
+            .fixed_pos(response.rect.max)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    hsv_wheel_picker(ui, rgb);
+                });
+            })
+            .response;
+
+        if !response.clicked()
+            && (ui.input(|i| i.key_pressed(egui::Key::Escape)) || area_response.clicked_elsewhere())
+        {
+            ui.memory_mut(|mem| mem.close_popup());
+        }
+    }
+}
+
+/// HSV ホイール本体: Hue リング + SV 四角
+fn hsv_wheel_picker(ui: &mut egui::Ui, rgb: &mut [f32; 3]) {
+    let hsv = rgb_to_hsv(*rgb);
+    let mut h = hsv[0];
+    let mut s = hsv[1];
+    let mut v = hsv[2];
+
+    let wheel_radius = 90.0_f32;
+    let ring_width = 16.0_f32;
+    let inner_radius = wheel_radius - ring_width;
+    // SV 四角: 内接円に内接する正方形
+    let sq_half = inner_radius * 0.65;
+    let total_size = egui::vec2(wheel_radius * 2.0 + 8.0, wheel_radius * 2.0 + 8.0);
+
+    let (rect, _) = ui.allocate_exact_size(total_size, egui::Sense::hover());
+    let center = rect.center();
+    let painter = ui.painter_at(rect);
+
+    // ── Hue リング描画（三角形メッシュ） ──
+    let segments = 64;
+    let mut hue_mesh = Mesh::default();
+    for i in 0..segments {
+        let a0 = std::f32::consts::TAU * (i as f32 / segments as f32);
+        let a1 = std::f32::consts::TAU * ((i + 1) as f32 / segments as f32);
+        let hue0 = i as f32 / segments as f32;
+        let hue1 = (i + 1) as f32 / segments as f32;
+        let c0 = hsv_to_color32(hue0, 1.0, 1.0);
+        let c1 = hsv_to_color32(hue1, 1.0, 1.0);
+
+        let outer0 = center + egui::vec2(a0.cos(), -a0.sin()) * wheel_radius;
+        let inner0 = center + egui::vec2(a0.cos(), -a0.sin()) * inner_radius;
+        let outer1 = center + egui::vec2(a1.cos(), -a1.sin()) * wheel_radius;
+        let inner1 = center + egui::vec2(a1.cos(), -a1.sin()) * inner_radius;
+
+        let base = hue_mesh.vertices.len() as u32;
+        hue_mesh.vertices.push(Vertex {
+            pos: outer0,
+            uv: egui::Pos2::ZERO,
+            color: c0,
+        });
+        hue_mesh.vertices.push(Vertex {
+            pos: inner0,
+            uv: egui::Pos2::ZERO,
+            color: c0,
+        });
+        hue_mesh.vertices.push(Vertex {
+            pos: outer1,
+            uv: egui::Pos2::ZERO,
+            color: c1,
+        });
+        hue_mesh.vertices.push(Vertex {
+            pos: inner1,
+            uv: egui::Pos2::ZERO,
+            color: c1,
+        });
+        hue_mesh.indices.extend_from_slice(&[
+            base,
+            base + 1,
+            base + 2,
+            base + 1,
+            base + 3,
+            base + 2,
+        ]);
+    }
+    painter.add(egui::Shape::mesh(hue_mesh));
+
+    // Hue インジケータ（リング上の丸）
+    let hue_angle = h * std::f32::consts::TAU;
+    let hue_mid_r = (wheel_radius + inner_radius) * 0.5;
+    let hue_pos = center + egui::vec2(hue_angle.cos(), -hue_angle.sin()) * hue_mid_r;
+    painter.circle_stroke(
+        hue_pos,
+        ring_width * 0.4,
+        egui::Stroke::new(2.0, Color32::WHITE),
+    );
+    painter.circle_stroke(
+        hue_pos,
+        ring_width * 0.4 + 1.0,
+        egui::Stroke::new(1.0, Color32::BLACK),
+    );
+
+    // ── SV 四角描画 ──
+    let sq_rect = egui::Rect::from_center_size(center, egui::vec2(sq_half * 2.0, sq_half * 2.0));
+    // 4頂点のグラデーション: 左上(白), 右上(hue), 左下(黒), 右下(黒)
+    // 実際にはSV空間: x=S(0→1), y=V(1→0)
+    let mut sv_mesh = Mesh::default();
+    let sv_steps = 32_u32;
+    for yi in 0..sv_steps {
+        for xi in 0..sv_steps {
+            let x0 = xi as f32 / sv_steps as f32;
+            let x1 = (xi + 1) as f32 / sv_steps as f32;
+            let y0 = yi as f32 / sv_steps as f32;
+            let y1 = (yi + 1) as f32 / sv_steps as f32;
+
+            let p00 = egui::pos2(
+                sq_rect.left() + x0 * sq_rect.width(),
+                sq_rect.top() + y0 * sq_rect.height(),
+            );
+            let p10 = egui::pos2(
+                sq_rect.left() + x1 * sq_rect.width(),
+                sq_rect.top() + y0 * sq_rect.height(),
+            );
+            let p01 = egui::pos2(
+                sq_rect.left() + x0 * sq_rect.width(),
+                sq_rect.top() + y1 * sq_rect.height(),
+            );
+            let p11 = egui::pos2(
+                sq_rect.left() + x1 * sq_rect.width(),
+                sq_rect.top() + y1 * sq_rect.height(),
+            );
+
+            let c00 = hsv_to_color32(h, x0, 1.0 - y0);
+            let c10 = hsv_to_color32(h, x1, 1.0 - y0);
+            let c01 = hsv_to_color32(h, x0, 1.0 - y1);
+            let c11 = hsv_to_color32(h, x1, 1.0 - y1);
+
+            let base = sv_mesh.vertices.len() as u32;
+            sv_mesh.vertices.push(Vertex {
+                pos: p00,
+                uv: egui::Pos2::ZERO,
+                color: c00,
+            });
+            sv_mesh.vertices.push(Vertex {
+                pos: p10,
+                uv: egui::Pos2::ZERO,
+                color: c10,
+            });
+            sv_mesh.vertices.push(Vertex {
+                pos: p01,
+                uv: egui::Pos2::ZERO,
+                color: c01,
+            });
+            sv_mesh.vertices.push(Vertex {
+                pos: p11,
+                uv: egui::Pos2::ZERO,
+                color: c11,
+            });
+            sv_mesh.indices.extend_from_slice(&[
+                base,
+                base + 1,
+                base + 2,
+                base + 1,
+                base + 3,
+                base + 2,
+            ]);
+        }
+    }
+    painter.add(egui::Shape::mesh(sv_mesh));
+    painter.rect_stroke(
+        sq_rect,
+        0.0,
+        egui::Stroke::new(1.0, Color32::from_gray(80)),
+        egui::StrokeKind::Outside,
+    );
+
+    // SV インジケータ
+    let sv_pos = egui::pos2(
+        sq_rect.left() + s * sq_rect.width(),
+        sq_rect.top() + (1.0 - v) * sq_rect.height(),
+    );
+    let indicator_color = if v > 0.5 {
+        Color32::BLACK
+    } else {
+        Color32::WHITE
+    };
+    painter.circle_stroke(sv_pos, 4.0, egui::Stroke::new(2.0, indicator_color));
+
+    // ── インタラクション ──
+    // Hue リングドラッグ
+    let ring_id = ui.id().with("hue_ring");
+    let ring_response = ui.interact(rect, ring_id, egui::Sense::click_and_drag());
+    if ring_response.dragged() || ring_response.clicked() {
+        if let Some(pos) = ring_response.interact_pointer_pos() {
+            let dx = pos.x - center.x;
+            let dy = -(pos.y - center.y);
+            let dist = (dx * dx + dy * dy).sqrt();
+            // リング上、またはドラッグ中なら hue を更新
+            if dist >= inner_radius * 0.8 || ui.ctx().is_being_dragged(ring_id) {
+                h = dy.atan2(dx) / std::f32::consts::TAU;
+                if h < 0.0 {
+                    h += 1.0;
+                }
+            }
+        }
+    }
+
+    // SV 四角ドラッグ
+    let sv_id = ui.id().with("sv_square");
+    let sv_response = ui.interact(sq_rect, sv_id, egui::Sense::click_and_drag());
+    if sv_response.dragged() || sv_response.clicked() {
+        if let Some(pos) = sv_response.interact_pointer_pos() {
+            s = ((pos.x - sq_rect.left()) / sq_rect.width()).clamp(0.0, 1.0);
+            v = 1.0 - ((pos.y - sq_rect.top()) / sq_rect.height()).clamp(0.0, 1.0);
+        }
+    }
+
+    // 値を書き戻し
+    let new_rgb = hsv_to_rgb(h, s, v);
+    *rgb = new_rgb;
+
+    // 現在色プレビュー
+    let preview_color = Color32::from_rgb(
+        linear_to_srgb_u8(rgb[0]),
+        linear_to_srgb_u8(rgb[1]),
+        linear_to_srgb_u8(rgb[2]),
+    );
+    let preview_size = egui::vec2(total_size.x, 14.0);
+    let (preview_rect, _) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
+    ui.painter().rect_filled(preview_rect, 2.0, preview_color);
+}
+
+// ─── 色空間変換ヘルパー ───
+
+fn linear_to_srgb_u8(c: f32) -> u8 {
+    let s = if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (s.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+}
+
+/// linear RGB → HSV (h: 0..1, s: 0..1, v: 0..1)
+fn rgb_to_hsv(rgb: [f32; 3]) -> [f32; 3] {
+    // linear → sRGB for perceptual HSV
+    let r = if rgb[0] <= 0.0031308 {
+        rgb[0] * 12.92
+    } else {
+        1.055 * rgb[0].powf(1.0 / 2.4) - 0.055
+    };
+    let g = if rgb[1] <= 0.0031308 {
+        rgb[1] * 12.92
+    } else {
+        1.055 * rgb[1].powf(1.0 / 2.4) - 0.055
+    };
+    let b = if rgb[2] <= 0.0031308 {
+        rgb[2] * 12.92
+    } else {
+        1.055 * rgb[2].powf(1.0 / 2.4) - 0.055
+    };
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+    let v = max;
+    let s = if max > 0.0 { delta / max } else { 0.0 };
+    let h = if delta < 1e-6 {
+        0.0
+    } else if max == r {
+        ((g - b) / delta).rem_euclid(6.0) / 6.0
+    } else if max == g {
+        ((b - r) / delta + 2.0) / 6.0
+    } else {
+        ((r - g) / delta + 4.0) / 6.0
+    };
+    [h, s, v]
+}
+
+/// HSV → linear RGB
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+    // HSV → sRGB
+    let h6 = (h * 6.0).rem_euclid(6.0);
+    let f = h6 - h6.floor();
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * f);
+    let t = v * (1.0 - s * (1.0 - f));
+    let (r, g, b) = match h6 as u32 {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    };
+    // sRGB → linear
+    let to_lin = |c: f32| {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    [to_lin(r), to_lin(g), to_lin(b)]
+}
+
+/// HSV → Color32 (sRGB, for painting)
+fn hsv_to_color32(h: f32, s: f32, v: f32) -> Color32 {
+    let h6 = (h * 6.0).rem_euclid(6.0);
+    let f = h6 - h6.floor();
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * f);
+    let t = v * (1.0 - s * (1.0 - f));
+    let (r, g, b) = match h6 as u32 {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    };
+    Color32::from_rgb(
+        (r * 255.0 + 0.5) as u8,
+        (g * 255.0 + 0.5) as u8,
+        (b * 255.0 + 0.5) as u8,
+    )
 }

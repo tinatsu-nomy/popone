@@ -1,3 +1,25 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [Usage](#usage)
+  - [Supported Formats](#supported-formats)
+  - [Quick Start](#quick-start)
+  - [Features](#features)
+    - [Viewer](#viewer)
+    - [PMX / PMD Loading](#pmx--pmd-loading)
+    - [Changelog](#changelog)
+  - [Extras](#extras)
+    - [Animation Playback](#animation-playback)
+    - [PMX (MikuMikuDance) Conversion](#pmx-mikumikudance-conversion)
+  - [Limitations](#limitations)
+  - [Build](#build)
+  - [CLI Options](#cli-options)
+  - [Output Files](#output-files)
+  - [Conversion Example](#conversion-example)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # Usage
 
 [日本語](usage.md)
@@ -32,7 +54,7 @@ If the viewer is already running, subsequent launches pass the file path to the 
 
 ### Viewer
 
-- **3D Rendering** — Real-time rendering with egui + wgpu. Textured Lambert shading, double-sided, alpha blending. PMX/PMD displayed in MMD rendering mode (NdotL-dependent toon shading, edges, sphere maps)
+- **3D Rendering** — Real-time rendering with egui + wgpu. Textured Lambert shading, double-sided, alpha blending. VRM MToon materials are displayed with 2-color toon shading (lit/shade smoothstep interpolation) + outline rendering (inverted hull method) + rim lighting (parametric rim + MatCap texture) + auxiliary textures (shadeMultiply / shadingShift / rimMultiply, with texCoord / KHR_texture_transform support) + UV animation (scroll/rotation) + emissive (emission) + normal mapping (MikkTSpace tangent generation for TBN construction, doubleSided back-face normal flipping) + MToon spec-compliant 4-phase draw order control (OPAQUE → MASK → BlendZWrite → Blend, with `transparentWithZWrite` / `renderQueueOffsetNumber` + dynamic camera distance sorting within BLEND). VRM 0.x MToon properties are fully normalized to VRM 1.0 (UniVRM migration compliant). All textures including base color support `texCoord` / `KHR_texture_transform`. Per-texture glTF sampler address modes (Repeat / ClampToEdge / MirroredRepeat) and filter modes (including all 6 minFilter mipmap selection values) are honored with individual samplers per texture. PMX/PMD displayed in MMD rendering mode (NdotL-dependent toon shading, edges, sphere maps). Lighting uses light color + hemisphere ambient (Sky/Ground 2-color interpolation) for VRoidHub-like ambient lighting
 - **Camera** — Left drag: rotate, Right drag: pan, Scroll: zoom. F: fit, R: reset, Double-click: fit, Shift: precision mode (1/3 speed). FOV 30° (MMD-compliant)
 - **Expression Morphs** — Adjust with sliders (0/1 buttons, direct input)
 - **Material Visibility** — Per-material ON/OFF toggle with search filter
@@ -44,8 +66,8 @@ If the viewer is already running, subsequent launches pass the file path to the 
 - **Physics Visualization** — Rigid bodies (sphere/capsule/box) in 1px wireframe. PMX/PMD colored by physics_mode (bone-follow = green, physics = red, physics+bone = blue), VRM colored by group (collider = red, spring = green). Capsules include hemisphere wireframes (PMX/PMD)
 - **Joint Display** — PMX/PMD joints visualized as yellow cubes (rotation-aware, animation-synced). Adjustable opacity
 - **Normal Map View** — Visualize normal vectors as RGB colors (debug/inspection)
-- **Normal Tools** — Normal smoothing, custom normal clear, normal direction visualization
-- **MSAA** — 4x anti-aliasing (toggleable)
+- **Normal Tools** — Normal smoothing, custom normal clear (both auto-disabled when normal-mapped materials are present), normal direction visualization
+- **MSAA** — 4x anti-aliasing (toggleable). MASK (cutout) materials enable alpha_to_coverage on both surface and outline passes for reduced jaggies on eyelashes, hair cards, etc.
 - **UV Map Export** — PSD output with per-material layers (1024–8192 resolution). UV boundary wrap handling for triangles crossing 0/1 edges. Groups layers into folders by model name when multiple models are merged
 
 <details>
@@ -129,7 +151,6 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 
 - **PMX/PMD is view-only** — PMX conversion (re-export) is not supported. Viewer display and UV map export only
 - **Sphere Mode 3 (sub-texture) unsupported** — Requires additional UVs, not implemented. Detected with warning log and disabled
-- **Normal maps not applied** — VRM/FBX normalTexture is not reflected in shading (can be inspected via Normal Map View mode)
 - **Texture size limit** — Textures exceeding the GPU's `max_texture_dimension_2d` (typically 8192px) are automatically downscaled. This may result in slight quality loss. Does not affect PMX conversion output (viewer display only)
 - **Extraction size limit** — Archive (ZIP / 7z) and `.unitypackage` extraction is capped at 2GB total. Files exceeding this limit will produce an error
 - **MMD-specialized models** — Models optimized for MMD-specific rendering may display some surfaces incorrectly

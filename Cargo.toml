@@ -1,6 +1,6 @@
 [package]
 name = "popone"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 license = "0BSD"
 
@@ -29,6 +29,7 @@ fern        = "0.7"
 chrono      = "0.4"
 clap        = { version = "4", features = ["derive"] }
 encoding_rs = "0.8"
+mikktspace  = "0.2"
 zip          = { version = "2", default-features = false, features = ["deflate"] }
 sevenz-rust2 = "0.20"
 
