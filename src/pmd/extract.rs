@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::Result;
 use glam::{Mat4, Vec3, Vec4};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -423,46 +423,21 @@ fn extract_materials(pmd: &PmdModel, textures: &[IrTexture]) -> Vec<IrMaterial> 
                 texture_index,
                 base_color_tex_info: None,
                 cull_mode: CullMode::Back,
-                is_mtoon: false,
                 edge_color: if has_edge {
                     Vec4::new(0.0, 0.0, 0.0, 1.0)
                 } else {
                     Vec4::ZERO
                 },
                 edge_size: if has_edge { 1.0 } else { 0.0 },
-                shade_color: None,
-                shade_texture: None,
-                shading_toony_factor: 0.9,
-                shading_shift_factor: 0.0,
-                outline_width_texture: None,
-                outline_width_tex_channel: ColorChannel::G,
-                outline_width_mode: OutlineWidthMode::None,
-                outline_width_factor: 0.0,
-                outline_lighting_mix: 1.0,
+                mtoon: None,
                 source_texture_name: None,
                 source_format: SourceFormat::Pmd,
                 sphere_texture_index,
                 sphere_mode,
                 toon_texture_index,
                 toon_shared_index,
-                parametric_rim_color: Vec3::ZERO,
-                parametric_rim_fresnel_power: 5.0,
-                parametric_rim_lift: 0.0,
-                rim_lighting_mix: 1.0,
-                gi_equalization_factor: 0.9,
-                matcap_factor: Vec3::ONE,
-                matcap_texture: None,
-                shading_shift_texture: None,
-                shading_shift_texture_scale: 1.0,
-                rim_multiply_texture: None,
-                uv_animation_scroll_x_speed: 0.0,
-                uv_animation_scroll_y_speed: 0.0,
-                uv_animation_rotation_speed: 0.0,
-                uv_animation_mask_texture: None,
-                uv_anim_mask_tex_channel: ColorChannel::B,
                 alpha_mode: AlphaMode::Opaque,
                 alpha_cutoff: 0.5,
-                render_queue_offset: 0,
                 emissive_factor: Vec3::ZERO,
                 emissive_texture: None,
                 normal_texture: None,

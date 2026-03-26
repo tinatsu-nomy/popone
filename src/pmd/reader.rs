@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use crate::error::{PoponeError, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use glam::{Vec2, Vec3, Vec4};
 use std::io::Read;
@@ -37,11 +37,15 @@ fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
     let mut magic = [0u8; 3];
     r.read_exact(&mut magic)?;
     if &magic != b"Pmd" {
-        bail!("PMDマジックナンバーが不正: {:?}", magic);
+        return Err(PoponeError::PmdParse(format!(
+            "PMDマジックナンバーが不正: {magic:?}"
+        )));
     }
     let version = r.read_f32::<LittleEndian>()?;
     if version < 1.0 {
-        bail!("未対応のPMDバージョン: {}", version);
+        return Err(PoponeError::PmdParse(format!(
+            "未対応のPMDバージョン: {version}"
+        )));
     }
 
     let mut name_buf = [0u8; 20];
@@ -79,7 +83,9 @@ fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
     // 面
     let face_index_count = r.read_u32::<LittleEndian>()? as usize;
     if !face_index_count.is_multiple_of(3) {
-        bail!("PMD面インデックス数が3の倍数でない: {}", face_index_count);
+        return Err(PoponeError::PmdParse(format!(
+            "PMD面インデックス数が3の倍数でない: {face_index_count}"
+        )));
     }
     let face_count = face_index_count / 3;
     let mut faces = Vec::with_capacity(face_count);
@@ -320,7 +326,7 @@ fn read_english_header<R: Read>(
 ) -> Result<PmdEnglishHeader> {
     let flag = r.read_u8()?;
     if flag == 0 {
-        bail!("英語ヘッダなし");
+        return Err(PoponeError::PmdParse("英語ヘッダなし".into()));
     }
 
     let mut name_buf = [0u8; 20];

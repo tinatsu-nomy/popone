@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::{PoponeError, Result, ResultExt};
 use glam::{Quat, Vec3};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
@@ -115,7 +115,9 @@ fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
         // ヘッダチェック（最初の数行のみ）
         if line_num <= 3 {
             if line_num == 1 && !line.starts_with("%YAML") {
-                anyhow::bail!("Unity YAMLファイルではありません");
+                return Err(PoponeError::Other(
+                    "Unity YAMLファイルではありません".into(),
+                ));
             }
             continue;
         }
@@ -656,7 +658,7 @@ pub fn load_humanoid_params(path: &Path) -> Result<HumanoidParams> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("Humanoidパラメータ読み込み失敗: {}", path.display()))?;
     let json: serde_json::Value =
-        serde_json::from_str(&text).with_context(|| "Humanoidパラメータ JSON パース失敗")?;
+        serde_json::from_str(&text).context("Humanoidパラメータ JSON パース失敗")?;
 
     let mut bones = HashMap::new();
     let mut muscle_ranges = HashMap::new();

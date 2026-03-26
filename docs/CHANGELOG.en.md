@@ -8,6 +8,7 @@
     - [Improvements](#improvements)
     - [Bug Fixes](#bug-fixes)
     - [Implementation Details](#implementation-details)
+    - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
     - [New Features](#new-features-1)
     - [Improvements](#improvements-1)
@@ -20,16 +21,16 @@
     - [Bug Fixes](#bug-fixes-2)
     - [New Features](#new-features-3)
     - [Improvements](#improvements-3)
-    - [Code Quality & Performance](#code-quality--performance)
+    - [Code Quality & Performance](#code-quality--performance-1)
   - [v0.2.5](#v025)
     - [Improvements](#improvements-4)
-    - [Code Quality & Performance](#code-quality--performance-1)
+    - [Code Quality & Performance](#code-quality--performance-2)
   - [v0.2.4](#v024)
     - [Improvements](#improvements-5)
   - [v0.2.3](#v023)
     - [Improvements](#improvements-6)
   - [v0.2.2](#v022)
-    - [Code Quality & Performance](#code-quality--performance-2)
+    - [Code Quality & Performance](#code-quality--performance-3)
   - [FBX Support](#fbx-support)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -181,6 +182,20 @@
 - **`doubleSided` back-face normal flipping (UniVRM-compliant)** — `@builtin(front_facing)` flips back-face normals before normal map application, matching UniVRM's `MTOON_IS_FRONT_VFACE`. Applied to all shader variants
 - **UV animation rotation precision** — Wraps angle within one period via `fract(turns) * 2π` per UniVRM, preventing float precision loss during long sessions
 - **Limitation: Only `TEXCOORD_0` / `TEXCOORD_1` UV sets are supported** — While the glTF spec allows arbitrary UV sets, VRM/MToon only uses UV0/UV1 (confirmed against UniVRM implementation). Textures with `texCoord >= 2` fall back to `texCoord=0` (`warn` log emitted)
+
+### Code Quality & Performance
+
+- **Reuse work buffers for translucent sorting** — Fixed per-frame allocation of `Vec<Vec3>` (centroids) and `Vec<usize>` (sorted indices) inside `render_to_texture`. Added `work_draw_centers` / `work_sorted_indices` work buffers to `GpuRenderer`, using a `std::mem::take` + return pattern to retain capacity while avoiding borrow conflicts
+- **Uniform sampling for translucent DrawCall centroids** — Changed centroid computation for translucent sorting from full index traversal to uniform interval sampling (max 30 points). Meshes with 30 or fewer indices use full traversal; larger meshes sample at `total / 30` step intervals. Produces spatially representative centroids even for spread-out meshes (hair, skirts, etc.) while keeping computation O(k)
+- **Reuse morph cycle-detection buffer** — Fixed `apply_gpu_morph_to` allocating `vec![false; N]` per morph. Added `morph_visited: Vec<bool>` to `GpuModel`, reused via `clear()` + `resize()`. Removed the `apply_gpu_morph_to` wrapper; callers now invoke `apply_gpu_morph_recursive` directly
+- **Swap-based `morph_work` / `animated_vertices` integration** — Replaced `extend_from_slice` / `clone` (~1.9 MB/frame) from `morph_work` to `animated_vertices` in `apply_morphs` with `std::mem::swap`. GPU writes now reference the swapped `animated_vertices`, eliminating redundant vertex buffer copies
+- **Eliminate clone in texture export** — Changed `convert/texture.rs` from `ImageBuffer::from_raw(w, h, tex.data.clone())` to `image::save_buffer(&out_path, &tex.data, ...)`, completely avoiding data clones up to 64 MB (4K RGBA). Removed `ImageBuffer` import
+- **Fix `convert_fbx_to_pmx` `normalize_pose` passthrough** — Fixed public API `convert_fbx_to_pmx` not passing `options.normalize_pose` to `extract_ir_model_from_fbx`. Switched to `extract_ir_model_from_fbx_with_options`
+- **Add SAFETY comments to `unsafe` blocks** — Added `// SAFETY:` comments to all `unsafe` blocks in `main.rs` (`attach_parent_console` / `detach_console`) and `viewer/single_instance.rs` (all Win32 API calls)
+- **Extract MToon fields from `IrMaterial`** — Moved 25 MToon-specific fields from `IrMaterial` into a new `MtoonParams` struct, held as `mtoon: Option<MtoonParams>`. Reduced field count from 35+ to ~18. Added `is_mtoon()` / `mtoon()` / `mtoon_mut()` helper methods (returns static default `MTOON_DEFAULT` for non-MToon materials)
+- **Split `viewer/app.rs` into submodules** — Split `app.rs` into 5 responsibility-based submodules: `mod.rs` (struct definitions, initialization, eframe::App impl), `file_io.rs` (file loading, D&D, reload), `texture_mgmt.rs` (texture assignment & preview), `pending.rs` (deferred task processing), `helpers.rs` (utility types & functions). External API preserved via `pub use`
+- **Unify `anyhow` → `PoponeError`** — Migrated 19 internal library files from `anyhow::Result` to `crate::error::Result`. Added 7 new variants to `PoponeError` (`FbxParse` / `PmxParse` / `PmdParse` / `Build` / `Archive` / `UnityPackage` / `Other`). Added `ResultExt` trait (`.context()` / `.with_context()` compatible). `main.rs` / `viewer/` retain `anyhow`
+- **Prevent `render_queue_offset` mis-assignment on non-MToon materials** — VRM 0.x `remap_vrm0_render_queue_offsets` called `mat.mtoon_mut()` on all materials, causing non-MToon materials to acquire `mtoon: Some(Default)` and report `is_mtoon() == true`. Fixed by using `if let Some(ref mut mtoon) = mat.mtoon` to restrict to MToon materials only
 
 ## v0.2.8
 

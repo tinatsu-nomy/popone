@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use crate::error::{PoponeError, Result, ResultExt};
 use byteorder::{LittleEndian, ReadBytesExt};
 use flate2::read::ZlibDecoder;
 use std::io::{Cursor, Read, Seek, SeekFrom};
@@ -118,7 +118,7 @@ pub fn parse(data: &[u8]) -> Result<FbxDocument> {
     let mut magic = [0u8; 23];
     cursor.read_exact(&mut magic)?;
     if &magic != MAGIC {
-        bail!("Invalid FBX magic number");
+        return Err(PoponeError::FbxParse("Invalid FBX magic number".into()));
     }
 
     let version = cursor.read_u32::<LittleEndian>()?;
@@ -269,7 +269,11 @@ fn parse_property(cursor: &mut Cursor<&[u8]>) -> Result<FbxProperty> {
             Ok(FbxProperty::Binary(buf))
         }
 
-        _ => bail!("Unknown property type code: 0x{:02x}", type_code),
+        _ => {
+            return Err(PoponeError::FbxParse(format!(
+                "Unknown property type code: 0x{type_code:02x}"
+            )))
+        }
     }
 }
 
@@ -289,10 +293,14 @@ fn read_array_raw(cursor: &mut Cursor<&[u8]>, element_size: usize) -> Result<Vec
             let mut decompressed = vec![0u8; expected_size];
             decoder
                 .read_exact(&mut decompressed)
-                .context("zlib decompression failed")?;
+                .map_err(|e| PoponeError::FbxParse(format!("zlib decompression failed: {e}")))?;
             decompressed
         }
-        _ => bail!("Unknown encoding: {}", encoding),
+        _ => {
+            return Err(PoponeError::FbxParse(format!(
+                "Unknown encoding: {encoding}"
+            )))
+        }
     };
 
     Ok(raw)
@@ -362,8 +370,9 @@ impl<'a> AsciiParser<'a> {
         let line = ascii_strip_inline_comment(line);
 
         // ノード名と値部分を分離（引用符外の最初の `:` で分割）
-        let colon_pos = ascii_find_colon(line)
-            .ok_or_else(|| anyhow::anyhow!("Expected ':' in: {}", &line[..line.len().min(80)]))?;
+        let colon_pos = ascii_find_colon(line).ok_or_else(|| {
+            PoponeError::FbxParse(format!("Expected ':' in: {}", &line[..line.len().min(80)]))
+        })?;
         let name = line[..colon_pos].trim().to_string();
         let after_colon = line[colon_pos + 1..].trim();
 

@@ -1,5 +1,5 @@
-use anyhow::Result;
-use image::{ImageBuffer, RgbaImage};
+use crate::error::Result;
+use image::RgbaImage;
 use std::path::Path;
 
 use crate::intermediate::types::IrTexture;
@@ -15,10 +15,9 @@ pub fn write_texture(
 
     // 生ピクセルデータ（gltf::image::Data.pixels）はRGB8またはRGBA8
     // widthとheightが必要
-    let img: RgbaImage = if tex.data.len() == (width * height * 4) as usize {
-        // RGBA8
-        ImageBuffer::from_raw(width, height, tex.data.clone())
-            .ok_or_else(|| anyhow::anyhow!("RGBA画像バッファ生成失敗: {}", tex.filename))?
+    if tex.data.len() == (width * height * 4) as usize {
+        // RGBA8 — スライス参照から直接保存（clone 回避）
+        image::save_buffer(&out_path, &tex.data, width, height, image::ColorType::Rgba8)?;
     } else if tex.data.len() == (width * height * 3) as usize {
         // RGB8 → RGBA8変換
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
@@ -28,8 +27,7 @@ pub fn write_texture(
             rgba.push(chunk[2]);
             rgba.push(255);
         }
-        ImageBuffer::from_raw(width, height, rgba)
-            .ok_or_else(|| anyhow::anyhow!("RGB→RGBA変換失敗: {}", tex.filename))?
+        image::save_buffer(&out_path, &rgba, width, height, image::ColorType::Rgba8)?;
     } else {
         // サイズ不一致の場合は空白画像
         log::warn!(
@@ -39,10 +37,8 @@ pub fn write_texture(
             width,
             height
         );
-        RgbaImage::new(1, 1)
+        RgbaImage::new(1, 1).save(&out_path)?;
     };
-
-    img.save(&out_path)?;
     log::info!("テクスチャ書き出し: {}", out_path.display());
 
     Ok(tex.filename.clone())

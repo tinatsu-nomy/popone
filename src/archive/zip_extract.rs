@@ -1,6 +1,6 @@
 //! ZIP アーカイブの展開（2パス: 一覧→選択展開）
 
-use anyhow::{bail, Result};
+use crate::error::{PoponeError, Result};
 use std::io::Read;
 
 use super::{normalize_archive_path, ArchiveEntry, ArchiveEntryMeta};
@@ -15,7 +15,9 @@ fn decode_filename(file: &zip::read::ZipFile) -> Result<String> {
     // Shift_JIS フォールバック
     let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(raw);
     if had_errors {
-        bail!("ファイル名のデコードに失敗: {:?}", raw);
+        return Err(PoponeError::Archive(format!(
+            "ファイル名のデコードに失敗: {raw:?}"
+        )));
     }
     Ok(decoded.into_owned())
 }
@@ -67,12 +69,9 @@ pub fn extract_files(
         // サイズチェック（declared size）
         let declared = file.size();
         if total + declared > max_total_bytes {
-            bail!(
-                "展開サイズ上限超過: {} + {} > {} bytes",
-                total,
-                declared,
-                max_total_bytes
-            );
+            return Err(PoponeError::Archive(format!(
+                "展開サイズ上限超過: {total} + {declared} > {max_total_bytes} bytes"
+            )));
         }
 
         // 実際の読み込み（take でハード制限）

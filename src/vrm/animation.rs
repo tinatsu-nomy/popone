@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::{PoponeError, Result, ResultExt};
 use glam::{Quat, Vec3};
 use gltf::buffer::Data;
 use serde_json::Value;
@@ -356,7 +356,9 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
     }
 
     if animations.is_empty() {
-        anyhow::bail!("アニメーションが含まれていません");
+        return Err(PoponeError::Other(
+            "アニメーションが含まれていません".into(),
+        ));
     }
 
     Ok(animations)
@@ -370,7 +372,9 @@ fn extract_vrma_extension(document: &gltf::Document) -> Result<Value> {
             return Ok(val.clone());
         }
     }
-    anyhow::bail!("VRMC_vrm_animation 拡張が見つかりません");
+    return Err(PoponeError::Other(
+        "VRMC_vrm_animation 拡張が見つかりません".into(),
+    ));
 }
 
 /// VRMA拡張 + glTFアニメーションをパース

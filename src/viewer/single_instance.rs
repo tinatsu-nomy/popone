@@ -97,6 +97,10 @@ pub enum InstanceCheck {
 pub fn try_send_to_existing(file_path: Option<&Path>) -> InstanceCheck {
     let mutex_name = to_wide(MUTEX_NAME);
 
+    // SAFETY: All Win32 API calls receive valid pointers — mutex_name and pipe_name
+    // are null-terminated UTF-16 from to_wide(), payload is a valid byte slice,
+    // and all returned handles are checked before use. The mutex handle is
+    // intentionally leaked (kept alive for process lifetime) for the primary instance.
     unsafe {
         let h_mutex = CreateMutexW(std::ptr::null_mut(), 0, mutex_name.as_ptr());
         if h_mutex.is_null() {
@@ -180,6 +184,8 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
     std::thread::spawn(move || {
         let pipe_name = to_wide(PIPE_NAME);
         loop {
+            // SAFETY: pipe_name is a valid null-terminated UTF-16 string from to_wide().
+            // All numeric parameters are valid pipe configuration constants.
             let h_pipe = unsafe {
                 CreateNamedPipeW(
                     pipe_name.as_ptr(),
@@ -198,12 +204,15 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
             }
 
             // クライアント接続待ち（ブロッキング）
+            // SAFETY: h_pipe is a valid named pipe handle (checked != INVALID above).
             let connected = unsafe { ConnectNamedPipe(h_pipe, std::ptr::null_mut()) };
             if connected == 0 {
                 // ERROR_PIPE_CONNECTED (535) は既に接続済みなので正常
+                // SAFETY: GetLastError has no preconditions.
                 let err = unsafe { GetLastError() };
                 if err != 535 {
                     log::warn!("ConnectNamedPipe 失敗: error={err}");
+                    // SAFETY: h_pipe is a valid handle from CreateNamedPipeW.
                     unsafe { CloseHandle(h_pipe) };
                     continue;
                 }
@@ -212,6 +221,8 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
             // メッセージ読み取り
             let mut buf = [0u8; 4096];
             let mut bytes_read: u32 = 0;
+            // SAFETY: h_pipe is a valid connected pipe handle, buf is a stack-allocated
+            // array with known size, and bytes_read is a valid mutable pointer.
             let ok = unsafe {
                 ReadFile(
                     h_pipe,
@@ -224,6 +235,7 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
 
             if ok == 0 {
                 // ReadFile 失敗（ERROR_MORE_DATA 等） — 無視して次の接続へ
+                // SAFETY: GetLastError has no preconditions.
                 let err = unsafe { GetLastError() };
                 log::warn!("ReadFile 失敗: error={err}");
             } else if bytes_read > 0 {
@@ -237,6 +249,8 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
 
             ctx.request_repaint();
 
+            // SAFETY: h_pipe is a valid pipe handle. DisconnectNamedPipe disconnects the
+            // server end, and CloseHandle releases the handle.
             unsafe {
                 DisconnectNamedPipe(h_pipe);
                 CloseHandle(h_pipe);

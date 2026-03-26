@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use crate::error::{PoponeError, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::Read;
 
@@ -13,7 +13,7 @@ pub struct PmxReader<R: Read> {
 #[inline]
 fn checked_count(val: i32, field: &str) -> Result<usize> {
     if val < 0 {
-        bail!("{}が負: {}", field, val);
+        return Err(PoponeError::PmxParse(format!("{field}が負: {val}")));
     }
     Ok(val as usize)
 }
@@ -64,20 +64,23 @@ impl<R: Read> PmxReader<R> {
         let mut magic = [0u8; 4];
         self.reader.read_exact(&mut magic)?;
         if &magic != b"PMX " {
-            bail!("PMXマジックナンバーが不正: {:?}", magic);
+            return Err(PoponeError::PmxParse(format!(
+                "PMXマジックナンバーが不正: {magic:?}"
+            )));
         }
 
         let version = self.reader.read_f32::<LittleEndian>()?;
         if !(2.0..=2.1).contains(&version) {
-            bail!("未対応のPMXバージョン: {}", version);
+            return Err(PoponeError::PmxParse(format!(
+                "未対応のPMXバージョン: {version}"
+            )));
         }
 
         let globals_count = self.reader.read_u8()?;
         if globals_count != 8 {
-            bail!(
-                "PMXヘッダのグローバル数が不正: {} (期待値: 8)",
-                globals_count
-            );
+            return Err(PoponeError::PmxParse(format!(
+                "PMXヘッダのグローバル数が不正: {globals_count} (期待値: 8)"
+            )));
         }
 
         let encoding = self.reader.read_u8()?;
@@ -105,7 +108,9 @@ impl<R: Read> PmxReader<R> {
     fn read_text(&mut self) -> Result<String> {
         let byte_len_i32 = self.reader.read_i32::<LittleEndian>()?;
         if byte_len_i32 < 0 {
-            bail!("テキスト長が負: {}", byte_len_i32);
+            return Err(PoponeError::PmxParse(format!(
+                "テキスト長が負: {byte_len_i32}"
+            )));
         }
         let byte_len = byte_len_i32 as usize;
         let mut buf = vec![0u8; byte_len];
@@ -114,7 +119,10 @@ impl<R: Read> PmxReader<R> {
         if self.header.encoding == 0 {
             // UTF-16LE
             if !buf.len().is_multiple_of(2) {
-                bail!("UTF-16LEテキストのバイト長が奇数: {}", buf.len());
+                return Err(PoponeError::PmxParse(format!(
+                    "UTF-16LEテキストのバイト長が奇数: {}",
+                    buf.len()
+                )));
             }
             let utf16: Vec<u16> = buf
                 .chunks_exact(2)
@@ -266,7 +274,11 @@ impl<R: Read> PmxReader<R> {
                         weight1,
                     }
                 }
-                _ => bail!("未対応のウェイト変形方式: {}", weight_type),
+                _ => {
+                    return Err(PoponeError::PmxParse(format!(
+                        "未対応のウェイト変形方式: {weight_type}"
+                    )))
+                }
             };
 
             let edge_scale = self.reader.read_f32::<LittleEndian>()?;
@@ -286,7 +298,9 @@ impl<R: Read> PmxReader<R> {
         let index_count =
             checked_count(self.reader.read_i32::<LittleEndian>()?, "面インデックス数")?;
         if !index_count.is_multiple_of(3) {
-            bail!("面インデックス数が3の倍数でない: {}", index_count);
+            return Err(PoponeError::PmxParse(format!(
+                "面インデックス数が3の倍数でない: {index_count}"
+            )));
         }
         let face_count = index_count / 3;
         let mut faces = Vec::with_capacity(face_count);
@@ -572,7 +586,11 @@ impl<R: Read> PmxReader<R> {
                     }
                     PmxMorphOffsets::Group(Vec::new())
                 }
-                _ => bail!("未対応のモーフ種類: {}", morph_type),
+                _ => {
+                    return Err(PoponeError::PmxParse(format!(
+                        "未対応のモーフ種類: {morph_type}"
+                    )))
+                }
             };
 
             morphs.push(PmxMorph {

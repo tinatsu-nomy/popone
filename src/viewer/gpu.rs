@@ -1496,6 +1496,10 @@ pub struct GpuRenderer {
     spring_cache_align: bool,
     /// 前フレームでアニメーションが有効だったか（Some→None 遷移検出用）
     cache_had_anim: bool,
+    /// 半透明ソート用: DrawCall 重心の作業バッファ
+    work_draw_centers: Vec<glam::Vec3>,
+    /// 半透明ソート用: ソート済みインデックスの作業バッファ
+    work_sorted_indices: Vec<usize>,
     // MMD リソース
     mmd_material_bgl: wgpu::BindGroupLayout,
     mmd_aux_bgl: wgpu::BindGroupLayout,
@@ -1933,6 +1937,8 @@ impl GpuRenderer {
             joint_cache_opacity: -1.0,
             spring_cache_align: false,
             cache_had_anim: false,
+            work_draw_centers: Vec::new(),
+            work_sorted_indices: Vec::new(),
             mmd_material_bgl,
             mmd_aux_bgl,
             shared_toon_textures,
@@ -3291,6 +3297,10 @@ impl GpuRenderer {
         // Unorm フレーム判定: MMD 専用パスに完全に乗るフレームのみ
         let use_unorm = can_use_unorm_frame(model, params.material_visibility, mmd_solid);
 
+        // take で借用衝突を回避（self.pipelines() が self 全体を immutable borrow するため）
+        let mut work_draw_centers = std::mem::take(&mut self.work_draw_centers);
+        let mut work_sorted_indices = std::mem::take(&mut self.work_sorted_indices);
+
         let ps = self.pipelines(use_unorm);
 
         // カラービュー選択: use_unorm に応じて Unorm / sRGB ビュー
@@ -3375,29 +3385,43 @@ impl GpuRenderer {
                 let eye = params.camera.eye();
                 let verts = model.current_vertices();
                 let indices = model.base_indices();
-                let draw_centers: Vec<glam::Vec3> = model
-                    .draws
-                    .iter()
-                    .map(|draw| {
-                        if !matches!(
-                            draw.render_queue,
-                            RenderQueue::Blend | RenderQueue::BlendZWrite
-                        ) || draw.index_count == 0
-                        {
-                            return draw.center; // 不透明は固定重心で十分
-                        }
-                        let start = draw.index_offset as usize;
-                        let end = start + draw.index_count as usize;
-                        let mut sum = glam::Vec3::ZERO;
-                        for &idx in &indices[start..end] {
+                work_draw_centers.clear();
+                work_draw_centers.extend(model.draws.iter().map(|draw| {
+                    if !matches!(
+                        draw.render_queue,
+                        RenderQueue::Blend | RenderQueue::BlendZWrite
+                    ) || draw.index_count == 0
+                    {
+                        return draw.center; // 不透明は固定重心で十分
+                    }
+                    // 均等サンプリングで重心を近似（全走査と先頭1三角形の中間）
+                    let start = draw.index_offset as usize;
+                    let total = draw.index_count as usize;
+                    let max_samples = 30; // 最大 10 三角形（30 index）
+                    let mut sum = glam::Vec3::ZERO;
+                    if total <= max_samples {
+                        // 少数なら全走査
+                        for &idx in &indices[start..start + total] {
                             sum += glam::Vec3::from(verts[idx as usize].position);
                         }
-                        sum / draw.index_count as f32
-                    })
-                    .collect();
+                        sum / total as f32
+                    } else {
+                        // 均等間隔でサンプリング
+                        let step = total / max_samples;
+                        let mut count = 0u32;
+                        let mut i = 0;
+                        while i < total {
+                            sum += glam::Vec3::from(verts[indices[start + i] as usize].position);
+                            count += 1;
+                            i += step;
+                        }
+                        sum / count as f32
+                    }
+                }));
 
-                let mut sorted_indices: Vec<usize> = (0..model.draws.len()).collect();
-                sorted_indices.sort_by(|&a, &b| {
+                work_sorted_indices.clear();
+                work_sorted_indices.extend(0..model.draws.len());
+                work_sorted_indices.sort_by(|&a, &b| {
                     let da = &model.draws[a];
                     let db = &model.draws[b];
                     da.render_queue
@@ -3409,8 +3433,8 @@ impl GpuRenderer {
                                 RenderQueue::Blend | RenderQueue::BlendZWrite
                             ) {
                                 // back-to-front: 遠いものを先に描画
-                                let za = draw_centers[a].distance_squared(eye);
-                                let zb = draw_centers[b].distance_squared(eye);
+                                let za = work_draw_centers[a].distance_squared(eye);
+                                let zb = work_draw_centers[b].distance_squared(eye);
                                 zb.partial_cmp(&za).unwrap_or(std::cmp::Ordering::Equal)
                             } else {
                                 std::cmp::Ordering::Equal
@@ -3434,7 +3458,7 @@ impl GpuRenderer {
                         matches!(target_queue, RenderQueue::Blend | RenderQueue::BlendZWrite);
 
                     // メッシュ描画
-                    for &draw_idx in &sorted_indices {
+                    for &draw_idx in &work_sorted_indices {
                         let draw = &model.draws[draw_idx];
                         if draw.render_queue != *target_queue {
                             continue;
@@ -3558,7 +3582,7 @@ impl GpuRenderer {
 
                     // OPAQUE/MASK: アウトラインをフェーズ後にまとめて描画
                     if !interleave_outline && params.display.outline_enabled {
-                        for &draw_idx in &sorted_indices {
+                        for &draw_idx in &work_sorted_indices {
                             let draw = &model.draws[draw_idx];
                             if draw.render_queue != *target_queue {
                                 continue;
@@ -3640,6 +3664,7 @@ impl GpuRenderer {
                         );
                     }
                 }
+                // 作業バッファを返却（容量を保持して次フレームで再利用）
             } // end if !model.draws.is_empty()
 
             // MMD 描画（材質インデックス順 — PMX の描画順序を維持）
@@ -3805,6 +3830,10 @@ impl GpuRenderer {
                 }
             }
         } // end single render pass
+
+        // 作業バッファを返却（容量を保持して次フレームで再利用）
+        self.work_draw_centers = work_draw_centers;
+        self.work_sorted_indices = work_sorted_indices;
 
         queue.submit(std::iter::once(encoder.finish()));
 

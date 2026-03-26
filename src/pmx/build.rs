@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::{PoponeError, Result};
 use glam::Vec3;
 use std::collections::HashMap;
 use std::f32::consts::PI;
@@ -120,9 +120,9 @@ pub fn build_pmx_model_with_options(ir: &IrModel, options: &PmxBuildOptions) -> 
         log::debug!("  [{:2}] \"{}\" diffuse=({:.2},{:.2},{:.2},{:.2}) tex={:?} double={} mtoon={} edge={:.3}",
             i, mat.name,
             mat.diffuse.x, mat.diffuse.y, mat.diffuse.z, mat.diffuse.w,
-            mat.texture_index, mat.cull_mode != CullMode::Back, mat.is_mtoon, mat.edge_size);
+            mat.texture_index, mat.cull_mode != CullMode::Back, mat.is_mtoon(), mat.edge_size);
     }
-    let mtoon_count = ir.materials.iter().filter(|m| m.is_mtoon).count();
+    let mtoon_count = ir.materials.iter().filter(|m| m.is_mtoon()).count();
     let double_count = ir
         .materials
         .iter()
@@ -778,7 +778,7 @@ fn add_waist_cancel_bones(model: &mut PmxModel) -> Result<()> {
             .bones
             .iter()
             .position(|b| b.name == "右足")
-            .ok_or_else(|| anyhow::anyhow!("ボーン「右足」が見つかりません"))?;
+            .ok_or_else(|| PoponeError::Build("ボーン「右足」が見つかりません".into()))?;
         move_bone_in_model(model, r_cancel_at, r_leg_at);
 
         log::debug!(
@@ -822,7 +822,7 @@ fn add_waist_cancel_bones(model: &mut PmxModel) -> Result<()> {
             .bones
             .iter()
             .position(|b| b.name == "左足")
-            .ok_or_else(|| anyhow::anyhow!("ボーン「左足」が見つかりません"))?;
+            .ok_or_else(|| PoponeError::Build("ボーン「左足」が見つかりません".into()))?;
         move_bone_in_model(model, l_cancel_at, l_leg_at);
     }
     Ok(())
@@ -1442,7 +1442,9 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
             .bones
             .iter()
             .position(|b| b.name == shoulder_name)
-            .ok_or_else(|| anyhow::anyhow!("ボーン「{}」が見つかりません", shoulder_name))?;
+            .ok_or_else(|| {
+                PoponeError::Build(format!("ボーン「{shoulder_name}」が見つかりません"))
+            })?;
         move_bone_in_model(model, p_at, shoulder_now);
 
         log::debug!(
@@ -1457,10 +1459,11 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
         // 3. 肩Cを末尾に追加 → 腕の直前に移動
         //    肩Cのgrant = 肩P × (-1.0)
         let c_flags = BONE_FLAG_ROTATABLE | BONE_FLAG_ROTATION_GRANT;
-        let shoulder_idx_now = find_bone_idx(&model.bones, shoulder_name)
-            .ok_or_else(|| anyhow::anyhow!("ボーン「{}」が見つかりません", shoulder_name))?;
+        let shoulder_idx_now = find_bone_idx(&model.bones, shoulder_name).ok_or_else(|| {
+            PoponeError::Build(format!("ボーン「{shoulder_name}」が見つかりません"))
+        })?;
         let p_idx_now = find_bone_idx(&model.bones, p_jp)
-            .ok_or_else(|| anyhow::anyhow!("ボーン「{}」が見つかりません", p_jp))?;
+            .ok_or_else(|| PoponeError::Build(format!("ボーン「{p_jp}」が見つかりません")))?;
 
         let c_at = model.bones.len();
         model.bones.push(PmxBone {
@@ -1480,7 +1483,7 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
 
         // 腕の親を肩Cに変更
         let arm_idx_now = find_bone_idx(&model.bones, arm_name)
-            .ok_or_else(|| anyhow::anyhow!("ボーン「{}」が見つかりません", arm_name))?;
+            .ok_or_else(|| PoponeError::Build(format!("ボーン「{arm_name}」が見つかりません")))?;
         model.bones[arm_idx_now as usize].parent_index = c_at as i32;
 
         // 肩Cを腕の直前に移動
@@ -1488,7 +1491,7 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
             .bones
             .iter()
             .position(|b| b.name == arm_name)
-            .ok_or_else(|| anyhow::anyhow!("ボーン「{}」が見つかりません", arm_name))?;
+            .ok_or_else(|| PoponeError::Build(format!("ボーン「{arm_name}」が見つかりません")))?;
         move_bone_in_model(model, c_at, arm_now);
 
         log::debug!(

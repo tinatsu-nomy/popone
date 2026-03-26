@@ -101,6 +101,8 @@ pub struct GpuModel {
     morph_work: Vec<Vertex>,
     /// GPU空間モーフデータ（重複排除・座標変換済み）
     gpu_morphs: Vec<GpuMorphEntry>,
+    /// グループモーフ循環検出用バッファ（毎回 alloc を回避）
+    morph_visited: Vec<bool>,
     /// アニメーション済み頂点キャッシュ（法線表示同期用）
     animated_vertices: Option<Vec<Vertex>>,
 }
@@ -240,60 +242,69 @@ impl GpuModel {
         self.morph_work.clear();
         self.morph_work.extend_from_slice(&self.base_vertices);
 
-        for morph_idx in 0..self.gpu_morphs.len() {
+        let morph_len = self.gpu_morphs.len();
+        for morph_idx in 0..morph_len {
             let w = weights.get(morph_idx).copied().unwrap_or(0.0);
             if w.abs() < 1e-6 {
                 continue;
             }
-            Self::apply_gpu_morph_to(&self.gpu_morphs, morph_idx, w, &mut self.morph_work);
+            self.morph_visited.clear();
+            self.morph_visited.resize(morph_len, false);
+            Self::apply_gpu_morph_recursive(
+                &self.gpu_morphs,
+                morph_idx,
+                w,
+                &mut self.morph_work,
+                &mut self.morph_visited,
+            );
         }
 
-        // CPU 側の現在頂点も同期（半透明ソート等が morphed 頂点を参照できるようにする）
-        match self.animated_vertices {
-            Some(ref mut verts) => {
-                verts.clear();
-                verts.extend_from_slice(&self.morph_work);
-            }
-            None => {
-                self.animated_vertices = Some(self.morph_work.clone());
-            }
-        }
+        // CPU 側の現在頂点も同期 — swap でアロケーション回避
+        let mut swap_buf = self.animated_vertices.take().unwrap_or_default();
+        std::mem::swap(&mut self.morph_work, &mut swap_buf);
+        self.animated_vertices = Some(swap_buf);
 
-        queue.write_buffer(&self.vertex_buf, 0, bytemuck::cast_slice(&self.morph_work));
+        queue.write_buffer(
+            &self.vertex_buf,
+            0,
+            bytemuck::cast_slice(self.animated_vertices.as_ref().unwrap()),
+        );
     }
 
     /// モーフウェイトを外部バッファに適用（アニメーション用：GPU アップロードはしない）
     pub fn apply_morphs_to_buf(&self, weights: &[f32], vertices: &mut [Vertex]) {
-        for morph_idx in 0..self.gpu_morphs.len() {
+        let morph_len = self.gpu_morphs.len();
+        let mut visited = vec![false; morph_len];
+        for morph_idx in 0..morph_len {
             let w = weights.get(morph_idx).copied().unwrap_or(0.0);
             if w.abs() < 1e-6 {
                 continue;
             }
-            Self::apply_gpu_morph_to(&self.gpu_morphs, morph_idx, w, vertices);
+            visited.fill(false);
+            Self::apply_gpu_morph_recursive(&self.gpu_morphs, morph_idx, w, vertices, &mut visited);
         }
     }
 
     /// animated_vertices にモーフを直接適用（借用衝突回避版）
     pub fn apply_morphs_to_animated(&mut self, weights: &[f32]) {
         if let Some(ref mut verts) = self.animated_vertices {
-            for morph_idx in 0..self.gpu_morphs.len() {
+            let morph_len = self.gpu_morphs.len();
+            for morph_idx in 0..morph_len {
                 let w = weights.get(morph_idx).copied().unwrap_or(0.0);
                 if w.abs() < 1e-6 {
                     continue;
                 }
-                Self::apply_gpu_morph_to(&self.gpu_morphs, morph_idx, w, verts);
+                self.morph_visited.clear();
+                self.morph_visited.resize(morph_len, false);
+                Self::apply_gpu_morph_recursive(
+                    &self.gpu_morphs,
+                    morph_idx,
+                    w,
+                    verts,
+                    &mut self.morph_visited,
+                );
             }
         }
-    }
-
-    fn apply_gpu_morph_to(
-        gpu_morphs: &[GpuMorphEntry],
-        morph_idx: usize,
-        weight: f32,
-        vertices: &mut [Vertex],
-    ) {
-        let mut visited = vec![false; gpu_morphs.len()];
-        Self::apply_gpu_morph_recursive(gpu_morphs, morph_idx, weight, vertices, &mut visited);
     }
 
     fn apply_gpu_morph_recursive(
@@ -629,8 +640,9 @@ fn build_gpu_model_inner(
 
         // 材質 bind group
         let diffuse = mat.diffuse;
-        let shade_color = mat.shade_color.unwrap_or(Vec3::ZERO).to_array();
-        let outline_mode = match mat.outline_width_mode {
+        let mp = mat.mtoon();
+        let shade_color = mp.shade_color.unwrap_or(Vec3::ZERO).to_array();
+        let outline_mode = match mp.outline_width_mode {
             OutlineWidthMode::None => 0.0,
             OutlineWidthMode::WorldCoordinates => 1.0,
             OutlineWidthMode::ScreenCoordinates => 2.0,
@@ -640,27 +652,27 @@ fn build_gpu_model_inner(
             &material_bgl,
             diffuse.to_array(),
             shade_color,
-            mat.is_mtoon,
-            mat.shading_toony_factor,
-            mat.shading_shift_factor,
-            mat.outline_width_factor,
+            mat.is_mtoon(),
+            mp.shading_toony_factor,
+            mp.shading_shift_factor,
+            mp.outline_width_factor,
             outline_mode,
             mat.edge_color.to_array(),
-            mat.outline_lighting_mix,
-            mat.parametric_rim_color.to_array(),
-            mat.parametric_rim_fresnel_power,
-            mat.parametric_rim_lift,
-            mat.rim_lighting_mix,
-            mat.matcap_texture.is_some(),
-            mat.matcap_factor.to_array(),
-            mat.shade_texture.is_some(),
-            mat.shading_shift_texture.is_some(),
-            mat.shading_shift_texture_scale,
-            mat.rim_multiply_texture.is_some(),
-            mat.uv_animation_scroll_x_speed,
-            mat.uv_animation_scroll_y_speed,
-            mat.uv_animation_rotation_speed,
-            mat.uv_animation_mask_texture.is_some(),
+            mp.outline_lighting_mix,
+            mp.parametric_rim_color.to_array(),
+            mp.parametric_rim_fresnel_power,
+            mp.parametric_rim_lift,
+            mp.rim_lighting_mix,
+            mp.matcap_texture.is_some(),
+            mp.matcap_factor.to_array(),
+            mp.shade_texture.is_some(),
+            mp.shading_shift_texture.is_some(),
+            mp.shading_shift_texture_scale,
+            mp.rim_multiply_texture.is_some(),
+            mp.uv_animation_scroll_x_speed,
+            mp.uv_animation_scroll_y_speed,
+            mp.uv_animation_rotation_speed,
+            mp.uv_animation_mask_texture.is_some(),
             // alphaMode エンコーディング: OPAQUE=-1.0, MASK=cutoff(>=0.0), BLEND=-0.5
             match mat.alpha_mode {
                 AlphaMode::Opaque => -1.0,
@@ -668,27 +680,27 @@ fn build_gpu_model_inner(
                 _ => -0.5,                           // Blend / BlendZWrite
             },
             gpu::pack_uv_params(mat.base_color_tex_info.as_ref()),
-            gpu::pack_uv_params(mat.shade_texture.as_ref()),
-            gpu::pack_uv_params(mat.shading_shift_texture.as_ref()),
-            gpu::pack_uv_params(mat.rim_multiply_texture.as_ref()),
-            gpu::pack_uv_params(mat.outline_width_texture.as_ref()),
-            gpu::pack_uv_params(mat.uv_animation_mask_texture.as_ref()),
+            gpu::pack_uv_params(mp.shade_texture.as_ref()),
+            gpu::pack_uv_params(mp.shading_shift_texture.as_ref()),
+            gpu::pack_uv_params(mp.rim_multiply_texture.as_ref()),
+            gpu::pack_uv_params(mp.outline_width_texture.as_ref()),
+            gpu::pack_uv_params(mp.uv_animation_mask_texture.as_ref()),
             mat.emissive_factor.to_array(),
             mat.emissive_texture.is_some(),
             gpu::pack_uv_params(mat.emissive_texture.as_ref()),
             mat.normal_texture.is_some(),
             mat.normal_texture_scale,
             gpu::pack_uv_params(mat.normal_texture.as_ref()),
-            mat.gi_equalization_factor,
-            mat.outline_width_tex_channel.to_f32(),
-            mat.uv_anim_mask_tex_channel.to_f32(),
-            gpu::pack_uv_params(mat.matcap_texture.as_ref()),
+            mp.gi_equalization_factor,
+            mp.outline_width_tex_channel.to_f32(),
+            mp.uv_anim_mask_tex_channel.to_f32(),
+            gpu::pack_uv_params(mp.matcap_texture.as_ref()),
         );
 
         // MToon 補助テクスチャ bind group（group 3）
         // MToon 材質だけでなく emissiveTexture を持つ非 MToon 材質にも必要
         let needs_aux =
-            mat.is_mtoon || mat.emissive_texture.is_some() || mat.normal_texture.is_some();
+            mat.is_mtoon() || mat.emissive_texture.is_some() || mat.normal_texture.is_some();
         let mtoon_aux_bg = if needs_aux {
             let get_srgb = |idx: Option<usize>| -> Option<&wgpu::TextureView> {
                 idx.and_then(|ti| gpu_textures_dual.get(ti).map(|(srgb, _)| srgb))
@@ -699,21 +711,20 @@ fn build_gpu_model_inner(
             let default_white = &default_white_view;
             let default_black = &default_black_view;
             let matcap_view =
-                get_srgb(mat.matcap_texture.as_ref().map(|t| t.index)).unwrap_or(default_black);
+                get_srgb(mp.matcap_texture.as_ref().map(|t| t.index)).unwrap_or(default_black);
             let shade_mul_view =
-                get_srgb(mat.shade_texture.as_ref().map(|t| t.index)).unwrap_or(default_white);
+                get_srgb(mp.shade_texture.as_ref().map(|t| t.index)).unwrap_or(default_white);
             // shadingShiftTexture: 仕様でリニア色空間と規定（Unorm ビュー使用）
-            let shift_view = get_linear(mat.shading_shift_texture.as_ref().map(|t| t.index))
+            let shift_view = get_linear(mp.shading_shift_texture.as_ref().map(|t| t.index))
                 .unwrap_or(default_white);
-            let rim_mul_view = get_srgb(mat.rim_multiply_texture.as_ref().map(|t| t.index))
+            let rim_mul_view = get_srgb(mp.rim_multiply_texture.as_ref().map(|t| t.index))
                 .unwrap_or(default_white);
             // uvAnimationMaskTexture: 仕様でリニア色空間と規定（Unorm ビュー使用）
-            let uv_mask_view = get_linear(mat.uv_animation_mask_texture.as_ref().map(|t| t.index))
+            let uv_mask_view = get_linear(mp.uv_animation_mask_texture.as_ref().map(|t| t.index))
                 .unwrap_or(default_white);
             // outlineWidthMultiplyTexture: 仕様でリニア色空間と規定（Gチャンネル参照）
-            let outline_width_view =
-                get_linear(mat.outline_width_texture.as_ref().map(|t| t.index))
-                    .unwrap_or(default_white);
+            let outline_width_view = get_linear(mp.outline_width_texture.as_ref().map(|t| t.index))
+                .unwrap_or(default_white);
             // emissiveTexture: sRGB 色空間
             let emissive_view =
                 get_srgb(mat.emissive_texture.as_ref().map(|t| t.index)).unwrap_or(default_white);
@@ -724,12 +735,12 @@ fn build_gpu_model_inner(
             let sampler_of = |ti: Option<&IrTextureInfo>| -> IrSamplerInfo {
                 ti.map(|t| t.sampler).unwrap_or_default()
             };
-            let matcap_si = sampler_of(mat.matcap_texture.as_ref());
-            let shade_si = sampler_of(mat.shade_texture.as_ref());
-            let shift_si = sampler_of(mat.shading_shift_texture.as_ref());
-            let rim_si = sampler_of(mat.rim_multiply_texture.as_ref());
-            let uv_mask_si = sampler_of(mat.uv_animation_mask_texture.as_ref());
-            let outline_si = sampler_of(mat.outline_width_texture.as_ref());
+            let matcap_si = sampler_of(mp.matcap_texture.as_ref());
+            let shade_si = sampler_of(mp.shade_texture.as_ref());
+            let shift_si = sampler_of(mp.shading_shift_texture.as_ref());
+            let rim_si = sampler_of(mp.rim_multiply_texture.as_ref());
+            let uv_mask_si = sampler_of(mp.uv_animation_mask_texture.as_ref());
+            let outline_si = sampler_of(mp.outline_width_texture.as_ref());
             let emissive_si = sampler_of(mat.emissive_texture.as_ref());
             let normal_si = sampler_of(mat.normal_texture.as_ref());
             for si in [
@@ -814,7 +825,7 @@ fn build_gpu_model_inner(
         };
         let has_edge = mat.edge_size > 0.0;
         let has_outline =
-            mat.outline_width_mode != OutlineWidthMode::None && mat.outline_width_factor > 0.0;
+            mp.outline_width_mode != OutlineWidthMode::None && mp.outline_width_factor > 0.0;
 
         // 描画メッシュの重心を計算（半透明距離ソート用）
         let center = if index_count > 0 {
@@ -836,7 +847,7 @@ fn build_gpu_model_inner(
             cull_mode: mat.cull_mode,
             is_alpha,
             render_queue,
-            render_queue_offset: mat.render_queue_offset,
+            render_queue_offset: mp.render_queue_offset,
             alpha_cutoff: mat.alpha_cutoff,
             texture_bind_group: tex_bg,
             material_bind_group: mat_bg,
@@ -1003,6 +1014,7 @@ fn build_gpu_model_inner(
         cached_bbox,
         morph_work,
         gpu_morphs,
+        morph_visited: Vec::new(),
         animated_vertices: None,
     })
 }

@@ -233,33 +233,34 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
         .chain(
             new_materials
                 .iter()
-                .filter_map(|m| m.shade_texture.as_ref().map(|t| t.index)),
+                .filter_map(|m| m.mtoon().shade_texture.as_ref().map(|t| t.index)),
         )
         .chain(
             new_materials
                 .iter()
-                .filter_map(|m| m.outline_width_texture.as_ref().map(|t| t.index)),
+                .filter_map(|m| m.mtoon().outline_width_texture.as_ref().map(|t| t.index)),
         )
         .chain(
             new_materials
                 .iter()
-                .filter_map(|m| m.matcap_texture.as_ref().map(|t| t.index)),
+                .filter_map(|m| m.mtoon().matcap_texture.as_ref().map(|t| t.index)),
         )
         .chain(
             new_materials
                 .iter()
-                .filter_map(|m| m.shading_shift_texture.as_ref().map(|t| t.index)),
+                .filter_map(|m| m.mtoon().shading_shift_texture.as_ref().map(|t| t.index)),
         )
         .chain(
             new_materials
                 .iter()
-                .filter_map(|m| m.rim_multiply_texture.as_ref().map(|t| t.index)),
+                .filter_map(|m| m.mtoon().rim_multiply_texture.as_ref().map(|t| t.index)),
         )
-        .chain(
-            new_materials
-                .iter()
-                .filter_map(|m| m.uv_animation_mask_texture.as_ref().map(|t| t.index)),
-        )
+        .chain(new_materials.iter().filter_map(|m| {
+            m.mtoon()
+                .uv_animation_mask_texture
+                .as_ref()
+                .map(|t| t.index)
+        }))
         .chain(
             new_materials
                 .iter()
@@ -290,30 +291,32 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
             .base_color_tex_info
             .take()
             .and_then(|t| t.remap_index(&tex_remap));
-        mat.shade_texture = mat
-            .shade_texture
-            .take()
-            .and_then(|t| t.remap_index(&tex_remap));
-        mat.outline_width_texture = mat
-            .outline_width_texture
-            .take()
-            .and_then(|t| t.remap_index(&tex_remap));
-        mat.matcap_texture = mat
-            .matcap_texture
-            .take()
-            .and_then(|t| t.remap_index(&tex_remap));
-        mat.shading_shift_texture = mat
-            .shading_shift_texture
-            .take()
-            .and_then(|t| t.remap_index(&tex_remap));
-        mat.rim_multiply_texture = mat
-            .rim_multiply_texture
-            .take()
-            .and_then(|t| t.remap_index(&tex_remap));
-        mat.uv_animation_mask_texture = mat
-            .uv_animation_mask_texture
-            .take()
-            .and_then(|t| t.remap_index(&tex_remap));
+        if let Some(ref mut mp) = mat.mtoon {
+            mp.shade_texture = mp
+                .shade_texture
+                .take()
+                .and_then(|t| t.remap_index(&tex_remap));
+            mp.outline_width_texture = mp
+                .outline_width_texture
+                .take()
+                .and_then(|t| t.remap_index(&tex_remap));
+            mp.matcap_texture = mp
+                .matcap_texture
+                .take()
+                .and_then(|t| t.remap_index(&tex_remap));
+            mp.shading_shift_texture = mp
+                .shading_shift_texture
+                .take()
+                .and_then(|t| t.remap_index(&tex_remap));
+            mp.rim_multiply_texture = mp
+                .rim_multiply_texture
+                .take()
+                .and_then(|t| t.remap_index(&tex_remap));
+            mp.uv_animation_mask_texture = mp
+                .uv_animation_mask_texture
+                .take()
+                .and_then(|t| t.remap_index(&tex_remap));
+        }
         mat.emissive_texture = mat
             .emissive_texture
             .take()

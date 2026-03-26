@@ -131,6 +131,10 @@ fn attach_parent_console() {
     const STD_ERROR_HANDLE: u32 = 0xFFFF_FFF4;
     const INVALID: *mut std::ffi::c_void = -1isize as *mut std::ffi::c_void;
 
+    // SAFETY: All Win32 calls receive valid arguments — string pointers come from
+    // null-terminated C literals ("CONIN$"/"CONOUT$"), handle validity is checked
+    // against INVALID before use, and null pointers are passed where the API permits.
+    // This block only runs once at startup before any I/O occurs.
     unsafe {
         if AttachConsole(0xFFFFFFFF) == 0 {
             return;
@@ -177,6 +181,8 @@ fn detach_console() {
     extern "system" {
         fn FreeConsole() -> i32;
     }
+    // SAFETY: FreeConsole has no preconditions; it detaches the calling process
+    // from its console. Called once before the GUI event loop starts.
     unsafe {
         FreeConsole();
     }

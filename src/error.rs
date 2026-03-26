@@ -48,4 +48,41 @@ impl From<anyhow::Error> for PoponeError {
     }
 }
 
+impl From<zip::result::ZipError> for PoponeError {
+    fn from(e: zip::result::ZipError) -> Self {
+        PoponeError::Archive(format!("{e}"))
+    }
+}
+
+impl From<sevenz_rust2::Error> for PoponeError {
+    fn from(e: sevenz_rust2::Error) -> Self {
+        PoponeError::Archive(format!("{e}"))
+    }
+}
+
 pub type Result<T> = std::result::Result<T, PoponeError>;
+
+/// `anyhow::Context` 相当のヘルパートレイト。
+/// `Result<T, E>` に `.context("msg")` / `.with_context(|| "msg")` を提供する。
+pub trait ResultExt<T> {
+    fn context(self, msg: &str) -> Result<T>;
+    fn with_context<F: FnOnce() -> String>(self, f: F) -> Result<T>;
+}
+
+impl<T, E: std::fmt::Display> ResultExt<T> for std::result::Result<T, E> {
+    fn context(self, msg: &str) -> Result<T> {
+        self.map_err(|e| PoponeError::Other(format!("{msg}: {e}")))
+    }
+    fn with_context<F: FnOnce() -> String>(self, f: F) -> Result<T> {
+        self.map_err(|e| PoponeError::Other(format!("{}: {e}", f())))
+    }
+}
+
+impl<T> ResultExt<T> for Option<T> {
+    fn context(self, msg: &str) -> Result<T> {
+        self.ok_or_else(|| PoponeError::Other(msg.to_string()))
+    }
+    fn with_context<F: FnOnce() -> String>(self, f: F) -> Result<T> {
+        self.ok_or_else(|| PoponeError::Other(f()))
+    }
+}

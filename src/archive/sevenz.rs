@@ -1,6 +1,6 @@
 //! 7z アーカイブの展開（フィルタ付き全展開）
 
-use anyhow::Result;
+use crate::error::Result;
 use std::path::Path;
 
 use super::{normalize_archive_path, ArchiveEntry, MODEL_EXTENSIONS, TEXTURE_EXTENSIONS};

@@ -11,10 +11,10 @@ fn luminance(v: Vec3) -> f32 {
 /// shade/diffuse 輝度比に基づいてトゥーンテクスチャを選択する。
 /// 非 MToon は Shared(0) を維持（回帰防止）。
 fn select_toon(ir: &IrMaterial) -> PmxToonRef {
-    if !ir.is_mtoon {
+    if !ir.is_mtoon() {
         return PmxToonRef::Shared(0); // 非MToon: 現行動作を維持
     }
-    let Some(shade) = ir.shade_color else {
+    let Some(shade) = ir.mtoon().shade_color else {
         return PmxToonRef::Shared(2); // shade_color無し: toon03（中間）
     };
     // shade/diffuse 輝度比でトゥーンの硬さを決定
@@ -45,8 +45,8 @@ pub fn ir_material_to_pmx(ir: &IrMaterial, texture_index: Option<i32>) -> PmxMat
     };
 
     // MToon の場合: shade_color → ambient、specular 抑制
-    let (ambient, specular, specular_power) = if ir.is_mtoon {
-        let amb = if let Some(sc) = ir.shade_color {
+    let (ambient, specular, specular_power) = if ir.is_mtoon() {
+        let amb = if let Some(sc) = ir.mtoon().shade_color {
             sc * 0.5
         } else {
             Vec3::new(ir.diffuse.x * 0.4, ir.diffuse.y * 0.4, ir.diffuse.z * 0.4)
@@ -91,10 +91,7 @@ mod tests {
             edge_size: 0.5,
             texture_index: Some(0),
             cull_mode: crate::intermediate::types::CullMode::None,
-            is_mtoon: true,
-            shade_color: None,
-            shade_texture: None,
-            outline_width_texture: None,
+            mtoon: Some(crate::intermediate::types::MtoonParams::default()),
             source_texture_name: None,
             ..Default::default()
         }
@@ -168,30 +165,28 @@ mod tests {
     #[test]
     fn test_select_toon_shade_diffuse_ratio() {
         let mut mat = make_test_material();
-        mat.is_mtoon = true;
         mat.diffuse = Vec4::new(0.8, 0.8, 0.8, 1.0);
 
         // shade << diffuse → 硬い影 (Shared(0))
-        mat.shade_color = Some(glam::Vec3::new(0.1, 0.1, 0.1));
+        mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.1, 0.1, 0.1));
         assert_eq!(select_toon(&mat), PmxToonRef::Shared(0));
 
         // shade ≈ diffuse → 柔らかい影 (Shared(6))
-        mat.shade_color = Some(glam::Vec3::new(0.75, 0.75, 0.75));
+        mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.75, 0.75, 0.75));
         assert_eq!(select_toon(&mat), PmxToonRef::Shared(6));
 
         // shade_color 中間 → 中間トゥーン
-        mat.shade_color = Some(glam::Vec3::new(0.4, 0.4, 0.4));
+        mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.4, 0.4, 0.4));
         assert_eq!(select_toon(&mat), PmxToonRef::Shared(2));
 
         // 非MToon → Shared(0)（現行動作維持）
-        mat.is_mtoon = false;
+        mat.mtoon = None;
         assert_eq!(select_toon(&mat), PmxToonRef::Shared(0));
     }
 
     #[test]
     fn test_mtoon_specular_suppression() {
         let mut mat = make_test_material();
-        mat.is_mtoon = true;
         mat.specular = glam::Vec3::ONE;
         mat.specular_power = 25.0;
         let pmx = ir_material_to_pmx(&mat, None);
@@ -202,7 +197,7 @@ mod tests {
     #[test]
     fn test_non_mtoon_unchanged() {
         let mut mat = make_test_material();
-        mat.is_mtoon = false;
+        mat.mtoon = None;
         mat.specular = glam::Vec3::new(0.5, 0.5, 0.5);
         mat.specular_power = 25.0;
         mat.ambient = glam::Vec3::new(0.3, 0.3, 0.3);
@@ -217,8 +212,7 @@ mod tests {
     #[test]
     fn test_mtoon_no_shade_color() {
         let mut mat = make_test_material();
-        mat.is_mtoon = true;
-        mat.shade_color = None;
+        mat.mtoon_mut().shade_color = None;
         let pmx = ir_material_to_pmx(&mat, None);
         // shade_color無し → toon03（中間）
         assert_eq!(pmx.toon_ref, PmxToonRef::Shared(2));

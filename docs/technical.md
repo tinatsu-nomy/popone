@@ -102,7 +102,7 @@
     - [データフロー](#%E3%83%87%E3%83%BC%E3%82%BF%E3%83%95%E3%83%AD%E3%83%BC)
     - [入力検証 (`validate_groups`)](#%E5%85%A5%E5%8A%9B%E6%A4%9C%E8%A8%BC-validate_groups)
     - [entries 構築 (`build_entries`)](#entries-%E6%A7%8B%E7%AF%89-build_entries)
-    - [`MaterialGroup` 構造体（`viewer/app.rs`）](#materialgroup-%E6%A7%8B%E9%80%A0%E4%BD%93viewerapprs)
+    - [`MaterialGroup` 構造体（`viewer/app/mod.rs`）](#materialgroup-%E6%A7%8B%E9%80%A0%E4%BD%93viewerappmodrs)
   - [表示材質のみ出力](#%E8%A1%A8%E7%A4%BA%E6%9D%90%E8%B3%AA%E3%81%AE%E3%81%BF%E5%87%BA%E5%8A%9B)
     - [設計方針](#%E8%A8%AD%E8%A8%88%E6%96%B9%E9%87%9D)
     - [処理フロー（`build_filtered_ir`）](#%E5%87%A6%E7%90%86%E3%83%95%E3%83%AD%E3%83%BCbuild_filtered_ir)
@@ -708,7 +708,7 @@ rim += matcap_factor * textureSample(t_matcap, matcap_uv).rgb;
 
 ### VRM パラメータ対応
 
-| VRM 1.0 (`VRMC_materials_mtoon`) | VRM 0.0 (float_properties) | IrMaterial フィールド |
+| VRM 1.0 (`VRMC_materials_mtoon`) | VRM 0.0 (float_properties) | IrMaterial / MtoonParams フィールド |
 |---|---|---|
 | `shadeColorFactor` | `_ShadeColor` (vector) | `shade_color` |
 | `shadingToonyFactor` | `_ShadeToony` | `shading_toony_factor` |
@@ -1570,7 +1570,7 @@ PSD ファイルのレイヤーグループは **lsct (Section Divider Setting)*
 ### データフロー
 
 ```
-viewer/app.rs: MaterialGroup { name, material_range, draw_range }
+viewer/app/mod.rs: MaterialGroup { name, material_range, draw_range }
     ↓ (material_range のみ抽出)
 viewer/ui.rs: Vec<(String, Range<usize>)>
     ↓
@@ -1592,7 +1592,7 @@ PSD ファイル（レイヤーグループ付き）
 3. material index 降順で走査し、グループ境界で GroupEnd/GroupStart マーカーを挿入
 4. グループに属さない孤立材質はルート階層に出力
 
-### `MaterialGroup` 構造体（`viewer/app.rs`）
+### `MaterialGroup` 構造体（`viewer/app/mod.rs`）
 
 ```rust
 pub struct MaterialGroup {
@@ -1676,7 +1676,7 @@ loop {
 src/
 ├── main.rs              エントリポイント（引数なし or 出力未指定→ビューア / 出力指定→CLI変換）
 ├── lib.rs               ライブラリ API
-├── error.rs             エラー型定義（PoponeError enum、thiserror）
+├── error.rs             エラー型定義（PoponeError enum、thiserror、ResultExt トレイト）
 ├── unitypackage.rs      .unitypackage (tar.gz) アセット展開（VRM / FBX 検出・抽出）
 ├── archive/
 │   ├── mod.rs           ZIP / 7z 統一 API（list_models, extract_model_bundle）
@@ -1713,7 +1713,7 @@ src/
 ├── unity/
 │   └── animation.rs     Unity .anim Muscle 変換（SwingTwist 分解）
 ├── intermediate/
-│   ├── types.rs         中間表現（IrModel / IrBone / IrMesh / CullMode 等、SourceFormat / merge 2パス方式）
+│   ├── types.rs         中間表現（IrModel / IrBone / IrMesh / IrMaterial / MtoonParams / CullMode 等、SourceFormat / merge 2パス方式）
 │   ├── tangent.rs       MikkTSpace 接線生成（mikktspace crate）
 │   ├── animation.rs     アニメーション中間表現（VrmaAnimation / BoneChannel）
 │   └── pose.rs          スタンス変換（T→A / A→T、物理同期対応）
@@ -1726,7 +1726,12 @@ src/
 │   ├── texture.rs       テクスチャ PNG 書き出し
 │   └── uvmap.rs         UVマップ PSD 出力（材質レイヤー分け、境界ラップ、グループフォルダ対応）
 └── viewer/              ← feature = "viewer" 時のみコンパイル
-    ├── app.rs           eframe::App 状態管理（TextureState / AnimLibrary / PendingState / ExportState サブ構造体）
+    ├── app/             eframe::App 状態管理（5分割）
+    │   ├── mod.rs           ViewerApp 構造体定義・初期化・eframe::App impl
+    │   ├── file_io.rs       ファイル読み込み・D&D・リロード
+    │   ├── texture_mgmt.rs  テクスチャ割り当て・プレビュー
+    │   ├── pending.rs       遅延タスク処理（PendingState / ExportState）
+    │   └── helpers.rs       ユーティリティ型・関数（ReloadableSource / TextureSource / is_temp_path 等）
     ├── gpu.rs           wgpu パイプライン・オフスクリーン描画・可視化バッファ dirty flag
     ├── mesh.rs          IrModel → GPU 頂点バッファ変換
     ├── texture.rs       テクスチャ GPU アップロード（MIME ヒント対応）

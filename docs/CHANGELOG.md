@@ -8,6 +8,7 @@
     - [改善](#%E6%94%B9%E5%96%84)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3)
     - [実装詳細](#%E5%AE%9F%E8%A3%85%E8%A9%B3%E7%B4%B0)
+    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84)
   - [v0.2.8](#v028)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
     - [改善](#%E6%94%B9%E5%96%84-1)
@@ -20,16 +21,16 @@
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-2)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
     - [改善](#%E6%94%B9%E5%96%84-3)
-    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84)
+    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-1)
   - [v0.2.5](#v025)
     - [改善](#%E6%94%B9%E5%96%84-4)
-    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-1)
+    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-2)
   - [v0.2.4](#v024)
     - [改善](#%E6%94%B9%E5%96%84-5)
   - [v0.2.3](#v023)
     - [改善](#%E6%94%B9%E5%96%84-6)
   - [v0.2.2](#v022)
-    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-2)
+    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-3)
   - [FBX 対応](#fbx-%E5%AF%BE%E5%BF%9C)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -191,6 +192,20 @@
 - **半球 ambient（Sky/Ground 2色補間）** — 一様な灰色 ambient を法線Y成分による Sky/Ground 2色補間に変更（`mix(ground, sky, normal.y * 0.5 + 0.5)`）。SH9 の L1 成分（上下明暗差）を近似し、VRoidHub / UniVRM の `SampleSH(normal)` に近い環境光を実現。`gi_equalized` も `(sky + ground) / 2` に更新（UniVRM `(SH(up) + SH(down)) / 2` 準拠）。UI に Sky/Ground 各色のカラーピッカーを追加
 - **デフォルトライトモードを固定に変更** — `LightMode::CameraFollow` から `LightMode::Fixed` に変更。VRoidHub と同じ固定ディレクショナルライト環境がデフォルトに
 - **`KHR_materials_emissive_strength` 対応** — glTF の `emissiveFactor` は [0,1] 範囲に制限されるため、HDR emissive は `KHR_materials_emissive_strength` 拡張の `emissiveStrength` で倍率を指定する。UniVRM は `maxComponent > 1.0` 時にこの拡張を書き出すが、読み取り側で未対応だった。`extract.rs` で `emissiveStrength` を読み取り `emissive_factor` に乗算するよう修正
+
+### コード品質・パフォーマンス改善
+
+- **半透明ソート用作業バッファ再利用** — `render_to_texture` 内で毎フレーム `Vec<Vec3>`（重心）と `Vec<usize>`（ソート済みインデックス）をアロケーションしていた問題を修正。`GpuRenderer` に `work_draw_centers` / `work_sorted_indices` を作業バッファとして追加し、`std::mem::take` + 返却パターンで容量を維持しつつ借用衝突を回避
+- **半透明 DrawCall 重心の均等サンプリング** — 半透明ソート用の重心計算を全インデックス走査から均等間隔サンプリング（最大30点）に変更。30 index 以下は全走査、それ以上は `total / 30` ステップで均等にサンプリング。髪・スカート等の広がったメッシュでも空間的に代表性の高い重心を算出しつつ計算量を O(k) に抑制
+- **モーフ循環検出バッファ再利用** — `apply_gpu_morph_to` がモーフごとに `vec![false; N]` をアロケーションしていた問題を修正。`GpuModel` に `morph_visited: Vec<bool>` を追加し、`clear()` + `resize()` で再利用。`apply_gpu_morph_to` 関数を廃止し、呼び出し元が直接 `apply_gpu_morph_recursive` を使用
+- **`morph_work` / `animated_vertices` の swap 統合** — `apply_morphs` 内で `morph_work` → `animated_vertices` への `extend_from_slice` / `clone`（~1.9MB/フレーム）を `std::mem::swap` に置き換え。GPU 書き込みも swap 後の `animated_vertices` を参照するよう変更し、頂点バッファの冗長コピーを回避
+- **テクスチャ書き出しの clone 回避** — `convert/texture.rs` の `ImageBuffer::from_raw(w, h, tex.data.clone())` を `image::save_buffer(&out_path, &tex.data, ...)` に変更し、最大 64MB（4K RGBA）のデータクローンを完全に回避。`ImageBuffer` import を除去
+- **`convert_fbx_to_pmx` の `normalize_pose` 修正** — 公開 API `convert_fbx_to_pmx` が `options.normalize_pose` を `extract_ir_model_from_fbx` に渡していなかった問題を修正。`extract_ir_model_from_fbx_with_options` に切り替え
+- **`unsafe` ブロックの SAFETY コメント追加** — `main.rs`（`attach_parent_console` / `detach_console`）と `viewer/single_instance.rs`（全 Win32 API 呼び出し）の `unsafe` ブロック全箇所に `// SAFETY:` コメントを追加
+- **`IrMaterial` の MToon フィールド分離** — `IrMaterial` の 25 個の MToon 固有フィールドを新しい `MtoonParams` 構造体に移動し、`mtoon: Option<MtoonParams>` で保持。フィールド数を 35+ → 約 18 に削減。`is_mtoon()` / `mtoon()` / `mtoon_mut()` ヘルパーメソッドを追加（非 MToon 時は静的デフォルト値 `MTOON_DEFAULT` を返却）
+- **`viewer/app.rs` サブモジュール分割** — `app.rs` を責務ごとに 5 サブモジュールに分割: `mod.rs`（構造体定義・初期化・eframe::App impl）、`file_io.rs`（ファイル読み込み・D&D・リロード）、`texture_mgmt.rs`（テクスチャ割り当て・プレビュー）、`pending.rs`（遅延タスク処理）、`helpers.rs`（ユーティリティ型・関数）。外部 API は `pub use` で互換性維持
+- **`anyhow` → `PoponeError` 統一** — ライブラリ内部モジュール 19 ファイルで `anyhow::Result` → `crate::error::Result` に移行。`PoponeError` に 7 新バリアント（`FbxParse` / `PmxParse` / `PmdParse` / `Build` / `Archive` / `UnityPackage` / `Other`）を追加。`ResultExt` トレイト（`.context()` / `.with_context()` 互換）を追加。`main.rs` / `viewer/` は `anyhow` のまま維持
+- **非 MToon 材質の `render_queue_offset` 誤設定防止** — VRM 0.x `remap_vrm0_render_queue_offsets` で `mat.mtoon_mut()` を全材質に呼んでいたため、非 MToon 材質に `mtoon: Some(Default)` が生成され `is_mtoon()` が `true` になる問題を修正。`if let Some(ref mut mtoon) = mat.mtoon` に変更し MToon 材質のみに制限
 
 ## v0.2.8
 

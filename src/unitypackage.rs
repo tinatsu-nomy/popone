@@ -1,6 +1,6 @@
 //! .unitypackage (tar.gz) からアセットを抽出するモジュール
 
-use anyhow::{bail, Context, Result};
+use crate::error::{PoponeError, Result, ResultExt};
 use flate2::read::GzDecoder;
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
@@ -74,19 +74,19 @@ fn extract_all_assets_with_limit(
             "asset" => {
                 let entry_size = entry.header().size().unwrap_or(0);
                 if total_bytes.saturating_add(entry_size) > max_bytes {
-                    bail!(
+                    return Err(PoponeError::UnityPackage(format!(
                         ".unitypackage 展開サイズが上限 ({}MB) を超えました",
                         max_bytes / (1024 * 1024)
-                    );
+                    )));
                 }
                 let mut data = Vec::new();
                 entry.read_to_end(&mut data).context("asset読み込み失敗")?;
                 total_bytes += data.len() as u64;
                 if total_bytes > max_bytes {
-                    bail!(
+                    return Err(PoponeError::UnityPackage(format!(
                         ".unitypackage 展開サイズが上限 ({}MB) を超えました",
                         max_bytes / (1024 * 1024)
-                    );
+                    )));
                 }
                 assets.insert(guid, data);
             }
@@ -122,7 +122,9 @@ pub fn take_fbx_and_textures(
     fbx_index: usize,
 ) -> Result<FbxWithTextures> {
     if fbx_index >= assets.len() {
-        bail!("FBXインデックスが範囲外: {}", fbx_index);
+        return Err(PoponeError::UnityPackage(format!(
+            "FBXインデックスが範囲外: {fbx_index}"
+        )));
     }
 
     // FBX を取り出す
@@ -169,7 +171,9 @@ pub fn find_vrm_list(assets: &[ExtractedAsset]) -> Vec<(usize, String)> {
 /// assets は消費される（所有権移動）
 pub fn take_vrm(mut assets: Vec<ExtractedAsset>, vrm_index: usize) -> Result<(Vec<u8>, String)> {
     if vrm_index >= assets.len() {
-        bail!("VRMインデックスが範囲外: {}", vrm_index);
+        return Err(PoponeError::UnityPackage(format!(
+            "VRMインデックスが範囲外: {vrm_index}"
+        )));
     }
     let vrm_asset = assets.swap_remove(vrm_index);
     let vrm_name = vrm_asset.filename();
@@ -193,7 +197,9 @@ pub fn extract_fbx_from_unitypackage(
     let fbx_list = find_fbx_list(&assets);
 
     if fbx_list.is_empty() {
-        bail!(".unitypackage 内に FBX ファイルが見つかりません");
+        return Err(PoponeError::UnityPackage(
+            ".unitypackage 内に FBX ファイルが見つかりません".into(),
+        ));
     }
 
     // 複数ある場合はログ出力
@@ -215,7 +221,7 @@ pub fn extract_fbx_from_unitypackage(
             .find(|(_, name)| name.to_lowercase().contains(&target_lower))
             .map(|(idx, _)| *idx)
             .ok_or_else(|| {
-                anyhow::anyhow!(
+                PoponeError::UnityPackage(format!(
                     "指定された FBX '{}' が見つかりません。利用可能: {}",
                     target,
                     fbx_list
@@ -223,7 +229,7 @@ pub fn extract_fbx_from_unitypackage(
                         .map(|(_, n)| n.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
-                )
+                ))
             })?
     } else {
         fbx_list[0].0

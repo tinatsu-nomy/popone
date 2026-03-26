@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::{PoponeError, Result, ResultExt};
 use glam::{Mat3, Quat, Vec3};
 use std::collections::HashMap;
 use std::path::Path;
@@ -31,7 +31,7 @@ pub fn load_fbx_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
 
 /// FBXバイナリデータからアニメーションを読み込む
 pub fn load_fbx_animation_from_data(data: &[u8]) -> Result<Vec<VrmaAnimation>> {
-    let doc = super::parser::parse(data).with_context(|| "FBXパースに失敗")?;
+    let doc = super::parser::parse(data).context("FBXパースに失敗")?;
     let scene = FbxScene::from_document(&doc);
     let axis_config = read_axis_config(&doc);
 
@@ -151,7 +151,9 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
         .collect();
 
     if anim_stacks.is_empty() {
-        anyhow::bail!("FBXにアニメーションが含まれていません");
+        return Err(PoponeError::FbxParse(
+            "FBXにアニメーションが含まれていません".into(),
+        ));
     }
 
     // 各ボーンの PreRotation を収集（アニメーション回転にPreRotationを適用するため）
@@ -438,7 +440,9 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
     }
 
     if animations.is_empty() {
-        anyhow::bail!("FBXにアニメーションチャネルが含まれていません");
+        return Err(PoponeError::FbxParse(
+            "FBXにアニメーションチャネルが含まれていません".into(),
+        ));
     }
 
     Ok(animations)

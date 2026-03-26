@@ -332,23 +332,25 @@ impl IrModel {
             if let Some(ref mut ti) = mat.base_color_tex_info {
                 ti.offset_index(tex_offset);
             }
-            if let Some(ref mut ti) = mat.shade_texture {
-                ti.offset_index(tex_offset);
-            }
-            if let Some(ref mut ti) = mat.outline_width_texture {
-                ti.offset_index(tex_offset);
-            }
-            if let Some(ref mut ti) = mat.matcap_texture {
-                ti.offset_index(tex_offset);
-            }
-            if let Some(ref mut ti) = mat.shading_shift_texture {
-                ti.offset_index(tex_offset);
-            }
-            if let Some(ref mut ti) = mat.rim_multiply_texture {
-                ti.offset_index(tex_offset);
-            }
-            if let Some(ref mut ti) = mat.uv_animation_mask_texture {
-                ti.offset_index(tex_offset);
+            if let Some(ref mut m) = mat.mtoon {
+                if let Some(ref mut ti) = m.shade_texture {
+                    ti.offset_index(tex_offset);
+                }
+                if let Some(ref mut ti) = m.outline_width_texture {
+                    ti.offset_index(tex_offset);
+                }
+                if let Some(ref mut ti) = m.matcap_texture {
+                    ti.offset_index(tex_offset);
+                }
+                if let Some(ref mut ti) = m.shading_shift_texture {
+                    ti.offset_index(tex_offset);
+                }
+                if let Some(ref mut ti) = m.rim_multiply_texture {
+                    ti.offset_index(tex_offset);
+                }
+                if let Some(ref mut ti) = m.uv_animation_mask_texture {
+                    ti.offset_index(tex_offset);
+                }
             }
             if let Some(ref mut ti) = mat.emissive_texture {
                 ti.offset_index(tex_offset);
@@ -614,6 +616,99 @@ impl ColorChannel {
     }
 }
 
+/// MToon シェーダー固有パラメータ
+#[derive(Debug, Clone)]
+pub struct MtoonParams {
+    /// shadeColorFactor (デフォルト [0,0,0])
+    pub shade_color: Option<Vec3>,
+    /// shadeMultiplyTexture
+    pub shade_texture: Option<IrTextureInfo>,
+    /// shadingToonyFactor (0.0~1.0, 影境界の硬さ)
+    pub shading_toony_factor: f32,
+    /// shadingShiftFactor (-1.0~1.0, 影の閾値シフト)
+    pub shading_shift_factor: f32,
+    /// shadingShiftTexture (Rチャネル)
+    pub shading_shift_texture: Option<IrTextureInfo>,
+    /// shadingShiftTexture.scale (デフォルト 1.0)
+    pub shading_shift_texture_scale: f32,
+    /// アウトライン幅テクスチャ（glTFテクスチャIndex）
+    /// VRM 1.0: outlineWidthMultiplyTexture (Gチャネル)
+    /// VRM 0.0: _OutlineWidthTexture (Rチャネル)
+    pub outline_width_texture: Option<IrTextureInfo>,
+    /// outlineWidthTexture の参照チャネル（VRM 1.0=G, VRM 0.x=R）
+    pub outline_width_tex_channel: ColorChannel,
+    /// アウトライン幅モード（ビューア描画用）
+    pub outline_width_mode: OutlineWidthMode,
+    /// アウトライン幅の生値（world=メートル, screen=比率）
+    pub outline_width_factor: f32,
+    /// outlineLightingMixFactor (0.0=純色, 1.0=ライト混合)
+    pub outline_lighting_mix: f32,
+    /// parametricRimColorFactor (デフォルト [0,0,0])
+    pub parametric_rim_color: Vec3,
+    /// parametricRimFresnelPowerFactor (デフォルト 5.0)
+    pub parametric_rim_fresnel_power: f32,
+    /// parametricRimLiftFactor (デフォルト 0.0)
+    pub parametric_rim_lift: f32,
+    /// rimLightingMixFactor (0.0=放射, 1.0=ライト混合, デフォルト 1.0)
+    pub rim_lighting_mix: f32,
+    /// rimMultiplyTexture
+    pub rim_multiply_texture: Option<IrTextureInfo>,
+    /// giEqualizationFactor (0.0~1.0, GI均一化係数, デフォルト 0.9)
+    pub gi_equalization_factor: f32,
+    /// matcapFactor (デフォルト [1,1,1])
+    pub matcap_factor: Vec3,
+    /// matcapTexture
+    pub matcap_texture: Option<IrTextureInfo>,
+    /// uvAnimationScrollXSpeedFactor (デフォルト 0.0)
+    pub uv_animation_scroll_x_speed: f32,
+    /// uvAnimationScrollYSpeedFactor (デフォルト 0.0)
+    pub uv_animation_scroll_y_speed: f32,
+    /// uvAnimationRotationSpeedFactor (デフォルト 0.0)
+    pub uv_animation_rotation_speed: f32,
+    /// uvAnimationMaskTexture
+    pub uv_animation_mask_texture: Option<IrTextureInfo>,
+    /// uvAnimationMaskTexture の参照チャネル（VRM 1.0=B, VRM 0.x=R）
+    pub uv_anim_mask_tex_channel: ColorChannel,
+    /// renderQueueOffsetNumber（BLEND 内描画順オフセット）
+    pub render_queue_offset: i32,
+}
+
+impl Default for MtoonParams {
+    fn default() -> Self {
+        Self {
+            shade_color: None,
+            shade_texture: None,
+            shading_toony_factor: 0.9,
+            shading_shift_factor: 0.0,
+            shading_shift_texture: None,
+            shading_shift_texture_scale: 1.0,
+            outline_width_texture: None,
+            outline_width_tex_channel: ColorChannel::G,
+            outline_width_mode: OutlineWidthMode::None,
+            outline_width_factor: 0.0,
+            outline_lighting_mix: 1.0,
+            parametric_rim_color: Vec3::ZERO,
+            parametric_rim_fresnel_power: 5.0,
+            parametric_rim_lift: 0.0,
+            rim_lighting_mix: 1.0,
+            rim_multiply_texture: None,
+            gi_equalization_factor: 0.9,
+            matcap_factor: Vec3::ONE,
+            matcap_texture: None,
+            uv_animation_scroll_x_speed: 0.0,
+            uv_animation_scroll_y_speed: 0.0,
+            uv_animation_rotation_speed: 0.0,
+            uv_animation_mask_texture: None,
+            uv_anim_mask_tex_channel: ColorChannel::B,
+            render_queue_offset: 0,
+        }
+    }
+}
+
+/// 空の MtoonParams 定数（非MToon材質からのフィールドアクセス用）
+static MTOON_DEFAULT: std::sync::LazyLock<MtoonParams> =
+    std::sync::LazyLock::new(MtoonParams::default);
+
 /// 中間材質
 #[derive(Debug, Clone)]
 pub struct IrMaterial {
@@ -627,29 +722,11 @@ pub struct IrMaterial {
     pub base_color_tex_info: Option<IrTextureInfo>,
     /// カリングモード（Back=片面, None=両面, Front=前面カリング）
     pub cull_mode: CullMode,
-    pub is_mtoon: bool,
     /// エッジ（輪郭線）
     pub edge_color: Vec4,
     pub edge_size: f32,
-    /// MToon固有
-    pub shade_color: Option<Vec3>,
-    pub shade_texture: Option<IrTextureInfo>,
-    /// MToon shadingToonyFactor (0.0~1.0, 影境界の硬さ)
-    pub shading_toony_factor: f32,
-    /// MToon shadingShiftFactor (-1.0~1.0, 影の閾値シフト)
-    pub shading_shift_factor: f32,
-    /// アウトライン幅テクスチャ（glTFテクスチャIndex）
-    /// VRM 1.0: outlineWidthMultiplyTexture (Gチャネル)
-    /// VRM 0.0: _OutlineWidthTexture (Rチャネル)
-    pub outline_width_texture: Option<IrTextureInfo>,
-    /// outlineWidthTexture の参照チャネル（VRM 1.0=G, VRM 0.x=R）
-    pub outline_width_tex_channel: ColorChannel,
-    /// MToon アウトライン幅モード（ビューア描画用）
-    pub outline_width_mode: OutlineWidthMode,
-    /// MToon アウトライン幅の生値（world=メートル, screen=比率）
-    pub outline_width_factor: f32,
-    /// MToon outlineLightingMixFactor (0.0=純色, 1.0=ライト混合)
-    pub outline_lighting_mix: f32,
+    /// MToon シェーダー固有パラメータ（None = 非MToon材質）
+    pub mtoon: Option<MtoonParams>,
     /// FBX元テクスチャファイル名（一括割り当て用）
     pub source_texture_name: Option<String>,
     /// 材質の出自（RenderStyle 決定に使用）
@@ -662,42 +739,10 @@ pub struct IrMaterial {
     pub toon_texture_index: Option<usize>,
     /// 共有トゥーン番号 (0-9 = toon01-10)
     pub toon_shared_index: Option<u8>,
-    /// MToon parametricRimColorFactor (デフォルト [0,0,0])
-    pub parametric_rim_color: Vec3,
-    /// MToon parametricRimFresnelPowerFactor (デフォルト 5.0)
-    pub parametric_rim_fresnel_power: f32,
-    /// MToon parametricRimLiftFactor (デフォルト 0.0)
-    pub parametric_rim_lift: f32,
-    /// MToon rimLightingMixFactor (0.0=放射, 1.0=ライト混合, デフォルト 1.0)
-    pub rim_lighting_mix: f32,
-    /// MToon giEqualizationFactor (0.0~1.0, GI均一化係数, デフォルト 0.9)
-    pub gi_equalization_factor: f32,
-    /// MToon matcapFactor (デフォルト [1,1,1])
-    pub matcap_factor: Vec3,
-    /// MToon matcapTexture (glTFテクスチャIndex)
-    pub matcap_texture: Option<IrTextureInfo>,
-    /// MToon shadingShiftTexture (glTFテクスチャIndex、Rチャネル)
-    pub shading_shift_texture: Option<IrTextureInfo>,
-    /// MToon shadingShiftTexture.scale (デフォルト 1.0)
-    pub shading_shift_texture_scale: f32,
-    /// MToon rimMultiplyTexture (glTFテクスチャIndex)
-    pub rim_multiply_texture: Option<IrTextureInfo>,
-    /// MToon uvAnimationScrollXSpeedFactor (デフォルト 0.0)
-    pub uv_animation_scroll_x_speed: f32,
-    /// MToon uvAnimationScrollYSpeedFactor (デフォルト 0.0)
-    pub uv_animation_scroll_y_speed: f32,
-    /// MToon uvAnimationRotationSpeedFactor (デフォルト 0.0)
-    pub uv_animation_rotation_speed: f32,
-    /// MToon uvAnimationMaskTexture (glTFテクスチャIndex)
-    pub uv_animation_mask_texture: Option<IrTextureInfo>,
-    /// uvAnimationMaskTexture の参照チャネル（VRM 1.0=B, VRM 0.x=R）
-    pub uv_anim_mask_tex_channel: ColorChannel,
     /// アルファモード（glTF alphaMode + MToon transparentWithZWrite）
     pub alpha_mode: AlphaMode,
     /// MASK モード時のカットオフ閾値（glTF alphaCutoff, デフォルト 0.5）
     pub alpha_cutoff: f32,
-    /// MToon renderQueueOffsetNumber（BLEND 内描画順オフセット）
-    pub render_queue_offset: i32,
     /// glTF emissiveFactor (デフォルト [0,0,0])
     pub emissive_factor: Vec3,
     /// glTF emissiveTexture
@@ -709,6 +754,21 @@ pub struct IrMaterial {
 }
 
 impl IrMaterial {
+    /// MToon 材質かどうか
+    pub fn is_mtoon(&self) -> bool {
+        self.mtoon.is_some()
+    }
+
+    /// MToon パラメータへの参照（非MToon時はデフォルト値を返す）
+    pub fn mtoon(&self) -> &MtoonParams {
+        self.mtoon.as_ref().unwrap_or(&MTOON_DEFAULT)
+    }
+
+    /// MToon パラメータへの可変参照を取得（None の場合はデフォルト値で初期化）
+    pub fn mtoon_mut(&mut self) -> &mut MtoonParams {
+        self.mtoon.get_or_insert_with(MtoonParams::default)
+    }
+
     /// テクスチャ有り時の PMX 材質パラメータを設定
     pub fn apply_textured_defaults(&mut self) {
         let alpha = self.diffuse.w;
@@ -730,42 +790,17 @@ impl Default for IrMaterial {
             texture_index: None,
             base_color_tex_info: None,
             cull_mode: CullMode::Back,
-            is_mtoon: false,
             edge_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
             edge_size: 0.0,
-            shade_color: None,
-            shade_texture: None,
-            shading_toony_factor: 0.9,
-            shading_shift_factor: 0.0,
-            outline_width_texture: None,
-            outline_width_tex_channel: ColorChannel::G,
-            outline_width_mode: OutlineWidthMode::None,
-            outline_width_factor: 0.0,
-            outline_lighting_mix: 1.0,
+            mtoon: None,
             source_texture_name: None,
             source_format: SourceFormat::Vrm1,
             sphere_texture_index: None,
             sphere_mode: 0,
             toon_texture_index: None,
             toon_shared_index: None,
-            parametric_rim_color: Vec3::ZERO,
-            parametric_rim_fresnel_power: 5.0,
-            parametric_rim_lift: 0.0,
-            rim_lighting_mix: 1.0,
-            gi_equalization_factor: 0.9,
-            matcap_factor: Vec3::ONE,
-            matcap_texture: None,
-            shading_shift_texture: None,
-            shading_shift_texture_scale: 1.0,
-            rim_multiply_texture: None,
-            uv_animation_scroll_x_speed: 0.0,
-            uv_animation_scroll_y_speed: 0.0,
-            uv_animation_rotation_speed: 0.0,
-            uv_animation_mask_texture: None,
-            uv_anim_mask_tex_channel: ColorChannel::B,
             alpha_mode: AlphaMode::Opaque,
             alpha_cutoff: 0.5,
-            render_queue_offset: 0,
             emissive_factor: Vec3::ZERO,
             emissive_texture: None,
             normal_texture: None,

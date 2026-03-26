@@ -102,7 +102,7 @@
     - [Data Flow](#data-flow)
     - [Input Validation (`validate_groups`)](#input-validation-validate_groups)
     - [Entry Construction (`build_entries`)](#entry-construction-build_entries)
-    - [`MaterialGroup` Struct (`viewer/app.rs`)](#materialgroup-struct-viewerapprs)
+    - [`MaterialGroup` Struct (`viewer/app/mod.rs`)](#materialgroup-struct-viewerappmodrs)
   - [Visible Materials Only Export](#visible-materials-only-export)
     - [Design Principles](#design-principles)
     - [Processing Flow (`build_filtered_ir`)](#processing-flow-build_filtered_ir)
@@ -708,7 +708,7 @@ rim += matcap_factor * textureSample(t_matcap, matcap_uv).rgb;
 
 ### VRM Parameter Mapping
 
-| VRM 1.0 (`VRMC_materials_mtoon`) | VRM 0.0 (float_properties) | IrMaterial Field |
+| VRM 1.0 (`VRMC_materials_mtoon`) | VRM 0.0 (float_properties) | IrMaterial / MtoonParams Field |
 |---|---|---|
 | `shadeColorFactor` | `_ShadeColor` (vector) | `shade_color` |
 | `shadingToonyFactor` | `_ShadeToony` | `shading_toony_factor` |
@@ -1570,7 +1570,7 @@ PSD layer groups are implemented using the **lsct (Section Divider Setting)** re
 ### Data Flow
 
 ```
-viewer/app.rs: MaterialGroup { name, material_range, draw_range }
+viewer/app/mod.rs: MaterialGroup { name, material_range, draw_range }
     ↓ (extract material_range only)
 viewer/ui.rs: Vec<(String, Range<usize>)>
     ↓
@@ -1592,7 +1592,7 @@ PSD file (with layer groups)
 3. Iterate material indices in descending order, inserting GroupEnd/GroupStart markers at group boundaries
 4. Orphan materials (not in any group) appear at root level
 
-### `MaterialGroup` Struct (`viewer/app.rs`)
+### `MaterialGroup` Struct (`viewer/app/mod.rs`)
 
 ```rust
 pub struct MaterialGroup {
@@ -1676,7 +1676,7 @@ Collect `texture_index` and all `IrTextureInfo` fields (shade / outline_width / 
 src/
 ├── main.rs              Entry point (no args or no output specified → viewer / output specified → CLI conversion)
 ├── lib.rs               Library API
-├── error.rs             Error type definitions (PoponeError enum, thiserror)
+├── error.rs             Error type definitions (PoponeError enum, thiserror, ResultExt trait)
 ├── unitypackage.rs      .unitypackage (tar.gz) asset extraction (VRM / FBX detection and extraction)
 ├── archive/
 │   ├── mod.rs           ZIP / 7z unified API (list_models, extract_model_bundle)
@@ -1713,7 +1713,7 @@ src/
 ├── unity/
 │   └── animation.rs     Unity .anim Muscle conversion (SwingTwist decomposition)
 ├── intermediate/
-│   ├── types.rs         Intermediate representation (IrModel / IrBone / IrMesh / CullMode etc., SourceFormat / merge 2-pass method)
+│   ├── types.rs         Intermediate representation (IrModel / IrBone / IrMesh / IrMaterial / MtoonParams / CullMode etc., SourceFormat / merge 2-pass method)
 │   ├── tangent.rs       MikkTSpace tangent generation (mikktspace crate)
 │   ├── animation.rs     Animation intermediate representation (VrmaAnimation / BoneChannel)
 │   └── pose.rs          Stance conversion (T→A / A→T, physics sync support)
@@ -1726,7 +1726,12 @@ src/
 │   ├── texture.rs       Texture PNG output
 │   └── uvmap.rs         UV map PSD output (material layers, boundary wrap, group folders)
 └── viewer/              ← Compiled only when feature = "viewer"
-    ├── app.rs           eframe::App state management (TextureState / AnimLibrary / PendingState / ExportState sub-structs)
+    ├── app/             eframe::App state management (split into 5 modules)
+    │   ├── mod.rs           ViewerApp struct definition, initialization, eframe::App impl
+    │   ├── file_io.rs       File loading, drag & drop, reload
+    │   ├── texture_mgmt.rs  Texture assignment and preview
+    │   ├── pending.rs       Deferred task processing (PendingState / ExportState)
+    │   └── helpers.rs       Utility types and functions (ReloadableSource / TextureSource / is_temp_path etc.)
     ├── gpu.rs           wgpu pipeline / offscreen rendering / visualization buffer dirty flag
     ├── mesh.rs          IrModel → GPU vertex buffer conversion
     ├── texture.rs       Texture GPU upload (MIME hint support)

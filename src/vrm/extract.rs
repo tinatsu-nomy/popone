@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::Result;
 use glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
 use gltf::buffer::Data;
 use serde_json::Value;
@@ -543,9 +543,12 @@ fn extract_materials(
 
         // VRM 0.0 マテリアルプロパティ
         if let Some(v0_prop) = v0_mat_props.get(i) {
-            ir_mat.is_mtoon = v0_prop.shader.contains("MToon");
+            let v0_is_mtoon = v0_prop.shader.contains("MToon");
 
-            if ir_mat.is_mtoon {
+            if v0_is_mtoon {
+                ir_mat.mtoon = Some(MtoonParams::default());
+                let mtoon = ir_mat.mtoon.as_mut().unwrap();
+
                 // _OutlineWidthMode: 0=None, 1=WorldCoordinates, 2=ScreenCoordinates
                 let outline_mode = v0_prop
                     .float_properties
@@ -554,8 +557,8 @@ fn extract_materials(
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0) as i32;
 
-                // OutlineWidthMode を IrMaterial に保存（ビューア描画用）
-                ir_mat.outline_width_mode = match outline_mode {
+                // OutlineWidthMode を保存（ビューア描画用）
+                mtoon.outline_width_mode = match outline_mode {
                     1 => OutlineWidthMode::WorldCoordinates,
                     2 => OutlineWidthMode::ScreenCoordinates,
                     _ => OutlineWidthMode::None,
@@ -579,14 +582,14 @@ fn extract_materials(
                             // UniVRM MigrationMToonMaterial.cs 準拠:
                             // WorldCoordinates: w * 0.01 (cm→m)
                             // ScreenCoordinates: w * 0.01 * 0.5 (旧:縦半分の%値 → 新:縦全体の比率)
-                            ir_mat.outline_width_factor = match outline_mode {
+                            mtoon.outline_width_factor = match outline_mode {
                                 1 => w * 0.01,       // WorldCoordinates: メートル
                                 2 => w * 0.01 * 0.5, // ScreenCoordinates: 1/200 換算
                                 _ => 0.0,
                             };
                             ir_mat.edge_size = match outline_mode {
-                                1 => ir_mat.outline_width_factor * PMX_SCALE * 10.0,
-                                2 => ir_mat.outline_width_factor * 100.0,
+                                1 => mtoon.outline_width_factor * PMX_SCALE * 10.0,
+                                2 => mtoon.outline_width_factor * 100.0,
                                 _ => 0.0,
                             };
                         }
@@ -595,7 +598,7 @@ fn extract_materials(
                     // （ここでは設定しない: main_tex_st 伝播のため後段で統一処理）
                     // _OutlineLightingMix
                     if let Some(float_props) = &v0_prop.float_properties {
-                        ir_mat.outline_lighting_mix = float_props
+                        mtoon.outline_lighting_mix = float_props
                             .get("_OutlineLightingMix")
                             .and_then(|v| v.as_f64())
                             .unwrap_or(1.0)
@@ -785,8 +788,11 @@ fn extract_materials(
                     _ => CullMode::Back,
                 };
 
+                // 再取得（ir_mat のフィールドアクセス後に mtoon を再借用）
+                let mtoon = ir_mat.mtoon.as_mut().unwrap();
+
                 // _ShadeColor
-                ir_mat.shade_color = Some(srgb_vec3_to_linear(get_color3(
+                mtoon.shade_color = Some(srgb_vec3_to_linear(get_color3(
                     "_ShadeColor",
                     0.5,
                     0.5,
@@ -794,7 +800,7 @@ fn extract_materials(
                 )));
 
                 // _ShadeTexture（未設定時は _MainTex を使用: UniVRM 破壊的マイグレーション準拠）
-                ir_mat.shade_texture =
+                mtoon.shade_texture =
                     resolve_tex("_ShadeTexture", true).or_else(|| resolve_tex("_MainTex", true));
 
                 // _ShadeToony / _ShadeShift → UniVRM MigrateToShadingToony/Shift 変換式
@@ -802,9 +808,9 @@ fn extract_materials(
                 let shift_0x = get_float("_ShadeShift", 0.0);
                 let range_min = shift_0x;
                 let range_max = 1.0 + (shift_0x - 1.0) * toony_0x; // lerp(1, shift, toony)
-                ir_mat.shading_toony_factor =
+                mtoon.shading_toony_factor =
                     ((2.0 - (range_max - range_min)) * 0.5).clamp(0.0, 1.0);
-                ir_mat.shading_shift_factor =
+                mtoon.shading_shift_factor =
                     ((range_max + range_min) * 0.5 * -1.0).clamp(-1.0, 1.0);
 
                 // _BumpMap / _BumpScale（法線マップ）
@@ -820,55 +826,57 @@ fn extract_materials(
                 }
 
                 // _RimColor / _RimFresnelPower / _RimLift
-                ir_mat.parametric_rim_color =
+                // 再取得（ir_mat のフィールドアクセス後に mtoon を再借用）
+                let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                mtoon.parametric_rim_color =
                     srgb_vec3_to_linear(get_color3("_RimColor", 0.0, 0.0, 0.0));
-                ir_mat.parametric_rim_fresnel_power = get_float("_RimFresnelPower", 1.0);
-                ir_mat.parametric_rim_lift = get_float("_RimLift", 0.0);
+                mtoon.parametric_rim_fresnel_power = get_float("_RimFresnelPower", 1.0);
+                mtoon.parametric_rim_lift = get_float("_RimLift", 0.0);
                 // rimLightingMixFactor: UniVRM は破壊的マイグレーションで常に 1.0 に設定
-                ir_mat.rim_lighting_mix = 1.0;
+                mtoon.rim_lighting_mix = 1.0;
 
                 // _RimTexture → rimMultiplyTexture
-                ir_mat.rim_multiply_texture = resolve_tex("_RimTexture", true);
+                mtoon.rim_multiply_texture = resolve_tex("_RimTexture", true);
 
                 // _SphereAdd → matcapTexture（VRM 1.0 では MatCap に変換）
                 // MatCap は VRM 1.0 で ST 不要（UniVRM MigrationMToonMaterial 準拠）
                 if let Some(tex_info) = resolve_tex("_SphereAdd", false) {
-                    ir_mat.matcap_texture = Some(tex_info);
-                    ir_mat.matcap_factor = Vec3::ONE;
+                    mtoon.matcap_texture = Some(tex_info);
+                    mtoon.matcap_factor = Vec3::ONE;
                 } else {
-                    ir_mat.matcap_factor = Vec3::ZERO;
+                    mtoon.matcap_factor = Vec3::ZERO;
                 }
 
                 // _UvAnimScrollX / _UvAnimScrollY / _UvAnimRotation
-                ir_mat.uv_animation_scroll_x_speed = get_float("_UvAnimScrollX", 0.0);
+                mtoon.uv_animation_scroll_x_speed = get_float("_UvAnimScrollX", 0.0);
                 // Y 反転（UniVRM 準拠: invertY = -1）
-                ir_mat.uv_animation_scroll_y_speed = get_float("_UvAnimScrollY", 0.0) * -1.0;
+                mtoon.uv_animation_scroll_y_speed = get_float("_UvAnimScrollY", 0.0) * -1.0;
                 // 回転: rotations/sec → rad/sec（× 2π）
-                ir_mat.uv_animation_rotation_speed =
+                mtoon.uv_animation_rotation_speed =
                     get_float("_UvAnimRotation", 0.0) * std::f32::consts::TAU;
 
                 // _UvAnimMaskTexture（VRM 0.x: Rチャネル参照、UniVRM MToonCore.cginc:129 準拠）
-                ir_mat.uv_animation_mask_texture = resolve_tex("_UvAnimMaskTexture", true);
-                ir_mat.uv_anim_mask_tex_channel = ColorChannel::R;
+                mtoon.uv_animation_mask_texture = resolve_tex("_UvAnimMaskTexture", true);
+                mtoon.uv_anim_mask_tex_channel = ColorChannel::R;
 
                 // _OutlineWidthTexture（VRM 0.x: Rチャネル参照、UniVRM MToonCore.cginc:86 準拠）
                 // _MainTex ST 伝播: UniVRM MigrationMToonMaterial 準拠
                 if outline_mode != 0 {
-                    ir_mat.outline_width_texture = resolve_tex("_OutlineWidthTexture", true);
-                    ir_mat.outline_width_tex_channel = ColorChannel::R;
+                    mtoon.outline_width_texture = resolve_tex("_OutlineWidthTexture", true);
+                    mtoon.outline_width_tex_channel = ColorChannel::R;
                 }
 
                 // _OutlineColorMode: 0=FixedColor → outlineLightingMix=0.0, 1=MixedLighting → 元値使用
                 if outline_mode != 0 {
                     let outline_color_mode = get_float("_OutlineColorMode", 0.0) as i32;
                     if outline_color_mode == 0 {
-                        ir_mat.outline_lighting_mix = 0.0;
+                        mtoon.outline_lighting_mix = 0.0;
                     }
                 }
 
                 // _IndirectLightIntensity → giEqualizationFactor (UniVRM MigrationMToonMaterial.cs:231-232 準拠)
                 let gi_intensity = get_float("_IndirectLightIntensity", 0.1);
-                ir_mat.gi_equalization_factor = (1.0 - gi_intensity).clamp(0.0, 1.0);
+                mtoon.gi_equalization_factor = (1.0 - gi_intensity).clamp(0.0, 1.0);
             }
         }
 
@@ -909,24 +917,25 @@ fn extract_materials(
             let json = document.as_json();
             if let Some(mat_json) = json.materials.get(i) {
                 if let Some(exts) = &mat_json.extensions {
-                    if let Some(mtoon) = exts.others.get("VRMC_materials_mtoon") {
-                        ir_mat.is_mtoon = true;
+                    if let Some(mtoon_json) = exts.others.get("VRMC_materials_mtoon") {
+                        ir_mat.mtoon = Some(MtoonParams::default());
+                        let mp = ir_mat.mtoon.as_mut().unwrap();
 
                         // outlineWidthMode が "none" 以外ならエッジ有効
-                        let mode = mtoon
+                        let mode = mtoon_json
                             .get("outlineWidthMode")
                             .and_then(|v| v.as_str())
                             .unwrap_or("none");
 
                         // OutlineWidthMode を保存（ビューア描画用）
-                        ir_mat.outline_width_mode = match mode {
+                        mp.outline_width_mode = match mode {
                             "worldCoordinates" => OutlineWidthMode::WorldCoordinates,
                             "screenCoordinates" => OutlineWidthMode::ScreenCoordinates,
                             _ => OutlineWidthMode::None,
                         };
 
                         if mode != "none" {
-                            let width = mtoon
+                            let width = mtoon_json
                                 .get("outlineWidthFactor")
                                 .and_then(|v| v.as_f64())
                                 .unwrap_or(0.0) as f32;
@@ -940,10 +949,10 @@ fn extract_materials(
                             };
 
                             // ビューア用生値（メートル単位 / 比率）
-                            ir_mat.outline_width_factor = width;
+                            mp.outline_width_factor = width;
 
                             // outlineColorFactor [r,g,b] → Vec4(r,g,b,1.0)
-                            if let Some(color) = mtoon.get("outlineColorFactor") {
+                            if let Some(color) = mtoon_json.get("outlineColorFactor") {
                                 if let Some(arr) = color.as_array() {
                                     let r =
                                         arr.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
@@ -956,12 +965,12 @@ fn extract_materials(
                             }
 
                             // outlineWidthMultiplyTexture → Gチャネルで頂点エッジ倍率を制御
-                            if let Some(wtex) = mtoon.get("outlineWidthMultiplyTexture") {
-                                ir_mat.outline_width_texture = read_texture_info(wtex, document);
+                            if let Some(wtex) = mtoon_json.get("outlineWidthMultiplyTexture") {
+                                mp.outline_width_texture = read_texture_info(wtex, document);
                             }
 
                             // outlineLightingMixFactor (default: 1.0)
-                            ir_mat.outline_lighting_mix = mtoon
+                            mp.outline_lighting_mix = mtoon_json
                                 .get("outlineLightingMixFactor")
                                 .and_then(|v| v.as_f64())
                                 .unwrap_or(1.0)
@@ -969,15 +978,15 @@ fn extract_materials(
                         }
 
                         // giEqualizationFactor (default: 0.9)
-                        ir_mat.gi_equalization_factor = mtoon
+                        mp.gi_equalization_factor = mtoon_json
                             .get("giEqualizationFactor")
                             .and_then(|v| v.as_f64())
                             .unwrap_or(0.9)
                             as f32;
 
                         // shadeColorFactor (default: [0, 0, 0] — VRM 1.0 MToon 仕様準拠)
-                        ir_mat.shade_color = Some(
-                            mtoon
+                        mp.shade_color = Some(
+                            mtoon_json
                                 .get("shadeColorFactor")
                                 .and_then(|shade| shade.as_array())
                                 .map(|arr| {
@@ -991,108 +1000,106 @@ fn extract_materials(
                         );
 
                         // shadingToonyFactor (default: 0.9)
-                        ir_mat.shading_toony_factor = mtoon
+                        mp.shading_toony_factor = mtoon_json
                             .get("shadingToonyFactor")
                             .and_then(|v| v.as_f64())
                             .unwrap_or(0.9)
                             as f32;
 
                         // shadingShiftFactor (default: 0.0)
-                        ir_mat.shading_shift_factor = mtoon
+                        mp.shading_shift_factor = mtoon_json
                             .get("shadingShiftFactor")
                             .and_then(|v| v.as_f64())
                             .unwrap_or(0.0)
                             as f32;
 
                         // parametricRimColorFactor (default: [0,0,0])
-                        if let Some(rim) = mtoon.get("parametricRimColorFactor") {
+                        if let Some(rim) = mtoon_json.get("parametricRimColorFactor") {
                             if let Some(arr) = rim.as_array() {
                                 let r = arr.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                 let g = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                 let b = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                                ir_mat.parametric_rim_color = Vec3::new(r, g, b);
+                                mp.parametric_rim_color = Vec3::new(r, g, b);
                             }
                         }
 
                         // parametricRimFresnelPowerFactor (default: 5.0)
-                        ir_mat.parametric_rim_fresnel_power = mtoon
+                        mp.parametric_rim_fresnel_power = mtoon_json
                             .get("parametricRimFresnelPowerFactor")
                             .and_then(|v| v.as_f64())
                             .unwrap_or(5.0)
                             as f32;
 
                         // parametricRimLiftFactor (default: 0.0)
-                        ir_mat.parametric_rim_lift = mtoon
+                        mp.parametric_rim_lift = mtoon_json
                             .get("parametricRimLiftFactor")
                             .and_then(|v| v.as_f64())
-                            .unwrap_or(0.0)
-                            as f32;
+                            .unwrap_or(0.0) as f32;
 
                         // rimLightingMixFactor (default: 1.0)
-                        ir_mat.rim_lighting_mix = mtoon
+                        mp.rim_lighting_mix = mtoon_json
                             .get("rimLightingMixFactor")
                             .and_then(|v| v.as_f64())
-                            .unwrap_or(1.0)
-                            as f32;
+                            .unwrap_or(1.0) as f32;
 
                         // matcapFactor (default: [1,1,1])
-                        if let Some(mcf) = mtoon.get("matcapFactor") {
+                        if let Some(mcf) = mtoon_json.get("matcapFactor") {
                             if let Some(arr) = mcf.as_array() {
                                 let r = arr.first().and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
                                 let g = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
                                 let b = arr.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-                                ir_mat.matcap_factor = Vec3::new(r, g, b);
+                                mp.matcap_factor = Vec3::new(r, g, b);
                             }
                         }
 
                         // matcapTexture
-                        if let Some(mc_tex) = mtoon.get("matcapTexture") {
-                            ir_mat.matcap_texture = read_texture_info(mc_tex, document);
+                        if let Some(mc_tex) = mtoon_json.get("matcapTexture") {
+                            mp.matcap_texture = read_texture_info(mc_tex, document);
                         }
 
                         // shadeMultiplyTexture → shade_texture
-                        if let Some(tex) = mtoon.get("shadeMultiplyTexture") {
-                            ir_mat.shade_texture = read_texture_info(tex, document);
+                        if let Some(tex) = mtoon_json.get("shadeMultiplyTexture") {
+                            mp.shade_texture = read_texture_info(tex, document);
                         }
 
                         // shadingShiftTexture (Rチャネル) + scale
-                        if let Some(tex) = mtoon.get("shadingShiftTexture") {
-                            ir_mat.shading_shift_texture = read_texture_info(tex, document);
+                        if let Some(tex) = mtoon_json.get("shadingShiftTexture") {
+                            mp.shading_shift_texture = read_texture_info(tex, document);
                             if let Some(scale) = tex.get("scale").and_then(|v| v.as_f64()) {
-                                ir_mat.shading_shift_texture_scale = scale as f32;
+                                mp.shading_shift_texture_scale = scale as f32;
                             }
                         }
 
                         // rimMultiplyTexture
-                        if let Some(tex) = mtoon.get("rimMultiplyTexture") {
-                            ir_mat.rim_multiply_texture = read_texture_info(tex, document);
+                        if let Some(tex) = mtoon_json.get("rimMultiplyTexture") {
+                            mp.rim_multiply_texture = read_texture_info(tex, document);
                         }
 
                         // uvAnimation パラメータ
-                        ir_mat.uv_animation_scroll_x_speed = mtoon
+                        mp.uv_animation_scroll_x_speed = mtoon_json
                             .get("uvAnimationScrollXSpeedFactor")
                             .and_then(|v| v.as_f64())
                             .unwrap_or(0.0)
                             as f32;
-                        ir_mat.uv_animation_scroll_y_speed = mtoon
+                        mp.uv_animation_scroll_y_speed = mtoon_json
                             .get("uvAnimationScrollYSpeedFactor")
                             .and_then(|v| v.as_f64())
                             .unwrap_or(0.0)
                             as f32;
-                        ir_mat.uv_animation_rotation_speed = mtoon
+                        mp.uv_animation_rotation_speed = mtoon_json
                             .get("uvAnimationRotationSpeedFactor")
                             .and_then(|v| v.as_f64())
                             .unwrap_or(0.0)
                             as f32;
 
                         // uvAnimationMaskTexture
-                        if let Some(tex) = mtoon.get("uvAnimationMaskTexture") {
-                            ir_mat.uv_animation_mask_texture = read_texture_info(tex, document);
+                        if let Some(tex) = mtoon_json.get("uvAnimationMaskTexture") {
+                            mp.uv_animation_mask_texture = read_texture_info(tex, document);
                         }
 
                         // transparentWithZWrite: BLEND + ZWrite On
                         if ir_mat.alpha_mode == AlphaMode::Blend {
-                            let z_write = mtoon
+                            let z_write = mtoon_json
                                 .get("transparentWithZWrite")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false);
@@ -1102,11 +1109,11 @@ fn extract_materials(
                         }
 
                         // renderQueueOffsetNumber（BLEND 時のみ有効、仕様準拠 clamp）
-                        let raw_offset = mtoon
+                        let raw_offset = mtoon_json
                             .get("renderQueueOffsetNumber")
                             .and_then(|v| v.as_i64())
                             .unwrap_or(0) as i32;
-                        ir_mat.render_queue_offset = match ir_mat.alpha_mode {
+                        mp.render_queue_offset = match ir_mat.alpha_mode {
                             AlphaMode::Opaque | AlphaMode::Mask => 0,
                             AlphaMode::BlendWithZWrite => raw_offset.clamp(0, 9),
                             AlphaMode::Blend => raw_offset.clamp(-9, 0),
@@ -1115,8 +1122,8 @@ fn extract_materials(
                         log::debug!("材質[{}] \"{}\" is_mtoon=true, edge_size={:.3}, edge_color=({:.2},{:.2},{:.2},{:.2}), rim=({:.2},{:.2},{:.2}), matcap_tex={:?}",
                             i, ir_mat.name, ir_mat.edge_size,
                             ir_mat.edge_color.x, ir_mat.edge_color.y, ir_mat.edge_color.z, ir_mat.edge_color.w,
-                            ir_mat.parametric_rim_color.x, ir_mat.parametric_rim_color.y, ir_mat.parametric_rim_color.z,
-                            ir_mat.matcap_texture.as_ref().map(|t| t.index));
+                            mp.parametric_rim_color.x, mp.parametric_rim_color.y, mp.parametric_rim_color.z,
+                            mp.matcap_texture.as_ref().map(|t| t.index));
                     }
                 }
             }
@@ -1571,7 +1578,7 @@ fn extract_meshes(
                 // IrTextureInfo.index は image index に正規化済み
                 let mut vertices = vertices;
                 if let Some(ir_mat) = materials.get(material_index) {
-                    if let Some(tex_info) = ir_mat.outline_width_texture.as_ref() {
+                    if let Some(tex_info) = ir_mat.mtoon().outline_width_texture.as_ref() {
                         if let Some(img) = images.get(tex_info.index) {
                             for (local_vi, vtx) in vertices.iter_mut().enumerate() {
                                 let uv0 = Vec2::new(vtx.uv.x, vtx.uv.y);
@@ -1582,7 +1589,7 @@ fn extract_meshes(
                                     uv.x,
                                     uv.y,
                                     &tex_info.sampler,
-                                    ir_mat.outline_width_tex_channel,
+                                    ir_mat.mtoon().outline_width_tex_channel,
                                 );
                             }
                             let zero_count =
@@ -2102,27 +2109,29 @@ fn remap_vrm0_render_queue_offsets(
         .map(|(rank, &src)| (src, (rank as i32).clamp(0, 9)))
         .collect();
 
-    // 各材質に適用
+    // 各材質に適用（MToon 材質のみ — 非MToon に mtoon_mut() を呼ぶと誤って MToon 化される）
     for (i, mat) in materials.iter_mut().enumerate() {
         if let Some(v0_prop) = v0_mat_props.get(i) {
             if let Some(rq) = v0_prop.render_queue {
-                mat.render_queue_offset = match mat.alpha_mode {
-                    AlphaMode::Blend => {
-                        if (2951..=3000).contains(&rq) {
-                            *blend_map.get(&(rq - 3000)).unwrap_or(&0)
-                        } else {
-                            0
+                if let Some(ref mut mtoon) = mat.mtoon {
+                    mtoon.render_queue_offset = match mat.alpha_mode {
+                        AlphaMode::Blend => {
+                            if (2951..=3000).contains(&rq) {
+                                *blend_map.get(&(rq - 3000)).unwrap_or(&0)
+                            } else {
+                                0
+                            }
                         }
-                    }
-                    AlphaMode::BlendWithZWrite => {
-                        if (2501..=2550).contains(&rq) {
-                            *blend_zw_map.get(&(rq - 2501)).unwrap_or(&0)
-                        } else {
-                            0
+                        AlphaMode::BlendWithZWrite => {
+                            if (2501..=2550).contains(&rq) {
+                                *blend_zw_map.get(&(rq - 2501)).unwrap_or(&0)
+                            } else {
+                                0
+                            }
                         }
-                    }
-                    _ => 0,
-                };
+                        _ => 0,
+                    };
+                }
             }
         }
     }
@@ -2134,6 +2143,7 @@ mod tests {
     use crate::vrm::types_v0::VrmMaterialProperty;
 
     /// テスト用ヘルパー: 指定された alpha_mode と render_queue の材質・v0_prop ペアを生成
+    /// render_queue_offset は MToon 材質にのみ設定されるため、mtoon を初期化する
     fn make_test_data(
         entries: &[(AlphaMode, Option<i32>)],
     ) -> (Vec<IrMaterial>, Vec<VrmMaterialProperty>) {
@@ -2142,6 +2152,7 @@ mod tests {
         for (alpha, rq) in entries {
             let mut m = IrMaterial::default();
             m.alpha_mode = alpha.clone();
+            m.mtoon = Some(MtoonParams::default());
             mats.push(m);
             props.push(VrmMaterialProperty {
                 name: String::new(),
@@ -2162,7 +2173,7 @@ mod tests {
         // renderQueue=3000 (offset=0) が1つだけ → rank 0 → output 0
         let (mut mats, props) = make_test_data(&[(AlphaMode::Blend, Some(3000))]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
-        assert_eq!(mats[0].render_queue_offset, 0);
+        assert_eq!(mats[0].mtoon().render_queue_offset, 0);
     }
 
     #[test]
@@ -2175,9 +2186,9 @@ mod tests {
             (AlphaMode::Blend, Some(2995)),
         ]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
-        assert_eq!(mats[0].render_queue_offset, 0);
-        assert_eq!(mats[1].render_queue_offset, -1);
-        assert_eq!(mats[2].render_queue_offset, -2);
+        assert_eq!(mats[0].mtoon().render_queue_offset, 0);
+        assert_eq!(mats[1].mtoon().render_queue_offset, -1);
+        assert_eq!(mats[2].mtoon().render_queue_offset, -2);
     }
 
     #[test]
@@ -2190,9 +2201,9 @@ mod tests {
         ]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
         // source offsets: {-5, 0} → 降順 (0, -5) → rank (0, -1)
-        assert_eq!(mats[0].render_queue_offset, -1); // rq=2995 → offset=-5 → rank=-1
-        assert_eq!(mats[1].render_queue_offset, 0); // rq=3000 → offset=0 → rank=0
-        assert_eq!(mats[2].render_queue_offset, -1); // rq=2995 → offset=-5 → rank=-1
+        assert_eq!(mats[0].mtoon().render_queue_offset, -1); // rq=2995 → offset=-5 → rank=-1
+        assert_eq!(mats[1].mtoon().render_queue_offset, 0); // rq=3000 → offset=0 → rank=0
+        assert_eq!(mats[2].mtoon().render_queue_offset, -1); // rq=2995 → offset=-5 → rank=-1
     }
 
     #[test]
@@ -2204,9 +2215,9 @@ mod tests {
             (AlphaMode::Blend, Some(2000)),
         ]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
-        assert_eq!(mats[0].render_queue_offset, 0);
-        assert_eq!(mats[1].render_queue_offset, 0);
-        assert_eq!(mats[2].render_queue_offset, 0);
+        assert_eq!(mats[0].mtoon().render_queue_offset, 0);
+        assert_eq!(mats[1].mtoon().render_queue_offset, 0);
+        assert_eq!(mats[2].mtoon().render_queue_offset, 0);
     }
 
     #[test]
@@ -2219,9 +2230,9 @@ mod tests {
         remap_vrm0_render_queue_offsets(&mut mats, &props);
         // rank: 0, -1, -2, ..., -9, -9 (clamp)
         for i in 0..10 {
-            assert_eq!(mats[i].render_queue_offset, -(i as i32));
+            assert_eq!(mats[i].mtoon().render_queue_offset, -(i as i32));
         }
-        assert_eq!(mats[10].render_queue_offset, -9); // clamped
+        assert_eq!(mats[10].mtoon().render_queue_offset, -9); // clamped
     }
 
     #[test]
@@ -2234,9 +2245,9 @@ mod tests {
             (AlphaMode::BlendWithZWrite, Some(2510)),
         ]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
-        assert_eq!(mats[0].render_queue_offset, 0);
-        assert_eq!(mats[1].render_queue_offset, 1);
-        assert_eq!(mats[2].render_queue_offset, 2);
+        assert_eq!(mats[0].mtoon().render_queue_offset, 0);
+        assert_eq!(mats[1].mtoon().render_queue_offset, 1);
+        assert_eq!(mats[2].mtoon().render_queue_offset, 2);
     }
 
     #[test]
@@ -2248,9 +2259,9 @@ mod tests {
             (AlphaMode::BlendWithZWrite, Some(2510)),
         ]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
-        assert_eq!(mats[0].render_queue_offset, 1); // rq=2510 → offset=9 → rank=1
-        assert_eq!(mats[1].render_queue_offset, 0); // rq=2501 → offset=0 → rank=0
-        assert_eq!(mats[2].render_queue_offset, 1);
+        assert_eq!(mats[0].mtoon().render_queue_offset, 1); // rq=2510 → offset=9 → rank=1
+        assert_eq!(mats[1].mtoon().render_queue_offset, 0); // rq=2501 → offset=0 → rank=0
+        assert_eq!(mats[2].mtoon().render_queue_offset, 1);
     }
 
     #[test]
@@ -2262,9 +2273,9 @@ mod tests {
             (AlphaMode::BlendWithZWrite, Some(2600)),
         ]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
-        assert_eq!(mats[0].render_queue_offset, 0);
-        assert_eq!(mats[1].render_queue_offset, 0);
-        assert_eq!(mats[2].render_queue_offset, 0);
+        assert_eq!(mats[0].mtoon().render_queue_offset, 0);
+        assert_eq!(mats[1].mtoon().render_queue_offset, 0);
+        assert_eq!(mats[2].mtoon().render_queue_offset, 0);
     }
 
     #[test]
@@ -2276,9 +2287,9 @@ mod tests {
         let (mut mats, props) = make_test_data(&queues);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
         for i in 0..10 {
-            assert_eq!(mats[i].render_queue_offset, i as i32);
+            assert_eq!(mats[i].mtoon().render_queue_offset, i as i32);
         }
-        assert_eq!(mats[10].render_queue_offset, 9); // clamped
+        assert_eq!(mats[10].mtoon().render_queue_offset, 9); // clamped
     }
 
     #[test]
@@ -2288,8 +2299,8 @@ mod tests {
             (AlphaMode::Mask, Some(2501)),
         ]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
-        assert_eq!(mats[0].render_queue_offset, 0);
-        assert_eq!(mats[1].render_queue_offset, 0);
+        assert_eq!(mats[0].mtoon().render_queue_offset, 0);
+        assert_eq!(mats[1].mtoon().render_queue_offset, 0);
     }
 
     #[test]
@@ -2304,13 +2315,13 @@ mod tests {
         ]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
         // Blend offsets: {-2, 0} → 降順 (0, -2) → rank (0, -1)
-        assert_eq!(mats[0].render_queue_offset, -1); // rq=2998
-        assert_eq!(mats[2].render_queue_offset, 0); // rq=3000
-                                                    // BlendWithZWrite offsets: {0, 4} → 昇順 (0, 4) → rank (0, 1)
-        assert_eq!(mats[3].render_queue_offset, 0); // rq=2501
-        assert_eq!(mats[1].render_queue_offset, 1); // rq=2505
-                                                    // Opaque
-        assert_eq!(mats[4].render_queue_offset, 0);
+        assert_eq!(mats[0].mtoon().render_queue_offset, -1); // rq=2998
+        assert_eq!(mats[2].mtoon().render_queue_offset, 0); // rq=3000
+                                                            // BlendWithZWrite offsets: {0, 4} → 昇順 (0, 4) → rank (0, 1)
+        assert_eq!(mats[3].mtoon().render_queue_offset, 0); // rq=2501
+        assert_eq!(mats[1].mtoon().render_queue_offset, 1); // rq=2505
+                                                            // Opaque
+        assert_eq!(mats[4].mtoon().render_queue_offset, 0);
     }
 
     #[test]
@@ -2318,6 +2329,6 @@ mod tests {
         // render_queue が None → offset 変更なし（デフォルト 0 のまま）
         let (mut mats, props) = make_test_data(&[(AlphaMode::Blend, None)]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
-        assert_eq!(mats[0].render_queue_offset, 0);
+        assert_eq!(mats[0].mtoon().render_queue_offset, 0);
     }
 }

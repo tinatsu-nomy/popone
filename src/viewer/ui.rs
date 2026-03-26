@@ -1814,7 +1814,7 @@ fn write_convert_log(
             mat.name,
             mat.texture_index,
             mat.cull_mode != CullMode::Back,
-            mat.is_mtoon,
+            mat.is_mtoon(),
         );
     }
 

@@ -82,7 +82,12 @@ pub fn convert_fbx_to_pmx(
     options: &VrmConvertOptions,
 ) -> Result<ConvertStats> {
     let data = std::fs::read(input_path)?;
-    let ir = fbx::extract::extract_ir_model_from_fbx(&data, Some(input_path))?;
+    let ir = fbx::extract::extract_ir_model_from_fbx_with_options(
+        &data,
+        Some(input_path),
+        options.normalize_pose,
+        false,
+    )?;
     let build_options = PmxBuildOptions {
         align_rigid_rotation: options.align_rigid_rotation,
         no_physics: options.no_physics,

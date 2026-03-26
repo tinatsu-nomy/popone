@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{bail, Result};
+use crate::error::{PoponeError, Result};
 
 /// アーカイブ対応モデル拡張子（unitypackage も二重展開で対応）
 pub const MODEL_EXTENSIONS: &[&str] = &["vrm", "glb", "fbx", "pmx", "pmd", "unitypackage"];
@@ -105,7 +105,11 @@ pub fn normalize_archive_path(raw: &str) -> Result<PathBuf> {
         match c {
             Component::Normal(part) => out.push(part),
             Component::CurDir => {}
-            _ => bail!("安全でないアーカイブパス: {raw}"),
+            _ => {
+                return Err(PoponeError::Archive(format!(
+                    "安全でないアーカイブパス: {raw}"
+                )))
+            }
         }
     }
     Ok(out)
@@ -202,10 +206,9 @@ pub fn extract_model_bundle(
     contents: ArchiveContents,
     model_index: usize,
 ) -> Result<ModelBundle> {
-    let (_, model_path, _, kind) = contents
-        .models
-        .get(model_index)
-        .ok_or_else(|| anyhow::anyhow!("モデルインデックスが範囲外: {model_index}"))?;
+    let (_, model_path, _, kind) = contents.models.get(model_index).ok_or_else(|| {
+        PoponeError::Archive(format!("モデルインデックスが範囲外: {model_index}"))
+    })?;
     let model_path = model_path.clone();
     let kind = *kind;
 
@@ -234,7 +237,10 @@ fn extract_bundle_from_zip(
                 .into_iter()
                 .find(|e| e.path == model_path)
                 .ok_or_else(|| {
-                    anyhow::anyhow!("モデルファイルが展開できません: {}", model_path.display())
+                    PoponeError::Archive(format!(
+                        "モデルファイルが展開できません: {}",
+                        model_path.display()
+                    ))
                 })?;
 
             // テクスチャ参照パスを取得
@@ -271,7 +277,10 @@ fn extract_bundle_from_zip(
                 .into_iter()
                 .find(|e| e.path == model_path)
                 .ok_or_else(|| {
-                    anyhow::anyhow!("モデルファイルが展開できません: {}", model_path.display())
+                    PoponeError::Archive(format!(
+                        "モデルファイルが展開できません: {}",
+                        model_path.display()
+                    ))
                 })?;
             Ok(ModelBundle {
                 model: model_entry,
@@ -314,7 +323,7 @@ fn extract_bundle_from_zip(
 
             Ok(ModelBundle {
                 model: model_entry
-                    .ok_or_else(|| anyhow::anyhow!("モデルファイルが展開できません"))?,
+                    .ok_or_else(|| PoponeError::Archive("モデルファイルが展開できません".into()))?,
                 kind,
                 textures,
                 aux_files: HashMap::new(),
@@ -342,7 +351,10 @@ fn extract_bundle_from_entries(
     }
 
     let model_entry = model_entry.ok_or_else(|| {
-        anyhow::anyhow!("モデルファイルが見つかりません: {}", model_path.display())
+        PoponeError::Archive(format!(
+            "モデルファイルが見つかりません: {}",
+            model_path.display()
+        ))
     })?;
 
     match kind {

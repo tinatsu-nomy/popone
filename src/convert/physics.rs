@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::Result;
 use glam::Vec3;
 use std::collections::HashMap;
 

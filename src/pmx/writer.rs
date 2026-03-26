@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::Result;
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::Write;
 
