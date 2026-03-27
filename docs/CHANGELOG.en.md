@@ -6,12 +6,13 @@
   - [v0.2.10](#v0210)
     - [New Features](#new-features)
     - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
+    - [Bug Fixes](#bug-fixes)
     - [Improvements](#improvements)
     - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
   - [v0.2.9](#v029)
     - [New Features](#new-features-1)
     - [Improvements](#improvements-1)
-    - [Bug Fixes](#bug-fixes)
+    - [Bug Fixes](#bug-fixes-1)
     - [Implementation Details](#implementation-details)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
@@ -19,11 +20,11 @@
     - [Improvements](#improvements-2)
   - [v0.2.7](#v027)
     - [New Features](#new-features-3)
-    - [Bug Fixes](#bug-fixes-1)
+    - [Bug Fixes](#bug-fixes-2)
     - [Improvements](#improvements-3)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
-    - [Bug Fixes](#bug-fixes-2)
+    - [Bug Fixes](#bug-fixes-3)
     - [New Features](#new-features-4)
     - [Improvements](#improvements-4)
     - [Code Quality & Performance](#code-quality--performance-1)
@@ -70,8 +71,14 @@
 | `_GI_Intensity` | GI (safe default 0.0) |
 | `_CullMode` | Culling mode |
 
+### Bug Fixes
+
+- **Fixed outline/MMD edge rendering as solid faces in Wire mode** — In wireframe mode, outline pipelines (`PolygonMode::Fill`) and MMD edge pipelines were not skipped, causing solid faces to appear. Now skips outline drawing and switches MMD materials to wireframe pipeline in Wire mode
+
 ### Improvements
 
+- **Outline checkbox grayed out for non-MToon models** — "Outline drawing" checkbox is disabled (`ui.add_enabled`) for models without MToon outlines (PMD/PMX, etc.). Non-functional UI elements are now clearly non-interactive
+- **Light settings color button alignment** — HSV color wheel buttons for Light, Ambient, and Ground are now column-aligned using `egui::Grid` layout. Previously, width differences between sliders and labels caused button misalignment
 - **UTS2 alpha mode detection** — Shader variant name-based (`_TransClipping` → Blend, `_Clipping` → Mask). Falls back to glTF core `alpha_mode`
 - **UTS2 outline POS mode** — POS outline approximated as WorldCoordinates (differs from MToon ScreenCoordinates), with warning
 - **UTS2 ClippingMask warning** — Warning for unsupported `_ClippingMask` texture, falls back to base alpha

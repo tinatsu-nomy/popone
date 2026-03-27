@@ -3544,7 +3544,9 @@ impl GpuRenderer {
                         );
 
                         // BLEND/BlendZWrite: サーフェス直後にアウトライン描画（インターリーブ）
+                        // Wire モードではアウトライン（ソリッド面）をスキップ
                         if interleave_outline
+                            && !use_wireframe
                             && params.display.outline_enabled
                             && draw.render_style == super::mesh::RenderStyle::Standard
                             && draw.has_outline
@@ -3581,7 +3583,8 @@ impl GpuRenderer {
                     }
 
                     // OPAQUE/MASK: アウトラインをフェーズ後にまとめて描画
-                    if !interleave_outline && params.display.outline_enabled {
+                    // Wire モードではアウトライン（ソリッド面）をスキップ
+                    if !interleave_outline && !use_wireframe && params.display.outline_enabled {
                         for &draw_idx in &work_sorted_indices {
                             let draw = &model.draws[draw_idx];
                             if draw.render_queue != *target_queue {
@@ -3673,6 +3676,8 @@ impl GpuRenderer {
                 pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
                 pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
 
+                let use_wireframe = params.display.draw_mode == DrawMode::Wireframe
+                    && ps.pipeline_wireframe.is_some();
                 let can_edge = mmd_edge_enabled
                     && model.edge_scale_buf.is_some()
                     && ps.pipeline_mmd_edge.is_some();
@@ -3692,41 +3697,66 @@ impl GpuRenderer {
                         continue;
                     }
 
-                    // 不透明 / 半透明 × カリングモードでパイプラインを切り替え
-                    // MMD は Front cull 未対応のため Back 以外は no_cull
-                    let is_no_cull = draw.cull_mode != CullMode::Back;
-                    if draw.is_alpha {
-                        if is_no_cull {
-                            pass.set_pipeline(ps.pipeline_mmd_alpha_no_cull.as_ref().unwrap());
-                        } else {
-                            pass.set_pipeline(ps.pipeline_mmd_alpha_cull.as_ref().unwrap());
-                        }
-                    } else if is_no_cull {
-                        pass.set_pipeline(ps.pipeline_mmd_main_no_cull.as_ref().unwrap());
+                    // Wire モードではワイヤーフレームパイプラインを使用
+                    if use_wireframe {
+                        pass.set_pipeline(
+                            ps.pipeline_wireframe
+                                .as_ref()
+                                .expect("wireframe パイプラインは supports_wireframe チェック済み"),
+                        );
                     } else {
-                        pass.set_pipeline(ps.pipeline_mmd_main_cull.as_ref().unwrap());
+                        // 不透明 / 半透明 × カリングモードでパイプラインを切り替え
+                        // MMD は Front cull 未対応のため Back 以外は no_cull
+                        let is_no_cull = draw.cull_mode != CullMode::Back;
+                        if draw.is_alpha {
+                            if is_no_cull {
+                                pass.set_pipeline(ps.pipeline_mmd_alpha_no_cull.as_ref().unwrap());
+                            } else {
+                                pass.set_pipeline(ps.pipeline_mmd_alpha_cull.as_ref().unwrap());
+                            }
+                        } else if is_no_cull {
+                            pass.set_pipeline(ps.pipeline_mmd_main_no_cull.as_ref().unwrap());
+                        } else {
+                            pass.set_pipeline(ps.pipeline_mmd_main_cull.as_ref().unwrap());
+                        }
                     }
                     pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                    let tex_bg = draw
-                        .mmd_texture_bind_group
-                        .as_ref()
-                        .or(draw.texture_bind_group.as_ref())
-                        .unwrap_or(&self.default_tex_bind_group);
-                    pass.set_bind_group(1, tex_bg, &[]);
-                    pass.set_bind_group(2, draw.mmd_material_bind_group.as_ref().unwrap(), &[]);
-                    let aux_bg = draw
-                        .mmd_aux_bind_group
-                        .as_ref()
-                        .unwrap_or(&self.default_mmd_aux_bind_group);
-                    pass.set_bind_group(3, aux_bg, &[]);
+                    if use_wireframe {
+                        // Wire モードでは標準バインドグループを使用
+                        // （wireframe パイプラインは標準 pipeline_layout）
+                        let tex_bg = draw
+                            .texture_bind_group
+                            .as_ref()
+                            .unwrap_or(&self.default_tex_bind_group);
+                        pass.set_bind_group(1, tex_bg, &[]);
+                        pass.set_bind_group(2, &draw.material_bind_group, &[]);
+                        let mtoon_aux_bg = draw
+                            .mtoon_aux_bind_group
+                            .as_ref()
+                            .unwrap_or(&self.default_mtoon_aux_bind_group);
+                        pass.set_bind_group(3, mtoon_aux_bg, &[]);
+                    } else {
+                        let tex_bg = draw
+                            .mmd_texture_bind_group
+                            .as_ref()
+                            .or(draw.texture_bind_group.as_ref())
+                            .unwrap_or(&self.default_tex_bind_group);
+                        pass.set_bind_group(1, tex_bg, &[]);
+                        pass.set_bind_group(2, draw.mmd_material_bind_group.as_ref().unwrap(), &[]);
+                        let aux_bg = draw
+                            .mmd_aux_bind_group
+                            .as_ref()
+                            .unwrap_or(&self.default_mmd_aux_bind_group);
+                        pass.set_bind_group(3, aux_bg, &[]);
+                    }
                     pass.draw_indexed(
                         draw.index_offset..(draw.index_offset + draw.index_count),
                         0,
                         0..1,
                     );
 
-                    // 不透明材質のエッジをその場で描画
-                    if can_edge && !draw.is_alpha && draw.has_edge {
+                    // 不透明材質のエッジをその場で描画（Wire モードではスキップ）
+                    if !use_wireframe && can_edge && !draw.is_alpha && draw.has_edge {
                         if let Some(ref mmd_mat_bg) = draw.mmd_material_bind_group {
                             let edge_scale_buf = model.edge_scale_buf.as_ref().unwrap();
                             let edge_pipeline = ps.pipeline_mmd_edge.as_ref().unwrap();

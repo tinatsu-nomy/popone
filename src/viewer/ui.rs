@@ -983,18 +983,24 @@ fn show_tab_display(
         app.display.ambient_ground_color = d.ambient_ground_color;
         app.display.bg_brightness = d.bg_brightness;
     }
-    ui.horizontal(|ui| {
-        ui.add(egui::Slider::new(&mut app.display.light_intensity, 0.0..=2.0).text("ライト"));
-        color_wheel_button_rgb(ui, "light_color", &mut app.display.light_color);
-    });
-    ui.horizontal(|ui| {
-        ui.add(egui::Slider::new(&mut app.display.ambient_intensity, 0.0..=1.0).text("環境光"));
-        color_wheel_button_rgb(ui, "ambient_sky", &mut app.display.ambient_sky_color);
-    });
-    ui.horizontal(|ui| {
-        ui.label("  Ground");
-        color_wheel_button_rgb(ui, "ambient_ground", &mut app.display.ambient_ground_color);
-    });
+    // ライト・環境光・Ground のカラーボタン位置を Grid で揃える
+    egui::Grid::new("light_color_grid")
+        .num_columns(2)
+        .show(ui, |ui| {
+            ui.add(egui::Slider::new(&mut app.display.light_intensity, 0.0..=2.0).text("ライト"));
+            color_wheel_button_rgb(ui, "light_color", &mut app.display.light_color);
+            ui.end_row();
+
+            ui.add(egui::Slider::new(&mut app.display.ambient_intensity, 0.0..=1.0).text("環境光"));
+            color_wheel_button_rgb(ui, "ambient_sky", &mut app.display.ambient_sky_color);
+            ui.end_row();
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label("Ground");
+            });
+            color_wheel_button_rgb(ui, "ambient_ground", &mut app.display.ambient_ground_color);
+            ui.end_row();
+        });
     ui.add(egui::Slider::new(&mut app.display.bg_brightness, 0.0..=1.0).text("背景"));
     ui.checkbox(&mut app.display.show_grid, "グリッド表示 (G)");
 
@@ -1070,7 +1076,17 @@ fn show_tab_display(
             .any(|d| d.mmd_material_bind_group.is_some())
     });
     ui.separator();
-    ui.checkbox(&mut app.display.outline_enabled, "アウトライン描画");
+    // MToon アウトラインを持つ Standard draw があるかで有効判定
+    let has_outline_draws = app.loaded.as_ref().is_some_and(|l| {
+        l.gpu_model
+            .draws
+            .iter()
+            .any(|d| d.render_style == super::mesh::RenderStyle::Standard && d.has_outline)
+    });
+    ui.add_enabled(
+        has_outline_draws,
+        egui::Checkbox::new(&mut app.display.outline_enabled, "アウトライン描画"),
+    );
 
     if has_mmd_capability {
         ui.checkbox(&mut app.display.mmd_mode, "MMD レンダリング");

@@ -61,7 +61,7 @@ If the viewer is already running, subsequent launches pass the file path to the 
 - **Texture Assignment** — Assign external textures (PNG/JPG/TGA/BMP/PSD) via drag & drop or dialog. Real-time preview. VRM embedded texture replacement supported (reset button to restore)
 - **Same-Name Material Linking** — ON/OFF toggle to assign textures to all materials sharing the same name simultaneously
 - **UnityPackage Support** — VRM / FBX model selection dialog, auto texture matching (manual assignment with thumbnail preview and search filter)
-- **Wireframe** — 3 modes (Solid / Wire / S+W). W key to cycle
+- **Wireframe** — 3 modes (Solid / Wire / S+W). W key to cycle. Wire mode unifies all rendering (including outlines and MMD edges) into wireframe
 - **Bone Display** — Flag-based shape rendering. Normal = ◎ (double circle + filled center), Move = ◻ (square + filled center), Axis-fixed = ⊗ (circle + ✕), IK Controller = ◻ (blue outline + orange fill + blue center). IK-affected bones (Link) in orange. Tail-based drawing for PMXEditor-compliant direction display. Constant screen-space size
 - **Physics Visualization** — Rigid bodies (sphere/capsule/box) in 1px wireframe. PMX/PMD colored by physics_mode (bone-follow = green, physics = red, physics+bone = blue), VRM colored by group (collider = red, spring = green). Capsules include hemisphere wireframes (PMX/PMD)
 - **Joint Display** — PMX/PMD joints visualized as yellow cubes (rotation-aware, animation-synced). Adjustable opacity
@@ -102,7 +102,7 @@ If the viewer is already running, subsequent launches pass the file path to the 
 - **MMD Rendering** — Toon shading (shared toon01-10 + individual toon), Blinn-Phong specular, sphere maps (multiply/add), edge drawing (inverted hull method, toggle/thickness adjustable)
 - **T-Stance Conversion** — Convert A-stance models to T-stance (bones, mesh, morphs, rigid bodies, joints synced)
 - **VRMA Animation** — Auto-mapping from PMX Japanese bone names to VRM humanoid names enables VRMA animation playback. Supports rotation/move grants, so D-bones (leg D, etc.) correctly follow FK animations
-- **UI Restrictions** — PMX conversion button, normal smoothing, and custom normal clear are grayed out when PMX/PMD is loaded
+- **UI Restrictions** — PMX conversion button, normal smoothing, and custom normal clear are grayed out when PMX/PMD is loaded. "Outline drawing" checkbox is also grayed out for models without MToon outlines
 - **Comment Display** — PMX/PMD comments shown in model info panel
 
 ### Changelog

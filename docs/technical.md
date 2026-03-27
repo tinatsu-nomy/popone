@@ -47,6 +47,7 @@
     - [ボーン表示](#%E3%83%9C%E3%83%BC%E3%83%B3%E8%A1%A8%E7%A4%BA-1)
     - [剛体表示](#%E5%89%9B%E4%BD%93%E8%A1%A8%E7%A4%BA)
     - [ジョイント表示（PMX/PMD のみ）](#%E3%82%B8%E3%83%A7%E3%82%A4%E3%83%B3%E3%83%88%E8%A1%A8%E7%A4%BApmxpmd-%E3%81%AE%E3%81%BF)
+    - [ワイヤーフレーム描画モード](#%E3%83%AF%E3%82%A4%E3%83%A4%E3%83%BC%E3%83%95%E3%83%AC%E3%83%BC%E3%83%A0%E6%8F%8F%E7%94%BB%E3%83%A2%E3%83%BC%E3%83%89)
     - [法線マップ表示](#%E6%B3%95%E7%B7%9A%E3%83%9E%E3%83%83%E3%83%97%E8%A1%A8%E7%A4%BA)
     - [法線マップ接線空間（TBN）](#%E6%B3%95%E7%B7%9A%E3%83%9E%E3%83%83%E3%83%97%E6%8E%A5%E7%B7%9A%E7%A9%BA%E9%96%93tbn)
     - [描画順](#%E6%8F%8F%E7%94%BB%E9%A0%86)
@@ -881,6 +882,15 @@ if material.alpha_cutoff < -0.75 {
 - 回転: Euler YXZ intrinsic（= ZXY extrinsic）→ Quat で姿勢反映
 - アニメーション同期: rigid_a のボーンからのオフセットで追従
 - 濃さ: スライダーで調整可能
+
+### ワイヤーフレーム描画モード
+
+- `DrawMode` enum: `Solid` / `Wireframe` / `SolidWireframe`
+- **Solid**: 通常のソリッド描画（`PolygonMode::Fill`）
+- **Wire**: `pipeline_wireframe`（`PolygonMode::Line`、cull_mode=None）で全メッシュを描画。アウトライン描画（`pipeline_outline*`）と MMD エッジ描画（`pipeline_mmd_edge`）はスキップ。MMD 材質もワイヤーフレームパイプラインに切り替え（標準 bind group layout を使用）
+- **S+W**: ソリッド描画後にワイヤーフレームオーバーレイ（`pipeline_wire_overlay`、depth bias -2 で Z ファイティング回避、黒色半透明）
+- GPU 機能 `POLYGON_MODE_LINE` 非対応時は Wire / S+W を無効化（UI 非表示）
+- 「アウトライン描画」チェックボックスは MToon アウトラインを持つ `RenderStyle::Standard` draw が存在する場合のみ有効。PMD/PMX（`RenderStyle::Mmd`）ではグレーアウト
 
 ### 法線マップ表示
 

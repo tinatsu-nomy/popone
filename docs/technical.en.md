@@ -47,6 +47,7 @@
     - [Bone Display](#bone-display-1)
     - [Rigid Body Display](#rigid-body-display)
     - [Joint Display (PMX/PMD only)](#joint-display-pmxpmd-only)
+    - [Wireframe Draw Modes](#wireframe-draw-modes)
     - [Normal Map Display](#normal-map-display)
     - [Normal Map Tangent Space (TBN)](#normal-map-tangent-space-tbn)
     - [Render Order](#render-order)
@@ -881,6 +882,15 @@ if material.alpha_cutoff < -0.75 {
 - Rotation: Euler YXZ intrinsic (= ZXY extrinsic) → Quat for pose reflection
 - Animation sync: Follows via offset from rigid_a's bone
 - Opacity: Adjustable via slider
+
+### Wireframe Draw Modes
+
+- `DrawMode` enum: `Solid` / `Wireframe` / `SolidWireframe`
+- **Solid**: Normal solid rendering (`PolygonMode::Fill`)
+- **Wire**: All meshes drawn with `pipeline_wireframe` (`PolygonMode::Line`, cull_mode=None). Outline rendering (`pipeline_outline*`) and MMD edge rendering (`pipeline_mmd_edge`) are skipped. MMD materials also switch to wireframe pipeline (using standard bind group layout)
+- **S+W**: Solid rendering followed by wireframe overlay (`pipeline_wire_overlay`, depth bias -2 to avoid Z-fighting, semi-transparent black)
+- Wire / S+W disabled when GPU feature `POLYGON_MODE_LINE` is unavailable (hidden in UI)
+- "Outline drawing" checkbox is only enabled when `RenderStyle::Standard` draws with MToon outlines exist. Grayed out for PMD/PMX (`RenderStyle::Mmd`)
 
 ### Normal Map Display
 
