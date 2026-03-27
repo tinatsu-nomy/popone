@@ -73,6 +73,11 @@
 
 ### バグ修正
 
+- **PMX/PMD モーフが正しく動作しない問題を修正** — v0.2.9 で追加した `generate_tangents`（MikkTSpace 接線生成）が tangent w 不一致時に頂点を分割するが、モーフパイプラインと整合していなかった。3つのバグを修正:
+  1. `ir_vertex_offset` が分割前の頂点数で加算 → 後続メッシュのグローバルインデックスがずれる
+  2. `ir.morphs` が `pmx_to_ir_vertex` ベースで構築 → 分割頂点がモーフに含まれない
+  3. `distribute_vertex_morphs` の面巻き順が `extract_meshes` と不一致 → ローカルインデックスがずれる
+  - 修正: 処理順を `mesh構築 → morph_targets分配 → generate_tangents（分割+morph複製）` に変更し、`ir.morphs` を `mesh.morph_targets` から構築するよう変更。PMD にも同パターン適用
 - **Wire モードでアウトライン・MMDエッジが面として描画される問題を修正** — ワイヤーフレームモード時にアウトラインパイプライン（`PolygonMode::Fill`）と MMD エッジパイプラインがスキップされず、ソリッド面が表示されていた。Wire モード時はアウトライン描画をスキップし、MMD 材質もワイヤーフレームパイプラインに切り替えるよう修正
 
 ### 改善
@@ -85,6 +90,9 @@
 - **ambient 上書き抑止** — UTS2 材質では `_2nd_ShadeColor` で設定した ambient が抽出末尾の `diffuse * 0.4` 再計算で上書きされないよう抑止
 - **PMX 変換 UTS2 分岐** — UTS2 材質では HighColor → specular、2nd_ShadeColor → ambient をそのまま PMX に出力（MToon の specular 抑制をスキップ）
 - **VRM 0.x ヘルパー共通化** — `get_float` / `get_color3` / `resolve_tex` / `main_tex_st` を MToon/UTS2 共通ヘルパーに整理。`adopt_main_tex` で `_MainTex` authoritative 処理を一箇所に集約
+- **MMD シェーダーにライト色・強度を反映** — MMD レンダリングモードの AmbientColor/SpecularColor 計算にライト色（`light_color`）と強度（`light_intensity`）を乗算。従来は固定スカラー（154/255 ≈ 0.604）のみで色・強度の変更が反映されなかった。デフォルト値（白・0.7）では従来と同一結果
+- **MToon 材質の PMX スペキュラー付与** — MToon 材質の PMX 出力で specular を完全ゼロから `diffuse × 0.2`（power=10）に変更。MMD でライト方向変更時にハイライトが反応するようになった
+- **MMD モードで環境光 UI をグレーアウト** — MMD の仕様上 LightAmbient がシーン環境光を兼ねるため、MMD モード時は環境光スライダー・Sky色・Ground色を操作不可にして混乱を防止
 
 ### v0.2.10 未対応（将来対応）
 

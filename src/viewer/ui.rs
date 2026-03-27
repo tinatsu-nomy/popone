@@ -991,14 +991,25 @@ fn show_tab_display(
             color_wheel_button_rgb(ui, "light_color", &mut app.display.light_color);
             ui.end_row();
 
-            ui.add(egui::Slider::new(&mut app.display.ambient_intensity, 0.0..=1.0).text("環境光"));
-            color_wheel_button_rgb(ui, "ambient_sky", &mut app.display.ambient_sky_color);
+            // MMDモードではLightAmbientがシーン環境光を兼ねるため無効化
+            let amb_enabled = !app.display.mmd_mode;
+            ui.add_enabled(
+                amb_enabled,
+                egui::Slider::new(&mut app.display.ambient_intensity, 0.0..=1.0).text("環境光"),
+            );
+            ui.add_enabled_ui(amb_enabled, |ui| {
+                color_wheel_button_rgb(ui, "ambient_sky", &mut app.display.ambient_sky_color);
+            });
             ui.end_row();
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label("Ground");
+            ui.add_enabled_ui(amb_enabled, |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label("Ground");
+                });
             });
-            color_wheel_button_rgb(ui, "ambient_ground", &mut app.display.ambient_ground_color);
+            ui.add_enabled_ui(amb_enabled, |ui| {
+                color_wheel_button_rgb(ui, "ambient_ground", &mut app.display.ambient_ground_color);
+            });
             ui.end_row();
         });
     ui.add(egui::Slider::new(&mut app.display.bg_brightness, 0.0..=1.0).text("背景"));

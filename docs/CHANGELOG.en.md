@@ -73,6 +73,11 @@
 
 ### Bug Fixes
 
+- **Fixed PMX/PMD morphs not working correctly** — `generate_tangents` (MikkTSpace tangent generation) added in v0.2.9 splits vertices on tangent w mismatch, but the morph pipeline was not updated. Three bugs fixed:
+  1. `ir_vertex_offset` used pre-split vertex count → global indices for subsequent meshes were shifted
+  2. `ir.morphs` built from `pmx_to_ir_vertex` → split vertices not included in morph data
+  3. Face winding order in `distribute_vertex_morphs` differed from `extract_meshes` → local index mismatch
+  - Fix: Reordered to `mesh build → morph_targets distribution → generate_tangents (split + morph duplication)`, and `ir.morphs` now built from `mesh.morph_targets`. Same pattern applied to PMD
 - **Fixed outline/MMD edge rendering as solid faces in Wire mode** — In wireframe mode, outline pipelines (`PolygonMode::Fill`) and MMD edge pipelines were not skipped, causing solid faces to appear. Now skips outline drawing and switches MMD materials to wireframe pipeline in Wire mode
 
 ### Improvements
@@ -85,6 +90,9 @@
 - **Ambient overwrite prevention** — UTS2 `_2nd_ShadeColor` ambient preserved (not overwritten by `diffuse * 0.4` recalculation)
 - **PMX conversion UTS2 branch** — UTS2 materials preserve HighColor → specular, 2nd_ShadeColor → ambient (skips MToon specular suppression)
 - **VRM 0.x helper consolidation** — `get_float` / `get_color3` / `resolve_tex` / `main_tex_st` shared between MToon/UTS2. `adopt_main_tex` centralizes `_MainTex` authoritative handling
+- **MMD shader now reflects light color & intensity** — AmbientColor/SpecularColor in MMD rendering mode now multiply by light color (`light_color`) and intensity (`light_intensity`). Previously used a fixed scalar (154/255 ≈ 0.604) ignoring color/intensity changes. Default values (white, 0.7) produce identical results to before
+- **MToon specular for PMX output** — MToon material PMX specular changed from zero to `diffuse × 0.2` (power=10). Specular highlights now respond to light direction changes in MMD
+- **Ambient UI grayed out in MMD mode** — In MMD spec, LightAmbient serves as scene ambient, so ambient slider/Sky color/Ground color are disabled in MMD mode to prevent confusion
 
 ### v0.2.10 Not Yet Supported (Future)
 

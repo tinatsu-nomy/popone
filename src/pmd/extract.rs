@@ -41,8 +41,8 @@ pub fn pmd_to_ir_with_aux(
     // 材質名テキストファイルの読み込み
     load_material_names(pmd_path, aux_files, &mut materials);
 
-    let (meshes, pmd_to_ir_vertex) = extract_meshes(pmd, &materials);
-    let morphs = extract_morphs(pmd, &pmd_to_ir_vertex);
+    let (meshes, _pmd_to_ir_vertex) = extract_meshes(pmd, &materials);
+    let morphs = extract_morphs(pmd, &meshes);
     let physics = extract_physics(pmd);
 
     Ok(IrModel {
@@ -513,7 +513,7 @@ fn extract_meshes(pmd: &PmdModel, _materials: &[IrMaterial]) -> (Vec<IrMesh>, Ha
 
         let name = format!("材質{}", mat_idx + 1);
 
-        let mut ir_mesh = IrMesh {
+        meshes.push(IrMesh {
             name,
             vertices: local_vertices,
             indices: local_indices,
@@ -521,24 +521,100 @@ fn extract_meshes(pmd: &PmdModel, _materials: &[IrMaterial]) -> (Vec<IrMesh>, Ha
             morph_targets: Vec::new(),
             node_index: 0,
             uvs1: Vec::new(),
-        };
-        crate::intermediate::tangent::generate_tangents(&mut ir_mesh, 0);
-        meshes.push(ir_mesh);
+        });
 
         face_offset += face_count;
+    }
+
+    // PMD 頂点モーフをメッシュの morph_targets に分配（generate_tangents の前に実行）
+    distribute_pmd_vertex_morphs(pmd, &mut meshes);
+
+    // 接線生成（tangent w 不一致時に頂点を分割 + morph_targets も複製）
+    for mesh in &mut meshes {
+        crate::intermediate::tangent::generate_tangents(mesh, 0);
     }
 
     (meshes, pmd_to_ir_vertex)
 }
 
-/// モーフ抽出
-/// pmd_to_ir_vertex: PMDグローバル頂点Index → IrModel通し番号
-fn extract_morphs(pmd: &PmdModel, pmd_to_ir_vertex: &HashMap<u32, usize>) -> Vec<IrMorph> {
-    // base モーフを探す（morph_type == 0）
-    let base = pmd.morphs.iter().find(|m| m.morph_type == 0);
-    let base_verts = match base {
-        Some(b) => &b.vertices,
-        None => return Vec::new(),
+/// PMD 頂点モーフをメッシュの morph_targets に分配（generate_tangents の前に実行）
+fn distribute_pmd_vertex_morphs(pmd: &PmdModel, meshes: &mut [IrMesh]) {
+    let base = match pmd.morphs.iter().find(|m| m.morph_type == 0) {
+        Some(b) => b,
+        None => return,
+    };
+
+    // PMDグローバル頂点Index → (mesh_idx, local_vertex_idx) のマッピング
+    let mut global_to_local: HashMap<u16, Vec<(usize, u32)>> = HashMap::new();
+    let mut face_offset = 0usize;
+    for (mesh_idx, pmd_mat) in pmd.materials.iter().enumerate() {
+        let face_count = (pmd_mat.face_count / 3) as usize;
+        let mut vertex_map: HashMap<u16, u32> = HashMap::new();
+        let mut next_local = 0u32;
+        for fi in face_offset..face_offset + face_count {
+            let face = &pmd.faces[fi];
+            // extract_meshes と同じ巻き順（b↔c swap）で走査して
+            // ローカル頂点インデックスの割り当て順を一致させる
+            let reordered = [face[0], face[2], face[1]];
+            for &global_idx in &reordered {
+                if let std::collections::hash_map::Entry::Vacant(e) = vertex_map.entry(global_idx) {
+                    e.insert(next_local);
+                    next_local += 1;
+                }
+            }
+        }
+        for (&global_idx, &local_idx) in &vertex_map {
+            global_to_local
+                .entry(global_idx)
+                .or_default()
+                .push((mesh_idx, local_idx));
+        }
+        face_offset += face_count;
+    }
+
+    // 各表情モーフをメッシュの morph_targets に分配
+    for m in pmd.morphs.iter().filter(|m| m.morph_type != 0) {
+        let mesh_count = meshes.len();
+        let mut mesh_offsets: Vec<Vec<(u32, Vec3)>> = (0..mesh_count).map(|_| Vec::new()).collect();
+
+        for mv in &m.vertices {
+            let base_v = match base.vertices.get(mv.index as usize) {
+                Some(v) => v,
+                None => continue,
+            };
+            let gltf_offset = pmx_pos_to_gltf(mv.offset);
+            if let Some(targets) = global_to_local.get(&(base_v.index as u16)) {
+                for &(mesh_idx, local_idx) in targets {
+                    mesh_offsets[mesh_idx].push((local_idx, gltf_offset));
+                }
+            }
+        }
+
+        for (mesh_idx, mut offsets) in mesh_offsets.into_iter().enumerate() {
+            if !offsets.is_empty() {
+                offsets.sort_by_key(|&(vi, _)| vi);
+                meshes[mesh_idx].morph_targets.push(IrMorphTarget {
+                    name: m.name.clone(),
+                    position_offsets: offsets,
+                    normal_offsets: Vec::new(),
+                    tangent_offsets: Vec::new(),
+                });
+            }
+        }
+    }
+}
+
+/// モーフ抽出: mesh.morph_targets から構築（generate_tangents の頂点分割に対応）
+fn extract_morphs(pmd: &PmdModel, meshes: &[IrMesh]) -> Vec<IrMorph> {
+    // 各メッシュのグローバル頂点オフセット
+    let mesh_global_offsets: Vec<usize> = {
+        let mut offsets = Vec::with_capacity(meshes.len());
+        let mut cum = 0usize;
+        for m in meshes {
+            offsets.push(cum);
+            cum += m.vertices.len();
+        }
+        offsets
     };
 
     pmd.morphs
@@ -546,20 +622,16 @@ fn extract_morphs(pmd: &PmdModel, pmd_to_ir_vertex: &HashMap<u32, usize>) -> Vec
         .filter(|m| m.morph_type != 0) // base 以外
         .enumerate()
         .map(|(i, m)| {
-            let entries: Vec<(usize, Vec3)> = m
-                .vertices
-                .iter()
-                .filter_map(|mv| {
-                    // mv.index は base モーフ内のインデックス
-                    let base_v = base_verts.get(mv.index as usize)?;
-                    // base_v.index がPMDグローバル頂点インデックス → IrModel通し番号に変換
-                    let ir_vi = pmd_to_ir_vertex.get(&base_v.index)?;
-                    Some((
-                        *ir_vi,
-                        pmx_pos_to_gltf(mv.offset), // 変位ベクトル: Z反転 + スケール÷12.5
-                    ))
-                })
-                .collect();
+            // mesh.morph_targets から構築（generate_tangents の分割頂点を含む）
+            let mut entries: Vec<(usize, Vec3)> = Vec::new();
+            for (mi, mesh) in meshes.iter().enumerate() {
+                let global_offset = mesh_global_offsets[mi];
+                if let Some(mt) = mesh.morph_targets.iter().find(|t| t.name == m.name) {
+                    for &(local_vi, offset) in &mt.position_offsets {
+                        entries.push((global_offset + local_vi as usize, offset));
+                    }
+                }
+            }
 
             let panel = match m.morph_type {
                 1 => 1, // 眉

@@ -99,7 +99,7 @@ If the viewer is already running, subsequent launches pass the file path to the 
 - **PMX 2.0 / 2.1** — Full data structure loading (vertices, faces, materials, bones, morphs, display frames, rigid bodies, joints). SoftBody (2.1) is skipped
 - **PMD** — Automatic Shift_JIS text conversion. IK and morph (base+offset) support. Material name text file (same-name `.txt`) loading
 - **Textures** — Auto-loads PNG/JPEG/BMP/TGA from PMX/PMD relative paths. MIME hint-based format detection. Sphere maps (.sph/.spa) supported
-- **MMD Rendering** — Toon shading (shared toon01-10 + individual toon), Blinn-Phong specular, sphere maps (multiply/add), edge drawing (inverted hull method, toggle/thickness adjustable)
+- **MMD Rendering** — Toon shading (shared toon01-10 + individual toon), Blinn-Phong specular, sphere maps (multiply/add), edge drawing (inverted hull method, toggle/thickness adjustable). Light color and intensity changes are reflected in MMD rendering. Ambient UI is disabled in MMD mode (LightAmbient serves as scene ambient)
 - **T-Stance Conversion** — Convert A-stance models to T-stance (bones, mesh, morphs, rigid bodies, joints synced)
 - **VRMA Animation** — Auto-mapping from PMX Japanese bone names to VRM humanoid names enables VRMA animation playback. Supports rotation/move grants, so D-bones (leg D, etc.) correctly follow FK animations
 - **UI Restrictions** — PMX conversion button, normal smoothing, and custom normal clear are grayed out when PMX/PMD is loaded. "Outline drawing" checkbox is also grayed out for models without MToon outlines

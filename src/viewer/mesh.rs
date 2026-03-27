@@ -238,7 +238,6 @@ impl GpuModel {
 
     /// モーフウェイトを適用して頂点バッファを更新
     pub fn apply_morphs(&mut self, weights: &[f32], queue: &wgpu::Queue) {
-        // 作業バッファにベース頂点をコピー（Vec の再割り当てを回避）
         self.morph_work.clear();
         self.morph_work.extend_from_slice(&self.base_vertices);
 

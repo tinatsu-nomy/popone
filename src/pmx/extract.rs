@@ -36,8 +36,8 @@ pub fn pmx_to_ir_with_aux(
     let bones = extract_bones(pmx);
     let textures = extract_textures(pmx, pmx_dir, aux_files);
     let materials = extract_materials(pmx);
-    let (meshes, pmx_to_ir_vertex) = extract_meshes(pmx);
-    let morphs = extract_morphs(pmx, &pmx_to_ir_vertex);
+    let (meshes, _pmx_to_ir_vertex) = extract_meshes(pmx);
+    let morphs = extract_morphs(pmx, &meshes);
     let physics = extract_physics(pmx);
 
     Ok(IrModel {
@@ -393,7 +393,7 @@ fn extract_meshes(pmx: &PmxModel) -> (Vec<IrMesh>, HashMap<u32, usize>) {
 
         ir_vertex_offset += local_vertices.len();
 
-        let mut ir_mesh = IrMesh {
+        meshes.push(IrMesh {
             name: mat.name.clone(),
             vertices: local_vertices,
             indices: local_indices,
@@ -401,15 +401,19 @@ fn extract_meshes(pmx: &PmxModel) -> (Vec<IrMesh>, HashMap<u32, usize>) {
             morph_targets: Vec::new(),
             node_index: 0,
             uvs1: Vec::new(),
-        };
-        crate::intermediate::tangent::generate_tangents(&mut ir_mesh, 0);
-        meshes.push(ir_mesh);
+        });
 
         face_offset += face_count;
     }
 
-    // 頂点モーフをメッシュに分配
+    // 頂点モーフをメッシュに分配（generate_tangents の前に実行）
+    // generate_tangents が頂点分割時に morph_targets を複製できるようにする
     distribute_vertex_morphs(pmx, &mut meshes);
+
+    // 接線生成（tangent w 不一致時に頂点を分割 + morph_targets も複製）
+    for mesh in &mut meshes {
+        crate::intermediate::tangent::generate_tangents(mesh, 0);
+    }
 
     (meshes, pmx_to_ir_vertex)
 }
@@ -426,7 +430,10 @@ fn distribute_vertex_morphs(pmx: &PmxModel, meshes: &mut [IrMesh]) {
 
         for fi in face_offset..face_offset + face_count {
             let face = &pmx.faces[fi];
-            for &global_idx in face {
+            // extract_meshes と同じ巻き順（b↔c swap）で走査して
+            // ローカル頂点インデックスの割り当て順を一致させる
+            let reordered = [face[0], face[2], face[1]];
+            for &global_idx in &reordered {
                 if let std::collections::hash_map::Entry::Vacant(e) = vertex_map.entry(global_idx) {
                     e.insert(next_local);
                     next_local += 1;
@@ -478,11 +485,20 @@ fn distribute_vertex_morphs(pmx: &PmxModel, meshes: &mut [IrMesh]) {
 }
 
 /// モーフ抽出: 頂点モーフ・グループモーフ → IrMorph
-/// pmx_to_ir_vertex: PMXグローバル頂点Index → IrModel通し番号
-///
-/// ボーン/材質/UV モーフはスキップされるため、グループモーフ内の
-/// サブモーフ参照インデックスを IrModel 上のインデックスにリマッピングする。
-fn extract_morphs(pmx: &PmxModel, pmx_to_ir_vertex: &HashMap<u32, usize>) -> Vec<IrMorph> {
+/// 頂点モーフは mesh.morph_targets から構築（generate_tangents の頂点分割に対応）。
+/// グループモーフは PMX データから直接構築（サブモーフインデックスをリマッピング）。
+fn extract_morphs(pmx: &PmxModel, meshes: &[IrMesh]) -> Vec<IrMorph> {
+    // 各メッシュのグローバル頂点オフセット（分割後の実頂点数ベース）
+    let mesh_global_offsets: Vec<usize> = {
+        let mut offsets = Vec::with_capacity(meshes.len());
+        let mut cum = 0usize;
+        for m in meshes {
+            offsets.push(cum);
+            cum += m.vertices.len();
+        }
+        offsets
+    };
+
     // Pass 1: PMX インデックス → IrModel インデックスのマッピングを構築
     // スキップされるモーフは None になる
     let mut pmx_to_ir_morph: Vec<Option<usize>> = Vec::with_capacity(pmx.morphs.len());
@@ -504,17 +520,17 @@ fn extract_morphs(pmx: &PmxModel, pmx_to_ir_vertex: &HashMap<u32, usize>) -> Vec
         .iter()
         .filter_map(|m| {
             let kind = match &m.offsets {
-                PmxMorphOffsets::Vertex(offsets) => {
-                    let entries: Vec<(usize, Vec3)> = offsets
-                        .iter()
-                        .filter_map(|off| {
-                            let ir_vi = pmx_to_ir_vertex.get(&off.vertex_index)?;
-                            Some((
-                                *ir_vi,
-                                pmx_pos_to_gltf(off.offset), // 変位ベクトル: Z反転 + スケール÷12.5
-                            ))
-                        })
-                        .collect();
+                PmxMorphOffsets::Vertex(_) => {
+                    // mesh.morph_targets から構築（generate_tangents の分割頂点を含む）
+                    let mut entries: Vec<(usize, Vec3)> = Vec::new();
+                    for (mi, mesh) in meshes.iter().enumerate() {
+                        let global_offset = mesh_global_offsets[mi];
+                        if let Some(mt) = mesh.morph_targets.iter().find(|t| t.name == m.name) {
+                            for &(local_vi, offset) in &mt.position_offsets {
+                                entries.push((global_offset + local_vi as usize, offset));
+                            }
+                        }
+                    }
                     IrMorphKind::Vertex {
                         positions: entries,
                         normals: Vec::new(),

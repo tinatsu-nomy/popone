@@ -985,10 +985,17 @@ passthrough_gi = mix(ambient_ground, ambient_sky, hemi_t)
 
 The `mmd_ambient_scale` field in CameraUniform separates ambient light between standard and MMD paths:
 
-- MMD mode ON: `mmd_ambient_scale = 154.0 / 255.0` (fixed value)
+- MMD mode ON: `mmd_ambient_scale = (154.0 / 255.0) × (light_intensity / 0.7)`
 - MMD mode OFF: `mmd_ambient_scale = ambient_intensity` (UI slider value)
 
-Standard shaders use `camera.ambient` / `camera.ambient_ground` (hemisphere ambient) and `camera.light_color`, while only MMD shaders reference `camera.mmd_ambient_scale`. When MMD mode is ON, changes to `light_color` / `ambient_sky_color` / `ambient_ground_color` have no effect.
+Inside the MMD shader, `mmd_light = vec3(mmd_ambient_scale) × light_color` is computed as a common light vector, used for AmbientColor / SpecularColor calculations matching the original MMD:
+
+```
+AmbientColor = clamp(diffuse_rgb × mmd_light + ambient, 0, 1)
+SpecularColor = specular × mmd_light
+```
+
+Standard shaders use `camera.ambient` / `camera.ambient_ground` (hemisphere ambient) and `camera.light_color`. In MMD mode, scene ambient is subsumed by LightAmbient, so the ambient UI (ambient intensity, Sky color, Ground color) is grayed out. Brightness and color tone can be controlled via light color and intensity settings.
 
 ## Log Output
 
@@ -1497,8 +1504,8 @@ Applied only at the conversion stage (`convert/material.rs`). The extraction sta
 | Parameter | MToon | UTS2 | Non-MToon |
 |-----------|-------|------|-----------|
 | ambient | `shade_color * 0.5` (or `diffuse * 0.4` if no shade_color) | `_2nd_ShadeColor * 0.5` (set during extraction) | Unchanged |
-| specular | `Vec3::ZERO` | `_HighColor` (set during extraction) | Unchanged |
-| specular_power | `0.0` | `_HighColor_Power * 10.0` | Unchanged |
+| specular | `diffuse.rgb * 0.2` (light-reactive) | `_HighColor` (set during extraction) | Unchanged |
+| specular_power | `10.0` | `_HighColor_Power * 10.0` | Unchanged |
 
 ### UTS2 (Unity-Chan Toon Shader Ver.2) Approximate Conversion
 

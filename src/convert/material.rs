@@ -52,13 +52,14 @@ pub fn ir_material_to_pmx(ir: &IrMaterial, texture_index: Option<i32>) -> PmxMat
                 (ir.ambient, ir.specular, ir.specular_power)
             }
             _ => {
-                // MToon: shade_color → ambient、specular 抑制
+                // MToon: shade_color → ambient、ライト反応用に軽いスペキュラーを付与
                 let amb = if let Some(sc) = ir.mtoon().shade_color {
                     sc * 0.5
                 } else {
                     Vec3::new(ir.diffuse.x * 0.4, ir.diffuse.y * 0.4, ir.diffuse.z * 0.4)
                 };
-                (amb, Vec3::ZERO, 0.0)
+                let diff_rgb = ir.diffuse.truncate();
+                (amb, diff_rgb * 0.2, 10.0)
             }
         }
     } else {
@@ -194,13 +195,15 @@ mod tests {
     }
 
     #[test]
-    fn test_mtoon_specular_suppression() {
+    fn test_mtoon_specular_light_reactive() {
         let mut mat = make_test_material();
         mat.specular = glam::Vec3::ONE;
         mat.specular_power = 25.0;
         let pmx = ir_material_to_pmx(&mat, None);
-        assert_eq!(pmx.specular, glam::Vec3::ZERO);
-        assert_eq!(pmx.specular_power, 0.0);
+        // MToon: diffuse RGB × 0.2 のスペキュラーでライト反応
+        let expected = mat.diffuse.truncate() * 0.2;
+        assert!((pmx.specular - expected).length() < 1e-5);
+        assert!((pmx.specular_power - 10.0).abs() < 1e-5);
     }
 
     #[test]
@@ -261,14 +264,15 @@ mod tests {
     }
 
     #[test]
-    fn test_mtoon_specular_still_suppressed() {
-        // MToon 回帰テスト: ShaderFamily::Mtoon でも specular 抑制が維持されること
+    fn test_mtoon_specular_light_reactive_explicit_family() {
+        // MToon 回帰テスト: ShaderFamily::Mtoon でもライト反応スペキュラーが付与されること
         let mut mat = make_test_material();
         mat.shader_family = crate::intermediate::types::ShaderFamily::Mtoon;
         mat.specular = glam::Vec3::ONE;
         mat.specular_power = 25.0;
         let pmx = ir_material_to_pmx(&mat, None);
-        assert_eq!(pmx.specular, glam::Vec3::ZERO);
-        assert_eq!(pmx.specular_power, 0.0);
+        let expected = mat.diffuse.truncate() * 0.2;
+        assert!((pmx.specular - expected).length() < 1e-5);
+        assert!((pmx.specular_power - 10.0).abs() < 1e-5);
     }
 }

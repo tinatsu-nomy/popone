@@ -711,7 +711,9 @@ fn compute_mmd_lighting(in: MmdVertexOutput) -> vec4<f32> {
     // ライティング:
     // AmbientColor = saturate(MaterialAmbient * LightAmbient + MaterialEmissive)
     // PMX ambient は D3D の emissive に相当、PMX diffuse は D3D の ambient に相当
-    let base_color = clamp(material.diffuse_rgb * vec3<f32>(camera.mmd_ambient_scale) + material.ambient, vec3<f32>(0.0), vec3<f32>(1.0));
+    // LightAmbient = mmd_ambient_scale × light_color (ライト色調・強度を反映)
+    let mmd_light = vec3<f32>(camera.mmd_ambient_scale) * camera.light_color;
+    let base_color = clamp(material.diffuse_rgb * mmd_light + material.ambient, vec3<f32>(0.0), vec3<f32>(1.0));
 
     // テクスチャサンプリング
     let tex_color = textureSample(t_diffuse, s_diffuse, in.uv);
@@ -744,8 +746,8 @@ fn compute_mmd_lighting(in: MmdVertexOutput) -> vec4<f32> {
     if out_a < 0.004 { discard; }
 
     // スペキュラ (最後に加算、トゥーンの影響を受けない)
-    // LightSpecular = mmd_ambient_scale (≈0.604)
-    let spec_color = material.specular * vec3<f32>(camera.mmd_ambient_scale);
+    // LightSpecular = mmd_ambient_scale × light_color
+    let spec_color = material.specular * mmd_light;
     var eye_dir: vec3<f32>;
     if camera.is_perspective > 0.5 {
         eye_dir = normalize(camera.camera_pos - in.world_pos);
@@ -3239,7 +3241,8 @@ impl GpuRenderer {
             _pad1: 0.0,
             view_row1: [view_mat.x_axis.y, view_mat.y_axis.y, view_mat.z_axis.y],
             mmd_ambient_scale: if params.display.mmd_mode {
-                154.0 / 255.0
+                // light_intensity を正規化して反映 (デフォルト 0.7 で従来値 154/255 を維持)
+                (154.0 / 255.0) * (params.display.light_intensity / 0.7)
             } else {
                 params.display.ambient_intensity
             },
