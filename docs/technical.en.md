@@ -91,6 +91,7 @@
   - [Shader-Aware PMX Material Conversion](#shader-aware-pmx-material-conversion)
     - [select_toon()](#select_toon)
     - [MToon ambient/specular Correction](#mtoon-ambientspecular-correction)
+    - [UTS2 (Unity-Chan Toon Shader Ver.2) Approximate Conversion](#uts2-unity-chan-toon-shader-ver2-approximate-conversion)
   - [A-Stance Conversion Result Management](#a-stance-conversion-result-management)
     - [AStanceResult enum](#astanceresult-enum)
     - [Determination Logic](#determination-logic)
@@ -1483,11 +1484,47 @@ Non-MToon retains `Shared(0)` (regression prevention). When shade_color is absen
 
 Applied only at the conversion stage (`convert/material.rs`). The extraction stage (`vrm/extract.rs`) retains source-faithful values.
 
-| Parameter | MToon | Non-MToon |
-|-----------|-------|-----------|
-| ambient | `shade_color * 0.5` (or `diffuse * 0.4` if no shade_color) | Unchanged |
-| specular | `Vec3::ZERO` | Unchanged |
-| specular_power | `0.0` | Unchanged |
+| Parameter | MToon | UTS2 | Non-MToon |
+|-----------|-------|------|-----------|
+| ambient | `shade_color * 0.5` (or `diffuse * 0.4` if no shade_color) | `_2nd_ShadeColor * 0.5` (set during extraction) | Unchanged |
+| specular | `Vec3::ZERO` | `_HighColor` (set during extraction) | Unchanged |
+| specular_power | `0.0` | `_HighColor_Power * 10.0` | Unchanged |
+
+### UTS2 (Unity-Chan Toon Shader Ver.2) Approximate Conversion
+
+Introduces `ShaderFamily` enum (`Other` / `Mtoon` / `Uts2`) to detect UTS2 from VRM 0.0 `materialProperties.shader` field. Detected parameters are approximate-mapped to `MtoonParams`, reusing the existing MToon rendering pipeline (viewer) and PMX conversion path.
+
+#### Shader Detection (Triple Check)
+
+1. **Shader name**: `UnityChanToonShader/*` (legacy)
+2. **Shader name + property**: `Toon/Toon` (unified shader) with `_utsVersion` or `_BaseColor_Step` present
+3. **Property only**: `_utsVersion` present (fallback for unknown shader names)
+
+Shader names containing "MToon" are excluded (`!v0_is_mtoon &&` guard).
+
+#### Alpha Mode Detection
+
+UTS2 does not have a `_ClippingMode` property. Transparency is determined by shader variant name:
+
+| Variant Name | AlphaMode | Notes |
+|---|---|---|
+| `_TransClipping` | Blend | Transparent + clipping |
+| `_Clipping` | Mask | Cutout |
+| Other | Retain glTF core | Opaque by default |
+
+`_ClippingMask` texture is not yet supported in v0.2.10 (warning + base alpha fallback).
+
+#### Outline
+
+UTS2 `_OUTLINE` keyword (NML/POS) detected from `keyword_map`. Both NML and POS approximated as `OutlineWidthMode::WorldCoordinates` (POS uses UTS2-specific camera distance-based transformation differing from MToon ScreenCoordinates; warning emitted).
+
+#### GI
+
+UTS2 `_GI_Intensity` is additive indirect light strength (default 0 = no GI), semantically different from MToon `gi_equalization_factor` (raw/equalized GI interpolation). Fixed to `gi_equalization_factor = 0.0` to avoid semantic inversion.
+
+#### Ambient Overwrite Prevention
+
+The end-of-extraction `ambient = diffuse * 0.4` recalculation for all materials is suppressed for `ShaderFamily::Uts2` to preserve UTS2's `_2nd_ShadeColor * 0.5`.
 
 ## A-Stance Conversion Result Management
 

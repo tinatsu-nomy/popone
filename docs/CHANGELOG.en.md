@@ -3,32 +3,37 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.9](#v029)
+  - [v0.2.10](#v0210)
     - [New Features](#new-features)
+    - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
     - [Improvements](#improvements)
+    - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
+  - [v0.2.9](#v029)
+    - [New Features](#new-features-1)
+    - [Improvements](#improvements-1)
     - [Bug Fixes](#bug-fixes)
     - [Implementation Details](#implementation-details)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
-    - [New Features](#new-features-1)
-    - [Improvements](#improvements-1)
-  - [v0.2.7](#v027)
     - [New Features](#new-features-2)
-    - [Bug Fixes](#bug-fixes-1)
     - [Improvements](#improvements-2)
+  - [v0.2.7](#v027)
+    - [New Features](#new-features-3)
+    - [Bug Fixes](#bug-fixes-1)
+    - [Improvements](#improvements-3)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
     - [Bug Fixes](#bug-fixes-2)
-    - [New Features](#new-features-3)
-    - [Improvements](#improvements-3)
+    - [New Features](#new-features-4)
+    - [Improvements](#improvements-4)
     - [Code Quality & Performance](#code-quality--performance-1)
   - [v0.2.5](#v025)
-    - [Improvements](#improvements-4)
+    - [Improvements](#improvements-5)
     - [Code Quality & Performance](#code-quality--performance-2)
   - [v0.2.4](#v024)
-    - [Improvements](#improvements-5)
-  - [v0.2.3](#v023)
     - [Improvements](#improvements-6)
+  - [v0.2.3](#v023)
+    - [Improvements](#improvements-7)
   - [v0.2.2](#v022)
     - [Code Quality & Performance](#code-quality--performance-3)
   - [FBX Support](#fbx-support)
@@ -38,6 +43,45 @@
 # Changelog
 
 [日本語](CHANGELOG.md)
+
+## v0.2.10
+
+### New Features
+
+- **UTS2 (Unity-Chan Toon Shader Ver.2) Support** — Auto-detect UTS2 shaders in VRM 0.0 models, approximate-map to existing MToon rendering pipeline for viewer display and PMX conversion
+  - `ShaderFamily` enum (`Other` / `Mtoon` / `Uts2`) for multi-shader classification
+  - Triple detection: shader name (`UnityChanToonShader/*`, `Toon/Toon`) + UTS2-specific properties (`_utsVersion`, `_BaseColor_Step`)
+  - Explicit `ShaderFamily::Mtoon` for VRM 0.0 / VRM 1.0 MToon materials
+
+### UTS2 Mapped Parameters
+
+| UTS2 Property | Maps To |
+|---|---|
+| `_BaseColor` / `_MainTex` | Base color / texture |
+| `_1st_ShadeColor` / `_1st_ShadeMap` | MToon shade_color / shade_texture |
+| `_2nd_ShadeColor` | PMX ambient (`color * 0.5`) |
+| `_BaseColor_Step` / `_BaseShade_Feather` | shading_toony / shading_shift |
+| `_Outline_Width` / `_Outline_Color` | Outline (NML/POS → WorldCoordinates approx.) |
+| `_RimLight` / `_RimLightColor` / `_RimLight_Power` | Rim lighting |
+| `_MatCap` / `_MatCap_Sampler` / `_MatCapColor` | MatCap texture |
+| `_Emissive_Tex` / `_Emissive_Color` | Emissive (HDR: kept linear) |
+| `_NormalMap` / `_BumpScale` | Normal map |
+| `_HighColor` / `_HighColor_Power` | PMX specular (PMX output only) |
+| `_GI_Intensity` | GI (safe default 0.0) |
+| `_CullMode` | Culling mode |
+
+### Improvements
+
+- **UTS2 alpha mode detection** — Shader variant name-based (`_TransClipping` → Blend, `_Clipping` → Mask). Falls back to glTF core `alpha_mode`
+- **UTS2 outline POS mode** — POS outline approximated as WorldCoordinates (differs from MToon ScreenCoordinates), with warning
+- **UTS2 ClippingMask warning** — Warning for unsupported `_ClippingMask` texture, falls back to base alpha
+- **Ambient overwrite prevention** — UTS2 `_2nd_ShadeColor` ambient preserved (not overwritten by `diffuse * 0.4` recalculation)
+- **PMX conversion UTS2 branch** — UTS2 materials preserve HighColor → specular, 2nd_ShadeColor → ambient (skips MToon specular suppression)
+- **VRM 0.x helper consolidation** — `get_float` / `get_color3` / `resolve_tex` / `main_tex_st` shared between MToon/UTS2. `adopt_main_tex` centralizes `_MainTex` authoritative handling
+
+### v0.2.10 Not Yet Supported (Future)
+
+- ClippingMask texture / HighColor viewer rendering / ShadingGradeMap / 2nd_ShadeMap texture / AngelRing / Stencil variants
 
 ## v0.2.9
 

@@ -430,6 +430,7 @@ fn extract_materials(pmd: &PmdModel, textures: &[IrTexture]) -> Vec<IrMaterial> 
                 },
                 edge_size: if has_edge { 1.0 } else { 0.0 },
                 mtoon: None,
+                shader_family: ShaderFamily::Other,
                 source_texture_name: None,
                 source_format: SourceFormat::Pmd,
                 sphere_texture_index,

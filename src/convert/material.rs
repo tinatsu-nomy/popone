@@ -1,6 +1,6 @@
 use glam::Vec3;
 
-use crate::intermediate::types::IrMaterial;
+use crate::intermediate::types::{IrMaterial, ShaderFamily};
 use crate::pmx::types::{PmxMaterial, PmxToonRef};
 
 /// Rec. 709 に基づく相対輝度
@@ -44,14 +44,23 @@ pub fn ir_material_to_pmx(ir: &IrMaterial, texture_index: Option<i32>) -> PmxMat
         f
     };
 
-    // MToon の場合: shade_color → ambient、specular 抑制
+    // トゥーンシェーダーの場合: ambient/specular の補正
     let (ambient, specular, specular_power) = if ir.is_mtoon() {
-        let amb = if let Some(sc) = ir.mtoon().shade_color {
-            sc * 0.5
-        } else {
-            Vec3::new(ir.diffuse.x * 0.4, ir.diffuse.y * 0.4, ir.diffuse.z * 0.4)
-        };
-        (amb, Vec3::ZERO, 0.0)
+        match ir.shader_family {
+            ShaderFamily::Uts2 => {
+                // UTS2: 2nd_ShadeColor→ambient、HighColor→specular が設定済み
+                (ir.ambient, ir.specular, ir.specular_power)
+            }
+            _ => {
+                // MToon: shade_color → ambient、specular 抑制
+                let amb = if let Some(sc) = ir.mtoon().shade_color {
+                    sc * 0.5
+                } else {
+                    Vec3::new(ir.diffuse.x * 0.4, ir.diffuse.y * 0.4, ir.diffuse.z * 0.4)
+                };
+                (amb, Vec3::ZERO, 0.0)
+            }
+        }
     } else {
         (ir.ambient, ir.specular, ir.specular_power)
     };
@@ -223,5 +232,43 @@ mod tests {
             mat.diffuse.z * 0.4,
         );
         assert!((pmx.ambient - expected_amb).length() < 1e-5);
+    }
+
+    #[test]
+    fn test_uts2_specular_preserved() {
+        let mut mat = make_test_material();
+        mat.shader_family = crate::intermediate::types::ShaderFamily::Uts2;
+        mat.specular = glam::Vec3::new(0.8, 0.6, 0.4);
+        mat.specular_power = 15.0;
+        mat.ambient = glam::Vec3::new(0.2, 0.15, 0.1);
+        let pmx = ir_material_to_pmx(&mat, None);
+        // UTS2: specular/ambient がそのまま保持されること
+        assert_eq!(pmx.specular, mat.specular);
+        assert_eq!(pmx.specular_power, mat.specular_power);
+        assert_eq!(pmx.ambient, mat.ambient);
+    }
+
+    #[test]
+    fn test_uts2_toon_selection() {
+        let mut mat = make_test_material();
+        mat.shader_family = crate::intermediate::types::ShaderFamily::Uts2;
+        mat.diffuse = Vec4::new(0.8, 0.8, 0.8, 1.0);
+        // UTS2 も mtoon.shade_color ベースで toon 選択される
+        mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.1, 0.1, 0.1));
+        assert_eq!(select_toon(&mat), PmxToonRef::Shared(0)); // 硬い影
+        mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.75, 0.75, 0.75));
+        assert_eq!(select_toon(&mat), PmxToonRef::Shared(6)); // 柔らかい影
+    }
+
+    #[test]
+    fn test_mtoon_specular_still_suppressed() {
+        // MToon 回帰テスト: ShaderFamily::Mtoon でも specular 抑制が維持されること
+        let mut mat = make_test_material();
+        mat.shader_family = crate::intermediate::types::ShaderFamily::Mtoon;
+        mat.specular = glam::Vec3::ONE;
+        mat.specular_power = 25.0;
+        let pmx = ir_material_to_pmx(&mat, None);
+        assert_eq!(pmx.specular, glam::Vec3::ZERO);
+        assert_eq!(pmx.specular_power, 0.0);
     }
 }

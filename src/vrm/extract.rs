@@ -544,9 +544,162 @@ fn extract_materials(
         // VRM 0.0 マテリアルプロパティ
         if let Some(v0_prop) = v0_mat_props.get(i) {
             let v0_is_mtoon = v0_prop.shader.contains("MToon");
+            let v0_is_uts2 = !v0_is_mtoon && {
+                let shader = v0_prop.shader.as_str();
+                let has_prop = |key: &str| {
+                    v0_prop
+                        .float_properties
+                        .as_ref()
+                        .and_then(|fp| fp.get(key))
+                        .and_then(|v| v.as_f64())
+                        .is_some()
+                };
+                // 旧版: shader 名で直接判定
+                shader.contains("UnityChanToonShader")
+                    // 新版(Toon/Toon): UTS2 固有プロパティの存在で確認
+                    || (shader.contains("Toon/Toon")
+                        && (has_prop("_utsVersion") || has_prop("_BaseColor_Step")))
+                    // プロパティのみでの判定（shader 名が未知の場合のフォールバック）
+                    || has_prop("_utsVersion")
+            };
+
+            // --- VRM 0.x 共通ヘルパー（MToon / UTS2 両方で使用）---
+
+            // ヘルパー: float プロパティ取得
+            let get_float = |key: &str, default: f64| -> f32 {
+                v0_prop
+                    .float_properties
+                    .as_ref()
+                    .and_then(|fp| fp.get(key))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(default) as f32
+            };
+
+            // ヘルパー: vec3 カラー取得
+            let get_color3 = |key: &str, dr: f64, dg: f64, db: f64| -> Vec3 {
+                v0_prop
+                    .vector_properties
+                    .as_ref()
+                    .and_then(|vp| vp.get(key))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        Vec3::new(
+                            arr.first().and_then(|v| v.as_f64()).unwrap_or(dr) as f32,
+                            arr.get(1).and_then(|v| v.as_f64()).unwrap_or(dg) as f32,
+                            arr.get(2).and_then(|v| v.as_f64()).unwrap_or(db) as f32,
+                        )
+                    })
+                    .unwrap_or(Vec3::new(dr as f32, dg as f32, db as f32))
+            };
+
+            // _MainTex ST 取得（UniVRM 準拠: 全MToon/UTS2テクスチャに伝播）
+            // VRM 0.x vectorProperties 格納順: [offsetX, offsetY, scaleX, scaleY]
+            // Unity ST → glTF KHR_texture_transform 変換:
+            //   offset.y = 1.0 - unityOffset.y - unityScale.y
+            // (Vrm10MaterialExportUtils.ExportTextureTransform 準拠)
+            main_tex_st = v0_prop
+                .vector_properties
+                .as_ref()
+                .and_then(|vp| vp.get("_MainTex"))
+                .and_then(|v| v.as_array())
+                .and_then(|arr| {
+                    let unity_offset_x = arr.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    let unity_offset_y = arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                    let scale = Vec2::new(
+                        arr.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32,
+                        arr.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32,
+                    );
+                    let offset = Vec2::new(unity_offset_x, 1.0 - unity_offset_y - scale.y);
+                    // identity transform (scale=1, offset=0) ならスキップ
+                    let is_identity = (scale - Vec2::ONE).length() < 1e-6 && offset.length() < 1e-6;
+                    if is_identity {
+                        None
+                    } else {
+                        Some((scale, offset))
+                    }
+                });
+
+            // ヘルパー: テクスチャプロパティ → IrTextureInfo
+            // inherit_st=true の場合、_MainTex ST を適用する（MatCap は除外）
+            let resolve_tex = |key: &str, inherit_st: bool| -> Option<IrTextureInfo> {
+                v0_prop
+                    .texture_properties
+                    .as_ref()
+                    .and_then(|tp| tp.get(key))
+                    .and_then(|v| v.as_u64())
+                    .and_then(|idx| {
+                        document.textures().nth(idx as usize).map(|t| {
+                            let mut ti = IrTextureInfo::from_index(t.source().index());
+                            // glTF sampler 情報を反映
+                            let s = t.sampler();
+                            ti.sampler = IrSamplerInfo {
+                                wrap_u: match s.wrap_s() {
+                                    gltf::texture::WrappingMode::ClampToEdge => {
+                                        IrWrapMode::ClampToEdge
+                                    }
+                                    gltf::texture::WrappingMode::MirroredRepeat => {
+                                        IrWrapMode::MirroredRepeat
+                                    }
+                                    gltf::texture::WrappingMode::Repeat => IrWrapMode::Repeat,
+                                },
+                                wrap_v: match s.wrap_t() {
+                                    gltf::texture::WrappingMode::ClampToEdge => {
+                                        IrWrapMode::ClampToEdge
+                                    }
+                                    gltf::texture::WrappingMode::MirroredRepeat => {
+                                        IrWrapMode::MirroredRepeat
+                                    }
+                                    gltf::texture::WrappingMode::Repeat => IrWrapMode::Repeat,
+                                },
+                                mag_filter: match s.mag_filter() {
+                                    Some(gltf::texture::MagFilter::Nearest) => IrMagFilter::Nearest,
+                                    _ => IrMagFilter::Linear,
+                                },
+                                min_filter: match s.min_filter() {
+                                    Some(gltf::texture::MinFilter::Nearest) => IrMinFilter::Nearest,
+                                    Some(gltf::texture::MinFilter::Linear) => IrMinFilter::Linear,
+                                    Some(gltf::texture::MinFilter::NearestMipmapNearest) => {
+                                        IrMinFilter::NearestMipmapNearest
+                                    }
+                                    Some(gltf::texture::MinFilter::LinearMipmapNearest) => {
+                                        IrMinFilter::LinearMipmapNearest
+                                    }
+                                    Some(gltf::texture::MinFilter::NearestMipmapLinear) => {
+                                        IrMinFilter::NearestMipmapLinear
+                                    }
+                                    Some(gltf::texture::MinFilter::LinearMipmapLinear) | None => {
+                                        IrMinFilter::LinearMipmapLinear
+                                    }
+                                },
+                            };
+                            if inherit_st {
+                                if let Some((scale, offset)) = &main_tex_st {
+                                    ti.scale = *scale;
+                                    ti.offset = *offset;
+                                }
+                            }
+                            ti
+                        })
+                    })
+            };
+
+            // MToon/UTS2 共通: _MainTex を authoritative source として採用
+            let mut adopt_main_tex = |ir_mat: &mut IrMaterial| {
+                if let Some(base_tex) = resolve_tex("_MainTex", true) {
+                    ir_mat.texture_index = Some(base_tex.index);
+                    ir_mat.source_texture_name = document
+                        .images()
+                        .nth(base_tex.index)
+                        .and_then(|img| img.name().map(|s| s.to_string()))
+                        .or_else(|| _textures.get(base_tex.index).map(|t| t.filename.clone()));
+                    ir_mat.base_color_tex_info = Some(base_tex);
+                    v0_main_tex_resolved = true;
+                }
+            };
 
             if v0_is_mtoon {
                 ir_mat.mtoon = Some(MtoonParams::default());
+                ir_mat.shader_family = ShaderFamily::Mtoon;
                 let mtoon = ir_mat.mtoon.as_mut().unwrap();
 
                 // _OutlineWidthMode: 0=None, 1=WorldCoordinates, 2=ScreenCoordinates
@@ -612,132 +765,6 @@ fn extract_materials(
 
                 // --- VRM 0.x → 1.0 正規化（UniVRM MigrationMToonMaterial.cs 準拠）---
 
-                // ヘルパー: float プロパティ取得
-                let get_float = |key: &str, default: f64| -> f32 {
-                    v0_prop
-                        .float_properties
-                        .as_ref()
-                        .and_then(|fp| fp.get(key))
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(default) as f32
-                };
-
-                // ヘルパー: vec3 カラー取得
-                let get_color3 = |key: &str, dr: f64, dg: f64, db: f64| -> Vec3 {
-                    v0_prop
-                        .vector_properties
-                        .as_ref()
-                        .and_then(|vp| vp.get(key))
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            Vec3::new(
-                                arr.first().and_then(|v| v.as_f64()).unwrap_or(dr) as f32,
-                                arr.get(1).and_then(|v| v.as_f64()).unwrap_or(dg) as f32,
-                                arr.get(2).and_then(|v| v.as_f64()).unwrap_or(db) as f32,
-                            )
-                        })
-                        .unwrap_or(Vec3::new(dr as f32, dg as f32, db as f32))
-                };
-
-                // _MainTex ST 取得（UniVRM 準拠: 全MToonテクスチャに伝播）
-                // VRM 0.x vectorProperties 格納順: [offsetX, offsetY, scaleX, scaleY]
-                // Unity ST → glTF KHR_texture_transform 変換:
-                //   offset.y = 1.0 - unityOffset.y - unityScale.y
-                // (Vrm10MaterialExportUtils.ExportTextureTransform 準拠)
-                main_tex_st = v0_prop
-                    .vector_properties
-                    .as_ref()
-                    .and_then(|vp| vp.get("_MainTex"))
-                    .and_then(|v| v.as_array())
-                    .and_then(|arr| {
-                        let unity_offset_x =
-                            arr.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                        let unity_offset_y =
-                            arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                        let scale = Vec2::new(
-                            arr.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32,
-                            arr.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32,
-                        );
-                        let offset = Vec2::new(unity_offset_x, 1.0 - unity_offset_y - scale.y);
-                        // identity transform (scale=1, offset=0) ならスキップ
-                        let is_identity =
-                            (scale - Vec2::ONE).length() < 1e-6 && offset.length() < 1e-6;
-                        if is_identity {
-                            None
-                        } else {
-                            Some((scale, offset))
-                        }
-                    });
-
-                // ヘルパー: テクスチャプロパティ → IrTextureInfo
-                // inherit_st=true の場合、_MainTex ST を適用する（MatCap は除外）
-                let resolve_tex = |key: &str, inherit_st: bool| -> Option<IrTextureInfo> {
-                    v0_prop
-                        .texture_properties
-                        .as_ref()
-                        .and_then(|tp| tp.get(key))
-                        .and_then(|v| v.as_u64())
-                        .and_then(|idx| {
-                            document.textures().nth(idx as usize).map(|t| {
-                                let mut ti = IrTextureInfo::from_index(t.source().index());
-                                // glTF sampler 情報を反映
-                                let s = t.sampler();
-                                ti.sampler = IrSamplerInfo {
-                                    wrap_u: match s.wrap_s() {
-                                        gltf::texture::WrappingMode::ClampToEdge => {
-                                            IrWrapMode::ClampToEdge
-                                        }
-                                        gltf::texture::WrappingMode::MirroredRepeat => {
-                                            IrWrapMode::MirroredRepeat
-                                        }
-                                        gltf::texture::WrappingMode::Repeat => IrWrapMode::Repeat,
-                                    },
-                                    wrap_v: match s.wrap_t() {
-                                        gltf::texture::WrappingMode::ClampToEdge => {
-                                            IrWrapMode::ClampToEdge
-                                        }
-                                        gltf::texture::WrappingMode::MirroredRepeat => {
-                                            IrWrapMode::MirroredRepeat
-                                        }
-                                        gltf::texture::WrappingMode::Repeat => IrWrapMode::Repeat,
-                                    },
-                                    mag_filter: match s.mag_filter() {
-                                        Some(gltf::texture::MagFilter::Nearest) => {
-                                            IrMagFilter::Nearest
-                                        }
-                                        _ => IrMagFilter::Linear,
-                                    },
-                                    min_filter: match s.min_filter() {
-                                        Some(gltf::texture::MinFilter::Nearest) => {
-                                            IrMinFilter::Nearest
-                                        }
-                                        Some(gltf::texture::MinFilter::Linear) => {
-                                            IrMinFilter::Linear
-                                        }
-                                        Some(gltf::texture::MinFilter::NearestMipmapNearest) => {
-                                            IrMinFilter::NearestMipmapNearest
-                                        }
-                                        Some(gltf::texture::MinFilter::LinearMipmapNearest) => {
-                                            IrMinFilter::LinearMipmapNearest
-                                        }
-                                        Some(gltf::texture::MinFilter::NearestMipmapLinear) => {
-                                            IrMinFilter::NearestMipmapLinear
-                                        }
-                                        Some(gltf::texture::MinFilter::LinearMipmapLinear)
-                                        | None => IrMinFilter::LinearMipmapLinear,
-                                    },
-                                };
-                                if inherit_st {
-                                    if let Some((scale, offset)) = &main_tex_st {
-                                        ti.scale = *scale;
-                                        ti.offset = *offset;
-                                    }
-                                }
-                                ti
-                            })
-                        })
-                };
-
                 // _Color / _MainTex → lit色/テクスチャ正規化（UniVRM MigrationMToonMaterial.cs:148-164 準拠）
                 // glTF core の baseColorFactor/baseColorTexture は近似値の場合があるため、
                 // materialProperties 側を優先する
@@ -753,17 +780,7 @@ fn extract_materials(
                     let a = color.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
                     ir_mat.diffuse = srgb_vec4_rgb_to_linear(Vec4::new(r, g, b, a));
                 }
-                if let Some(base_tex) = resolve_tex("_MainTex", true) {
-                    ir_mat.texture_index = Some(base_tex.index);
-                    // _MainTex を authoritative source にしたので source_texture_name も同期
-                    ir_mat.source_texture_name = document
-                        .images()
-                        .nth(base_tex.index)
-                        .and_then(|img| img.name().map(|s| s.to_string()))
-                        .or_else(|| _textures.get(base_tex.index).map(|t| t.filename.clone()));
-                    ir_mat.base_color_tex_info = Some(base_tex);
-                    v0_main_tex_resolved = true;
-                }
+                adopt_main_tex(&mut ir_mat);
 
                 // _BlendMode: 0=Opaque, 1=Cutout, 2=Transparent, 3=TransparentWithZWrite
                 let blend_mode = get_float("_BlendMode", 0.0) as i32;
@@ -877,6 +894,210 @@ fn extract_materials(
                 // _IndirectLightIntensity → giEqualizationFactor (UniVRM MigrationMToonMaterial.cs:231-232 準拠)
                 let gi_intensity = get_float("_IndirectLightIntensity", 0.1);
                 mtoon.gi_equalization_factor = (1.0 - gi_intensity).clamp(0.0, 1.0);
+            } else if v0_is_uts2 {
+                // --- UTS2 (Unity-Chan Toon Shader Ver.2) → MtoonParams 近似変換 ---
+                ir_mat.shader_family = ShaderFamily::Uts2;
+                ir_mat.mtoon = Some(MtoonParams::default());
+
+                // ヘルパー: keyword_map からキーワードの存在を確認
+                let has_keyword = |key: &str| {
+                    v0_prop
+                        .keyword_map
+                        .as_ref()
+                        .and_then(|km| km.as_object())
+                        .is_some_and(|obj| obj.contains_key(key))
+                };
+
+                // --- ベースカラー ---
+                // _BaseColor → diffuse (UTS2 は _BaseColor、MToon は _Color)
+                if let Some(color) = v0_prop
+                    .vector_properties
+                    .as_ref()
+                    .and_then(|vp| vp.get("_BaseColor"))
+                    .and_then(|v| v.as_array())
+                {
+                    let r = color.first().and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                    let g = color.get(1).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                    let b = color.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                    let a = color.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                    ir_mat.diffuse = srgb_vec4_rgb_to_linear(Vec4::new(r, g, b, a));
+                }
+                adopt_main_tex(&mut ir_mat);
+
+                // --- 1st ShadeColor → shade_color ---
+                {
+                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    mtoon.shade_color = Some(srgb_vec3_to_linear(get_color3(
+                        "_1st_ShadeColor",
+                        0.5,
+                        0.5,
+                        0.5,
+                    )));
+                    // _1st_ShadeMap → shade_texture（未設定時は _MainTex）
+                    mtoon.shade_texture = resolve_tex("_1st_ShadeMap", true)
+                        .or_else(|| resolve_tex("_MainTex", true));
+                }
+
+                // --- 2nd ShadeColor → ambient（PMX 用） ---
+                let second_shade =
+                    srgb_vec3_to_linear(get_color3("_2nd_ShadeColor", 0.3, 0.3, 0.3));
+                ir_mat.ambient = second_shade * 0.5;
+
+                // --- 影境界制御 ---
+                // _BaseColor_Step / _BaseShade_Feather → shading_toony / shading_shift
+                {
+                    let step = get_float("_BaseColor_Step", 0.5);
+                    let feather = get_float("_BaseShade_Feather", 0.01).max(0.001);
+                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    mtoon.shading_toony_factor = (1.0 - feather).clamp(0.0, 1.0);
+                    mtoon.shading_shift_factor = (-(step * 2.0 - 1.0)).clamp(-1.0, 1.0);
+                }
+
+                // --- アウトライン ---
+                let outline_keyword = if has_keyword("_OUTLINE_POS") {
+                    2
+                } else if has_keyword("_OUTLINE_NML") {
+                    1
+                } else {
+                    get_float("_OUTLINE", 0.0) as i32
+                };
+
+                {
+                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    mtoon.outline_width_mode = if outline_keyword != 0 {
+                        if outline_keyword == 2 {
+                            log::warn!(
+                                "材質[{}] \"{}\" UTS2 POS outline → WorldCoordinates 近似",
+                                i,
+                                ir_mat.name
+                            );
+                        }
+                        OutlineWidthMode::WorldCoordinates
+                    } else {
+                        OutlineWidthMode::None
+                    };
+                }
+
+                if outline_keyword != 0 {
+                    // _Outline_Width
+                    let width = get_float("_Outline_Width", 0.0);
+                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    mtoon.outline_width_factor = width * 0.01; // 任意スケール → メートル近似
+                    ir_mat.edge_size = (mtoon.outline_width_factor * PMX_SCALE * 10.0).min(1.0);
+
+                    // _Outline_Color
+                    let oc = get_color3("_Outline_Color", 0.0, 0.0, 0.0);
+                    let oc_linear = srgb_vec3_to_linear(oc);
+                    ir_mat.edge_color = Vec4::new(oc_linear.x, oc_linear.y, oc_linear.z, 1.0);
+
+                    // _Outline_Sampler → outline_width_texture (Rチャネル)
+                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    mtoon.outline_width_texture = resolve_tex("_Outline_Sampler", true);
+                    mtoon.outline_width_tex_channel = ColorChannel::R;
+
+                    // _Is_BlendBaseColor → outline_lighting_mix 近似
+                    let blend_base = get_float("_Is_BlendBaseColor", 0.0);
+                    mtoon.outline_lighting_mix = if blend_base > 0.5 { 1.0 } else { 0.0 };
+                }
+
+                // --- アルファモード（シェーダーバリアント名ベース）---
+                // UTS2 は _ClippingMode プロパティを持たない。透過種別はシェーダー名で決まる:
+                //   _TransClipping → Blend（透明+クリッピング）
+                //   _Clipping → Mask（カットアウト）
+                //   それ以外 → glTF core の alpha_mode を保持
+                let shader_name = v0_prop.shader.as_str();
+                if shader_name.contains("_TransClipping") || shader_name.contains("_Transparent") {
+                    ir_mat.alpha_mode = AlphaMode::Blend;
+                    // TransClipping は Clipping_Level も持つ
+                    ir_mat.alpha_cutoff = get_float("_Clipping_Level", 0.5);
+                } else if shader_name.contains("_Clipping") {
+                    ir_mat.alpha_mode = AlphaMode::Mask;
+                    ir_mat.alpha_cutoff = get_float("_Clipping_Level", 0.5);
+                    let has_clip_mask = v0_prop
+                        .texture_properties
+                        .as_ref()
+                        .and_then(|tp| tp.get("_ClippingMask"))
+                        .is_some();
+                    let use_base_alpha = get_float("_IsBaseMapAlphaAsClippingMask", 0.0) > 0.5;
+                    if has_clip_mask && !use_base_alpha {
+                        log::warn!(
+                            "材質[{}] \"{}\" UTS2 _ClippingMask テクスチャは未対応（base alpha フォールバック）",
+                            i, ir_mat.name
+                        );
+                    }
+                }
+                // それ以外: glTF core から読んだ alpha_mode を保持（Opaque が既定）
+
+                // --- カリング ---
+                let cull_mode_val = get_float("_CullMode", 2.0) as i32;
+                ir_mat.cull_mode = match cull_mode_val {
+                    0 => CullMode::None,
+                    1 => CullMode::Front,
+                    _ => CullMode::Back,
+                };
+
+                // --- リムライト ---
+                {
+                    let rim_enabled = get_float("_RimLight", 0.0);
+                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    if rim_enabled > 0.5 {
+                        mtoon.parametric_rim_color =
+                            srgb_vec3_to_linear(get_color3("_RimLightColor", 1.0, 1.0, 1.0));
+                        mtoon.parametric_rim_fresnel_power = get_float("_RimLight_Power", 5.0);
+                        mtoon.parametric_rim_lift = 0.0;
+                    }
+                    mtoon.rim_lighting_mix = 1.0;
+                }
+
+                // --- MatCap ---
+                {
+                    let matcap_enabled = get_float("_MatCap", 0.0);
+                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    if matcap_enabled > 0.5 {
+                        if let Some(tex_info) = resolve_tex("_MatCap_Sampler", false) {
+                            mtoon.matcap_texture = Some(tex_info);
+                            mtoon.matcap_factor =
+                                srgb_vec3_to_linear(get_color3("_MatCapColor", 1.0, 1.0, 1.0));
+                        }
+                    } else {
+                        mtoon.matcap_factor = Vec3::ZERO;
+                    }
+                }
+
+                // --- エミッシブ（HDR: linear のまま） ---
+                ir_mat.emissive_factor = get_color3("_Emissive_Color", 0.0, 0.0, 0.0);
+                if let Some(tex_info) = resolve_tex("_Emissive_Tex", true) {
+                    ir_mat.emissive_texture = Some(tex_info);
+                }
+
+                // --- 法線マップ ---
+                if let Some(tex_info) = resolve_tex("_NormalMap", true) {
+                    ir_mat.normal_texture = Some(tex_info);
+                    ir_mat.normal_texture_scale = get_float("_BumpScale", 1.0);
+                }
+
+                // --- HighColor → specular（PMX 出力のみ有効） ---
+                ir_mat.specular = srgb_vec3_to_linear(get_color3("_HighColor", 0.0, 0.0, 0.0));
+                ir_mat.specular_power = get_float("_HighColor_Power", 0.0) * 10.0;
+
+                // --- GI ---
+                // UTS2 の _GI_Intensity は環境光の加算量（デフォルト 0 = GI なし）。
+                // MToon の gi_equalization_factor は raw/equalized GI の補間係数で意味が異なる。
+                // 直接マッピングすると意味が逆転するため、0.0 固定（GI 均一化なし）で安全に。
+                {
+                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    mtoon.gi_equalization_factor = 0.0;
+                }
+
+                log::debug!(
+                    "材質[{}] \"{}\" is_uts2=true, shader=\"{}\", outline={}, edge_size={:.3}, shade={:?}",
+                    i,
+                    ir_mat.name,
+                    v0_prop.shader,
+                    outline_keyword,
+                    ir_mat.edge_size,
+                    ir_mat.mtoon.as_ref().unwrap().shade_color,
+                );
             }
         }
 
@@ -919,6 +1140,7 @@ fn extract_materials(
                 if let Some(exts) = &mat_json.extensions {
                     if let Some(mtoon_json) = exts.others.get("VRMC_materials_mtoon") {
                         ir_mat.mtoon = Some(MtoonParams::default());
+                        ir_mat.shader_family = ShaderFamily::Mtoon;
                         let mp = ir_mat.mtoon.as_mut().unwrap();
 
                         // outlineWidthMode が "none" 以外ならエッジ有効
@@ -1129,12 +1351,14 @@ fn extract_materials(
             }
         }
 
-        // Ambient を diffuseから計算
-        ir_mat.ambient = Vec3::new(
-            ir_mat.diffuse.x * 0.4,
-            ir_mat.diffuse.y * 0.4,
-            ir_mat.diffuse.z * 0.4,
-        );
+        // Ambient を diffuseから計算（UTS2 は _2nd_ShadeColor で設定済みのため抑止）
+        if !matches!(ir_mat.shader_family, ShaderFamily::Uts2) {
+            ir_mat.ambient = Vec3::new(
+                ir_mat.diffuse.x * 0.4,
+                ir_mat.diffuse.y * 0.4,
+                ir_mat.diffuse.z * 0.4,
+            );
+        }
 
         materials.push(ir_mat);
     }

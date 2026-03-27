@@ -3,32 +3,37 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
-  - [v0.2.9](#v029)
+  - [v0.2.10](#v0210)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
+    - [UTS2 対応パラメータ](#uts2-%E5%AF%BE%E5%BF%9C%E3%83%91%E3%83%A9%E3%83%A1%E3%83%BC%E3%82%BF)
     - [改善](#%E6%94%B9%E5%96%84)
+    - [v0.2.10 未対応（将来対応）](#v0210-%E6%9C%AA%E5%AF%BE%E5%BF%9C%E5%B0%86%E6%9D%A5%E5%AF%BE%E5%BF%9C)
+  - [v0.2.9](#v029)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
+    - [改善](#%E6%94%B9%E5%96%84-1)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3)
     - [実装詳細](#%E5%AE%9F%E8%A3%85%E8%A9%B3%E7%B4%B0)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84)
   - [v0.2.8](#v028)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
-    - [改善](#%E6%94%B9%E5%96%84-1)
-  - [v0.2.7](#v027)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
-    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-1)
     - [改善](#%E6%94%B9%E5%96%84-2)
+  - [v0.2.7](#v027)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
+    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-1)
+    - [改善](#%E6%94%B9%E5%96%84-3)
     - [コード品質改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E6%94%B9%E5%96%84)
   - [v0.2.6](#v026)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-2)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
-    - [改善](#%E6%94%B9%E5%96%84-3)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-4)
+    - [改善](#%E6%94%B9%E5%96%84-4)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-1)
   - [v0.2.5](#v025)
-    - [改善](#%E6%94%B9%E5%96%84-4)
+    - [改善](#%E6%94%B9%E5%96%84-5)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-2)
   - [v0.2.4](#v024)
-    - [改善](#%E6%94%B9%E5%96%84-5)
-  - [v0.2.3](#v023)
     - [改善](#%E6%94%B9%E5%96%84-6)
+  - [v0.2.3](#v023)
+    - [改善](#%E6%94%B9%E5%96%84-7)
   - [v0.2.2](#v022)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-3)
   - [FBX 対応](#fbx-%E5%AF%BE%E5%BF%9C)
@@ -38,6 +43,45 @@
 # 更新履歴
 
 [English](CHANGELOG.en.md)
+
+## v0.2.10
+
+### 新機能
+
+- **UTS2（Unity-Chan Toon Shader Ver.2）サポート** — VRM 0.0 モデルで使用される UTS2 シェーダーを自動検出し、既存の MToon 描画パイプラインに近似変換して表示・PMX 変換に対応
+  - `ShaderFamily` enum 導入（`Other` / `Mtoon` / `Uts2`）による複数シェーダー分類基盤
+  - 3重判定による UTS2 検出: シェーダー名（`UnityChanToonShader/*`, `Toon/Toon`）+ UTS2 固有プロパティ（`_utsVersion`, `_BaseColor_Step`）
+  - VRM 0.0 / VRM 1.0 の MToon 材質にも `ShaderFamily::Mtoon` を明示設定
+
+### UTS2 対応パラメータ
+
+| UTS2 プロパティ | 変換先 |
+|---|---|
+| `_BaseColor` / `_MainTex` | ベースカラー / テクスチャ |
+| `_1st_ShadeColor` / `_1st_ShadeMap` | MToon shade_color / shade_texture |
+| `_2nd_ShadeColor` | PMX ambient（`color * 0.5`） |
+| `_BaseColor_Step` / `_BaseShade_Feather` | shading_toony / shading_shift |
+| `_Outline_Width` / `_Outline_Color` | アウトライン（NML/POS → WorldCoordinates 近似） |
+| `_RimLight` / `_RimLightColor` / `_RimLight_Power` | リムライティング |
+| `_MatCap` / `_MatCap_Sampler` / `_MatCapColor` | MatCap テクスチャ |
+| `_Emissive_Tex` / `_Emissive_Color` | エミッシブ（HDR: linear 維持） |
+| `_NormalMap` / `_BumpScale` | 法線マップ |
+| `_HighColor` / `_HighColor_Power` | PMX specular（PMX 出力のみ） |
+| `_GI_Intensity` | GI（安全デフォルト 0.0 固定） |
+| `_CullMode` | カリングモード |
+
+### 改善
+
+- **UTS2 alpha モード判定** — シェーダーバリアント名ベースで判定（`_TransClipping` → Blend、`_Clipping` → Mask）。glTF core の `alpha_mode` をフォールバックとして保持
+- **UTS2 アウトライン POS モード** — UTS2 の POS outline は MToon の ScreenCoordinates とは異なるため WorldCoordinates 近似に統一し warning を出力
+- **UTS2 ClippingMask 警告** — `_ClippingMask` テクスチャ使用材質で未対応を warning 出力し base alpha でフォールバック
+- **ambient 上書き抑止** — UTS2 材質では `_2nd_ShadeColor` で設定した ambient が抽出末尾の `diffuse * 0.4` 再計算で上書きされないよう抑止
+- **PMX 変換 UTS2 分岐** — UTS2 材質では HighColor → specular、2nd_ShadeColor → ambient をそのまま PMX に出力（MToon の specular 抑制をスキップ）
+- **VRM 0.x ヘルパー共通化** — `get_float` / `get_color3` / `resolve_tex` / `main_tex_st` を MToon/UTS2 共通ヘルパーに整理。`adopt_main_tex` で `_MainTex` authoritative 処理を一箇所に集約
+
+### v0.2.10 未対応（将来対応）
+
+- ClippingMask 専用テクスチャ / HighColor ビューア描画 / ShadingGradeMap / 2nd_ShadeMap テクスチャ / AngelRing / Stencil 系バリアント
 
 ## v0.2.9
 

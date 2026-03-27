@@ -616,6 +616,15 @@ impl ColorChannel {
     }
 }
 
+/// シェーダー種別（Phase 3: 複数シェーダー検出対応）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShaderFamily {
+    #[default]
+    Other,
+    Mtoon,
+    Uts2,
+}
+
 /// MToon シェーダー固有パラメータ
 #[derive(Debug, Clone)]
 pub struct MtoonParams {
@@ -727,6 +736,8 @@ pub struct IrMaterial {
     pub edge_size: f32,
     /// MToon シェーダー固有パラメータ（None = 非MToon材質）
     pub mtoon: Option<MtoonParams>,
+    /// シェーダー種別（MToon / UTS2 / Other）
+    pub shader_family: ShaderFamily,
     /// FBX元テクスチャファイル名（一括割り当て用）
     pub source_texture_name: Option<String>,
     /// 材質の出自（RenderStyle 決定に使用）
@@ -793,6 +804,7 @@ impl Default for IrMaterial {
             edge_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
             edge_size: 0.0,
             mtoon: None,
+            shader_family: ShaderFamily::Other,
             source_texture_name: None,
             source_format: SourceFormat::Vrm1,
             sphere_texture_index: None,

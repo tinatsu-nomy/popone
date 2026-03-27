@@ -274,6 +274,7 @@ fn extract_materials(pmx: &PmxModel) -> Vec<IrMaterial> {
                 edge_color: if has_edge { m.edge_color } else { Vec4::ZERO },
                 edge_size: if has_edge { m.edge_size } else { 0.0 },
                 mtoon: None,
+                shader_family: ShaderFamily::Other,
                 source_texture_name: None,
                 source_format: SourceFormat::Pmx,
                 sphere_texture_index,
