@@ -1252,6 +1252,10 @@ Content: {
 
 During texture extraction (`texture.rs`), retrieval is done via `as_binary()` only, so images are not decoded from ASCII FBX Content strings. Instead, recovery is done via external file fallback using `RelativeFilename` / `FileName`.
 
+#### FBX External Texture Nearby Search
+
+When `RelativeFilename` / `FileName` paths don't match the actual directory structure (common with Unity/Blender project exports), `TextureSearchCache` is used to recursively search directories near the FBX file (max depth 3). The cache is a `HashMap` of filename (lowercase) → path, targeting only image file extensions (png/jpg/tga/bmp/dds/psd, etc.). Directory scanning runs only once per conversion.
+
 ### pkg Texture Namespace
 
 When append-loading multiple UnityPackages, texture name collisions between packages can occur (e.g., both contain `body.png`).

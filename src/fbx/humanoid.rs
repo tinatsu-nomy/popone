@@ -267,8 +267,8 @@ fn detect_rig_type(bone_names: &[(usize, &str)]) -> RigType {
     }
 
     // プレフィックスなし Mixamo: "Hips" + "Spine1" + "LeftArm" が存在
-    let has_hips = names.iter().any(|n| n == "hips");
-    let has_spine1 = names.iter().any(|n| n == "spine1");
+    let has_hips = names.iter().any(|n| n == "hips" || n == "下半身");
+    let has_spine1 = names.iter().any(|n| n == "spine1" || n == "上半身2");
     let has_leftarm = names.iter().any(|n| n == "leftarm");
     if has_hips && has_spine1 && has_leftarm {
         return RigType::Mixamo;
@@ -276,8 +276,9 @@ fn detect_rig_type(bone_names: &[(usize, &str)]) -> RigType {
 
     // Blender 汎用: "Hips" + ("Head" or "Spine") が存在
     // Head なしの部分スケルトン（衣装FBX等）も Blender と判定する
-    let has_head = names.iter().any(|n| n == "head");
-    let has_spine = names.iter().any(|n| n == "spine");
+    // 日本語ボーン名（下半身/上半身/頭）も許容
+    let has_head = names.iter().any(|n| n == "head" || n == "頭");
+    let has_spine = names.iter().any(|n| n == "spine" || n == "上半身");
     if has_hips && (has_head || has_spine) {
         return RigType::Blender;
     }
@@ -368,6 +369,7 @@ const VROID_MAP: &[(&str, HumanBone)] = &[
 ];
 
 /// Blender 汎用ボーン名（スペース/ドット/アンダースコアは "_" に正規化済み）
+/// Mixamo 風英語名・日本語ボーン名も含む（混合リグ FBX 対応）
 const BLENDER_MAP: &[(&str, HumanBone)] = &[
     ("hips", HumanBone::Hips),
     ("spine", HumanBone::Spine),
@@ -404,6 +406,62 @@ const BLENDER_MAP: &[(&str, HumanBone)] = &[
     ("toe_r", HumanBone::RightToes),
     ("lefteye", HumanBone::LeftEye),
     ("righteye", HumanBone::RightEye),
+    // --- Mixamo 風英語名（プレフィックスなし・日英混合リグ対応） ---
+    ("leftshoulder", HumanBone::LeftShoulder),
+    ("rightshoulder", HumanBone::RightShoulder),
+    ("leftarm", HumanBone::LeftUpperArm),
+    ("rightarm", HumanBone::RightUpperArm),
+    ("leftforearm", HumanBone::LeftLowerArm),
+    ("rightforearm", HumanBone::RightLowerArm),
+    ("lefthand", HumanBone::LeftHand),
+    ("righthand", HumanBone::RightHand),
+    ("leftupleg", HumanBone::LeftUpperLeg),
+    ("rightupleg", HumanBone::RightUpperLeg),
+    ("leftleg", HumanBone::LeftLowerLeg),
+    ("rightleg", HumanBone::RightLowerLeg),
+    ("leftfoot", HumanBone::LeftFoot),
+    ("rightfoot", HumanBone::RightFoot),
+    ("lefttoebase", HumanBone::LeftToes),
+    ("righttoebase", HumanBone::RightToes),
+    ("lefthandthumb1", HumanBone::LeftThumbProximal),
+    ("lefthandthumb2", HumanBone::LeftThumbIntermediate),
+    ("lefthandthumb3", HumanBone::LeftThumbDistal),
+    ("lefthandindex1", HumanBone::LeftIndexProximal),
+    ("lefthandindex2", HumanBone::LeftIndexIntermediate),
+    ("lefthandindex3", HumanBone::LeftIndexDistal),
+    ("lefthandmiddle1", HumanBone::LeftMiddleProximal),
+    ("lefthandmiddle2", HumanBone::LeftMiddleIntermediate),
+    ("lefthandmiddle3", HumanBone::LeftMiddleDistal),
+    ("lefthandring1", HumanBone::LeftRingProximal),
+    ("lefthandring2", HumanBone::LeftRingIntermediate),
+    ("lefthandring3", HumanBone::LeftRingDistal),
+    ("lefthandpinky1", HumanBone::LeftLittleProximal),
+    ("lefthandpinky2", HumanBone::LeftLittleIntermediate),
+    ("lefthandpinky3", HumanBone::LeftLittleDistal),
+    ("righthandthumb1", HumanBone::RightThumbProximal),
+    ("righthandthumb2", HumanBone::RightThumbIntermediate),
+    ("righthandthumb3", HumanBone::RightThumbDistal),
+    ("righthandindex1", HumanBone::RightIndexProximal),
+    ("righthandindex2", HumanBone::RightIndexIntermediate),
+    ("righthandindex3", HumanBone::RightIndexDistal),
+    ("righthandmiddle1", HumanBone::RightMiddleProximal),
+    ("righthandmiddle2", HumanBone::RightMiddleIntermediate),
+    ("righthandmiddle3", HumanBone::RightMiddleDistal),
+    ("righthandring1", HumanBone::RightRingProximal),
+    ("righthandring2", HumanBone::RightRingIntermediate),
+    ("righthandring3", HumanBone::RightRingDistal),
+    ("righthandpinky1", HumanBone::RightLittleProximal),
+    ("righthandpinky2", HumanBone::RightLittleIntermediate),
+    ("righthandpinky3", HumanBone::RightLittleDistal),
+    // --- 日本語ボーン名（PMX/MMD 慣習） ---
+    ("下半身", HumanBone::Hips),
+    ("上半身", HumanBone::Spine),
+    ("上半身2", HumanBone::Chest),
+    ("上半身3", HumanBone::UpperChest),
+    ("首", HumanBone::Neck),
+    ("頭", HumanBone::Head),
+    ("左目", HumanBone::LeftEye),
+    ("右目", HumanBone::RightEye),
     ("thumb_proximal_l", HumanBone::LeftThumbProximal),
     ("thumb_proximal_r", HumanBone::RightThumbProximal),
     ("thumb_intermediate_l", HumanBone::LeftThumbIntermediate),

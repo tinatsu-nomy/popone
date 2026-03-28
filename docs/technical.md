@@ -1252,6 +1252,10 @@ Content: {
 
 テクスチャ抽出時（`texture.rs`）は `as_binary()` のみで取得するため、ASCII FBX の Content 文字列からは画像デコードされない。代わりに `RelativeFilename` / `FileName` による外部ファイルフォールバックで復元する。
 
+#### FBX 外部テクスチャ近傍検索
+
+`RelativeFilename` / `FileName` のパスが実際のディレクトリ構造と一致しない場合（Unity/Blender プロジェクトからのエクスポートで頻発）、`TextureSearchCache` を使用して FBX 親ディレクトリ以下を再帰検索（最大深度 3）する。キャッシュはファイル名（小文字）→パスの `HashMap` で、画像ファイル拡張子（png/jpg/tga/bmp/dds/psd 等）のみを対象とする。1 回の変換で走査は 1 度だけ実行される。
+
 ### pkg テクスチャ名前空間
 
 複数の UnityPackage を追加読み込みすると、パッケージ間でテクスチャ名が衝突する可能性がある（例: 両方に `body.png` が含まれる場合）。

@@ -58,8 +58,8 @@
   <text x="205" y="196" font-size="11" fill="#444">scene</text>
   <text x="205" y="212" font-size="11" fill="#444">extract</text>
   <text x="205" y="228" font-size="11" fill="#444">bone / mesh / skin</text>
-  <text x="205" y="244" font-size="11" fill="#444">texture</text>
-  <text x="205" y="260" font-size="11" fill="#444">humanoid (6リグ) / blendshape</text>
+  <text x="205" y="244" font-size="11" fill="#444">texture (近傍検索キャッシュ)</text>
+  <text x="205" y="260" font-size="11" fill="#444">humanoid (6リグ+日英混合) / blendshape</text>
 
   <!-- pmx/ (読み書き両対応) -->
   <rect x="350" y="140" width="140" height="120" rx="6" fill="#FCE4EC" stroke="#C62828" stroke-width="1.5"/>

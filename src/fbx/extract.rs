@@ -65,6 +65,7 @@ pub fn extract_ir_model_from_fbx_with_options(
     let mut ir_textures: Vec<IrTexture> = Vec::new();
     let mut ir_materials: Vec<IrMaterial> = Vec::new();
     let mut ir_meshes: Vec<IrMesh> = Vec::new();
+    let mut tex_search_cache = texture::TextureSearchCache::new();
     let mut ir_morphs: Vec<IrMorph> = Vec::new();
     for geom_obj in scene.geometries() {
         let geom = geom_obj.node;
@@ -99,8 +100,13 @@ pub fn extract_ir_model_from_fbx_with_options(
             let diffuse = mesh::extract_diffuse_color(mat_obj.node);
             let props = mesh::extract_material_props(mat_obj.node);
 
-            let tex_idx = texture::extract_texture_for_material(&scene, mat_obj.id, fbx_path)
-                .and_then(|tex| texture_to_ir(&tex, &mut ir_textures));
+            let tex_idx = texture::extract_texture_for_material(
+                &scene,
+                mat_obj.id,
+                fbx_path,
+                &mut tex_search_cache,
+            )
+            .and_then(|tex| texture_to_ir(&tex, &mut ir_textures));
             let source_tex_name = texture::extract_texture_name_for_material(&scene, mat_obj.id);
 
             // PMX 材質パラメータ

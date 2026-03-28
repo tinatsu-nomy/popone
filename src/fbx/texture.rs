@@ -1,11 +1,74 @@
 use super::scene::FbxScene;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 pub struct TextureData {
     pub name: String,
     pub rgba: Vec<u8>,
     pub width: u32,
     pub height: u32,
+}
+
+/// FBX 近傍テクスチャ検索キャッシュ
+/// 初回アクセス時に FBX 親ディレクトリ以下を走査し、basename(小文字)→パスのマップを構築
+pub struct TextureSearchCache {
+    map: Option<HashMap<String, PathBuf>>,
+}
+
+impl TextureSearchCache {
+    pub fn new() -> Self {
+        Self { map: None }
+    }
+
+    fn get_or_build(&mut self, fbx_dir: &Path) -> &HashMap<String, PathBuf> {
+        if self.map.is_none() {
+            let search_root = fbx_dir.parent().unwrap_or(fbx_dir);
+            let mut map = HashMap::new();
+            collect_files(search_root, &mut map, 0);
+            log::debug!(
+                "テクスチャ検索キャッシュ構築: {} ファイル (root={})",
+                map.len(),
+                search_root.display()
+            );
+            self.map = Some(map);
+        }
+        self.map.as_ref().unwrap()
+    }
+
+    fn lookup(&mut self, fbx_dir: &Path, basename: &str) -> Option<PathBuf> {
+        let key = basename.to_lowercase();
+        self.get_or_build(fbx_dir).get(&key).cloned()
+    }
+}
+
+fn collect_files(dir: &Path, map: &mut HashMap<String, PathBuf>, depth: u8) {
+    if depth > 3 {
+        return;
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let ft = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        if ft.is_file() {
+            if let Some(name) = entry.file_name().to_str() {
+                let key = name.to_lowercase();
+                // 画像ファイルのみキャッシュ
+                if matches!(
+                    Path::new(&key).extension().and_then(|e| e.to_str()),
+                    Some("png" | "jpg" | "jpeg" | "tga" | "bmp" | "dds" | "psd" | "tif" | "tiff")
+                ) {
+                    map.entry(key).or_insert_with(|| entry.path());
+                }
+            }
+        } else if ft.is_dir() {
+            collect_files(&entry.path(), map, depth + 1);
+        }
+    }
 }
 
 /// テクスチャリストから Diffuse テクスチャを選択（共通ロジック）
@@ -43,11 +106,23 @@ pub fn extract_texture_for_material(
     scene: &FbxScene,
     mat_id: i64,
     fbx_path: Option<&Path>,
+    search_cache: &mut TextureSearchCache,
 ) -> Option<TextureData> {
     let textures = scene.textures_for_material(mat_id);
     let tex_obj = find_diffuse_texture(&textures)?;
 
-    let tex_name = tex_obj.name.clone();
+    // テクスチャ名: 実ファイル名を優先し、無ければ FBX オブジェクト名
+    let file_basename = extract_basename_from_texture(tex_obj);
+    let tex_name = file_basename
+        .as_deref()
+        .map(|b| {
+            Path::new(b)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_else(|| tex_obj.name.clone());
 
     // Try embedded Video content first (binary FBX only)
     // ASCII FBX の Content はテキスト表現のため画像デコードできない → 外部ファイルフォールバックに委ねる
@@ -92,6 +167,26 @@ pub fn extract_texture_for_material(
         }
     }
 
+    // Fallback: basename で FBX 近傍ディレクトリをキャッシュ検索
+    // Unity/Blender エクスポート FBX で RelativeFilename のパスが実際のディレクトリ構造と異なる場合に対応
+    let basename = file_basename?;
+    if let Some(found) = search_cache.lookup(fbx_dir, &basename) {
+        log::info!(
+            "テクスチャ '{}' を近傍検索で発見: {}",
+            basename,
+            found.display()
+        );
+        if let Ok(data) = std::fs::read(&found) {
+            if let Some(tex) = decode_image_data(&data, &tex_name) {
+                return Some(tex);
+            }
+        }
+    }
+
+    log::warn!(
+        "テクスチャ '{}' が見つかりません (FBXディレクトリ近傍を検索済み)",
+        basename
+    );
     None
 }
 

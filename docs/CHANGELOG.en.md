@@ -3,47 +3,49 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.13](#v0213)
+  - [v0.2.14](#v0214)
     - [Improvements](#improvements)
+  - [v0.2.13](#v0213)
+    - [Improvements](#improvements-1)
   - [v0.2.12](#v0212)
     - [Bug Fixes](#bug-fixes)
     - [New Features](#new-features)
-    - [Improvements](#improvements-1)
+    - [Improvements](#improvements-2)
   - [v0.2.11](#v0211)
     - [New Features](#new-features-1)
-    - [Improvements](#improvements-2)
+    - [Improvements](#improvements-3)
   - [v0.2.10](#v0210)
     - [New Features](#new-features-2)
     - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
     - [Bug Fixes](#bug-fixes-1)
-    - [Improvements](#improvements-3)
+    - [Improvements](#improvements-4)
     - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
   - [v0.2.9](#v029)
     - [New Features](#new-features-3)
-    - [Improvements](#improvements-4)
+    - [Improvements](#improvements-5)
     - [Bug Fixes](#bug-fixes-2)
     - [Implementation Details](#implementation-details)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
     - [New Features](#new-features-4)
-    - [Improvements](#improvements-5)
+    - [Improvements](#improvements-6)
   - [v0.2.7](#v027)
     - [New Features](#new-features-5)
     - [Bug Fixes](#bug-fixes-3)
-    - [Improvements](#improvements-6)
+    - [Improvements](#improvements-7)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
     - [Bug Fixes](#bug-fixes-4)
     - [New Features](#new-features-6)
-    - [Improvements](#improvements-7)
+    - [Improvements](#improvements-8)
     - [Code Quality & Performance](#code-quality--performance-1)
   - [v0.2.5](#v025)
-    - [Improvements](#improvements-8)
+    - [Improvements](#improvements-9)
     - [Code Quality & Performance](#code-quality--performance-2)
   - [v0.2.4](#v024)
-    - [Improvements](#improvements-9)
-  - [v0.2.3](#v023)
     - [Improvements](#improvements-10)
+  - [v0.2.3](#v023)
+    - [Improvements](#improvements-11)
   - [v0.2.2](#v022)
     - [Code Quality & Performance](#code-quality--performance-3)
   - [FBX Support](#fbx-support)
@@ -53,6 +55,14 @@
 # Changelog
 
 [日本語](CHANGELOG.md)
+
+## v0.2.14
+
+### Improvements
+
+- **FBX external texture nearby search** — When FBX `RelativeFilename` / `FileName` paths don't match the actual directory structure (common with Unity/Blender project exports), added a fallback that recursively searches directories near the FBX file. `TextureSearchCache` ensures directory scanning happens only once
+- **FBX texture name improvement** — Uses the actual filename (`LL_Skin`, etc.) instead of the FBX object name (`file3`, etc.) as the texture name
+- **Mixed Japanese/English FBX bone mapping** — Added support for Blender-exported FBX files with mixed Japanese bone names (下半身/上半身/頭, etc.) and English bone names (RightArm/LeftForeArm, etc.). Added Japanese bone names to rig detection and extended `BLENDER_MAP` with Mixamo-style English names and Japanese bone names
 
 ## v0.2.13
 
