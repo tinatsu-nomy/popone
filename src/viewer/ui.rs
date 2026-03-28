@@ -822,8 +822,24 @@ pub fn execute_conversion(app: &mut ViewerApp) {
         .map(|m| m.len())
         .unwrap_or(0);
 
-    // 法線が変更されている場合、IrModel に書き戻してから変換
-    let normals_modified = app.display.smooth_normals || app.display.clear_custom_normals;
+    // 法線が変更されている場合、IrModel に書き戻して変換（変換後に元の法線を復元）
+    let normals_modified = app.smooth_normals_per_mat.iter().any(|&v| v)
+        || app.clear_normals_per_mat.iter().any(|&v| v);
+    // 元の法線を保存（復元用）
+    let saved_normals: Option<Vec<Vec<glam::Vec3>>> = if normals_modified {
+        Some(
+            app.loaded
+                .as_ref()
+                .unwrap()
+                .ir
+                .meshes
+                .iter()
+                .map(|m| m.vertices.iter().map(|v| v.normal).collect())
+                .collect(),
+        )
+    } else {
+        None
+    };
     if normals_modified {
         if let Some(ref mut loaded) = app.loaded {
             loaded.gpu_model.write_normals_back(&mut loaded.ir);
@@ -853,7 +869,7 @@ pub fn execute_conversion(app: &mut ViewerApp) {
         log::info!(
             "表示材質のみ出力: {}/{} 材質を出力",
             visible_mat_indices.len(),
-            loaded.ir.materials.len()
+            &loaded.ir.materials.len()
         );
         filtered_ir = build_filtered_ir(&loaded.ir, &visible_mat_indices);
         &filtered_ir
@@ -935,6 +951,21 @@ pub fn execute_conversion(app: &mut ViewerApp) {
             app.convert_message = Some(ConvertMessage::failure(format!(
                 "変換失敗: {e}\n出力先のパスやディスク容量を確認してください。"
             )));
+        }
+    }
+
+    // 法線を元に戻す（write_normals_back で上書きした法線を復元）
+    if let Some(saved) = saved_normals {
+        if let Some(ref mut loaded) = app.loaded {
+            for (mi, mesh) in loaded.ir.meshes.iter_mut().enumerate() {
+                if let Some(normals) = saved.get(mi) {
+                    for (vi, v) in mesh.vertices.iter_mut().enumerate() {
+                        if let Some(&n) = normals.get(vi) {
+                            v.normal = n;
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1348,46 +1379,50 @@ fn show_tab_display(
             .iter()
             .any(|d| d.render_style == super::mesh::RenderStyle::Mmd)
     });
-    let has_normal_map = app
-        .loaded
-        .as_ref()
-        .is_some_and(|l| l.ir.materials.iter().any(|m| m.normal_texture.is_some()));
+    // per-material 法線フラグの一括切替チェックボックス
     ui.add_enabled_ui(!has_mmd_normals, |ui| {
-        let smooth_disabled = has_normal_map;
-        let old_smooth = app.display.smooth_normals;
-        let resp = ui.add_enabled(
-            !smooth_disabled,
-            egui::Checkbox::new(&mut app.display.smooth_normals, "法線平滑化"),
-        );
-        if smooth_disabled {
-            resp.on_disabled_hover_text(
-                "法線マップ付き材質があるため無効（UV seam 境界で tangent が不正確になります）",
-            );
-        } else {
-            resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
+        // 法線平滑化 一括
+        {
+            let all_on = !app.smooth_normals_per_mat.is_empty()
+                && app.smooth_normals_per_mat.iter().all(|&v| v);
+            let mut checked = all_on;
+            let resp = ui.checkbox(&mut checked, "法線平滑化（一括）");
+            if resp.changed() && app.loaded.is_some() {
+                let ir_mats = &app.loaded.as_ref().unwrap().ir.materials;
+                for (i, v) in app.smooth_normals_per_mat.iter_mut().enumerate() {
+                    // 法線マップ付き材質はスキップ
+                    if ir_mats.get(i).is_some_and(|m| m.normal_texture.is_some()) {
+                        *v = false;
+                    } else {
+                        *v = checked;
+                    }
+                }
+                app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
+            }
+            if has_mmd_normals {
+                resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
+            }
         }
-        // smooth_normals が強制無効化された場合、値もリセット
-        if smooth_disabled && app.display.smooth_normals {
-            app.display.smooth_normals = false;
-        }
-        if app.display.smooth_normals != old_smooth && app.loaded.is_some() {
-            app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
-        }
-        let old_clear = app.display.clear_custom_normals;
-        let clear_resp = ui.add_enabled(
-            !smooth_disabled,
-            egui::Checkbox::new(&mut app.display.clear_custom_normals, "カスタム法線クリア"),
-        );
-        if smooth_disabled {
-            clear_resp.on_disabled_hover_text(
-                "法線マップ付き材質があるため無効（UV seam 境界で tangent が不正確になります）",
-            );
-            app.display.clear_custom_normals = false;
-        } else {
-            clear_resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
-        }
-        if app.display.clear_custom_normals != old_clear && app.loaded.is_some() {
-            app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
+        // カスタム法線クリア 一括
+        {
+            let all_on = !app.clear_normals_per_mat.is_empty()
+                && app.clear_normals_per_mat.iter().all(|&v| v);
+            let mut checked = all_on;
+            let resp = ui.checkbox(&mut checked, "カスタム法線クリア（一括）");
+            if resp.changed() && app.loaded.is_some() {
+                let ir_mats = &app.loaded.as_ref().unwrap().ir.materials;
+                for (i, v) in app.clear_normals_per_mat.iter_mut().enumerate() {
+                    if ir_mats.get(i).is_some_and(|m| m.normal_texture.is_some()) {
+                        *v = false;
+                    } else {
+                        *v = checked;
+                    }
+                }
+                app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
+            }
+            if has_mmd_normals {
+                resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
+            }
         }
     });
 
@@ -1436,6 +1471,17 @@ fn show_tab_display(
     }
     let filter_lower = app.material_filter.to_lowercase();
     let thumb_ids = &app.tex.pkg_thumb_cache;
+    // 材質ごとの法線マップ有無を事前抽出（借用衝突回避のため）
+    let mat_has_normal_map: Vec<bool> = app
+        .loaded
+        .as_ref()
+        .map(|l| {
+            l.ir.materials
+                .iter()
+                .map(|m| m.normal_texture.is_some())
+                .collect()
+        })
+        .unwrap_or_default();
     // グループ情報を軽量抽出（名前と draw_range のみ。MaterialGroup 全体の clone を回避）
     let (group_names, group_draw_ranges): (Vec<String>, Vec<std::ops::Range<usize>>) = app
         .loaded
@@ -1599,6 +1645,35 @@ fn show_tab_display(
                         mat_src_tex.get(mat_idx)
                             .and_then(|s| s.as_deref())
                     });
+                // 法線 per-material トグル（S=平滑化, C=カスタム法線クリア）
+                let has_nmap = mat_has_normal_map.get(mat_idx).copied().unwrap_or(false);
+                if mat_idx < app.smooth_normals_per_mat.len() {
+                    let old = app.smooth_normals_per_mat[mat_idx];
+                    let resp = ui.add_enabled(
+                        !has_nmap,
+                        egui::SelectableLabel::new(app.smooth_normals_per_mat[mat_idx], "S"),
+                    );
+                    if resp.clicked() && !has_nmap {
+                        app.smooth_normals_per_mat[mat_idx] = !old;
+                        app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
+                    }
+                    if resp.hovered() { row_highlight = true; }
+                    resp.on_hover_text("法線平滑化");
+                }
+                if mat_idx < app.clear_normals_per_mat.len() {
+                    let old = app.clear_normals_per_mat[mat_idx];
+                    let resp = ui.add_enabled(
+                        !has_nmap,
+                        egui::SelectableLabel::new(app.clear_normals_per_mat[mat_idx], "C"),
+                    );
+                    if resp.clicked() && !has_nmap {
+                        app.clear_normals_per_mat[mat_idx] = !old;
+                        app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
+                    }
+                    if resp.hovered() { row_highlight = true; }
+                    resp.on_hover_text("カスタム法線クリア");
+                }
+
                 let cb = if let Some(tex_name) = display_tex {
                     ui.checkbox(
                         &mut app.material_visibility[i],
@@ -1756,6 +1831,39 @@ fn show_tab_display(
                 let display_tex = assigned_name
                     .as_deref()
                     .or_else(|| mat_src_tex.get(mat_idx).and_then(|s| s.as_deref()));
+                // 法線 per-material トグル（S=平滑化, C=カスタム法線クリア）
+                let has_nmap = mat_has_normal_map.get(mat_idx).copied().unwrap_or(false);
+                if mat_idx < app.smooth_normals_per_mat.len() {
+                    let old = app.smooth_normals_per_mat[mat_idx];
+                    let resp = ui.add_enabled(
+                        !has_nmap,
+                        egui::SelectableLabel::new(app.smooth_normals_per_mat[mat_idx], "S"),
+                    );
+                    if resp.clicked() && !has_nmap {
+                        app.smooth_normals_per_mat[mat_idx] = !old;
+                        app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
+                    }
+                    if resp.hovered() {
+                        row_highlight = true;
+                    }
+                    resp.on_hover_text("法線平滑化");
+                }
+                if mat_idx < app.clear_normals_per_mat.len() {
+                    let old = app.clear_normals_per_mat[mat_idx];
+                    let resp = ui.add_enabled(
+                        !has_nmap,
+                        egui::SelectableLabel::new(app.clear_normals_per_mat[mat_idx], "C"),
+                    );
+                    if resp.clicked() && !has_nmap {
+                        app.clear_normals_per_mat[mat_idx] = !old;
+                        app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
+                    }
+                    if resp.hovered() {
+                        row_highlight = true;
+                    }
+                    resp.on_hover_text("カスタム法線クリア");
+                }
+
                 let cb = if let Some(tex_name) = display_tex {
                     ui.checkbox(
                         &mut app.material_visibility[i],

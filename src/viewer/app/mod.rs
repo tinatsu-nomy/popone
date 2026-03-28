@@ -332,6 +332,10 @@ pub struct ViewerApp {
     pub export: ExportState,
     /// 材質ごとの表示ON/OFF
     pub material_visibility: Vec<bool>,
+    /// 材質ごとの法線平滑化 ON/OFF（mat_idx でインデックス）
+    pub smooth_normals_per_mat: Vec<bool>,
+    /// 材質ごとのカスタム法線クリア ON/OFF（mat_idx でインデックス）
+    pub clear_normals_per_mat: Vec<bool>,
     /// 材質フィルター文字列
     pub material_filter: String,
     /// ドラッグオーバー中フラグ
@@ -414,6 +418,8 @@ impl ViewerApp {
             morph_dirty: false,
             display: DisplaySettings::default(),
             material_visibility: Vec::new(),
+            smooth_normals_per_mat: Vec::new(),
+            clear_normals_per_mat: Vec::new(),
             export: ExportState::default(),
             material_filter: String::new(),
             drag_hovering: false,
@@ -476,12 +482,22 @@ impl ViewerApp {
         let queue = &self.render_state.queue;
 
         // GPU リソース構築（IrTexture から直接アップロード）
+        // 初回ロード時は per_mat 未初期化のため空スライス（全OFF扱い）
+        let smooth_per_mat: Vec<bool>;
+        let clear_per_mat: Vec<bool>;
+        if self.smooth_normals_per_mat.len() == ir.materials.len() {
+            smooth_per_mat = self.smooth_normals_per_mat.clone();
+            clear_per_mat = self.clear_normals_per_mat.clone();
+        } else {
+            smooth_per_mat = vec![false; ir.materials.len()];
+            clear_per_mat = vec![false; ir.materials.len()];
+        }
         let gpu_model = super::mesh::build_gpu_model_from_ir(
             &ir,
             device,
             queue,
-            self.display.smooth_normals,
-            self.display.clear_custom_normals,
+            &smooth_per_mat,
+            &clear_per_mat,
         )?;
         self.finish_load_with_gpu(ir, gpu_model, source)
     }
@@ -557,6 +573,8 @@ impl ViewerApp {
         self.morph_dirty = false;
         // 材質表示フラグ初期化（DrawCall数 = 材質数ではない場合があるのでdraws数に合わせる）
         self.material_visibility = vec![true; gpu_model.draws.len()];
+        self.smooth_normals_per_mat = vec![false; ir.materials.len()];
+        self.clear_normals_per_mat = vec![false; ir.materials.len()];
         self.export.export_visible_only = false;
         self.material_filter.clear();
         // カメラをモデルのバウンディングボックスにフィット
@@ -646,11 +664,14 @@ impl ViewerApp {
         let Some(loaded) = &self.loaded else { return };
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
-        let smooth = self.display.smooth_normals;
-        let clear_normals = self.display.clear_custom_normals;
 
-        match super::mesh::build_gpu_model_from_ir(&loaded.ir, device, queue, smooth, clear_normals)
-        {
+        match super::mesh::build_gpu_model_from_ir(
+            &loaded.ir,
+            device,
+            queue,
+            &self.smooth_normals_per_mat,
+            &self.clear_normals_per_mat,
+        ) {
             Ok(mut new_model) => {
                 // MMD リソース構築
                 if let Some(ref renderer) = self.renderer {
@@ -685,9 +706,18 @@ impl ViewerApp {
                     new_state.ping_pong_direction = old_anim.ping_pong_direction;
                     self.anim.state = Some(new_state);
                 }
-                log::info!("GPU モデル再構築完了 (smooth_normals={})", smooth);
+                log::info!("GPU モデル再構築完了 (per-material normals)");
             }
             Err(e) => log::error!("GPU モデル再構築失敗: {}", e),
+        }
+    }
+
+    /// per_mat フラグが材質数と一致すればそのまま返し、不一致なら全 false で生成
+    fn per_mat_or_default(flags: &[bool], mat_count: usize) -> Vec<bool> {
+        if flags.len() == mat_count {
+            flags.to_vec()
+        } else {
+            vec![false; mat_count]
         }
     }
 

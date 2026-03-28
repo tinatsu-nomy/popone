@@ -3,45 +3,47 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.2.13](#v0213)
+    - [Improvements](#improvements)
   - [v0.2.12](#v0212)
     - [Bug Fixes](#bug-fixes)
     - [New Features](#new-features)
-    - [Improvements](#improvements)
+    - [Improvements](#improvements-1)
   - [v0.2.11](#v0211)
     - [New Features](#new-features-1)
-    - [Improvements](#improvements-1)
+    - [Improvements](#improvements-2)
   - [v0.2.10](#v0210)
     - [New Features](#new-features-2)
     - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
     - [Bug Fixes](#bug-fixes-1)
-    - [Improvements](#improvements-2)
+    - [Improvements](#improvements-3)
     - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
   - [v0.2.9](#v029)
     - [New Features](#new-features-3)
-    - [Improvements](#improvements-3)
+    - [Improvements](#improvements-4)
     - [Bug Fixes](#bug-fixes-2)
     - [Implementation Details](#implementation-details)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
     - [New Features](#new-features-4)
-    - [Improvements](#improvements-4)
+    - [Improvements](#improvements-5)
   - [v0.2.7](#v027)
     - [New Features](#new-features-5)
     - [Bug Fixes](#bug-fixes-3)
-    - [Improvements](#improvements-5)
+    - [Improvements](#improvements-6)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
     - [Bug Fixes](#bug-fixes-4)
     - [New Features](#new-features-6)
-    - [Improvements](#improvements-6)
+    - [Improvements](#improvements-7)
     - [Code Quality & Performance](#code-quality--performance-1)
   - [v0.2.5](#v025)
-    - [Improvements](#improvements-7)
+    - [Improvements](#improvements-8)
     - [Code Quality & Performance](#code-quality--performance-2)
   - [v0.2.4](#v024)
-    - [Improvements](#improvements-8)
-  - [v0.2.3](#v023)
     - [Improvements](#improvements-9)
+  - [v0.2.3](#v023)
+    - [Improvements](#improvements-10)
   - [v0.2.2](#v022)
     - [Code Quality & Performance](#code-quality--performance-3)
   - [FBX Support](#fbx-support)
@@ -51,6 +53,18 @@
 # Changelog
 
 [日本語](CHANGELOG.md)
+
+## v0.2.13
+
+### Improvements
+
+- **Bone merge algorithm improvement** — Extended bone merging during append loading to a 3-level fallback method. Models with different bone naming conventions (Japanese vs English names) are now correctly merged
+  - **Pass 1a**: Match by `vrm_bone_name` (humanoid bone name). VRM names are unique per skeleton, no parent check needed
+  - **Pass 1b**: Match by `original_name` (FBX node name) with lowercase normalization. Parent consistency check included
+  - **Pass 1c**: Match by `bone.name` (PMX name) + same parent name check (existing behavior, backward compatible)
+- **Relaxed Blender rig detection** — Changed `detect_rig_type` Blender condition from `hips && head` to `hips && (head || spine)`. Partial skeletons such as costume FBX without Head bone are now detected as Blender rig
+- **Pre-merge humanoid completion** — When appended model lacks humanoid information, `detect_humanoid` is re-run against `original_name` before merge to fill in `vrm_bone_name`
+- **VRM confirmed flag** — Bones matched by `vrm_bone_name` are exempted from parent propagation cancellation (pass 2), ensuring semantically correct merging
 
 ## v0.2.12
 

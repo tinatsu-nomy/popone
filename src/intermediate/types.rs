@@ -222,10 +222,62 @@ impl IrModel {
         let mut is_new_bone: Vec<bool> = vec![true; other_bone_count];
         let mut merged_count: usize = 0;
 
-        // パス1: 同名+同親名の候補を暫定マーク（順序非依存）
+        // ── 3段フォールバック候補決定 ──
         // candidate[i] = Some(self_idx) なら統合候補
         let mut candidate: Vec<Option<usize>> = vec![None; other_bone_count];
+        // vrm_bone_name マッチは確定扱い（パス2の親伝播取り消し対象外）
+        let mut is_vrm_match: Vec<bool> = vec![false; other_bone_count];
+
+        // Pass 1a: vrm_bone_name 照合（最高信頼度、親チェック不要 — VRM名は全身で一意）
+        let mut vrm_to_self: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for (i, bone) in self.bones.iter().enumerate() {
+            if let Some(ref vrm) = bone.vrm_bone_name {
+                vrm_to_self.entry(vrm.as_str()).or_insert(i);
+            }
+        }
         for (i, other_bone) in other.bones.iter().enumerate() {
+            if let Some(ref vrm) = other_bone.vrm_bone_name {
+                if let Some(&self_idx) = vrm_to_self.get(vrm.as_str()) {
+                    candidate[i] = Some(self_idx);
+                    is_vrm_match[i] = true;
+                }
+            }
+        }
+
+        // Pass 1b: original_name 照合（親整合性チェック付き）
+        let mut orig_to_self: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for (i, bone) in self.bones.iter().enumerate() {
+            let key = bone.original_name.to_lowercase();
+            orig_to_self.entry(key).or_insert(i);
+        }
+        for (i, other_bone) in other.bones.iter().enumerate() {
+            if candidate[i].is_some() {
+                continue;
+            }
+            let key = other_bone.original_name.to_lowercase();
+            if let Some(&self_idx) = orig_to_self.get(&key) {
+                let parent_ok = match (other_bone.parent, self.bones[self_idx].parent) {
+                    (None, None) => true,
+                    (Some(op), Some(sp)) => {
+                        candidate[op] == Some(sp)
+                            || self.bones[sp].original_name.to_lowercase()
+                                == other.bones[op].original_name.to_lowercase()
+                    }
+                    _ => false,
+                };
+                if parent_ok {
+                    candidate[i] = Some(self_idx);
+                }
+            }
+        }
+
+        // Pass 1c: bone.name 照合（既存ロジック — 後方互換）
+        for (i, other_bone) in other.bones.iter().enumerate() {
+            if candidate[i].is_some() {
+                continue;
+            }
             if let Some(&self_idx) = bone_name_to_self.get(other_bone.name.as_str()) {
                 let self_parent_name = self.bones[self_idx]
                     .parent
@@ -239,11 +291,12 @@ impl IrModel {
 
         // パス2: 親の統合状態を伝播して最終決定（順序非依存）
         // 候補ボーンの親が候補でない場合は統合を取り消す（異なる部分木の子孫が誤統合されるのを防ぐ）
+        // vrm_bone_name マッチは意味的に確定なので取り消し対象外
         let mut changed = true;
         while changed {
             changed = false;
             for i in 0..other_bone_count {
-                if candidate[i].is_none() {
+                if candidate[i].is_none() || is_vrm_match[i] {
                     continue;
                 }
                 if let Some(parent_idx) = other.bones[i].parent {

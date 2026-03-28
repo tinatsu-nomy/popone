@@ -9,6 +9,8 @@ use eframe::egui;
 use crate::intermediate::types::IrModel;
 use crate::vrm;
 
+use super::pending::PendingOverlay;
+
 use super::super::animation::AnimationState;
 use super::helpers::{
     build_pkg_model_list, collect_image_files_recursive, is_temp_path, FbxLoadMode, PkgModelType,
@@ -979,14 +981,11 @@ impl ViewerApp {
 
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
-        let gpu_model = super::super::mesh::build_gpu_model(
-            &ir,
-            &glb.images,
-            device,
-            queue,
-            self.display.smooth_normals,
-            self.display.clear_custom_normals,
-        )?;
+        let mat_count = ir.materials.len();
+        let smooth = Self::per_mat_or_default(&self.smooth_normals_per_mat, mat_count);
+        let clear = Self::per_mat_or_default(&self.clear_normals_per_mat, mat_count);
+        let gpu_model =
+            super::super::mesh::build_gpu_model(&ir, &glb.images, device, queue, &smooth, &clear)?;
 
         Self::encode_ir_textures_as_png(&mut ir, &glb.images);
         let source =
@@ -1400,13 +1399,16 @@ impl ViewerApp {
 
             let device = &self.render_state.device;
             let queue = &self.render_state.queue;
+            let mc = ir.materials.len();
+            let smooth = Self::per_mat_or_default(&self.smooth_normals_per_mat, mc);
+            let clear = Self::per_mat_or_default(&self.clear_normals_per_mat, mc);
             let gpu_model = super::super::mesh::build_gpu_model(
                 &ir,
                 &glb.images,
                 device,
                 queue,
-                self.display.smooth_normals,
-                self.display.clear_custom_normals,
+                &smooth,
+                &clear,
             )?;
             Self::encode_ir_textures_as_png(&mut ir, &glb.images);
 
@@ -1436,14 +1438,11 @@ impl ViewerApp {
 
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
-        let gpu_model = super::super::mesh::build_gpu_model(
-            &ir,
-            &glb.images,
-            device,
-            queue,
-            self.display.smooth_normals,
-            self.display.clear_custom_normals,
-        )?;
+        let mc = ir.materials.len();
+        let smooth = Self::per_mat_or_default(&self.smooth_normals_per_mat, mc);
+        let clear = Self::per_mat_or_default(&self.clear_normals_per_mat, mc);
+        let gpu_model =
+            super::super::mesh::build_gpu_model(&ir, &glb.images, device, queue, &smooth, &clear)?;
 
         // IrTexture を PNG エンコード済みに変換（convert_ir_to_pmx で統一的に使えるように）
         Self::encode_ir_textures_as_png(&mut ir, &glb.images);
@@ -1467,6 +1466,8 @@ impl ViewerApp {
         let saved_camera = self.camera.clone();
         let saved_morphs = std::mem::take(&mut self.morph_weights);
         let saved_visibility = std::mem::take(&mut self.material_visibility);
+        let saved_smooth_per_mat = std::mem::take(&mut self.smooth_normals_per_mat);
+        let saved_clear_per_mat = std::mem::take(&mut self.clear_normals_per_mat);
         let saved_filter = std::mem::take(&mut self.material_filter);
         let saved_pmx_path = std::mem::take(&mut self.export.pmx_output_path);
         let saved_visible_only = self.export.export_visible_only;
@@ -1572,12 +1573,25 @@ impl ViewerApp {
 
         // 状態を復元（モーフ数・材質数が変わらなければそのまま使う）
         self.camera = saved_camera;
+        self.pending.refit = false; // リロード時はカメラリセットしない
         if saved_morphs.len() == self.morph_weights.len() {
             self.morph_weights = saved_morphs;
             self.morph_dirty = true; // 強制更新
         }
         if saved_visibility.len() == self.material_visibility.len() {
             self.material_visibility = saved_visibility;
+        }
+        if saved_smooth_per_mat.len() == self.smooth_normals_per_mat.len() {
+            self.smooth_normals_per_mat = saved_smooth_per_mat;
+        }
+        if saved_clear_per_mat.len() == self.clear_normals_per_mat.len() {
+            self.clear_normals_per_mat = saved_clear_per_mat;
+        }
+        // per-mat フラグが復元された場合、GPU モデルを再構築して反映
+        if self.smooth_normals_per_mat.iter().any(|&v| v)
+            || self.clear_normals_per_mat.iter().any(|&v| v)
+        {
+            self.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
         }
         self.material_filter = saved_filter;
         self.export.pmx_output_path = saved_pmx_path;
@@ -1728,13 +1742,16 @@ impl ViewerApp {
                             )?;
                             let device = &self.render_state.device;
                             let queue = &self.render_state.queue;
+                            let mc = ir.materials.len();
+                            let smooth = Self::per_mat_or_default(&self.smooth_normals_per_mat, mc);
+                            let clear = Self::per_mat_or_default(&self.clear_normals_per_mat, mc);
                             let gpu_model = super::super::mesh::build_gpu_model(
                                 &ir,
                                 &glb.images,
                                 device,
                                 queue,
-                                self.display.smooth_normals,
-                                self.display.clear_custom_normals,
+                                &smooth,
+                                &clear,
                             )?;
                             Self::encode_ir_textures_as_png(&mut ir, &glb.images);
                             self.finish_load_with_gpu(ir, gpu_model, source_clone.clone())
@@ -1801,12 +1818,15 @@ impl ViewerApp {
                         .unwrap_or("")
                         .to_lowercase();
                     match ext.as_str() {
-                        "fbx" => Ok(crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-                            &std::fs::read(path)?,
-                            Some(path),
-                            self.normalize_pose,
-                            self.normalize_to_tstance,
-                        )?),
+                        "fbx" => {
+                            let ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                                &std::fs::read(path)?,
+                                Some(path),
+                                self.normalize_pose,
+                                self.normalize_to_tstance,
+                            )?;
+                            Ok(ir)
+                        }
                         "pmx" => {
                             let pmx_model = crate::pmx::reader::read_pmx(path)?;
                             let pmx_dir = path.parent().unwrap_or(Path::new("."));
@@ -1881,7 +1901,8 @@ impl ViewerApp {
                             if let Some(dir) = &temp_dir {
                                 let _ = std::fs::remove_dir_all(dir);
                             }
-                            Ok(result?)
+                            let ir = result?;
+                            Ok(ir)
                         }
                         "pmx" => {
                             let pmx_model = crate::pmx::reader::read_pmx_from_data(main_bytes)?;
@@ -2810,7 +2831,7 @@ impl ViewerApp {
 
     fn finish_append_ext(
         &mut self,
-        other_ir: IrModel,
+        mut other_ir: IrModel,
         source: ReloadableSource,
         silent: bool,
         pkg_model_name: Option<String>,
@@ -2841,16 +2862,41 @@ impl ViewerApp {
             .map(|b| (b.children.clone(), b.vrm_bone_name.clone()))
             .collect();
 
+        // other側にヒューマノイド情報がなければ original_name で再検出して補完
+        let other_has_humanoid = other_ir.bones.iter().any(|b| b.vrm_bone_name.is_some());
+        if !other_has_humanoid {
+            let names: Vec<(usize, &str)> = other_ir
+                .bones
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (i, b.original_name.as_str()))
+                .collect();
+            let mapping = crate::fbx::humanoid::detect_humanoid(&names);
+            for (&idx, hb) in &mapping.mapping {
+                other_ir.bones[idx].vrm_bone_name = Some(hb.as_vrm_name().to_string());
+            }
+            if !mapping.mapping.is_empty() {
+                log::info!(
+                    "マージ前ヒューマノイド補完: {} 本検出",
+                    mapping.mapping.len()
+                );
+            }
+        }
+
         let (merged_bones, new_bones) = loaded.ir.merge(other_ir);
 
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
+        // merge後は材質数が変わるため per_mat を resize
+        let mc = loaded.ir.materials.len();
+        self.smooth_normals_per_mat.resize(mc, false);
+        self.clear_normals_per_mat.resize(mc, false);
         match super::super::mesh::build_gpu_model_from_ir(
             &loaded.ir,
             device,
             queue,
-            self.display.smooth_normals,
-            self.display.clear_custom_normals,
+            &self.smooth_normals_per_mat,
+            &self.clear_normals_per_mat,
         ) {
             Ok(mut gpu_model) => {
                 if let Some(ref renderer) = self.renderer {

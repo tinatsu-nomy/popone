@@ -69,6 +69,7 @@ If the viewer is already running, subsequent launches pass the file path to the 
 - **Normal Tools** — Normal smoothing, custom normal clear (both auto-disabled when normal-mapped materials are present), normal direction visualization
 - **MSAA** — 4x anti-aliasing (toggleable). MASK (cutout) materials enable alpha_to_coverage on both surface and outline passes for reduced jaggies on eyelashes, hair cards, etc.
 - **UV Map Export** — PSD output with per-material layers (1024–8192 resolution). UV boundary wrap handling for triangles crossing 0/1 edges. Groups layers into folders by model name when multiple models are merged
+- **Model Append Loading** — Merge costume FBX etc. into existing model. Bone matching uses 3-level fallback (VRM humanoid name → FBX node name → PMX name) for correct merging across different naming conventions
 
 <details>
 <summary>Keyboard Shortcuts</summary>

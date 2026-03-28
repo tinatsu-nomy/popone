@@ -345,31 +345,17 @@ pub fn build_gpu_model(
     images: &[gltf::image::Data],
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    smooth_normals: bool,
-    clear_custom_normals: bool,
+    smooth_per_mat: &[bool],
+    clear_per_mat: &[bool],
 ) -> Result<GpuModel> {
-    // 法線マップ付き材質がある場合、smooth_normals / clear_custom_normals を強制無効化
-    // （UV seam 境界で tangent basis が壊れるため。UI 側でも無効化しているが、ビルド層でも防御）
-    let has_normal_map = ir.materials.iter().any(|m| m.normal_texture.is_some());
-    let smooth_normals = if has_normal_map {
-        false
-    } else {
-        smooth_normals
-    };
-    let clear_custom_normals = if has_normal_map {
-        false
-    } else {
-        clear_custom_normals
-    };
-
     let gpu_textures = super::texture::upload_textures(ir, images, device, queue)?;
     build_gpu_model_inner(
         ir,
         gpu_textures,
         device,
         queue,
-        smooth_normals,
-        clear_custom_normals,
+        smooth_per_mat,
+        clear_per_mat,
     )
 }
 
@@ -446,30 +432,17 @@ pub fn build_gpu_model_from_ir(
     ir: &IrModel,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    smooth_normals: bool,
-    clear_custom_normals: bool,
+    smooth_per_mat: &[bool],
+    clear_per_mat: &[bool],
 ) -> Result<GpuModel> {
-    // 法線マップ付き材質がある場合、smooth_normals / clear_custom_normals を強制無効化
-    let has_normal_map = ir.materials.iter().any(|m| m.normal_texture.is_some());
-    let smooth_normals = if has_normal_map {
-        false
-    } else {
-        smooth_normals
-    };
-    let clear_custom_normals = if has_normal_map {
-        false
-    } else {
-        clear_custom_normals
-    };
-
     let gpu_textures = super::texture::upload_textures_from_ir(ir, device, queue)?;
     build_gpu_model_inner(
         ir,
         gpu_textures,
         device,
         queue,
-        smooth_normals,
-        clear_custom_normals,
+        smooth_per_mat,
+        clear_per_mat,
     )
 }
 
@@ -478,8 +451,8 @@ fn build_gpu_model_inner(
     gpu_textures_dual: Vec<(wgpu::TextureView, wgpu::TextureView)>,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    smooth_normals: bool,
-    clear_custom_normals: bool,
+    smooth_per_mat: &[bool],
+    clear_per_mat: &[bool],
 ) -> Result<GpuModel> {
     let pos_fn = if ir.source_format.is_vrm0() {
         gltf_pos_to_pmx_v0
@@ -548,6 +521,10 @@ fn build_gpu_model_inner(
         let mat = &ir.materials[mat_idx];
         let index_offset = all_indices.len() as u32;
 
+        // 材質ごとの法線平滑化フラグ（法線マップ付き材質は強制無効化）
+        let mat_smooth =
+            smooth_per_mat.get(mat_idx).copied().unwrap_or(false) && mat.normal_texture.is_none();
+
         // 材質ごとに vertex_dedup をリセット（異なる材質間で頂点を共有しない）
         vertex_dedup.clear();
 
@@ -573,7 +550,7 @@ fn build_gpu_model_inner(
                     .normalize_or_zero()
                     .extend(-v.tangent.w);
 
-                let gpu_vi = if smooth_normals {
+                let gpu_vi = if mat_smooth {
                     // 位置+UVで統合、法線は累積して後で平均化
                     let key = PosUvKey::new(pos.to_array(), v.uv.to_array(), uv1);
                     *vertex_dedup.entry(key).or_insert_with(|| {
@@ -597,10 +574,12 @@ fn build_gpu_model_inner(
                         uv1,
                         tangent: tangent.to_array(),
                     });
+                    // normal_accum を all_vertices と同期（count=0 で平均化対象外）
+                    normal_accum.push(([0.0; 3], 0));
                     idx
                 };
 
-                if smooth_normals {
+                if mat_smooth {
                     let acc = &mut normal_accum[gpu_vi as usize];
                     acc.0[0] += normal.x;
                     acc.0[1] += normal.y;
@@ -611,7 +590,7 @@ fn build_gpu_model_inner(
             }
 
             // インデックス
-            let mut indices: Vec<u32> = if smooth_normals {
+            let mut indices: Vec<u32> = if mat_smooth {
                 mesh.indices
                     .iter()
                     .map(|&i| global_to_gpu[global_offset + i as usize])
@@ -868,8 +847,11 @@ fn build_gpu_model_inner(
         });
     }
 
-    // 累積法線を平均化・正規化（smooth_normals 有効時のみ）
-    if smooth_normals {
+    let any_smooth = smooth_per_mat.iter().any(|&s| s);
+    let any_clear = clear_per_mat.iter().any(|&c| c);
+
+    // 累積法線を平均化・正規化（smooth 有効材質の頂点のみ、count > 0 で自動フィルタ）
+    if any_smooth {
         for (vi, v) in all_vertices.iter_mut().enumerate() {
             if let Some(&(sum, count)) = normal_accum.get(vi) {
                 if count > 0 {
@@ -880,24 +862,15 @@ fn build_gpu_model_inner(
         }
     }
 
-    // カスタム法線クリア: ジオメトリから法線を再計算（位置ごとに面法線を加重平均）
-    if clear_custom_normals {
-        recalculate_normals_from_geometry(&mut all_vertices, &all_indices);
+    // カスタム法線クリア: 対象材質の頂点のみジオメトリから法線を再計算
+    if any_clear {
+        recalculate_normals_selective(&mut all_vertices, &all_indices, &draws, clear_per_mat);
     }
 
     // normal 再計算後の tangent 再直交化（Gram-Schmidt）
-    // smooth_normals / clear_custom_normals で normal が変わると TBN 行列が不整合になるため
-    if smooth_normals || clear_custom_normals {
+    // smooth / clear で normal が変わると TBN 行列が不整合になるため
+    if any_smooth || any_clear {
         reorthogonalize_tangents(&mut all_vertices);
-
-        // normal map 付き材質では Gram-Schmidt 再直交化だけでは UV seam 境界で
-        // tangent basis が壊れる可能性がある（MikkTSpace 再生成が理想だがコスト大）
-        if smooth_normals && ir.materials.iter().any(|m| m.normal_texture.is_some()) {
-            log::warn!(
-                "法線平滑化が有効ですが、normal map 付き材質が含まれています。\
-                 UV seam 境界で tangent が不正確になる場合があります"
-            );
-        }
     }
 
     // GPU空間モーフデータを事前計算（重複排除 + 座標変換済み）
@@ -974,9 +947,8 @@ fn build_gpu_model_inner(
 
     // エッジスケールバッファ（MMD エッジ専用）
     // MToon アウトラインは GPU 側で outlineWidthMultiplyTexture をサンプリングするため不要
-    // 注意: smooth_normals ON 時は同一位置の頂点が統合され、異なる material の
-    // edge_scale が混在しうるが、UI 側で MMD draw 存在時は smooth_normals を
-    // 無効化しているため、実用上は material 境界を越えた干渉は発生しない
+    // 注意: smooth_normals は材質ごとに制御され、vertex_dedup は材質ごとに
+    // clear されるため、material 境界を越えた頂点統合は発生しない
     let has_mmd = draws.iter().any(|d| d.render_style == RenderStyle::Mmd);
     let edge_scale_buf = if has_mmd {
         let mut edge_scales = vec![1.0f32; all_vertices.len()];
@@ -1023,30 +995,61 @@ fn build_gpu_model_inner(
     })
 }
 
-/// カスタム法線クリア: ジオメトリから法線を再計算
-/// 同一位置の頂点をグルーピングし、面法線の角度加重平均を割り当てる
-fn recalculate_normals_from_geometry(vertices: &mut [Vertex], indices: &[u32]) {
-    use std::collections::HashMap;
+/// カスタム法線クリア（材質選択版）: clear_per_mat が true の材質の頂点のみ法線を再計算
+fn recalculate_normals_selective(
+    vertices: &mut [Vertex],
+    indices: &[u32],
+    draws: &[DrawCall],
+    clear_per_mat: &[bool],
+) {
+    use std::collections::{HashMap, HashSet};
 
     let num_verts = vertices.len();
 
-    // 位置ごとに頂点インデックスをグルーピング
+    // clear 対象の頂点インデックスを収集
+    let mut target_verts: HashSet<u32> = HashSet::new();
+    for draw in draws {
+        if clear_per_mat
+            .get(draw.material_index)
+            .copied()
+            .unwrap_or(false)
+        {
+            let start = draw.index_offset as usize;
+            let end = start + draw.index_count as usize;
+            for &idx in &indices[start..end.min(indices.len())] {
+                target_verts.insert(idx);
+            }
+        }
+    }
+
+    if target_verts.is_empty() {
+        return;
+    }
+
+    // 対象頂点の位置グルーピング
     let mut pos_groups: HashMap<[u32; 3], Vec<usize>> = HashMap::new();
-    for (i, v) in vertices.iter().enumerate() {
+    for &vi in &target_verts {
+        let v = &vertices[vi as usize];
         let key = [
             v.position[0].to_bits(),
             v.position[1].to_bits(),
             v.position[2].to_bits(),
         ];
-        pos_groups.entry(key).or_default().push(i);
+        pos_groups.entry(key).or_default().push(vi as usize);
     }
 
-    // 各頂点の法線累積
+    // 対象頂点の法線累積
     let mut accum = vec![Vec3::ZERO; num_verts];
 
-    // 各三角形の面法線を角度加重で累積
+    // 対象頂点を含む三角形のみ面法線を角度加重で累積
     for tri in indices.chunks_exact(3) {
-        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+        let (i0, i1, i2) = (tri[0], tri[1], tri[2]);
+        // この三角形に対象頂点が含まれているか
+        if !target_verts.contains(&i0) && !target_verts.contains(&i1) && !target_verts.contains(&i2)
+        {
+            continue;
+        }
+        let (i0, i1, i2) = (i0 as usize, i1 as usize, i2 as usize);
         if i0 >= num_verts || i1 >= num_verts || i2 >= num_verts {
             continue;
         }
@@ -1060,13 +1063,15 @@ fn recalculate_normals_from_geometry(vertices: &mut [Vertex], indices: &[u32]) {
         }
         let fn_normalized = face_normal / area;
 
-        // 各頂点の角度を計算して加重
         let edges = [
             (i0, v1 - v0, v2 - v0),
             (i1, v0 - v1, v2 - v1),
             (i2, v0 - v2, v1 - v2),
         ];
         for (vi, e1, e2) in edges {
+            if !target_verts.contains(&(vi as u32)) {
+                continue;
+            }
             let l1 = e1.length();
             let l2 = e2.length();
             if l1 < 1e-10 || l2 < 1e-10 {
@@ -1078,7 +1083,7 @@ fn recalculate_normals_from_geometry(vertices: &mut [Vertex], indices: &[u32]) {
         }
     }
 
-    // 同一位置の頂点の法線を合算して正規化
+    // 同一位置の対象頂点の法線を合算して正規化
     for group in pos_groups.values() {
         let mut sum = Vec3::ZERO;
         for &vi in group {

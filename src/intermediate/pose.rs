@@ -274,7 +274,6 @@ pub fn normalize_pose_to_tstance_with_meshes(
     if corrections.is_empty() {
         return result;
     }
-    // global_mats は bone.global_mat をそのまま使う（PMXではnode_index == bone_index）
     let mut global_mats: Vec<Mat4> = bones.iter().map(|b| b.global_mat).collect();
     apply_bone_corrections(bones, &mut global_mats, &corrections);
     let vertex_rot3s = apply_mesh_corrections(bones, meshes, &corrections);

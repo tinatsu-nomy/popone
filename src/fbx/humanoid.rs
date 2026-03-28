@@ -274,9 +274,11 @@ fn detect_rig_type(bone_names: &[(usize, &str)]) -> RigType {
         return RigType::Mixamo;
     }
 
-    // Blender 汎用: "Hips" + "Head" が存在（スペース/アンダースコア/ドット区切り）
+    // Blender 汎用: "Hips" + ("Head" or "Spine") が存在
+    // Head なしの部分スケルトン（衣装FBX等）も Blender と判定する
     let has_head = names.iter().any(|n| n == "head");
-    if has_hips && has_head {
+    let has_spine = names.iter().any(|n| n == "spine");
+    if has_hips && (has_head || has_spine) {
         return RigType::Blender;
     }
 
@@ -495,3 +497,36 @@ const UNREAL_MAP: &[(&str, HumanBone)] = &[
     ("foot_r", HumanBone::RightFoot),
     ("ball_r", HumanBone::RightToes),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names<'a>(list: &'a [&'a str]) -> Vec<(usize, &'a str)> {
+        list.iter().enumerate().map(|(i, n)| (i, *n)).collect()
+    }
+
+    #[test]
+    fn test_blender_with_head() {
+        let n = names(&["Armature", "Hips", "Spine", "Head"]);
+        let m = detect_humanoid(&n);
+        assert_eq!(m.rig_type, RigType::Blender);
+        assert!(m.mapping.values().any(|h| *h == HumanBone::Hips));
+    }
+
+    #[test]
+    fn test_blender_without_head() {
+        // 衣装FBXなど Head なしの部分スケルトン
+        let n = names(&["Armature", "Hips", "Spine", "Neck"]);
+        let m = detect_humanoid(&n);
+        assert_eq!(m.rig_type, RigType::Blender);
+        assert!(m.mapping.values().any(|h| *h == HumanBone::Hips));
+    }
+
+    #[test]
+    fn test_unknown_no_hips_no_spine() {
+        let n = names(&["Armature", "Bone1", "Bone2"]);
+        let m = detect_humanoid(&n);
+        assert_eq!(m.rig_type, RigType::Unknown);
+    }
+}

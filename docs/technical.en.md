@@ -73,7 +73,7 @@
     - [Unity .anim Muscle Conversion (Hidden Feature)](#unity-anim-muscle-conversion-hidden-feature)
     - [Loop Modes](#loop-modes)
   - [Model Append Loading](#model-append-loading)
-    - [Bone Merge 2-Pass Method](#bone-merge-2-pass-method)
+    - [Bone Merge 3-Level Fallback Method](#bone-merge-3-level-fallback-method)
     - [ASCII FBX Content Block Processing](#ascii-fbx-content-block-processing)
     - [pkg Texture Namespace](#pkg-texture-namespace)
   - [Direct Archive Loading](#direct-archive-loading)
@@ -1204,30 +1204,38 @@ When specifying a JSON file output by DumpHumanoidParams.cs, model-specific preQ
 
 ## Model Append Loading
 
-### Bone Merge 2-Pass Method
+### Bone Merge 3-Level Fallback Method
 
-When merging same-named bones into the existing side with `IrModel::merge()`, a 2-pass method is used to guarantee parent-child relationship consistency regardless of order.
+When merging bones into the existing side with `IrModel::merge()`, candidates are determined using a 3-level fallback in order of reliability, with parent-child relationship consistency guaranteed regardless of order.
 
 #### Problem
 
-In a 1-pass method, `is_new_bone[parent_idx]` references the array being constructed, causing panics or misidentification when the bone array is not in parent → child order. Also, determining merge by string matching on parent names alone can cause descendants from different subtrees to be incorrectly merged into the existing side.
+Matching by `bone.name` (PMX name) alone failed entirely when naming conventions differed between models (e.g., Japanese "下半身" vs English "Hips" for the same bone). Additionally, a 1-pass method could incorrectly merge descendants from different subtrees.
 
-Example: For existing `Root→Spine→Head` and appended `Accessory→Spine→Head`, `Spine` is newly added due to parent mismatch, but `Head`'s parent name is `"Spine"` in both cases, causing it to be incorrectly merged with the existing `Head`.
-
-#### Solution
+#### Solution: 3-Level Fallback + Parent Propagation
 
 ```
-Pass 1 (candidate collection): Scan all bones, collect merge candidates with same name + same parent name regardless of order
-  candidate[i] = Some(self_idx)  // Name match and parent name match
+Pass 1a (vrm_bone_name match): Match by VRM humanoid bone name
+  - VRM names are unique per skeleton, no parent check needed
+  - Sets vrm confirmed flag (exempt from pass 2 cancellation)
 
-Pass 2 (propagation loop): Cancel candidates whose parent is not a candidate, iterate until no changes
+Pass 1b (original_name match): Match by FBX node name with lowercase normalization
+  - Only becomes merge candidate if parent is already matched or parent's original_name matches
+
+Pass 1c (bone.name match): PMX name + same parent name check (existing behavior, backward compatible)
+
+Pass 2 (propagation loop): Cancel candidates whose parent is not a candidate (skip vrm confirmed)
   while changed:
     for i in 0..N:
-      if candidate[i].is_some() && parent's candidate is None:
-        candidate[i] = None  // Parent is new → child is also new
+      if candidate[i].is_some() && !is_vrm_match[i] && parent's candidate is None:
+        candidate[i] = None
 
 Finalize: Merge bones with Some candidate, add bones with None candidate as new
 ```
+
+#### Pre-Merge Humanoid Completion
+
+When the appended model has no `vrm_bone_name` set (e.g., Unknown rig), `detect_humanoid` is re-run against `original_name` before merge to fill in `vrm_bone_name`. This improves Pass 1a matching accuracy.
 
 Pass 2 iteration converges in worst case O(depth) times (at least 1 candidate is cancelled per iteration).
 
@@ -1815,7 +1823,7 @@ src/
 ├── unity/
 │   └── animation.rs     Unity .anim Muscle conversion (SwingTwist decomposition)
 ├── intermediate/
-│   ├── types.rs         Intermediate representation (IrModel / IrBone / IrMesh / IrMaterial / MtoonParams / CullMode etc., SourceFormat / merge 2-pass method)
+│   ├── types.rs         Intermediate representation (IrModel / IrBone / IrMesh / IrMaterial / MtoonParams / CullMode etc., SourceFormat / merge 3-level fallback)
 │   ├── tangent.rs       MikkTSpace tangent generation (mikktspace crate)
 │   ├── animation.rs     Animation intermediate representation (VrmaAnimation / BoneChannel)
 │   └── pose.rs          Stance conversion (T→A / A→T, physics sync support)
