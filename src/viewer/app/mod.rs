@@ -17,7 +17,7 @@ use crate::intermediate::types::IrModel;
 
 use super::animation::AnimationState;
 use super::camera::OrbitCamera;
-use super::gpu::{DrawMode, GpuRenderer, LightMode, RenderParams};
+use super::gpu::{DrawMode, GpuRenderer, LightMode, RenderParams, ShaderOverride, ShaderSelection};
 use super::mesh::GpuModel;
 use super::ui;
 
@@ -174,10 +174,12 @@ pub struct DisplaySettings {
     pub show_normals: bool,
     /// 法線表示の長さ
     pub normal_length: f32,
-    /// 法線マップ表示（法線ベクトル→RGB）
-    pub show_normal_map: bool,
-    /// MMD レンダリングモード
-    pub mmd_mode: bool,
+    /// シェーダーオーバーライドモード（GPU uniform 用）
+    pub shader_override: ShaderOverride,
+    /// MMD 専用レンダーパス使用（旧 mmd_mode）
+    pub use_mmd_path: bool,
+    /// Auto モード（モデル形式に応じて Standard/MMD を自動選択）
+    pub auto_shader: bool,
     /// MToon アウトライン描画
     pub outline_enabled: bool,
     /// MMD エッジ描画
@@ -210,11 +212,66 @@ impl Default for DisplaySettings {
             clear_custom_normals: false,
             show_normals: false,
             normal_length: 0.1,
-            show_normal_map: false,
+            shader_override: ShaderOverride::Default,
+            use_mmd_path: false,
+            auto_shader: true,
             outline_enabled: true,
-            mmd_mode: false,
             mmd_edge_enabled: true,
             mmd_edge_thickness: 1.0,
+        }
+    }
+}
+
+impl DisplaySettings {
+    /// UI の ShaderSelection から内部状態を設定
+    pub fn set_shader_selection(&mut self, sel: ShaderSelection) {
+        match sel {
+            ShaderSelection::Auto => {
+                self.shader_override = ShaderOverride::Default;
+                self.auto_shader = true;
+                // use_mmd_path は normalize_shader_state で自動判定
+            }
+            ShaderSelection::Mtoon => {
+                self.shader_override = ShaderOverride::Default;
+                self.use_mmd_path = false;
+                self.auto_shader = false;
+            }
+            ShaderSelection::Mmd => {
+                self.shader_override = ShaderOverride::Default;
+                self.use_mmd_path = true;
+                self.auto_shader = false;
+            }
+            ShaderSelection::Unlit => {
+                self.shader_override = ShaderOverride::Unlit;
+                self.use_mmd_path = false;
+                self.auto_shader = false;
+            }
+            ShaderSelection::GgxPreview => {
+                self.shader_override = ShaderOverride::GgxPreview;
+                self.use_mmd_path = false;
+                self.auto_shader = false;
+            }
+            ShaderSelection::Normal => {
+                self.shader_override = ShaderOverride::Normal;
+                self.use_mmd_path = false;
+                self.auto_shader = false;
+            }
+        }
+    }
+
+    /// 現在の内部状態から UI 表示用の ShaderSelection を取得
+    pub fn shader_selection(&self) -> ShaderSelection {
+        if self.auto_shader {
+            ShaderSelection::Auto
+        } else if self.use_mmd_path {
+            ShaderSelection::Mmd
+        } else {
+            match self.shader_override {
+                ShaderOverride::Default => ShaderSelection::Mtoon,
+                ShaderOverride::Unlit => ShaderSelection::Unlit,
+                ShaderOverride::GgxPreview => ShaderSelection::GgxPreview,
+                ShaderOverride::Normal => ShaderSelection::Normal,
+            }
         }
     }
 }
@@ -426,6 +483,41 @@ impl ViewerApp {
         self.finish_load_with_gpu(ir, gpu_model, source)
     }
 
+    /// シェーダー状態を現在のモデルに合わせて正規化
+    ///
+    /// - Auto: モデル形式に応じて Standard/MMD を自動判定
+    /// - Mtoon/Unlit/GGX/Normal/MMD: ユーザー選択を維持（整合性チェックのみ）
+    fn normalize_shader_state(&mut self) {
+        let has_mmd = self.loaded.as_ref().is_some_and(|l| {
+            l.gpu_model
+                .draws
+                .iter()
+                .any(|d| d.mmd_material_bind_group.is_some())
+        });
+
+        if self.display.auto_shader {
+            // Auto モード: モデル形式に合わせて MMD パスを自動判定
+            self.display.shader_override = ShaderOverride::Default;
+            if !has_mmd {
+                self.display.use_mmd_path = false;
+            } else {
+                let is_pmx_pmd = self.loaded.as_ref().is_some_and(|l| {
+                    matches!(
+                        l.ir.source_format,
+                        crate::intermediate::types::SourceFormat::Pmx
+                            | crate::intermediate::types::SourceFormat::Pmd
+                    )
+                });
+                self.display.use_mmd_path = is_pmx_pmd;
+            }
+        } else {
+            // ユーザー明示選択: MMD リソースがなければ use_mmd_path だけ落とす
+            if !has_mmd && self.display.use_mmd_path {
+                self.display.use_mmd_path = false;
+            }
+        }
+    }
+
     pub(crate) fn finish_load_with_gpu(
         &mut self,
         ir: IrModel,
@@ -443,17 +535,6 @@ impl ViewerApp {
 
         // MMD リソース構築
         self.prepare_mmd_for_model(&mut gpu_model, &ir);
-
-        // PMX/PMD 単体ロード時は mmd_mode を自動 ON
-        let has_mmd_draw = gpu_model
-            .draws
-            .iter()
-            .any(|d| d.render_style == super::mesh::RenderStyle::Mmd);
-        if has_mmd_draw {
-            self.display.mmd_mode = true;
-        } else {
-            self.display.mmd_mode = false;
-        }
 
         // テクスチャ割り当て履歴クリア（別モデル読み込み時）
         self.tex.assignments.clear();
@@ -514,6 +595,9 @@ impl ViewerApp {
             stats_cache,
         });
 
+        // シェーダー状態を正規化（PMX/PMD → 自動 MMD、VRM → 標準パスに戻す）
+        self.normalize_shader_state();
+
         // ウィンドウタイトル更新
         self.window_title = Some(format!(
             "Model Viewer v{} - {}",
@@ -561,6 +645,7 @@ impl ViewerApp {
                     loaded.gpu_model = new_model;
                     loaded.mat_cache = mat_cache;
                 }
+                self.normalize_shader_state();
                 if let Some(ref mut renderer) = self.renderer {
                     renderer.invalidate_normal_cache();
                 }

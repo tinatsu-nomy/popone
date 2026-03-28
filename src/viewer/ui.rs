@@ -6,7 +6,7 @@ use egui::epaint::{Color32, Mesh, Vertex};
 
 use super::app::{ConvertMessage, DisplaySettings, PendingOverlay, SidePanelTab, ViewerApp};
 use super::export_filter::build_filtered_ir;
-use super::gpu::{DrawMode, LightMode};
+use super::gpu::{DrawMode, LightMode, ShaderSelection};
 use crate::intermediate::types::CullMode;
 
 /// 材質パネルからのテクスチャ割り当てリクエスト
@@ -987,12 +987,21 @@ fn show_tab_display(
     egui::Grid::new("light_color_grid")
         .num_columns(2)
         .show(ui, |ui| {
-            ui.add(egui::Slider::new(&mut app.display.light_intensity, 0.0..=2.0).text("ライト"));
-            color_wheel_button_rgb(ui, "light_color", &mut app.display.light_color);
+            // Unlit/Normal ではライティングが効かないため light を disabled に
+            let shader_sel = app.display.shader_selection();
+            let light_enabled =
+                !matches!(shader_sel, ShaderSelection::Unlit | ShaderSelection::Normal);
+            ui.add_enabled(
+                light_enabled,
+                egui::Slider::new(&mut app.display.light_intensity, 0.0..=2.0).text("ライト"),
+            );
+            ui.add_enabled_ui(light_enabled, |ui| {
+                color_wheel_button_rgb(ui, "light_color", &mut app.display.light_color);
+            });
             ui.end_row();
 
-            // MMDモードではLightAmbientがシーン環境光を兼ねるため無効化
-            let amb_enabled = !app.display.mmd_mode;
+            // MMD/Unlit/Normal では環境光を無効化
+            let amb_enabled = light_enabled && !app.display.use_mmd_path;
             ui.add_enabled(
                 amb_enabled,
                 egui::Slider::new(&mut app.display.ambient_intensity, 0.0..=1.0).text("環境光"),
@@ -1079,7 +1088,7 @@ fn show_tab_display(
         );
         ui.selectable_value(&mut app.display.light_mode, LightMode::Fixed, "固定 (L)");
     });
-    // MMD レンダリング UI（MMD リソース構築済みの draw があるかで判定 — mmd_mode ON/OFF に依存しない）
+    // MMD リソース構築済みの draw があるかで判定
     let has_mmd_capability = app.loaded.as_ref().is_some_and(|l| {
         l.gpu_model
             .draws
@@ -1087,6 +1096,77 @@ fn show_tab_display(
             .any(|d| d.mmd_material_bind_group.is_some())
     });
     ui.separator();
+
+    // シェーダーモード選択（▲ ComboBox ▼）
+    let mut sel = app.display.shader_selection();
+    let shader_choices: Vec<ShaderSelection> = {
+        let mut v = vec![
+            ShaderSelection::Auto,
+            ShaderSelection::Mtoon,
+            ShaderSelection::Unlit,
+            ShaderSelection::GgxPreview,
+            ShaderSelection::Normal,
+        ];
+        if has_mmd_capability {
+            v.push(ShaderSelection::Mmd);
+        }
+        v
+    };
+    let shader_label = |s: ShaderSelection| match s {
+        ShaderSelection::Auto => "Auto",
+        ShaderSelection::Mtoon => "MToon/Lambert",
+        ShaderSelection::Unlit => "Unlit",
+        ShaderSelection::GgxPreview => "GGX Preview",
+        ShaderSelection::Normal => "法線",
+        ShaderSelection::Mmd => "MMD",
+    };
+    let len = shader_choices.len();
+    // 最長選択肢に合わせた固定幅を計算
+    let combo_min_width = {
+        let max_w = shader_choices
+            .iter()
+            .map(|&c| {
+                ui.fonts(|f| {
+                    f.layout_no_wrap(
+                        shader_label(c).to_string(),
+                        egui::FontId::default(),
+                        egui::Color32::WHITE,
+                    )
+                    .size()
+                    .x
+                })
+            })
+            .fold(0.0f32, f32::max);
+        max_w + ui.spacing().button_padding.x * 2.0 + 8.0
+    };
+    ui.horizontal(|ui| {
+        ui.label("シェーダー:");
+        if ui.small_button("\u{25b2}").clicked() {
+            if let Some(idx) = shader_choices.iter().position(|&s| s == sel) {
+                sel = shader_choices[(idx + len - 1) % len];
+            }
+        }
+        ui.scope(|ui| {
+            ui.spacing_mut().combo_width = combo_min_width;
+            egui::ComboBox::from_id_salt("shader_mode")
+                .selected_text(shader_label(sel))
+                .icon(|_, _, _, _, _| {})
+                .show_ui(ui, |ui| {
+                    for &choice in &shader_choices {
+                        ui.selectable_value(&mut sel, choice, shader_label(choice));
+                    }
+                });
+        });
+        if ui.small_button("\u{25bc}").clicked() {
+            if let Some(idx) = shader_choices.iter().position(|&s| s == sel) {
+                sel = shader_choices[(idx + 1) % len];
+            }
+        }
+    });
+    if sel != app.display.shader_selection() {
+        app.display.set_shader_selection(sel);
+    }
+
     // MToon アウトラインを持つ Standard draw があるかで有効判定
     let has_outline_draws = app.loaded.as_ref().is_some_and(|l| {
         l.gpu_model
@@ -1094,27 +1174,26 @@ fn show_tab_display(
             .iter()
             .any(|d| d.render_style == super::mesh::RenderStyle::Standard && d.has_outline)
     });
+    let outline_available =
+        has_outline_draws && matches!(sel, ShaderSelection::Auto | ShaderSelection::Mtoon);
     ui.add_enabled(
-        has_outline_draws,
+        outline_available,
         egui::Checkbox::new(&mut app.display.outline_enabled, "アウトライン描画"),
     );
 
-    if has_mmd_capability {
-        ui.checkbox(&mut app.display.mmd_mode, "MMD レンダリング");
-        if app.display.mmd_mode {
-            ui.checkbox(&mut app.display.mmd_edge_enabled, "エッジ描画");
-            if app.display.mmd_edge_enabled {
-                ui.add(
-                    egui::Slider::new(&mut app.display.mmd_edge_thickness, 0.1..=3.0)
-                        .text("エッジ太さ"),
-                );
-            }
+    // MMD サブオプション
+    if sel == ShaderSelection::Mmd {
+        ui.checkbox(&mut app.display.mmd_edge_enabled, "エッジ描画");
+        if app.display.mmd_edge_enabled {
+            ui.add(
+                egui::Slider::new(&mut app.display.mmd_edge_thickness, 0.1..=3.0)
+                    .text("エッジ太さ"),
+            );
         }
     }
 
     ui.separator();
     ui.checkbox(&mut app.display.msaa, "MSAA (アンチエイリアス)");
-    ui.checkbox(&mut app.display.show_normal_map, "法線マップ表示");
     ui.checkbox(&mut app.display.show_normals, "法線表示 (N)");
     if app.display.show_normals {
         ui.add(egui::Slider::new(&mut app.display.normal_length, 0.1..=3.0).text("法線長さ"));

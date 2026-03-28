@@ -34,6 +34,10 @@
     - [Pipeline Configuration](#pipeline-configuration)
     - [Color Space](#color-space)
     - [Shared Toon Textures](#shared-toon-textures)
+  - [Shader Override](#shader-override)
+    - [Shader Mode List](#shader-mode-list)
+    - [Alpha Processing](#alpha-processing)
+    - [State Normalization](#state-normalization)
   - [MToon Shading](#mtoon-shading)
     - [MaterialUniform](#materialuniform)
     - [lit/shade Interpolation Formula](#litshade-interpolation-formula)
@@ -508,6 +512,45 @@ Actual MMD standard toon01-10 pixel data (32 rows of RGB values) stored as const
 | toon05 | White → warm pink gradient |
 | toon06 | Yellow, center highlight band + dark yellow |
 | toon07-10 | All white (no toon effect) |
+
+## Shader Override
+
+The viewer supports 6 shader modes. Internal state is managed on 2 axes.
+
+| Internal Field | Type | Role |
+|---|---|---|
+| `shader_override` | `ShaderOverride` (u32) | GPU fragment shader branching (Default=0 / Normal=1 / Unlit=2 / GgxPreview=3) |
+| `use_mmd_path` | `bool` | CPU-side MMD dedicated render path toggle |
+| `auto_shader` | `bool` | Auto mode (auto-detection based on model format) |
+
+Passed to the fragment shader as `CameraUniform.shader_mode: u32`, with early-return branching via integer comparison at the top of `fs_main`. MMD uses separate pipelines so it is not included in `shader_mode`; the CPU-side `mmd_solid` flag controls the draw path.
+
+### Shader Mode List
+
+| Mode | shader_mode | Draw Path | Description |
+|---|---|---|---|
+| Auto | 0 | Auto | Auto-selects Standard/MMD based on model format |
+| MToon/Lambert | 0 | Standard (forced) | Displays PMX/PMD with MToon/Lambert |
+| Unlit | 2 | Standard | Texture color only, no lighting |
+| GGX Preview | 3 | Standard | Cook-Torrance GGX (metallic=0, roughness=0.8 fixed) |
+| Normal | 1 | Standard | Geometry normal → RGB |
+| MMD | 0 | MMD (forced) | Blinn-Phong + sphere + toon |
+
+### Alpha Processing
+
+The `apply_alpha_mode()` WGSL function provides unified alpha handling across all modes.
+
+```
+OPAQUE  (cutoff < -0.75): Returns texture alpha as-is (PMX/PMD transparency support)
+MASK    (cutoff >= -0.25): AlphaToCoverage + fwidth smoothing
+BLEND   (else):           Discard fully transparent pixels only
+```
+
+Override modes (Unlit / GGX / Normal) output texture alpha directly without `apply_alpha_mode`, ensuring PMX/PMD OPAQUE materials still show texture transparency.
+
+### State Normalization
+
+`normalize_shader_state()` is called on all model load / rebuild / append paths. Only Auto mode auto-sets `use_mmd_path` based on model format. Explicit user selections are preserved across model loads.
 
 ## MToon Shading
 

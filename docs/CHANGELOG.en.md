@@ -3,38 +3,41 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.10](#v0210)
+  - [v0.2.11](#v0211)
     - [New Features](#new-features)
+    - [Improvements](#improvements)
+  - [v0.2.10](#v0210)
+    - [New Features](#new-features-1)
     - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
     - [Bug Fixes](#bug-fixes)
-    - [Improvements](#improvements)
+    - [Improvements](#improvements-1)
     - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
   - [v0.2.9](#v029)
-    - [New Features](#new-features-1)
-    - [Improvements](#improvements-1)
+    - [New Features](#new-features-2)
+    - [Improvements](#improvements-2)
     - [Bug Fixes](#bug-fixes-1)
     - [Implementation Details](#implementation-details)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
-    - [New Features](#new-features-2)
-    - [Improvements](#improvements-2)
-  - [v0.2.7](#v027)
     - [New Features](#new-features-3)
-    - [Bug Fixes](#bug-fixes-2)
     - [Improvements](#improvements-3)
+  - [v0.2.7](#v027)
+    - [New Features](#new-features-4)
+    - [Bug Fixes](#bug-fixes-2)
+    - [Improvements](#improvements-4)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
     - [Bug Fixes](#bug-fixes-3)
-    - [New Features](#new-features-4)
-    - [Improvements](#improvements-4)
+    - [New Features](#new-features-5)
+    - [Improvements](#improvements-5)
     - [Code Quality & Performance](#code-quality--performance-1)
   - [v0.2.5](#v025)
-    - [Improvements](#improvements-5)
+    - [Improvements](#improvements-6)
     - [Code Quality & Performance](#code-quality--performance-2)
   - [v0.2.4](#v024)
-    - [Improvements](#improvements-6)
-  - [v0.2.3](#v023)
     - [Improvements](#improvements-7)
+  - [v0.2.3](#v023)
+    - [Improvements](#improvements-8)
   - [v0.2.2](#v022)
     - [Code Quality & Performance](#code-quality--performance-3)
   - [FBX Support](#fbx-support)
@@ -44,6 +47,28 @@
 # Changelog
 
 [日本語](CHANGELOG.md)
+
+## v0.2.11
+
+### New Features
+
+- **Shader Override** — Added 6 shader modes to the viewer, switchable via ▲ ComboBox ▼
+  - **Auto** — Automatically selects Standard (MToon/Lambert) or MMD based on model format (existing behavior)
+  - **MToon/Lambert** — Forces Standard path. Displays PMX/PMD with MToon/Lambert shader
+  - **Unlit** — No lighting, texture color only. Useful for texture inspection
+  - **GGX Preview** — Simplified Cook-Torrance specular (metallic=0, roughness=0.8 fixed). Schlick Fresnel + GGX NDF + Smith geometry + hemisphere ambient
+  - **Normal** — Visualizes normal direction as RGB color
+  - **MMD** — MMD dedicated render path for PMX/PMD (consolidates the former MMD rendering checkbox)
+
+### Improvements
+
+- **2-axis shader state separation** — `shader_override` (GPU shader branching) and `use_mmd_path` (CPU render path selection) are managed independently. UI presents a unified 6-choice dropdown
+- **Unified alpha processing** — Introduced `apply_alpha_mode()` WGSL helper function. Consistent alpha handling (OPAQUE / MASK+A2C / BLEND) across all shader modes
+- **Texture alpha in OPAQUE materials** — OPAQUE mode now passes through texture alpha instead of forcing 1.0. PMX/PMD texture transparency displays correctly in all shader modes
+- **CameraUniform shader_mode changed to u32** — Replaced `show_normal_map: f32` with `shader_mode: u32`. Integer comparison branching in WGSL
+- **Mode-specific UI disabling** — Light/ambient sliders disabled in Unlit/Normal modes. Ambient disabled in MMD mode (existing behavior preserved)
+- **Shader selection persistence** — Explicit selections (Unlit / GGX / Normal / MToon / MMD) are preserved across model loads. Only Auto mode auto-detects based on model format
+- **Consolidated `show_normal_map` / `mmd_mode`** — Former individual checkboxes merged into shader selection dropdown
 
 ## v0.2.10
 

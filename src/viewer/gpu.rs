@@ -57,7 +57,7 @@ pub struct CameraUniform {
     pub light_dir: [f32; 3],
     pub light_intensity: f32,
     pub ambient: [f32; 3],
-    pub show_normal_map: f32, // 0.0 = 通常, 1.0 = 法線マップ表示
+    pub shader_mode: u32, // ShaderOverride as u32
     pub camera_pos: [f32; 3],
     pub mmd_edge_thickness: f32,
     pub view_row0: [f32; 3],
@@ -257,7 +257,7 @@ macro_rules! wgsl_camera_uniform {
     light_dir: vec3<f32>,
     light_intensity: f32,
     ambient: vec3<f32>,
-    show_normal_map: f32,
+    shader_mode: u32,
     camera_pos: vec3<f32>,
     mmd_edge_thickness: f32,
     view_row0: vec3<f32>,
@@ -492,6 +492,26 @@ fn apply_normal_map(base_n: vec3<f32>, tangent: vec4<f32>, normal_uv: vec2<f32>)
     return normalize(t * scaled_normal.x + b * scaled_normal.y + n * scaled_normal.z);
 }
 
+/// アルファモード処理（OPAQUE / MASK+A2C / BLEND）
+fn apply_alpha_mode(alpha: f32, cutoff: f32) -> f32 {
+    if cutoff < -0.75 {
+        // OPAQUE: テクスチャ alpha をそのまま返す
+        // VRM OPAQUE 材質はテクスチャ alpha=1.0 のため影響なし
+        // PMX/PMD 材質ではテクスチャ alpha による透過が反映される
+        if alpha <= 0.001 { discard; }
+        return alpha;
+    }
+    if cutoff >= -0.25 {
+        // MASK + AlphaToCoverage（UniVRM vrmc_materials_mtoon_geometry_alpha.hlsl 準拠）
+        let a2c_alpha = (alpha - cutoff) / max(fwidth(alpha), 1e-5) + 0.5;
+        if a2c_alpha < cutoff { discard; }
+        return 1.0;
+    }
+    // BLEND: 完全透明ピクセルを破棄（深度汚染防止）
+    if alpha <= 0.001 { discard; }
+    return alpha;
+}
+
 @fragment
 fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
     // doubleSided 材質の背面法線反転（UniVRM 準拠: 法線マップ適用前に反転）
@@ -522,10 +542,75 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
         n = apply_normal_map(n, in.tangent, normal_uv);
     }
 
-    // 法線マップ表示: 法線ベクトル → RGB
-    if camera.show_normal_map > 0.5 {
-        let rgb = (n + vec3<f32>(1.0)) * 0.5;
-        return vec4<f32>(rgb, 1.0);
+    // === シェーダーオーバーライド ===
+    // プレビュー用モードではテクスチャ alpha をそのまま使用（PMX/PMD の OPAQUE 材質でも透過を反映）
+    if camera.shader_mode == 1u {
+        // Normal: ジオメトリ法線→RGB
+        let base_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.base_uv_a, material.base_uv_b);
+        let raw_alpha = textureSample(t_diffuse, s_diffuse, base_uv).a * material.diffuse.a;
+        if raw_alpha <= 0.001 { discard; }
+        let vis_n = normalize(in.normal) * face_sign;
+        return vec4<f32>(vis_n * 0.5 + vec3<f32>(0.5), raw_alpha);
+    }
+    if camera.shader_mode == 2u {
+        // Unlit: テクスチャ色のみ、ライティングなし
+        let base_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.base_uv_a, material.base_uv_b);
+        let tex = textureSample(t_diffuse, s_diffuse, base_uv);
+        let c = tex * material.diffuse;
+        if c.a <= 0.001 { discard; }
+        return vec4<f32>(c.rgb, c.a);
+    }
+    if camera.shader_mode == 3u {
+        // GGX Preview: 簡易 Cook-Torrance スペキュラ
+        let base_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.base_uv_a, material.base_uv_b);
+        let tex = textureSample(t_diffuse, s_diffuse, base_uv);
+        let base_color = tex * material.diffuse;
+        if base_color.a <= 0.001 { discard; }
+        let out_a = base_color.a;
+
+        const METALLIC: f32 = 0.0;
+        const ROUGHNESS: f32 = 0.8;
+
+        // View direction
+        var v: vec3<f32>;
+        if camera.is_perspective > 0.5 {
+            v = normalize(camera.camera_pos - in.world_pos);
+        } else {
+            v = -normalize(camera.camera_forward);
+        }
+        let l = -camera.light_dir;
+        let h = normalize(v + l);
+        let n_dot_l = max(dot(n, l), 0.0);
+        let n_dot_v = max(dot(n, v), 0.001);
+        let n_dot_h = max(dot(n, h), 0.0);
+
+        // Schlick Fresnel
+        let f0 = mix(vec3<f32>(0.04), base_color.rgb, METALLIC);
+        let f = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - max(dot(h, v), 0.0), 5.0);
+
+        // GGX NDF
+        let a = ROUGHNESS * ROUGHNESS;
+        let a2 = a * a;
+        let d_denom = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
+        let d = a2 / (3.14159 * d_denom * d_denom);
+
+        // Smith GGX geometry
+        let k = (ROUGHNESS + 1.0) * (ROUGHNESS + 1.0) / 8.0;
+        let g1_v = n_dot_v / (n_dot_v * (1.0 - k) + k);
+        let g1_l = n_dot_l / (n_dot_l * (1.0 - k) + k);
+        let g = g1_v * g1_l;
+
+        let specular = (d * f * g) / (4.0 * n_dot_v * n_dot_l + 0.001);
+        let diffuse_brdf = (vec3<f32>(1.0) - f) * (1.0 - METALLIC) * base_color.rgb / 3.14159;
+
+        let direct = (diffuse_brdf + specular) * camera.light_intensity * camera.light_color * n_dot_l;
+
+        // 半球アンビエント
+        let hemi_t = n.y * 0.5 + 0.5;
+        let ambient = mix(camera.ambient_ground, camera.ambient, vec3<f32>(hemi_t));
+        let indirect = base_color.rgb * ambient;
+
+        return vec4<f32>(direct + indirect, out_a);
     }
 
     var lit: vec3<f32>;
@@ -643,23 +728,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
         lit += emissive;
     }
 
-    // alphaMode 処理（alpha_cutoff エンコーディング: <-0.75=OPAQUE, >=−0.25=MASK, else=BLEND）
-    if material.alpha_cutoff < -0.75 {
-        // OPAQUE (-1.0): アルファ無視、常に不透明
-        out_alpha = 1.0;
-    } else if material.alpha_cutoff >= -0.25 {
-        // MASK + AlphaToCoverage（UniVRM vrmc_materials_mtoon_geometry_alpha.hlsl 準拠）
-        // fwidth ベースの勾配計算で cutoff 境界の alpha を 0→1 にスムーズ化し、
-        // MSAA サンプルカバレッジによるエッジ平滑化を有効にする
-        let a2c_alpha = (out_alpha - material.alpha_cutoff)
-            / max(fwidth(out_alpha), 1e-5) + 0.5;
-        if a2c_alpha < material.alpha_cutoff { discard; }
-        out_alpha = 1.0; // UniVRM 準拠: A2C はカバレッジ制御のみ、最終 alpha は不透明
-    } else {
-        // BLEND (-0.5) / BlendZWrite: 完全透明ピクセルを破棄（深度汚染防止）
-        if out_alpha <= 0.001 { discard; }
-    }
-
+    out_alpha = apply_alpha_mode(out_alpha, material.alpha_cutoff);
     return vec4<f32>(lit, out_alpha);
 }
 "#
@@ -1365,6 +1434,29 @@ pub enum DrawMode {
 pub enum LightMode {
     CameraFollow,
     Fixed,
+}
+
+/// フラグメントシェーダーのオーバーライドモード（GPU uniform に渡す値）
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u32)]
+pub enum ShaderOverride {
+    #[default]
+    Default = 0,
+    Normal = 1,
+    Unlit = 2,
+    GgxPreview = 3,
+}
+
+/// UI ドロップダウン用
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShaderSelection {
+    #[default]
+    Auto, // モデル形式に応じて Standard/MMD を自動選択
+    Mtoon, // MToon/Lambert 強制（PMX/PMD でも Standard パス）
+    Unlit,
+    GgxPreview,
+    Normal,
+    Mmd,
 }
 
 /// サンプル数ごとのパイプラインセット
@@ -3230,17 +3322,13 @@ impl GpuRenderer {
                 params.display.ambient_sky_color[1] * params.display.ambient_intensity,
                 params.display.ambient_sky_color[2] * params.display.ambient_intensity,
             ],
-            show_normal_map: if params.display.show_normal_map {
-                1.0
-            } else {
-                0.0
-            },
+            shader_mode: params.display.shader_override as u32,
             camera_pos: params.camera.eye().to_array(),
             mmd_edge_thickness: params.display.mmd_edge_thickness,
             view_row0: [view_mat.x_axis.x, view_mat.y_axis.x, view_mat.z_axis.x],
             _pad1: 0.0,
             view_row1: [view_mat.x_axis.y, view_mat.y_axis.y, view_mat.z_axis.y],
-            mmd_ambient_scale: if params.display.mmd_mode {
+            mmd_ambient_scale: if params.display.use_mmd_path {
                 // light_intensity を正規化して反映 (デフォルト 0.7 で従来値 154/255 を維持)
                 (154.0 / 255.0) * (params.display.light_intensity / 0.7)
             } else {
@@ -3283,12 +3371,12 @@ impl GpuRenderer {
             label: Some("offscreen_encoder"),
         });
 
-        let mmd_mode = params.display.mmd_mode;
+        let mmd_mode = params.display.use_mmd_path;
         let mmd_edge_enabled = params.display.mmd_edge_enabled;
-        // ワイヤーフレーム/法線マップ時は MMD パスを使わず既存パイプラインにフォールバック
+        // ワイヤーフレーム/シェーダーオーバーライド時は MMD パスを使わず既存パイプラインにフォールバック
         let mmd_solid = mmd_mode
             && params.display.draw_mode == DrawMode::Solid
-            && !params.display.show_normal_map;
+            && params.display.shader_override == ShaderOverride::Default;
 
         // MMD 描画が必要かどうかを事前チェック
         let has_mmd_draws = mmd_solid
@@ -3547,10 +3635,12 @@ impl GpuRenderer {
                         );
 
                         // BLEND/BlendZWrite: サーフェス直後にアウトライン描画（インターリーブ）
-                        // Wire モードではアウトライン（ソリッド面）をスキップ
+                        // Wire モード、シェーダーオーバーライド、MMD パス時はアウトラインをスキップ
                         if interleave_outline
                             && !use_wireframe
                             && params.display.outline_enabled
+                            && params.display.shader_override == ShaderOverride::Default
+                            && !mmd_mode
                             && draw.render_style == super::mesh::RenderStyle::Standard
                             && draw.has_outline
                         {
@@ -3586,8 +3676,13 @@ impl GpuRenderer {
                     }
 
                     // OPAQUE/MASK: アウトラインをフェーズ後にまとめて描画
-                    // Wire モードではアウトライン（ソリッド面）をスキップ
-                    if !interleave_outline && !use_wireframe && params.display.outline_enabled {
+                    // Wire モード、シェーダーオーバーライド、MMD パス時はスキップ
+                    if !interleave_outline
+                        && !use_wireframe
+                        && params.display.outline_enabled
+                        && params.display.shader_override == ShaderOverride::Default
+                        && !mmd_mode
+                    {
                         for &draw_idx in &work_sorted_indices {
                             let draw = &model.draws[draw_idx];
                             if draw.render_queue != *target_queue {
