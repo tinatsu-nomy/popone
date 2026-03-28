@@ -79,15 +79,16 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                 if let Some((ref tex_name, ref tex_data)) = pkg.get(tex_idx) {
                     let name = tex_name.clone();
                     let data = tex_data.clone();
-                    app.assign_texture_data_to_material(mat_idx, &name, &data);
-                    app.tex.pkg_assignments.insert(mat_idx, name.clone());
-                    // 同名連動分もpkg割り当て履歴に記録
-                    if app.tex.link_same_name {
-                        if let Some(ref loaded) = app.loaded {
-                            let target_name = loaded.ir.materials[mat_idx].name.clone();
-                            for (i, m) in loaded.ir.materials.iter().enumerate() {
-                                if i != mat_idx && m.name == target_name {
-                                    app.tex.pkg_assignments.insert(i, name.clone());
+                    if app.assign_texture_data_to_material(mat_idx, &name, &data) {
+                        app.tex.pkg_assignments.insert(mat_idx, name.clone());
+                        // 同名連動分もpkg割り当て履歴に記録
+                        if app.tex.link_same_name {
+                            if let Some(ref loaded) = app.loaded {
+                                let target_name = loaded.ir.materials[mat_idx].name.clone();
+                                for (i, m) in loaded.ir.materials.iter().enumerate() {
+                                    if i != mat_idx && m.name == target_name {
+                                        app.tex.pkg_assignments.insert(i, name.clone());
+                                    }
                                 }
                             }
                         }
@@ -107,8 +108,10 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
     // アーカイブ内モデル選択ダイアログ
     show_archive_select_dialog(ctx, app);
 
-    // unitypackage テクスチャ手動割当ダイアログ
+    // unitypackage テクスチャ手動割当ダイアログ + リアルタイムプレビュー
+    app.prepare_tex_match_views();
     show_tex_match_dialog(ctx, app);
+    app.sync_tex_match_preview();
 }
 
 /// FBX読み込み方法選択ダイアログ（モデル+アニメーション両方含む場合）
@@ -300,7 +303,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         .unwrap_or_default();
     let thumb_ids = &app.tex.pkg_thumb_cache;
     if tex_names.is_empty() {
-        app.tex.pending_match = None;
+        app.cancel_tex_match_preview();
         return;
     }
 
@@ -329,15 +332,64 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
 
     egui::Window::new("テクスチャ手動割当")
         .open(&mut open)
-        .collapsible(false)
+        .collapsible(true)
         .resizable(true)
         .default_width(450.0)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .default_pos(egui::pos2(20.0, 60.0))
         .show(ctx, |ui| {
             ui.label("自動割当できなかった材質にテクスチャを割り当ててください。");
             ui.horizontal(|ui| {
                 ui.label(format!("パッケージ内テクスチャ: {}個", tex_names.len()));
-                ui.checkbox(&mut app.tex.link_same_name, "同名連動");
+                let link_resp = ui.checkbox(&mut app.tex.link_same_name, "同名連動");
+                // 同名連動の ON/OFF 切り替え時にプレビューを全復元→再同期
+                if link_resp.changed() {
+                    if let (Some(ref mut pending), Some(ref mut loaded)) =
+                        (&mut app.tex.pending_match, &mut app.loaded)
+                    {
+                        // saved_binds を全復元
+                        for (draw_idx, (orig_tex, orig_mmd)) in pending.saved_binds.drain() {
+                            if draw_idx < loaded.gpu_model.draws.len() {
+                                loaded.gpu_model.draws[draw_idx].texture_bind_group = orig_tex;
+                                loaded.gpu_model.draws[draw_idx].mmd_texture_bind_group = orig_mmd;
+                            }
+                        }
+                        // ON 切り替え時: 同名グループ内の selections を正規化
+                        // （グループ内で Some を優先して統一）
+                        if app.tex.link_same_name {
+                            let mat_count = pending.mat_indices.len();
+                            let mut unified: std::collections::HashMap<String, Option<usize>> =
+                                std::collections::HashMap::new();
+                            for i in 0..mat_count {
+                                let mi = pending.mat_indices[i];
+                                let mat_name = loaded
+                                    .ir
+                                    .materials
+                                    .get(mi)
+                                    .map(|m| m.name.clone())
+                                    .unwrap_or_default();
+                                let entry = unified.entry(mat_name).or_insert(None);
+                                // Some を優先（None → Some に上書き、Some → Some は先勝ち）
+                                if entry.is_none() && pending.selections[i].is_some() {
+                                    *entry = pending.selections[i];
+                                }
+                            }
+                            for i in 0..mat_count {
+                                let mi = pending.mat_indices[i];
+                                let mat_name = loaded
+                                    .ir
+                                    .materials
+                                    .get(mi)
+                                    .map(|m| m.name.as_str())
+                                    .unwrap_or_default();
+                                if let Some(&group_sel) = unified.get(mat_name) {
+                                    pending.selections[i] = group_sel;
+                                }
+                            }
+                        }
+                        // previewed を全リセット → 次フレームの sync で再適用
+                        pending.previewed.iter_mut().for_each(|p| *p = None);
+                    }
+                }
             });
             ui.separator();
 
@@ -363,9 +415,18 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                             ui.end_row();
 
                             for i in 0..mat_count {
-                                ui.label(&mat_info[i].0);
+                                // この行のハイライトフラグ（どのセルにホバーしてもハイライト）
+                                let mut row_highlight = false;
+
+                                let mat_label = ui.label(&mat_info[i].0);
+                                if mat_label.contains_pointer() {
+                                    row_highlight = true;
+                                }
                                 let src = mat_info[i].1.as_deref().unwrap_or("-");
-                                ui.label(egui::RichText::new(src).color(egui::Color32::GRAY));
+                                let src_label = ui.label(egui::RichText::new(src).color(egui::Color32::GRAY));
+                                if src_label.contains_pointer() {
+                                    row_highlight = true;
+                                }
 
                                 ui.horizontal(|ui| {
                                     // 選択中テクスチャのサムネイル
@@ -390,6 +451,13 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                                         )
                                         .frame(true),
                                     );
+                                    if btn.contains_pointer() || btn.has_focus() {
+                                        row_highlight = true;
+                                    }
+                                    // ポップアップが開いている間もハイライト
+                                    if ui.memory(|m| m.is_popup_open(popup_id)) {
+                                        row_highlight = true;
+                                    }
                                     if btn.clicked() {
                                         ui.memory_mut(|m| m.toggle_popup(popup_id));
                                     }
@@ -448,6 +516,21 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                                         },
                                     );
                                 });
+                                // 行ホバー → 3Dビューでハイライト
+                                if row_highlight {
+                                    if let (Some(ref pending), Some(ref loaded)) =
+                                        (&app.tex.pending_match, &app.loaded)
+                                    {
+                                        let real_mat_idx = pending.mat_indices[i];
+                                        for (di, d) in loaded.gpu_model.draws.iter().enumerate() {
+                                            if d.material_index == real_mat_idx
+                                                && app.material_visibility.get(di).copied().unwrap_or(true)
+                                            {
+                                                app.hovered_draw_indices.push(di);
+                                            }
+                                        }
+                                    }
+                                }
                                 ui.end_row();
                             }
                         });
@@ -503,6 +586,19 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             .pending_match
             .take()
             .expect("pending_match は apply フラグで Some 確認済み");
+        // プレビュー中の bind group を復元（正式割り当てで上書きされるため）
+        if let Some(ref mut loaded) = app.loaded {
+            for (draw_idx, (orig_tex, orig_mmd)) in pending.saved_binds.into_iter() {
+                if draw_idx < loaded.gpu_model.draws.len() {
+                    loaded.gpu_model.draws[draw_idx].texture_bind_group = orig_tex;
+                    loaded.gpu_model.draws[draw_idx].mmd_texture_bind_group = orig_mmd;
+                }
+            }
+        }
+        // D&D プレビューが併存していた場合、復元で表示がずれるためリセット
+        if let Some(ref mut preview) = app.tex.pending_preview {
+            preview.previewed.iter_mut().for_each(|v| *v = false);
+        }
         // 割り当て情報を先にコピーして借用を解放
         let assignments: Vec<(usize, String, Vec<u8>)> = pending
             .selections
@@ -518,10 +614,43 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                 })
             })
             .collect();
-        let count = assignments.len();
+        // 同名連動はダイアログ側で selections を複製済みだが、同じ pkg テクスチャを
+        // 同名材質グループに適用する場合に IrTexture が重複 push されるのを防ぐ。
+        // → (テクスチャ名, 材質名) ペアで重複排除し、同名材質グループにつき1回だけ
+        //   assign_texture_data_to_material を呼ぶ（link_same_name が横展開を担当）。
+        let mut applied_pairs: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        let mut count = 0usize;
         for (mat_idx, tex_name, tex_data) in &assignments {
-            app.assign_texture_data_to_material(*mat_idx, tex_name, tex_data);
+            let mat_name = app
+                .loaded
+                .as_ref()
+                .map(|l| l.ir.materials[*mat_idx].name.clone())
+                .unwrap_or_default();
+            if app.tex.link_same_name
+                && applied_pairs.contains(&(tex_name.clone(), mat_name.clone()))
+            {
+                // 同名テクスチャ×同名材質は既に link_same_name で横展開済み
+                // 兄弟分の pkg_assignments は初回適用時に記録済み
+                continue;
+            }
+            applied_pairs.insert((tex_name.clone(), mat_name.clone()));
+            if !app.assign_texture_data_to_material(*mat_idx, tex_name, tex_data) {
+                // デコード/アップロード失敗 — pkg_assignments に記録しない
+                continue;
+            }
             app.tex.pkg_assignments.insert(*mat_idx, tex_name.clone());
+            // link_same_name で横展開された兄弟材質も pkg_assignments に記録
+            if app.tex.link_same_name {
+                if let Some(ref loaded) = app.loaded {
+                    for (si, m) in loaded.ir.materials.iter().enumerate() {
+                        if si != *mat_idx && m.name == mat_name {
+                            app.tex.pkg_assignments.insert(si, tex_name.clone());
+                        }
+                    }
+                }
+            }
+            count += 1;
         }
         if count > 0 {
             app.convert_message = Some(ConvertMessage::success(format!(
@@ -530,7 +659,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             )));
         }
     } else if cancelled || !open {
-        app.tex.pending_match = None;
+        app.cancel_tex_match_preview();
     }
 }
 
@@ -555,9 +684,9 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     let mut cancelled = false;
 
     egui::Window::new("テクスチャ割り当て")
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .collapsible(true)
+        .resizable(true)
+        .default_pos(egui::pos2(20.0, 60.0))
         .show(ctx, |ui| {
             // サムネイル + ファイル名を横並び表示
             ui.horizontal(|ui| {
@@ -631,9 +760,9 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                             .get(mat_idx)
                             .and_then(|s| s.as_deref())
                             .unwrap_or("");
-                        ui.horizontal(|ui| {
-                            ui.label(indicator);
-                            ui.checkbox(&mut preview.selection[mat_idx], name);
+                        let row = ui.horizontal(|ui| {
+                            let ind_resp = ui.label(indicator);
+                            let cb = ui.checkbox(&mut preview.selection[mat_idx], name);
                             if !src_name.is_empty() {
                                 ui.label(
                                     egui::RichText::new(src_name)
@@ -641,7 +770,18 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                                         .color(egui::Color32::from_gray(0x90)),
                                 );
                             }
+                            ind_resp.contains_pointer() || cb.contains_pointer()
                         });
+                        // 材質行ホバー → 3Dビューでハイライト
+                        if row.inner {
+                            for (di, d) in loaded.gpu_model.draws.iter().enumerate() {
+                                if d.material_index == mat_idx
+                                    && app.material_visibility.get(di).copied().unwrap_or(true)
+                                {
+                                    app.hovered_draw_indices.push(di);
+                                }
+                            }
+                        }
                     }
                 });
             ui.add_space(8.0);
@@ -785,6 +925,10 @@ pub fn execute_conversion(app: &mut ViewerApp) {
                 app.convert_message = Some(ConvertMessage::warning(msg));
             } else {
                 app.convert_message = Some(ConvertMessage::success(msg));
+            }
+            // 出力フォルダを開く
+            if let Some(dir) = output_path.parent() {
+                super::app::helpers::open_directory(dir);
             }
         }
         Err(e) => {
@@ -1357,7 +1501,8 @@ fn show_tab_display(
                     {
                         continue;
                     }
-                    ui.horizontal(|ui| {
+                    let row_resp = ui.horizontal(|ui| {
+                let mut row_highlight = false;
                 // テクスチャ状態インジケータ
                 {
                     let has_tex = mat_tex_info.get(mat_idx)
@@ -1382,8 +1527,15 @@ fn show_tab_display(
                     };
                     let resp = ui.add(egui::Label::new(indicator).sense(egui::Sense::click()))
                         .on_hover_text(&tooltip);
+                    if resp.contains_pointer() {
+                        row_highlight = true;
+                    }
                     let has_pkg = app.tex.pkg_textures.is_some();
                     let popup_id = ui.id().with(("pkg_tex_popup", mat_idx));
+                    // ポップアップ開放中もハイライト
+                    if ui.memory(|m| m.is_popup_open(popup_id)) {
+                        row_highlight = true;
+                    }
                     if resp.clicked() {
                         if has_pkg {
                             ui.memory_mut(|m| m.toggle_popup(popup_id));
@@ -1447,15 +1599,29 @@ fn show_tab_display(
                         mat_src_tex.get(mat_idx)
                             .and_then(|s| s.as_deref())
                     });
-                if let Some(tex_name) = display_tex {
+                let cb = if let Some(tex_name) = display_tex {
                     ui.checkbox(
                         &mut app.material_visibility[i],
                         format!("{} [{}]", name, tex_name),
-                    );
+                    )
                 } else {
-                    ui.checkbox(&mut app.material_visibility[i], name);
-                }
+                    ui.checkbox(&mut app.material_visibility[i], name)
+                };
+                if cb.contains_pointer() { row_highlight = true; }
+                row_highlight
                     });
+                    // 行ホバー検出 → 同一材質の全 draw をハイライト（非表示は除外）
+                    if row_resp.inner {
+                        if let Some(ref loaded) = app.loaded {
+                            for (di, d) in loaded.gpu_model.draws.iter().enumerate() {
+                                if d.material_index == mat_idx
+                                    && app.material_visibility.get(di).copied().unwrap_or(true)
+                                {
+                                    app.hovered_draw_indices.push(di);
+                                }
+                            }
+                        }
+                    }
                 }
             });
         }
@@ -1475,7 +1641,8 @@ fn show_tab_display(
             if !filter_lower.is_empty() && !name.to_lowercase().contains(&filter_lower) {
                 continue;
             }
-            ui.horizontal(|ui| {
+            let row_resp = ui.horizontal(|ui| {
+                let mut row_highlight = false;
                 // テクスチャ状態インジケータ
                 {
                     let has_tex = mat_tex_info.get(mat_idx).and_then(|t| *t).is_some();
@@ -1500,8 +1667,15 @@ fn show_tab_display(
                     let resp = ui
                         .add(egui::Label::new(indicator).sense(egui::Sense::click()))
                         .on_hover_text(&tooltip);
+                    if resp.contains_pointer() {
+                        row_highlight = true;
+                    }
                     let has_pkg = app.tex.pkg_textures.is_some();
                     let popup_id = ui.id().with(("pkg_tex_popup", mat_idx));
+                    // ポップアップ開放中もハイライト
+                    if ui.memory(|m| m.is_popup_open(popup_id)) {
+                        row_highlight = true;
+                    }
                     if resp.clicked() {
                         if has_pkg {
                             ui.memory_mut(|m| m.toggle_popup(popup_id));
@@ -1582,15 +1756,31 @@ fn show_tab_display(
                 let display_tex = assigned_name
                     .as_deref()
                     .or_else(|| mat_src_tex.get(mat_idx).and_then(|s| s.as_deref()));
-                if let Some(tex_name) = display_tex {
+                let cb = if let Some(tex_name) = display_tex {
                     ui.checkbox(
                         &mut app.material_visibility[i],
                         format!("{} [{}]", name, tex_name),
-                    );
+                    )
                 } else {
-                    ui.checkbox(&mut app.material_visibility[i], name);
+                    ui.checkbox(&mut app.material_visibility[i], name)
+                };
+                if cb.contains_pointer() {
+                    row_highlight = true;
                 }
+                row_highlight
             });
+            // 行ホバー検出 → 同一材質の全 draw をハイライト（非表示は除外）
+            if row_resp.inner {
+                if let Some(ref loaded) = app.loaded {
+                    for (di, d) in loaded.gpu_model.draws.iter().enumerate() {
+                        if d.material_index == mat_idx
+                            && app.material_visibility.get(di).copied().unwrap_or(true)
+                        {
+                            app.hovered_draw_indices.push(di);
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1620,6 +1810,47 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     ui.heading(egui::RichText::new("PMX 変換").color(egui::Color32::from_gray(0x20)));
     ui.separator();
 
+    // 出力先ディレクトリ（converted_modelXX の作成場所）
+    ui.horizontal(|ui| {
+        ui.label("出力先:");
+        let dir_label = app
+            .export
+            .output_base_dir
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "(ソースと同じ場所)".to_string());
+        ui.label(
+            egui::RichText::new(&dir_label)
+                .small()
+                .color(egui::Color32::from_gray(0x60)),
+        );
+    });
+    ui.horizontal(|ui| {
+        if ui.small_button("フォルダ選択...").clicked() {
+            let start_dir = app
+                .export
+                .output_base_dir
+                .clone()
+                .or_else(|| {
+                    app.loaded
+                        .as_ref()
+                        .and_then(|l| l.source.display_path().parent().map(|p| p.to_path_buf()))
+                })
+                .unwrap_or_default();
+            let mut dialog = rfd::FileDialog::new().set_title("PMX出力先フォルダを選択");
+            if start_dir.exists() {
+                dialog = dialog.set_directory(&start_dir);
+            }
+            if let Some(dir) = dialog.pick_folder() {
+                app.export.output_base_dir = Some(dir);
+            }
+        }
+        if app.export.output_base_dir.is_some() && ui.small_button("リセット").clicked() {
+            app.export.output_base_dir = None;
+        }
+    });
+    ui.separator();
+
     // PMX/PMD ロード時は PMX 変換関連をグレーアウト
     ui.add_enabled_ui(has_model && !is_processing && !is_pmx_pmd, |ui| {
         if ui
@@ -1633,22 +1864,29 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             })
             .clicked()
         {
-            let default_path = if app.export.pmx_output_path.is_empty() {
-                std::path::PathBuf::from("output.pmx")
-            } else {
-                std::path::PathBuf::from(&app.export.pmx_output_path)
-            };
-            let mut dialog = rfd::FileDialog::new()
-                .set_title("PMX出力先を選択")
-                .add_filter("PMX", &["pmx"]);
-            if let Some(dir) = default_path.parent() {
-                dialog = dialog.set_directory(dir);
-            }
-            if let Some(name) = default_path.file_name() {
-                dialog = dialog.set_file_name(name.to_string_lossy());
-            }
-            if let Some(path) = dialog.save_file() {
-                app.export.pmx_output_path = path.to_string_lossy().into_owned();
+            // 変換ごとに converted_modelXX を再採番（上書き防止）
+            if let Some(ref loaded) = app.loaded {
+                let source_path = loaded.source.display_path();
+                let base_dir =
+                    app.export.output_base_dir.as_deref().unwrap_or_else(|| {
+                        source_path.parent().unwrap_or(std::path::Path::new("."))
+                    });
+                let converted_dir = crate::next_converted_dir(base_dir);
+                let pmx_stem = crate::sanitize_filename(&loaded.ir.name).unwrap_or_else(|| {
+                    source_path
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
+                });
+                let output_path = converted_dir.join(format!("{}.pmx", pmx_stem));
+                // 出力ディレクトリ作成
+                if let Some(dir) = output_path.parent() {
+                    if let Err(e) = std::fs::create_dir_all(dir) {
+                        log::warn!("出力ディレクトリ作成失敗: {e}");
+                    }
+                }
+                app.export.pmx_output_path = output_path.to_string_lossy().into_owned();
                 app.pending.convert = Some(PendingOverlay::WaitingOverlay);
             }
         }

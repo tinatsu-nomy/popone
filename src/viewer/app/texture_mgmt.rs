@@ -60,7 +60,7 @@ pub struct PendingTexPreview {
     /// 材質ごとの選択状態（チェックボックス）
     pub selection: Vec<bool>,
     /// 現在プレビュー適用中の材質
-    pub(super) previewed: Vec<bool>,
+    pub previewed: Vec<bool>,
     /// プレビュー用テクスチャビュー（GPU）
     pub(super) texture_view: wgpu::TextureView,
     /// draw_index → 退避した元の bind group
@@ -77,6 +77,14 @@ pub struct PendingTexMatch {
     pub selections: Vec<Option<usize>>,
     /// テクスチャ名フィルタ
     pub tex_filter: String,
+    /// 現在プレビュー適用中の選択状態
+    pub previewed: Vec<Option<usize>>,
+    /// draw_index → 退避した元の (texture_bind_group, mmd_texture_bind_group)
+    pub saved_binds: HashMap<usize, (Option<wgpu::BindGroup>, Option<wgpu::BindGroup>)>,
+    /// pkg テクスチャの GPU TextureView（インデックス対応）
+    pub texture_views: Vec<Option<wgpu::TextureView>>,
+    /// アップロード失敗済みテクスチャインデックス（再試行防止）
+    pub failed_uploads: std::collections::HashSet<usize>,
 }
 
 /// UI 表示用にキャッシュされた材質情報（借用制約回避 + 毎フレーム clone 回避）
@@ -422,12 +430,13 @@ impl ViewerApp {
     }
 
     /// パッケージ内テクスチャデータを材質に割り当て（バイト列から直接）
+    /// 成功時は true、デコード/アップロード失敗時は false を返す
     pub fn assign_texture_data_to_material(
         &mut self,
         material_index: usize,
         tex_name: &str,
         tex_data: &[u8],
-    ) {
+    ) -> bool {
         let is_psd = super::super::texture::is_psd_filename(tex_name);
 
         let device = &self.render_state.device;
@@ -442,12 +451,12 @@ impl ViewerApp {
                     self.convert_message = Some(ConvertMessage::failure(format!(
                         "テクスチャデコード失敗: {e}"
                     )));
-                    return;
+                    return false;
                 }
             };
 
         let Some(ref mut loaded) = self.loaded else {
-            return;
+            return false;
         };
 
         // IrModel にテクスチャを追加
@@ -472,14 +481,23 @@ impl ViewerApp {
             (tex_data.to_vec(), tex_name.to_string(), String::new())
         };
 
-        let tex_idx = loaded.ir.textures.len();
-        loaded
+        // 同名同内容の IrTexture が既に存在する場合は再利用（重複防止）
+        let tex_idx = loaded
             .ir
             .textures
-            .push(crate::intermediate::types::IrTexture {
-                filename: ir_filename,
-                data: ir_data,
-                mime_type: ir_mime,
+            .iter()
+            .position(|t| t.filename == ir_filename && t.data == ir_data)
+            .unwrap_or_else(|| {
+                let idx = loaded.ir.textures.len();
+                loaded
+                    .ir
+                    .textures
+                    .push(crate::intermediate::types::IrTexture {
+                        filename: ir_filename,
+                        data: ir_data,
+                        mime_type: ir_mime,
+                    });
+                idx
             });
         let mat = &mut loaded.ir.materials[material_index];
         mat.texture_index = Some(tex_idx);
@@ -496,7 +514,7 @@ impl ViewerApp {
         // GPU DrawCall 更新（材質固有のサンプラー情報を維持）
         let texture_bgl = match self.renderer {
             Some(ref r) => r.texture_bgl(),
-            None => return,
+            None => return false,
         };
         let sampler_info = loaded.ir.materials[material_index]
             .base_color_tex_info
@@ -510,6 +528,12 @@ impl ViewerApp {
             texture_bgl,
             &sampler_info,
         );
+        // MMD 描画パスが古い mmd_texture_bind_group を優先しないようクリア
+        for draw in &mut loaded.gpu_model.draws {
+            if draw.material_index == material_index {
+                draw.mmd_texture_bind_group = None;
+            }
+        }
 
         log::info!(
             "パッケージテクスチャ割り当て: 材質[{}] '{}' ← {}",
@@ -553,11 +577,18 @@ impl ViewerApp {
                     texture_bgl,
                     &sib_sampler_info,
                 );
+                // MMD bind group もクリア
+                for draw in &mut loaded.gpu_model.draws {
+                    if draw.material_index == sib_idx {
+                        draw.mmd_texture_bind_group = None;
+                    }
+                }
                 log::info!("  連動割り当て: 材質[{}] '{}'", sib_idx, target_name);
             }
         }
 
         self.update_mat_cache();
+        true
     }
 
     /// 1枚のテクスチャをプレビューダイアログで開く
@@ -880,6 +911,209 @@ impl ViewerApp {
             if draw_idx < loaded.gpu_model.draws.len() {
                 loaded.gpu_model.draws[draw_idx].texture_bind_group = orig;
             }
+        }
+    }
+
+    /// pkg テクスチャの TextureView スロットを初期化（遅延ロード用）
+    /// 実際の GPU アップロードは sync_tex_match_preview 内で選択時にオンデマンドで行う
+    pub fn prepare_tex_match_views(&mut self) {
+        let Some(ref mut pending) = self.tex.pending_match else {
+            return;
+        };
+        if !pending.texture_views.is_empty() {
+            return; // 既に初期化済み
+        }
+        let pkg_count = self.tex.pkg_textures.as_ref().map(|p| p.len()).unwrap_or(0);
+        if pkg_count > 0 {
+            pending.texture_views = vec![None; pkg_count];
+        }
+    }
+
+    /// テクスチャ手動割当のリアルタイムプレビュー同期
+    /// selections と previewed の差分を GPU bind group に反映
+    /// テクスチャは選択時にオンデマンドで GPU アップロード（VRAM スパイク防止）
+    pub fn sync_tex_match_preview(&mut self) {
+        let Some(ref mut pending) = self.tex.pending_match else {
+            return;
+        };
+        let Some(ref mut loaded) = self.loaded else {
+            return;
+        };
+        let Some(ref renderer) = self.renderer else {
+            return;
+        };
+        let device = &self.render_state.device;
+        let queue = &self.render_state.queue;
+        let texture_bgl = renderer.texture_bgl();
+
+        for i in 0..pending.mat_indices.len() {
+            let mat_idx = pending.mat_indices[i];
+            let sel = pending.selections[i];
+            let prev = pending.previewed[i];
+
+            if sel == prev {
+                continue;
+            }
+
+            if let Some(tex_idx) = sel {
+                // オンデマンドアップロード: 未アップロードなら今アップロード
+                if tex_idx < pending.texture_views.len()
+                    && pending.texture_views[tex_idx].is_none()
+                    && !pending.failed_uploads.contains(&tex_idx)
+                {
+                    if let Some(ref pkg) = self.tex.pkg_textures {
+                        if let Some((name, data)) = pkg.get(tex_idx) {
+                            let is_psd = super::super::texture::is_psd_filename(name);
+                            match super::super::texture::upload_texture_from_bytes(
+                                data, is_psd, device, queue,
+                            ) {
+                                Ok((view, _unorm)) => {
+                                    pending.texture_views[tex_idx] = Some(view);
+                                }
+                                Err(e) => {
+                                    log::warn!("pkg テクスチャアップロード失敗 ({}): {e}", name);
+                                    pending.failed_uploads.insert(tex_idx);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // テクスチャビュー取得（失敗時は既存プレビューを復元 — 同名兄弟含む）
+                let Some(Some(ref view)) = pending.texture_views.get(tex_idx) else {
+                    if prev.is_some() {
+                        let fail_mat_name =
+                            loaded.ir.materials.get(mat_idx).map(|m| m.name.clone());
+                        for (draw_idx, draw) in loaded.gpu_model.draws.iter_mut().enumerate() {
+                            let is_target = draw.material_index == mat_idx
+                                || (self.tex.link_same_name
+                                    && fail_mat_name.as_ref().is_some_and(|n| {
+                                        loaded
+                                            .ir
+                                            .materials
+                                            .get(draw.material_index)
+                                            .is_some_and(|m| m.name == *n)
+                                    }));
+                            if is_target {
+                                if let Some((orig_tex, orig_mmd)) =
+                                    pending.saved_binds.remove(&draw_idx)
+                                {
+                                    draw.texture_bind_group = orig_tex;
+                                    draw.mmd_texture_bind_group = orig_mmd;
+                                }
+                            }
+                        }
+                        pending.previewed[i] = None;
+                    }
+                    continue;
+                };
+
+                // link_same_name 時は同名材質にも横展開（確定適用と同じ範囲）
+                let mat_name = loaded.ir.materials.get(mat_idx).map(|m| m.name.clone());
+                let target_mats: Vec<usize> = if self.tex.link_same_name {
+                    if let Some(ref name) = mat_name {
+                        loaded
+                            .ir
+                            .materials
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, m)| m.name == *name)
+                            .map(|(idx, _)| idx)
+                            .collect()
+                    } else {
+                        vec![mat_idx]
+                    }
+                } else {
+                    vec![mat_idx]
+                };
+
+                for &target in &target_mats {
+                    let sampler_info = loaded
+                        .ir
+                        .materials
+                        .get(target)
+                        .and_then(|m| m.base_color_tex_info.as_ref())
+                        .map(|ti| ti.sampler)
+                        .unwrap_or_default();
+                    let sampler =
+                        super::super::mesh::create_sampler_from_info(device, &sampler_info);
+
+                    for (draw_idx, draw) in loaded.gpu_model.draws.iter_mut().enumerate() {
+                        if draw.material_index == target {
+                            if let std::collections::hash_map::Entry::Vacant(e) =
+                                pending.saved_binds.entry(draw_idx)
+                            {
+                                e.insert((
+                                    draw.texture_bind_group.take(),
+                                    draw.mmd_texture_bind_group.take(),
+                                ));
+                            }
+                            let new_bg = super::super::gpu::create_texture_bind_group(
+                                device,
+                                texture_bgl,
+                                view,
+                                &sampler,
+                            );
+                            draw.texture_bind_group = Some(new_bg);
+                            // MMD パスでも texture_bind_group を参照させるため mmd 側を None に
+                            draw.mmd_texture_bind_group = None;
+                        }
+                    }
+                }
+            } else {
+                // 選択解除 → 元の bind group を復元（同名材質含む）
+                let mat_name = loaded.ir.materials.get(mat_idx).map(|m| m.name.clone());
+                let target_mats: Vec<usize> = if self.tex.link_same_name {
+                    if let Some(ref name) = mat_name {
+                        loaded
+                            .ir
+                            .materials
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, m)| m.name == *name)
+                            .map(|(idx, _)| idx)
+                            .collect()
+                    } else {
+                        vec![mat_idx]
+                    }
+                } else {
+                    vec![mat_idx]
+                };
+                for &target in &target_mats {
+                    for (draw_idx, draw) in loaded.gpu_model.draws.iter_mut().enumerate() {
+                        if draw.material_index == target {
+                            if let Some((orig_tex, orig_mmd)) =
+                                pending.saved_binds.remove(&draw_idx)
+                            {
+                                draw.texture_bind_group = orig_tex;
+                                draw.mmd_texture_bind_group = orig_mmd;
+                            }
+                        }
+                    }
+                }
+            }
+            pending.previewed[i] = sel;
+        }
+    }
+
+    /// テクスチャ手動割当プレビューをキャンセル（元の bind group を復元）
+    pub fn cancel_tex_match_preview(&mut self) {
+        let Some(pending) = self.tex.pending_match.take() else {
+            return;
+        };
+        let Some(ref mut loaded) = self.loaded else {
+            return;
+        };
+        for (draw_idx, (orig_tex, orig_mmd)) in pending.saved_binds.into_iter() {
+            if draw_idx < loaded.gpu_model.draws.len() {
+                loaded.gpu_model.draws[draw_idx].texture_bind_group = orig_tex;
+                loaded.gpu_model.draws[draw_idx].mmd_texture_bind_group = orig_mmd;
+            }
+        }
+        // D&D プレビューが併存していた場合、bind group 復元で表示がずれるため
+        // previewed をリセットして次フレームの sync_tex_preview で再適用させる
+        if let Some(ref mut preview) = self.tex.pending_preview {
+            preview.previewed.iter_mut().for_each(|v| *v = false);
         }
     }
 }

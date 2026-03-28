@@ -65,6 +65,7 @@ pub fn write_all_textures(
 }
 
 /// IrTexture のデータ（PNG/JPEG バイナリ）をそのまま書き出す（FBX 用）
+/// PSD データの場合は PNG に変換して書き出す
 pub fn write_all_textures_from_ir(
     textures: &[IrTexture],
     output_dir: &Path,
@@ -73,12 +74,92 @@ pub fn write_all_textures_from_ir(
         return Ok(Vec::new());
     }
     std::fs::create_dir_all(output_dir)?;
+
+    // 書き出し済みファイル名を逐次追跡（全テクスチャの衝突検出・回避用）
+    let mut used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     let mut filenames = Vec::new();
     for tex in textures {
-        let out_path = output_dir.join(&tex.filename);
-        std::fs::write(&out_path, &tex.data)?;
-        log::info!("テクスチャ書き出し: {}", out_path.display());
-        filenames.push(tex.filename.clone());
+        if crate::psd::is_psd_filename(&tex.filename) {
+            // PSD → PNG 変換
+            match crate::psd::psd_to_png(&tex.data) {
+                Ok(png_data) => {
+                    let stem = std::path::Path::new(&tex.filename)
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned();
+                    let mut candidate = format!("{}.png", stem);
+                    if used_names.contains(&candidate.to_lowercase()) {
+                        candidate = format!("{}_from_psd.png", stem);
+                        let mut suffix = 2u32;
+                        while used_names.contains(&candidate.to_lowercase()) {
+                            candidate = format!("{}_from_psd{}.png", stem, suffix);
+                            suffix += 1;
+                        }
+                        log::info!("PSD→PNG: 衝突回避 → '{}'", candidate);
+                    }
+                    used_names.insert(candidate.to_lowercase());
+                    let out_path = output_dir.join(&candidate);
+                    std::fs::write(&out_path, &png_data)?;
+                    log::info!("テクスチャ書き出し (PSD→PNG): {}", out_path.display());
+                    filenames.push(candidate);
+                }
+                Err(e) => {
+                    log::warn!("PSD→PNG変換失敗、PSDのまま書き出し: {e}");
+                    // 衝突回避（非PSD分岐と同じロジック）
+                    let mut out_name = tex.filename.clone();
+                    if used_names.contains(&out_name.to_lowercase()) {
+                        let p = std::path::Path::new(&tex.filename);
+                        let stem = p.file_stem().unwrap_or_default().to_string_lossy();
+                        let ext = p.extension().unwrap_or_default().to_string_lossy();
+                        let mut suffix = 2u32;
+                        loop {
+                            out_name = if ext.is_empty() {
+                                format!("{}_{}", stem, suffix)
+                            } else {
+                                format!("{}_{}.{}", stem, suffix, ext)
+                            };
+                            if !used_names.contains(&out_name.to_lowercase()) {
+                                break;
+                            }
+                            suffix += 1;
+                        }
+                        log::info!("PSD衝突回避: '{}' → '{}'", tex.filename, out_name);
+                    }
+                    used_names.insert(out_name.to_lowercase());
+                    let out_path = output_dir.join(&out_name);
+                    std::fs::write(&out_path, &tex.data)?;
+                    filenames.push(out_name);
+                }
+            }
+        } else {
+            // 非PSD: 同名ファイルの衝突回避（手動割当で PSD→PNG 済みの同名エントリ等）
+            let mut out_name = tex.filename.clone();
+            if used_names.contains(&out_name.to_lowercase()) {
+                let p = std::path::Path::new(&tex.filename);
+                let stem = p.file_stem().unwrap_or_default().to_string_lossy();
+                let ext = p.extension().unwrap_or_default().to_string_lossy();
+                let mut suffix = 2u32;
+                loop {
+                    out_name = if ext.is_empty() {
+                        format!("{}_{}", stem, suffix)
+                    } else {
+                        format!("{}_{}.{}", stem, suffix, ext)
+                    };
+                    if !used_names.contains(&out_name.to_lowercase()) {
+                        break;
+                    }
+                    suffix += 1;
+                }
+                log::info!("テクスチャ名衝突回避: '{}' → '{}'", tex.filename, out_name);
+            }
+            used_names.insert(out_name.to_lowercase());
+            let out_path = output_dir.join(&out_name);
+            std::fs::write(&out_path, &tex.data)?;
+            log::info!("テクスチャ��き出し: {}", out_path.display());
+            filenames.push(out_name);
+        }
     }
     Ok(filenames)
 }

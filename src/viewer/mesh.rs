@@ -118,27 +118,7 @@ impl GpuModel {
         texture_bgl: &wgpu::BindGroupLayout,
         sampler_info: &IrSamplerInfo,
     ) {
-        let (min_filter, mipmap_filter) = ir_min_filter_to_wgpu(sampler_info.min_filter);
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("assign_sampler"),
-            mag_filter: match sampler_info.mag_filter {
-                IrMagFilter::Nearest => wgpu::FilterMode::Nearest,
-                IrMagFilter::Linear => wgpu::FilterMode::Linear,
-            },
-            min_filter,
-            mipmap_filter,
-            address_mode_u: match sampler_info.wrap_u {
-                IrWrapMode::Repeat => wgpu::AddressMode::Repeat,
-                IrWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
-                IrWrapMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
-            },
-            address_mode_v: match sampler_info.wrap_v {
-                IrWrapMode::Repeat => wgpu::AddressMode::Repeat,
-                IrWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
-                IrWrapMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
-            },
-            ..Default::default()
-        });
+        let sampler = create_sampler_from_info(device, sampler_info);
         for draw in &mut self.draws {
             if draw.material_index == material_index {
                 draw.texture_bind_group = Some(gpu::create_texture_bind_group(
@@ -403,6 +383,31 @@ fn ir_min_filter_to_wgpu(mode: IrMinFilter) -> (wgpu::FilterMode, wgpu::FilterMo
         IrMinFilter::NearestMipmapLinear => (wgpu::FilterMode::Nearest, wgpu::FilterMode::Linear),
         IrMinFilter::LinearMipmapLinear => (wgpu::FilterMode::Linear, wgpu::FilterMode::Linear),
     }
+}
+
+/// IrSamplerInfo から wgpu::Sampler を作成（プレビュー等で単発使用）
+pub fn create_sampler_from_info(device: &wgpu::Device, info: &IrSamplerInfo) -> wgpu::Sampler {
+    let (min_filter, mipmap_filter) = ir_min_filter_to_wgpu(info.min_filter);
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("preview_sampler"),
+        mag_filter: match info.mag_filter {
+            IrMagFilter::Nearest => wgpu::FilterMode::Nearest,
+            IrMagFilter::Linear => wgpu::FilterMode::Linear,
+        },
+        min_filter,
+        mipmap_filter,
+        address_mode_u: match info.wrap_u {
+            IrWrapMode::Repeat => wgpu::AddressMode::Repeat,
+            IrWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
+            IrWrapMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
+        },
+        address_mode_v: match info.wrap_v {
+            IrWrapMode::Repeat => wgpu::AddressMode::Repeat,
+            IrWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
+            IrWrapMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
+        },
+        ..Default::default()
+    })
 }
 
 /// IrSamplerInfo に対応する wgpu::Sampler をキャッシュから取得（なければ作成）

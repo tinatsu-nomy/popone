@@ -62,6 +62,7 @@
     - [MMD Ambient Separation](#mmd-ambient-separation)
   - [Log Output](#log-output)
     - [Overall Log Structure](#overall-log-structure)
+    - [Panic Log](#panic-log)
   - [Single Instance](#single-instance)
   - [FPS Measurement](#fps-measurement)
   - [Animation Playback](#animation-playback)
@@ -1067,6 +1068,10 @@ Vertex weight distribution: ...       ← DEBUG: Vertex count distribution of BD
 --- Display Frames ---                ← DEBUG: Bone count, morph count per display frame
 === PMX Model Build Complete ===      ← INFO: Output PMX statistics summary
 ```
+
+### Panic Log
+
+On panic, the current log file (`popone_yyyymmdd_hhmmss.log`) is copied to `panic_yyyymmdd_hhmmss.log`. Files with the `panic_` prefix are excluded from log rotation (`rotate_logs`) cleanup, so they persist until manually deleted.
 
 ## Single Instance
 

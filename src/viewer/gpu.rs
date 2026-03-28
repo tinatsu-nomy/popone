@@ -1008,6 +1008,11 @@ fn vs_main(
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(0.0, 0.0, 0.0, 1.0);
 }
+
+@fragment
+fn fs_highlight_fill(in: VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(1.0, 0.5, 0.0, 0.35);
+}
 "#
 );
 
@@ -1419,6 +1424,8 @@ pub struct RenderParams<'a> {
     pub is_vrm0: bool,
     /// 累積時間（秒、UVアニメーション用）
     pub time: f32,
+    /// ホバー中の draw_index 群（オレンジワイヤーフレームでハイライト表示）
+    pub hovered_draw_indices: &'a [usize],
 }
 
 /// 描画モード
@@ -1466,6 +1473,8 @@ struct PipelineSet {
     pipeline_wireframe: Option<wgpu::RenderPipeline>,
     /// ワイヤーフレームオーバーレイ（Solid+Wire用、depth bias付き）
     pipeline_wire_overlay: Option<wgpu::RenderPipeline>,
+    /// 材質ホバーハイライト（オレンジワイヤーフレーム）
+    pipeline_highlight: Option<wgpu::RenderPipeline>,
     pipeline_mask_cull: wgpu::RenderPipeline,
     pipeline_mask_no_cull: wgpu::RenderPipeline,
     pipeline_alpha_cull: wgpu::RenderPipeline,
@@ -2342,6 +2351,51 @@ impl GpuRenderer {
             None
         };
 
+        // ハイライト用パイプライン（半透明オレンジ塗りつぶし）
+        let pipeline_highlight = {
+            let highlight_depth = wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: wgpu::DepthBiasState::default(),
+            };
+            let highlight_color_target = wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            };
+            Some(
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(&format!("mesh_highlight_fill{suffix}")),
+                    layout: Some(pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: wire_overlay_shader,
+                        entry_point: Some("vs_main"),
+                        buffers: &[Vertex::layout()],
+                        compilation_options: Default::default(),
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        cull_mode: None,
+                        front_face: wgpu::FrontFace::Cw,
+                        polygon_mode: wgpu::PolygonMode::Fill,
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(highlight_depth),
+                    multisample: ms,
+                    fragment: Some(wgpu::FragmentState {
+                        module: wire_overlay_shader,
+                        entry_point: Some("fs_highlight_fill"),
+                        targets: &[Some(highlight_color_target)],
+                        compilation_options: Default::default(),
+                    }),
+                    multiview: None,
+                    cache: None,
+                }),
+            )
+        };
+
         let pipeline_alpha_cull = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(&format!("mesh_alpha_cull{suffix}")),
             layout: Some(pipeline_layout),
@@ -2897,6 +2951,7 @@ impl GpuRenderer {
             pipeline_no_cull,
             pipeline_wireframe,
             pipeline_wire_overlay,
+            pipeline_highlight,
             pipeline_mask_cull,
             pipeline_mask_no_cull,
             pipeline_alpha_cull,
@@ -3954,6 +4009,32 @@ impl GpuRenderer {
                         pass.set_bind_group(0, &self.camera_bind_group, &[]);
                         pass.set_vertex_buffer(0, edge_buf.slice(..));
                         pass.draw(0..self.joint_edge_vertex_count, 0..1);
+                    }
+                }
+            }
+
+            // ===== 材質ホバーハイライト（オレンジワイヤーフレーム）=====
+            if !params.hovered_draw_indices.is_empty() && !model.draws.is_empty() {
+                if let Some(ref highlight_pl) = ps.pipeline_highlight {
+                    pass.set_pipeline(highlight_pl);
+                    pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
+                    pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    for &draw_idx in params.hovered_draw_indices {
+                        if let Some(draw) = model.draws.get(draw_idx) {
+                            let tex_bg = draw
+                                .texture_bind_group
+                                .as_ref()
+                                .unwrap_or(&self.default_tex_bind_group);
+                            pass.set_bind_group(1, tex_bg, &[]);
+                            pass.set_bind_group(2, &draw.material_bind_group, &[]);
+                            pass.set_bind_group(3, &self.default_mtoon_aux_bind_group, &[]);
+                            pass.draw_indexed(
+                                draw.index_offset..(draw.index_offset + draw.index_count),
+                                0,
+                                0..1,
+                            );
+                        }
                     }
                 }
             }

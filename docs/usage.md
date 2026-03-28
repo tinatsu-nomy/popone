@@ -57,7 +57,7 @@ popone.exe input.fbx
 - **3D 表示** — egui + wgpu によるリアルタイムレンダリング。テクスチャ付き Lambert シェーディング、両面描画、アルファブレンド。VRM の MToon 材質は 2 色トゥーンシェーディング（lit/shade smoothstep 補間）+ アウトライン描画（inverted hull 法）+ リムライティング（パラメトリックリム + MatCap テクスチャ）+ 補助テクスチャ（shadeMultiply / shadingShift / rimMultiply、texCoord / KHR_texture_transform 対応）+ UV アニメーション（スクロール・回転）+ emissive（発光）+ 法線マップ（MikkTSpace 接線生成による TBN 構築、doubleSided 背面法線反転対応）+ MToon 仕様準拠 4 段階描画順制御（OPAQUE → MASK → BlendZWrite → Blend、`transparentWithZWrite` / `renderQueueOffsetNumber` + BLEND 内カメラ距離動的ソート対応）で表示。VRM 0.x MToon の全プロパティを VRM 1.0 に正規化（UniVRM マイグレーション準拠）。ベースカラーテクスチャを含む全テクスチャで `texCoord` / `KHR_texture_transform` に対応。glTF sampler のアドレスモード（Repeat / ClampToEdge / MirroredRepeat）・フィルタモード（minFilter の mipmap 選択方式を含む 6 値保持）をテクスチャごとに個別のサンプラーで反映。UTS2（Unity-Chan Toon Shader）材質は自動検出し MToon 近似表示（1st shade / outline / rim / MatCap / emissive / normal 対応、HighColor は PMX 出力のみ）。PMX/PMD は MMD レンダリングモード（NdotL 依存トゥーンシェーディング・エッジ・スフィアマップ）で表示。ライティングはライトカラー + 半球 ambient（Sky/Ground 2色補間）で VRoidHub に近い環境光を再現
 - **カメラ操作** — 左ドラッグ:回転、右ドラッグ:パン、ホイール:ズーム。F:フィット、R:リセット、ダブルクリック:フィット、Shift:精密操作（1/3速度）。FOV 30°（MMD準拠）
 - **表情モーフ** — スライダで Expression を調整（0/1 ボタン・直接入力対応）
-- **材質表示切替** — 材質ごとの ON/OFF、検索フィルタ
+- **材質表示切替** — 材質ごとの ON/OFF、検索フィルタ。材質行ホバーで 3D ビュー上の該当メッシュを半透明オレンジでハイライト
 - **テクスチャ割り当て** — 材質に外部テクスチャ（PNG/JPG/TGA/BMP/PSD）を D&D またはダイアログで割り当て。リアルタイムプレビュー付き。VRM 埋め込みテクスチャの差し替えにも対応（リセットボタンで復元可能）
 - **同名材質連動** — 同じ名前の材質に同時にテクスチャを割り当てる ON/OFF スイッチ
 - **UnityPackage 対応** — VRM / FBX モデル選択ダイアログ、テクスチャ自動割当（サムネイルプレビュー・検索フィルタ付き手動割当も可能）
@@ -133,9 +133,10 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 | 出力 | 説明 |
 |------|------|
 | PMX 2.0 (`.pmx`) | MikuMikuDance / PmxEditor 用。MMD 標準ボーン・IK・物理を自動挿入 |
-| テクスチャ PNG | `textures/` フォルダに出力 |
+| テクスチャ PNG | `textures/` フォルダに出力（PSD テクスチャは自動的に PNG に変換） |
 | UVマップ PSD | 材質ごとにレイヤー分け、モデル別グループフォルダ付き（ビューアから出力） |
 
+- ビューアでは「PMX 変換」ボタンで即座に `converted_modelXX/` ディレクトリに出力。変換完了後にエクスプローラーで自動オープン。出力先ベースディレクトリは「出力」タブで変更可能
 - VRM 0.0 / 1.0 / FBX / UnityPackage / ZIP / 7z を自動判定
 - MMD 標準ボーン自動挿入（全ての親・センター・グルーブ・腰・足IK・つま先IK）
 - 準標準ボーン挿入（腰キャンセル・足D・足先EX・腕捩り・手捩り・肩キャンセル）

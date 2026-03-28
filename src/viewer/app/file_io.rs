@@ -63,11 +63,12 @@ impl ViewerApp {
             .unwrap_or("")
             .to_lowercase();
 
+        // 読み込み時はプレビュー中の bind group を復元してからクリア
+        self.cancel_tex_match_preview();
         // unitypackage以外の読み込み時はパッケージテクスチャをクリア
         if ext != "unitypackage" {
             self.tex.pkg_textures = None;
             self.clear_pkg_thumb_cache();
-            self.tex.pending_match = None;
         }
 
         // アニメーションファイルの判定
@@ -844,8 +845,12 @@ impl ViewerApp {
                     .collect()
             };
             for (mat_idx, tex_name, data) in &assignments_to_restore {
-                self.assign_texture_data_to_material(*mat_idx, tex_name, data);
-                self.tex.pkg_assignments.insert(*mat_idx, tex_name.clone());
+                if self.assign_texture_data_to_material(*mat_idx, tex_name, data) {
+                    self.tex.pkg_assignments.insert(*mat_idx, tex_name.clone());
+                } else {
+                    // 復元失敗 → 不正な履歴を除去
+                    self.tex.pkg_assignments.remove(mat_idx);
+                }
             }
         }
     }
@@ -899,11 +904,17 @@ impl ViewerApp {
             // 未割当材質がある場合、手動割当ダイアログを開く（リロード中は抑制）
             if !unmatched.is_empty() && self.tex.pkg_textures.is_some() && !self.suppress_tex_match
             {
+                // 既存プレビューがあれば先に復元
+                self.cancel_tex_match_preview();
                 let count = unmatched.len();
                 self.tex.pending_match = Some(PendingTexMatch {
                     mat_indices: unmatched,
                     selections: vec![None; count],
                     tex_filter: String::new(),
+                    previewed: vec![None; count],
+                    saved_binds: std::collections::HashMap::new(),
+                    texture_views: Vec::new(),
+                    failed_uploads: std::collections::HashSet::new(),
                 });
             }
         }
@@ -1443,11 +1454,14 @@ impl ViewerApp {
     /// 現在読み込み中のVRMを再読み込みする（オプション変更時）
     /// カメラ・モーフ・材質表示などの状態は保持する
     pub fn reload_current(&mut self) {
-        let Some(ref loaded) = self.loaded else {
+        if self.loaded.is_none() {
             return;
-        };
+        }
+        // リロード前にプレビューを復元（旧モデルの GPU リソースが有効な間に実行）
+        self.cancel_tex_match_preview();
         // リロード中はテクスチャ選択ダイアログを抑制
         self.suppress_tex_match = true;
+        let loaded = self.loaded.as_ref().unwrap();
         let source = loaded.source.clone();
         let saved_appended = loaded.appended_models.clone();
         let saved_camera = self.camera.clone();
@@ -1455,6 +1469,7 @@ impl ViewerApp {
         let saved_visibility = std::mem::take(&mut self.material_visibility);
         let saved_filter = std::mem::take(&mut self.material_filter);
         let saved_pmx_path = std::mem::take(&mut self.export.pmx_output_path);
+        let saved_visible_only = self.export.export_visible_only;
         let saved_tex_assignments = std::mem::take(&mut self.tex.assignments);
         let saved_pkg_tex_assignments = std::mem::take(&mut self.tex.pkg_assignments);
         let saved_pkg_textures = self.tex.pkg_textures.take();
@@ -1483,9 +1498,6 @@ impl ViewerApp {
             }
             _ => self.reload_from_source(&source),
         };
-
-        // リロード時はテクスチャ選択ダイアログを抑制（後で割り当てを復元するため不要）
-        self.tex.pending_match = None;
 
         // リロード失敗時は状態変更をスキップして早期リターン
         if let Err(e) = result {
@@ -1540,7 +1552,7 @@ impl ViewerApp {
                 }
                 self.suppress_tex_match = false;
                 // リロード経由の再アペンドではテクスチャ選択ダイアログを抑制
-                self.tex.pending_match = None;
+                self.cancel_tex_match_preview();
                 // アペンド失敗のエラーメッセージは保持、成功メッセージのみクリア
                 if let Some(ref msg) = self.convert_message {
                     if matches!(
@@ -1569,6 +1581,7 @@ impl ViewerApp {
         }
         self.material_filter = saved_filter;
         self.export.pmx_output_path = saved_pmx_path;
+        self.export.export_visible_only = saved_visible_only;
 
         // テクスチャ割り当てを復元（ファイルパス分のみ。pkg分はreload_unitypackage内で処理済み）
         let saved_link = self.tex.link_same_name;
@@ -2737,6 +2750,8 @@ impl ViewerApp {
                     && self.tex.pkg_textures.is_some()
                     && !self.suppress_tex_match
                 {
+                    // 既存プレビューがあれば先に復元
+                    self.cancel_tex_match_preview();
                     let global_unmatched: Vec<usize> =
                         pkg_unmatched.iter().map(|&i| i + mat_offset).collect();
                     let count = global_unmatched.len();
@@ -2744,6 +2759,10 @@ impl ViewerApp {
                         mat_indices: global_unmatched,
                         selections: vec![None; count],
                         tex_filter: String::new(),
+                        previewed: vec![None; count],
+                        saved_binds: std::collections::HashMap::new(),
+                        texture_views: Vec::new(),
+                        failed_uploads: std::collections::HashSet::new(),
                     });
                 }
             }

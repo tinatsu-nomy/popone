@@ -57,7 +57,7 @@ If the viewer is already running, subsequent launches pass the file path to the 
 - **3D Rendering** — Real-time rendering with egui + wgpu. Textured Lambert shading, double-sided, alpha blending. VRM MToon materials are displayed with 2-color toon shading (lit/shade smoothstep interpolation) + outline rendering (inverted hull method) + rim lighting (parametric rim + MatCap texture) + auxiliary textures (shadeMultiply / shadingShift / rimMultiply, with texCoord / KHR_texture_transform support) + UV animation (scroll/rotation) + emissive (emission) + normal mapping (MikkTSpace tangent generation for TBN construction, doubleSided back-face normal flipping) + MToon spec-compliant 4-phase draw order control (OPAQUE → MASK → BlendZWrite → Blend, with `transparentWithZWrite` / `renderQueueOffsetNumber` + dynamic camera distance sorting within BLEND). VRM 0.x MToon properties are fully normalized to VRM 1.0 (UniVRM migration compliant). All textures including base color support `texCoord` / `KHR_texture_transform`. Per-texture glTF sampler address modes (Repeat / ClampToEdge / MirroredRepeat) and filter modes (including all 6 minFilter mipmap selection values) are honored with individual samplers per texture. UTS2 (Unity-Chan Toon Shader) materials are auto-detected and displayed via MToon approximation (1st shade / outline / rim / MatCap / emissive / normal supported; HighColor is PMX output only). PMX/PMD displayed in MMD rendering mode (NdotL-dependent toon shading, edges, sphere maps). Lighting uses light color + hemisphere ambient (Sky/Ground 2-color interpolation) for VRoidHub-like ambient lighting
 - **Camera** — Left drag: rotate, Right drag: pan, Scroll: zoom. F: fit, R: reset, Double-click: fit, Shift: precision mode (1/3 speed). FOV 30° (MMD-compliant)
 - **Expression Morphs** — Adjust with sliders (0/1 buttons, direct input)
-- **Material Visibility** — Per-material ON/OFF toggle with search filter
+- **Material Visibility** — Per-material ON/OFF toggle with search filter. Hovering over a material row highlights the corresponding mesh in the 3D view with semi-transparent orange overlay
 - **Texture Assignment** — Assign external textures (PNG/JPG/TGA/BMP/PSD) via drag & drop or dialog. Real-time preview. VRM embedded texture replacement supported (reset button to restore)
 - **Same-Name Material Linking** — ON/OFF toggle to assign textures to all materials sharing the same name simultaneously
 - **UnityPackage Support** — VRM / FBX model selection dialog, auto texture matching (manual assignment with thumbnail preview and search filter)
@@ -133,9 +133,10 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 | Output | Description |
 |--------|-------------|
 | PMX 2.0 (`.pmx`) | For MikuMikuDance / PmxEditor. Auto-inserts MMD standard bones, IK, and physics |
-| Texture PNG | Output to `textures/` folder |
+| Texture PNG | Output to `textures/` folder (PSD textures are automatically converted to PNG) |
 | UV Map PSD | Per-material layers with model-based group folders (from viewer) |
 
+- In the viewer, "PMX Convert" button exports immediately to `converted_modelXX/` directory. Output folder opens automatically in Explorer. Base output directory is configurable in the "Export" tab
 - Auto-detection of VRM 0.0 / 1.0 / FBX / UnityPackage / ZIP / 7z
 - MMD standard bone insertion (master, center, groove, waist, leg IK, toe IK)
 - Semi-standard bones (waist cancel, leg D, toe EX, arm twist, wrist twist, shoulder cancel)

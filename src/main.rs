@@ -392,16 +392,18 @@ fn run_main(mut args: Args) -> Result<()> {
 
     // 出力ディレクトリ確定
     let output_dir = output.parent().unwrap_or(Path::new(".")).to_path_buf();
+    std::fs::create_dir_all(&output_dir)
+        .with_context(|| format!("出力ディレクトリ作成失敗: {}", output_dir.display()))?;
 
     // テクスチャ書き出し（VRM は保持済み glb を再利用）
     let tex_dir = output_dir.join("textures");
-    if let Some(ref glb) = glb_for_tex {
+    let written_filenames = if let Some(ref glb) = glb_for_tex {
         convert::texture::write_all_textures(&ir.textures, &glb.images, &tex_dir)
-            .context("テクスチャ書き出し失敗")?;
+            .context("テクスチャ書き出し失敗")?
     } else {
         convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)
-            .context("テクスチャ書き出し失敗")?;
-    }
+            .context("テクスチャ書き出し失敗")?
+    };
 
     // PMXモデル構築
     let build_options = pmx::build::PmxBuildOptions {
@@ -409,8 +411,14 @@ fn run_main(mut args: Args) -> Result<()> {
         no_physics: args.no_physics,
         raw_structure: args.raw_structure,
     };
-    let pmx_model = pmx::build::build_pmx_model_with_options(&ir, &build_options)
+    let mut pmx_model = pmx::build::build_pmx_model_with_options(&ir, &build_options)
         .context("PMXモデル構築失敗")?;
+    // PSD→PNG 変換でファイル名が変わった場合、PMX テクスチャパスを補正
+    for (i, name) in written_filenames.iter().enumerate() {
+        if i < pmx_model.textures.len() {
+            pmx_model.textures[i] = format!("textures\\{}", name);
+        }
+    }
 
     // PMX書き出し
     let output_file = std::fs::File::create(&output)
@@ -622,8 +630,10 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
 
     // テクスチャ書き出し（アーカイブ経由は常に write_all_textures_from_ir を使用）
     let output_dir = output.parent().unwrap_or(Path::new(".")).to_path_buf();
+    std::fs::create_dir_all(&output_dir)
+        .with_context(|| format!("出力ディレクトリ作成失敗: {}", output_dir.display()))?;
     let tex_dir = output_dir.join("textures");
-    convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)
+    let written_filenames = convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)
         .context("テクスチャ書き出し失敗")?;
 
     // PMXモデル構築 & 書き出し
@@ -632,8 +642,14 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         no_physics: args.no_physics,
         raw_structure: args.raw_structure,
     };
-    let pmx_model = pmx::build::build_pmx_model_with_options(&ir, &build_options)
+    let mut pmx_model = pmx::build::build_pmx_model_with_options(&ir, &build_options)
         .context("PMXモデル構築失敗")?;
+    // PSD→PNG 変換でファイル名が変わった場合、PMX テクスチャパスを補正
+    for (i, name) in written_filenames.iter().enumerate() {
+        if i < pmx_model.textures.len() {
+            pmx_model.textures[i] = format!("textures\\{}", name);
+        }
+    }
     let output_file = std::fs::File::create(output)
         .with_context(|| format!("出力ファイル作成失敗: {}", output.display()))?;
     let writer = std::io::BufWriter::new(output_file);
@@ -696,6 +712,14 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
             if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&panic_log) {
                 use std::io::Write;
                 let _ = writeln!(f, "\n{msg}");
+            }
+            // パニックログを panic_yyyymmdd_hhmmss.log としてコピー
+            if let Some(name) = panic_log.file_name().and_then(|n| n.to_str()) {
+                if let Some(rest) = name.strip_prefix("popone_") {
+                    let panic_name = format!("panic_{rest}");
+                    let panic_path = panic_log.with_file_name(panic_name);
+                    let _ = std::fs::copy(&panic_log, &panic_path);
+                }
             }
         }));
     }

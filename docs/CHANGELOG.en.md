@@ -3,41 +3,45 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.11](#v0211)
+  - [v0.2.12](#v0212)
+    - [Bug Fixes](#bug-fixes)
     - [New Features](#new-features)
     - [Improvements](#improvements)
-  - [v0.2.10](#v0210)
+  - [v0.2.11](#v0211)
     - [New Features](#new-features-1)
-    - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
-    - [Bug Fixes](#bug-fixes)
     - [Improvements](#improvements-1)
+  - [v0.2.10](#v0210)
+    - [New Features](#new-features-2)
+    - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
+    - [Bug Fixes](#bug-fixes-1)
+    - [Improvements](#improvements-2)
     - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
   - [v0.2.9](#v029)
-    - [New Features](#new-features-2)
-    - [Improvements](#improvements-2)
-    - [Bug Fixes](#bug-fixes-1)
+    - [New Features](#new-features-3)
+    - [Improvements](#improvements-3)
+    - [Bug Fixes](#bug-fixes-2)
     - [Implementation Details](#implementation-details)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
-    - [New Features](#new-features-3)
-    - [Improvements](#improvements-3)
-  - [v0.2.7](#v027)
     - [New Features](#new-features-4)
-    - [Bug Fixes](#bug-fixes-2)
     - [Improvements](#improvements-4)
+  - [v0.2.7](#v027)
+    - [New Features](#new-features-5)
+    - [Bug Fixes](#bug-fixes-3)
+    - [Improvements](#improvements-5)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
-    - [Bug Fixes](#bug-fixes-3)
-    - [New Features](#new-features-5)
-    - [Improvements](#improvements-5)
+    - [Bug Fixes](#bug-fixes-4)
+    - [New Features](#new-features-6)
+    - [Improvements](#improvements-6)
     - [Code Quality & Performance](#code-quality--performance-1)
   - [v0.2.5](#v025)
-    - [Improvements](#improvements-6)
+    - [Improvements](#improvements-7)
     - [Code Quality & Performance](#code-quality--performance-2)
   - [v0.2.4](#v024)
-    - [Improvements](#improvements-7)
-  - [v0.2.3](#v023)
     - [Improvements](#improvements-8)
+  - [v0.2.3](#v023)
+    - [Improvements](#improvements-9)
   - [v0.2.2](#v022)
     - [Code Quality & Performance](#code-quality--performance-3)
   - [FBX Support](#fbx-support)
@@ -47,6 +51,25 @@
 # Changelog
 
 [日本語](CHANGELOG.md)
+
+## v0.2.12
+
+### Bug Fixes
+
+- **PSD textures not converted during PMX export** — PSD format textures are now decoded and saved as PNG during PMX conversion. PSD decode functions extracted to `src/psd.rs` shared module, available in CLI builds
+
+### New Features
+
+- **Material hover highlight** — Hovering over a material row in the material list highlights the corresponding mesh in the 3D view with semi-transparent orange overlay. Works across texture match dialog, D&D texture dialog, and side panel material list. Responds to indicator icons, checkboxes, and dropdown interactions
+- **Real-time texture preview in manual assignment** — Selecting a texture in the archive texture match dialog immediately reflects it in the 3D view before pressing "Apply". Uses lazy GPU upload for VRAM efficiency
+- **Auto-organized PMX output** — Each conversion creates an auto-numbered `converted_model01/`, `converted_model02/`... directory containing PMX + textures. Base output directory is configurable via UI
+- **One-click PMX export** — Removed the file save dialog; "PMX Convert" button exports immediately. Output folder opens automatically in Explorer after conversion
+- **Panic log preservation** — On panic, the log file is automatically copied to `panic_yyyymmdd_hhmmss.log`, excluded from log rotation cleanup
+
+### Improvements
+
+- **Dialog placement** — Texture match and D&D texture dialogs now open at the top-left corner, are draggable, collapsible, and resizable. Model visibility improved
+- **State preservation** — Material visibility ON/OFF and "export visible only" settings are now preserved across A/T-stance toggle, normal smoothing, and custom normal clear operations
 
 ## v0.2.11
 

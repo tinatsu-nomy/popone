@@ -379,6 +379,8 @@ pub struct ViewerApp {
     pub window_title: Option<String>,
     /// テクスチャ手動割当ダイアログを抑制（リロード中に使用）
     pub suppress_tex_match: bool,
+    /// ホバー中の材質に対応する draw_index 群（3Dビューでハイライト表示）
+    pub hovered_draw_indices: Vec<usize>,
     /// D&D一時ファイルの先読みデータ（ロードチェーン中のみ使用）
     pub(crate) preloaded: Option<PreloadedData>,
     /// 起動時刻（UVアニメーション用累積時間の基準）
@@ -437,6 +439,7 @@ impl ViewerApp {
             side_panel_tab: SidePanelTab::Info,
             window_title: None,
             suppress_tex_match: false,
+            hovered_draw_indices: Vec::new(),
             preloaded: None,
             start_time: Instant::now(),
         }
@@ -567,9 +570,23 @@ impl ViewerApp {
         // ビューポートサイズ確定後に refit（初回ロード時はサイズが未確定の場合がある）
         self.pending.refit = true;
 
-        // デフォルト出力パス: 入力VRMと同じ場所に .pmx
+        // デフォルト出力パス: converted_modelXX/ ディレクトリ内に .pmx
+        // output_base_dir が設定されていればそちらを優先
         let path = source.display_path();
-        self.export.pmx_output_path = path.with_extension("pmx").to_string_lossy().into_owned();
+        let base_dir = self
+            .export
+            .output_base_dir
+            .as_deref()
+            .unwrap_or_else(|| path.parent().unwrap_or(std::path::Path::new(".")));
+        let converted_dir = crate::next_converted_dir(base_dir);
+        let pmx_stem = crate::sanitize_filename(&ir.name).unwrap_or_else(|| {
+            path.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        });
+        let pmx_name = format!("{}.pmx", pmx_stem);
+        self.export.pmx_output_path = converted_dir.join(&pmx_name).to_string_lossy().into_owned();
 
         // キャッシュ構築
         let mat_cache = Self::build_mat_cache(&ir, &gpu_model);
@@ -640,7 +657,10 @@ impl ViewerApp {
                     renderer.prepare_mmd_resources(device, &mut new_model, &loaded.ir);
                 }
                 let mat_cache = Self::build_mat_cache(&loaded.ir, &new_model);
-                self.material_visibility = vec![true; new_model.draws.len()];
+                // draw数が同じなら材質表示状態を保持
+                if self.material_visibility.len() != new_model.draws.len() {
+                    self.material_visibility = vec![true; new_model.draws.len()];
+                }
                 if let Some(loaded) = &mut self.loaded {
                     loaded.gpu_model = new_model;
                     loaded.mat_cache = mat_cache;
@@ -713,19 +733,9 @@ impl ViewerApp {
         }
     }
 
-    /// PSD データを PNG に変換（decode_psd を共有）
+    /// PSD データを PNG に変換（crate::psd::psd_to_png に委譲）
     pub(crate) fn psd_to_png(psd_data: &[u8]) -> anyhow::Result<Vec<u8>> {
-        let (rgba, width, height) = super::texture::decode_psd(psd_data)?;
-
-        let mut png_data = Vec::new();
-        {
-            let encoder = image::codecs::png::PngEncoder::new(&mut png_data);
-            use image::ImageEncoder;
-            encoder
-                .write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
-                .map_err(|e| anyhow::anyhow!("PNG エンコード失敗: {}", e))?;
-        }
-        Ok(png_data)
+        crate::psd::psd_to_png(psd_data)
     }
 
     /// アニメーション状態の更新（ボーン適用 + モーフ適用）
@@ -761,6 +771,9 @@ impl eframe::App for ViewerApp {
                 self.pending.load = Some((path, false));
             }
         }
+
+        // ホバー状態リセット（UIフレーム中に再設定される）
+        self.hovered_draw_indices.clear();
 
         // ウィンドウタイトル更新
         if let Some(title) = self.window_title.take() {
@@ -963,6 +976,7 @@ impl eframe::App for ViewerApp {
                                 animated_bone_globals: animated_globals,
                                 is_vrm0,
                                 time: self.start_time.elapsed().as_secs_f32(),
+                                hovered_draw_indices: &self.hovered_draw_indices,
                             };
 
                             let (texture_id, _) = renderer.render_to_texture(

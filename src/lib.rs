@@ -5,6 +5,7 @@ pub mod fbx;
 pub mod intermediate;
 pub mod pmd;
 pub mod pmx;
+pub mod psd;
 pub mod unity;
 pub mod unitypackage;
 pub mod vrm;
@@ -104,10 +105,17 @@ pub fn convert_ir_to_pmx(
     options: &PmxBuildOptions,
 ) -> Result<ConvertStats> {
     let output_dir = output_path.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(output_dir)?;
     let tex_dir = output_dir.join("textures");
-    convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)?;
+    let written_filenames = convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)?;
 
-    let pmx_model = pmx::build::build_pmx_model_with_options(ir, options)?;
+    let mut pmx_model = pmx::build::build_pmx_model_with_options(ir, options)?;
+    // PSD→PNG 変換でファイル名が変わった場合、PMX テクスチャパスを補正
+    for (i, name) in written_filenames.iter().enumerate() {
+        if i < pmx_model.textures.len() {
+            pmx_model.textures[i] = format!("textures\\{}", name);
+        }
+    }
     write_pmx_and_stats(&pmx_model, output_path, &tex_dir)
 }
 
@@ -135,6 +143,71 @@ fn write_pmx_and_stats(
     pmx_writer.write_model(pmx_model)?;
 
     Ok(stats)
+}
+
+/// base_dir が既に converted_modelXX 配下なら親ディレクトリを返す（入れ子防止）
+pub fn resolve_converted_base(dir: &Path) -> &Path {
+    if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
+        if name.starts_with("converted_model")
+            && name["converted_model".len()..]
+                .chars()
+                .all(|c| c.is_ascii_digit())
+        {
+            return dir.parent().unwrap_or(dir);
+        }
+    }
+    dir
+}
+
+/// converted_modelXX ディレクトリの次の空き番号を検索（上限なし）
+pub fn next_converted_dir(base_dir: &Path) -> std::path::PathBuf {
+    let base_dir = resolve_converted_base(base_dir);
+    for i in 1.. {
+        let dir = base_dir.join(format!("converted_model{:02}", i));
+        if !dir.exists() {
+            return dir;
+        }
+    }
+    unreachable!()
+}
+
+/// モデル名をファイル名に安全な文字列にサニタイズ
+/// Windows の不正文字・予約名を処理し、空の場合は None を返す
+pub fn sanitize_filename(name: &str) -> Option<String> {
+    const INVALID_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if name.is_empty() {
+        return None;
+    }
+    // 不正文字を _ に置換
+    let sanitized: String = name
+        .chars()
+        .map(|c| {
+            if INVALID_CHARS.contains(&c) || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    // 末尾の空白・ピリオドを除去
+    let trimmed = sanitized.trim_end_matches(|c: char| c == ' ' || c == '.');
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Windows 予約名チェック（ベース名 = 最初の '.' より前で判定）
+    let base = match trimmed.find('.') {
+        Some(pos) => &trimmed[..pos],
+        None => trimmed,
+    };
+    let base_upper = base.to_uppercase();
+    if RESERVED.contains(&base_upper.as_str()) {
+        return Some(format!("_{}", trimmed));
+    }
+    Some(trimmed.to_string())
 }
 
 /// 拡張子で VRM/FBX を自動判定して PMX 変換
