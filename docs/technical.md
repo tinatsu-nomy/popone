@@ -48,6 +48,7 @@
     - [UV アニメーション](#uv-%E3%82%A2%E3%83%8B%E3%83%A1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3)
     - [透明描画順制御（alphaMode / transparentWithZWrite / renderQueueOffsetNumber）](#%E9%80%8F%E6%98%8E%E6%8F%8F%E7%94%BB%E9%A0%86%E5%88%B6%E5%BE%A1alphamode--transparentwithzwrite--renderqueueoffsetnumber)
   - [ビューア表示スタイル](#%E3%83%93%E3%83%A5%E3%83%BC%E3%82%A2%E8%A1%A8%E7%A4%BA%E3%82%B9%E3%82%BF%E3%82%A4%E3%83%AB)
+    - [ダークテーマ（v0.2.15）](#%E3%83%80%E3%83%BC%E3%82%AF%E3%83%86%E3%83%BC%E3%83%9Ev0215)
     - [ボーン表示](#%E3%83%9C%E3%83%BC%E3%83%B3%E8%A1%A8%E7%A4%BA-1)
     - [剛体表示](#%E5%89%9B%E4%BD%93%E8%A1%A8%E7%A4%BA)
     - [ジョイント表示（PMX/PMD のみ）](#%E3%82%B8%E3%83%A7%E3%82%A4%E3%83%B3%E3%83%88%E8%A1%A8%E7%A4%BApmxpmd-%E3%81%AE%E3%81%BF)
@@ -901,6 +902,25 @@ if material.alpha_cutoff < -0.75 {
 | outline_blend | Front | なし | MToon アウトライン（Blend）。depth bias 付き |
 
 ## ビューア表示スタイル
+
+### ダークテーマ（v0.2.15）
+
+Blender / Substance Painter 風のダークテーマを `setup_dark_theme()` で毎フレーム適用。各パネル（トップバー・サイドパネル・ステータスバー）には `egui::Frame::new().fill().stroke()` で明示的にフレーム色を指定（egui のパネルデフォルトフレーム生成をバイパス）。
+
+| 要素 | 色 |
+|------|------|
+| パネル背景 | `#1D1D1D` |
+| セクションヘッダ | `#2A2A2A` |
+| ウィジェット背景 | `#252525` |
+| ボーダー | `#333333` |
+| アクセント（選択・ホバー） | `#4A90D9` |
+| アクティブ（押下中） | `#2A5A8A` |
+| テキスト | `#FFFFFF`（`override_text_color`） |
+
+注意点:
+- `Button::fill()` は全状態（inactive/hovered/active）を強制するため使用しない。ホバー色はグローバルの `widgets.hovered` に任せる
+- `Button::stroke()` も同様にホバー時の枠線色を上書きするため使用しない
+- サイドパネル幅は `width_range(280.0..=280.0)` + `resizable(false)` で固定
 
 ### ボーン表示
 

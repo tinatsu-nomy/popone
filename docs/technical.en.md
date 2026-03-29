@@ -48,6 +48,7 @@
     - [UV Animation](#uv-animation)
     - [Transparent Draw Order Control (alphaMode / transparentWithZWrite / renderQueueOffsetNumber)](#transparent-draw-order-control-alphamode--transparentwithzwrite--renderqueueoffsetnumber)
   - [Viewer Display Styles](#viewer-display-styles)
+    - [Dark Theme (v0.2.15)](#dark-theme-v0215)
     - [Bone Display](#bone-display-1)
     - [Rigid Body Display](#rigid-body-display)
     - [Joint Display (PMX/PMD only)](#joint-display-pmxpmd-only)
@@ -901,6 +902,25 @@ if material.alpha_cutoff < -0.75 {
 | outline_blend | Front | off | MToon outline (Blend). With depth bias |
 
 ## Viewer Display Styles
+
+### Dark Theme (v0.2.15)
+
+Blender / Substance Painter style dark theme applied every frame via `setup_dark_theme()`. Each panel (top bar, side panel, status bar) uses explicit `egui::Frame::new().fill().stroke()` to bypass egui's default panel frame generation.
+
+| Element | Color |
+|---------|-------|
+| Panel background | `#1D1D1D` |
+| Section header | `#2A2A2A` |
+| Widget background | `#252525` |
+| Border | `#333333` |
+| Accent (selection/hover) | `#4A90D9` |
+| Active (pressed) | `#2A5A8A` |
+| Text | `#FFFFFF` (`override_text_color`) |
+
+Notes:
+- `Button::fill()` overrides all states (inactive/hovered/active) — do not use. Hover color is controlled by global `widgets.hovered`
+- `Button::stroke()` similarly overrides hover border color — do not use
+- Side panel width fixed with `width_range(280.0..=280.0)` + `resizable(false)`
 
 ### Bone Display
 

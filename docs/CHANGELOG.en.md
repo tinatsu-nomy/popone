@@ -3,49 +3,52 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.14](#v0214)
+  - [v0.2.15](#v0215)
+    - [New Features](#new-features)
     - [Improvements](#improvements)
-  - [v0.2.13](#v0213)
+  - [v0.2.14](#v0214)
     - [Improvements](#improvements-1)
+  - [v0.2.13](#v0213)
+    - [Improvements](#improvements-2)
   - [v0.2.12](#v0212)
     - [Bug Fixes](#bug-fixes)
-    - [New Features](#new-features)
-    - [Improvements](#improvements-2)
-  - [v0.2.11](#v0211)
     - [New Features](#new-features-1)
     - [Improvements](#improvements-3)
-  - [v0.2.10](#v0210)
+  - [v0.2.11](#v0211)
     - [New Features](#new-features-2)
+    - [Improvements](#improvements-4)
+  - [v0.2.10](#v0210)
+    - [New Features](#new-features-3)
     - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
     - [Bug Fixes](#bug-fixes-1)
-    - [Improvements](#improvements-4)
+    - [Improvements](#improvements-5)
     - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
   - [v0.2.9](#v029)
-    - [New Features](#new-features-3)
-    - [Improvements](#improvements-5)
+    - [New Features](#new-features-4)
+    - [Improvements](#improvements-6)
     - [Bug Fixes](#bug-fixes-2)
     - [Implementation Details](#implementation-details)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
-    - [New Features](#new-features-4)
-    - [Improvements](#improvements-6)
-  - [v0.2.7](#v027)
     - [New Features](#new-features-5)
-    - [Bug Fixes](#bug-fixes-3)
     - [Improvements](#improvements-7)
+  - [v0.2.7](#v027)
+    - [New Features](#new-features-6)
+    - [Bug Fixes](#bug-fixes-3)
+    - [Improvements](#improvements-8)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
     - [Bug Fixes](#bug-fixes-4)
-    - [New Features](#new-features-6)
-    - [Improvements](#improvements-8)
+    - [New Features](#new-features-7)
+    - [Improvements](#improvements-9)
     - [Code Quality & Performance](#code-quality--performance-1)
   - [v0.2.5](#v025)
-    - [Improvements](#improvements-9)
+    - [Improvements](#improvements-10)
     - [Code Quality & Performance](#code-quality--performance-2)
   - [v0.2.4](#v024)
-    - [Improvements](#improvements-10)
-  - [v0.2.3](#v023)
     - [Improvements](#improvements-11)
+  - [v0.2.3](#v023)
+    - [Improvements](#improvements-12)
   - [v0.2.2](#v022)
     - [Code Quality & Performance](#code-quality--performance-3)
   - [FBX Support](#fbx-support)
@@ -55,6 +58,22 @@
 # Changelog
 
 [日本語](CHANGELOG.md)
+
+## v0.2.15
+
+### New Features
+
+- **Dark theme (Blender/Substance Painter style)** — Panel background `#1D1D1D`, widget background `#252525`, accent color `#4A90D9`. All buttons show accent blue on hover. Tooltips, popups, and ComboBoxes are unified
+- **Status bar separation** — Keyboard shortcut hints and file info split into two independent bars. Viewport overlay shortcut text removed
+
+### Improvements
+
+- **Fixed side panel width** — 280px fixed (no resize). Flat-style equal-width tab bar (active tab = accent blue background)
+- **Compact info tab** — 4-column Grid pairs: bone/vertex, face/material, texture/morph. Numbers formatted with comma separators
+- **Export tab 2-column checkboxes** — PMX conversion options (rigid body alignment / no physics / original bone structure / visible materials only / log output) in 2-column grid layout
+- **Top bar improvements** — Fit/Reset buttons moved from viewport overlay to top bar right side. All buttons: white text, transparent background, blue on hover
+- **Animation list improvement** — `[▶][×] filename` layout. ▶ click to switch, × always visible
+- **White text unification** — Side panel, status bar, and shortcut bar text unified to white
 
 ## v0.2.14
 

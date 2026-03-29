@@ -401,6 +401,9 @@ impl ViewerApp {
         // 日本語フォント読み込み
         Self::setup_japanese_font(&cc.egui_ctx);
 
+        // ダークテーマ（Blender/Substance Painter 風）
+        Self::setup_dark_theme(&cc.egui_ctx);
+
         // シングルインスタンス: IPC パイプリスナー起動
         #[cfg(target_os = "windows")]
         let ipc_receiver = {
@@ -471,6 +474,71 @@ impl ViewerApp {
             .expect("Monospace フォントファミリーは常に存在")
             .push("noto_jp".to_owned());
         ctx.set_fonts(fonts);
+    }
+
+    /// v0 デザイン準拠のダークテーマを適用
+    fn setup_dark_theme(ctx: &egui::Context) {
+        let mut visuals = egui::Visuals::dark();
+
+        // パネル・ウィンドウ背景: #1D1D1D
+        let panel_bg = egui::Color32::from_rgb(0x1D, 0x1D, 0x1D);
+        visuals.panel_fill = panel_bg;
+        visuals.window_fill = panel_bg;
+
+        // ボーダー: #333333
+        let border = egui::Color32::from_rgb(0x33, 0x33, 0x33);
+        let border_stroke = egui::Stroke::new(1.0, border);
+        visuals.window_stroke = border_stroke;
+
+        // アクセントカラー
+        let accent = egui::Color32::from_rgb(0x4A, 0x90, 0xD9);
+
+        // ウィジェット共通テキスト色: #D0D0D0
+        let fg = egui::Stroke::new(1.0, egui::Color32::from_gray(0xD0));
+
+        // noninteractive（ラベル・セパレータ等）
+        visuals.widgets.noninteractive.bg_stroke = border_stroke;
+        visuals.widgets.noninteractive.fg_stroke = fg;
+
+        // inactive（ボタン通常時）
+        let widget_bg = egui::Color32::from_rgb(0x25, 0x25, 0x25);
+        visuals.widgets.inactive.bg_fill = widget_bg;
+        visuals.widgets.inactive.weak_bg_fill = widget_bg;
+        visuals.widgets.inactive.bg_stroke = border_stroke;
+        visuals.widgets.inactive.fg_stroke = fg;
+
+        // hovered（ホバー時）: アクセントカラー
+        visuals.widgets.hovered.bg_fill = accent;
+        visuals.widgets.hovered.weak_bg_fill = accent;
+        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent);
+        visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+
+        // active（クリック中）
+        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(0x2A, 0x5A, 0x8A);
+        visuals.widgets.active.bg_stroke =
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(0x2A, 0x5A, 0x8A));
+        visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+
+        // open（展開中のComboBox等）
+        visuals.widgets.open.bg_fill = egui::Color32::from_rgb(0x2A, 0x2A, 0x2A);
+        visuals.widgets.open.bg_stroke = border_stroke;
+        visuals.widgets.open.fg_stroke = fg;
+
+        // セレクション/アクセント
+        visuals.selection.bg_fill = accent;
+        visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+
+        // 極端な背景色（TextEdit内部等）
+        visuals.extreme_bg_color = egui::Color32::from_rgb(0x15, 0x15, 0x15);
+
+        // スクロールバーを細く
+        let mut spacing = ctx.style().spacing.clone();
+        spacing.scroll.bar_width = 6.0;
+
+        let mut style = (*ctx.style()).clone();
+        style.visuals = visuals;
+        style.spacing = spacing;
+        ctx.set_style(style);
     }
 
     pub(crate) fn finish_load(
@@ -846,35 +914,97 @@ impl eframe::App for ViewerApp {
         let (is_hover_image, is_hover_model) = self.process_drag_and_drop(ctx);
         self.process_keyboard_shortcuts(ctx);
 
+        // ダークテーマ: 毎フレームビジュアルを適用（ツールチップ・ポップアップ含む全UIに反映）
+        Self::setup_dark_theme(ctx);
+
+        // ダークテーマ: パネル背景を明示的に設定
+        let dark_panel = egui::Color32::from_rgb(0x1D, 0x1D, 0x1D);
+        let dark_border = egui::Stroke::new(1.0, egui::Color32::from_rgb(0x33, 0x33, 0x33));
+        let panel_frame = egui::Frame::new()
+            .fill(dark_panel)
+            .stroke(dark_border)
+            .inner_margin(egui::Margin::same(4));
+
         // トップバー
-        egui::TopBottomPanel::top("top_bar").show(ctx, |bar| {
-            egui::menu::bar(bar, |bar| {
-                if bar.button("開く").clicked() {
-                    self.open_file_dialog();
-                }
+        egui::TopBottomPanel::top("top_bar")
+            .frame(panel_frame.clone())
+            .show(ctx, |bar| {
+                bar.horizontal(|ui| {
+                    // トップバーボタン: 通常時は透明背景、ホバー時はグローバルテーマのブルーが効く
+                    let border33 = egui::Color32::from_rgb(0x33, 0x33, 0x33);
+                    ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+                    ui.visuals_mut().widgets.inactive.bg_fill = egui::Color32::TRANSPARENT;
+                    ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border33);
 
-                // モデル読み込み済みの場合のみ「追加」ボタンを表示
-                if self.loaded.is_some()
-                    && bar
-                        .button("追加")
-                        .on_hover_text("モデルを追加読み込み（Shift+D&Dでも可）")
-                        .clicked()
-                {
-                    self.open_append_dialog();
-                }
+                    // ダークテーマ用メニューボタンヘルパー（.fill() を使わずビジュアルに任せる）
+                    let menu_btn = |ui: &mut egui::Ui, label: &str| -> egui::Response {
+                        let btn = egui::Button::new(
+                            egui::RichText::new(label)
+                                .color(egui::Color32::WHITE)
+                                .size(12.0),
+                        );
+                        ui.add(btn)
+                    };
 
-                if bar.button("ログ").clicked() {
-                    helpers::open_directory(&self.logs_dir);
-                }
+                    if menu_btn(ui, "開く").clicked() {
+                        self.open_file_dialog();
+                    }
 
-                if let Some(ref loaded) = self.loaded {
-                    bar.separator();
-                    bar.label(
-                        egui::RichText::new(&loaded.ir.name).color(egui::Color32::from_gray(0x20)),
-                    );
-                }
+                    if self.loaded.is_some() {
+                        if menu_btn(ui, "追加")
+                            .on_hover_text("モデルを追加読み込み（Shift+D&Dでも可）")
+                            .clicked()
+                        {
+                            self.open_append_dialog();
+                        }
+                    }
+
+                    if menu_btn(ui, "ログ").clicked() {
+                        helpers::open_directory(&self.logs_dir);
+                    }
+
+                    if let Some(ref loaded) = self.loaded {
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new(&loaded.ir.name)
+                                .color(egui::Color32::WHITE)
+                                .size(11.0),
+                        );
+                    }
+
+                    // 右端にフィット/リセットボタン
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if menu_btn(ui, "リセット(R)")
+                            .on_hover_text("カメラをリセット")
+                            .clicked()
+                        {
+                            if let Some(ref loaded) = self.loaded {
+                                let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
+                                self.camera.reset_to_bbox_with_margin(
+                                    bbox_min,
+                                    bbox_max,
+                                    self.last_viewport_width,
+                                    self.last_viewport_height,
+                                );
+                            }
+                        }
+                        if menu_btn(ui, "フィット(F)")
+                            .on_hover_text("モデルにフィット")
+                            .clicked()
+                        {
+                            if let Some(ref loaded) = self.loaded {
+                                let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
+                                self.camera.fit_to_bbox_with_margin(
+                                    bbox_min,
+                                    bbox_max,
+                                    self.last_viewport_width,
+                                    self.last_viewport_height,
+                                );
+                            }
+                        }
+                    });
+                });
             });
-        });
 
         // 右側パネル
         ui::show_side_panel(ctx, self);
@@ -883,17 +1013,16 @@ impl eframe::App for ViewerApp {
         ui::show_texture_drop_dialog(ctx, self);
         self.sync_tex_preview();
 
-        // ステータスバー
+        // ステータスバー: ファイルパス + 統計
         egui::TopBottomPanel::bottom("status_bar")
-            .exact_height(22.0)
+            .frame(panel_frame.clone())
             .show(ctx, |ui| {
+                ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
                 ui.horizontal_centered(|ui| {
                     if let Some(ref loaded) = self.loaded {
                         let ir = &loaded.ir;
-                        let font = egui::FontId::proportional(11.0);
-                        let color = egui::Color32::from_gray(0x30);
+                        let font = egui::FontId::proportional(10.0);
 
-                        // ファイルパス
                         let path_label = if loaded.source.is_snapshot() {
                             format!(
                                 "{} (キャッシュ済み)",
@@ -902,22 +1031,14 @@ impl eframe::App for ViewerApp {
                         } else {
                             loaded.source.display_path().to_string_lossy().into_owned()
                         };
-                        ui.label(
-                            egui::RichText::new(path_label)
-                                .font(font.clone())
-                                .color(color),
-                        );
+                        ui.label(egui::RichText::new(path_label).font(font.clone()));
 
                         ui.separator();
 
-                        // モデル統計（キャッシュ済み文字列）
                         ui.label(
-                            egui::RichText::new(&loaded.stats_cache.status_text)
-                                .font(font.clone())
-                                .color(color),
+                            egui::RichText::new(&loaded.stats_cache.status_text).font(font.clone()),
                         );
 
-                        // FBXの場合、テクスチャ設定状況（キャッシュ済み文字列）
                         if ir.source_format == crate::intermediate::types::SourceFormat::Fbx {
                             let tex_set = loaded.mat_cache.tex_set_count;
                             let tex_total = ir.materials.len();
@@ -936,12 +1057,33 @@ impl eframe::App for ViewerApp {
                     } else {
                         ui.label(
                             egui::RichText::new("VRM/FBX ファイルを読み込んでください")
-                                .font(egui::FontId::proportional(11.0))
-                                .color(egui::Color32::from_gray(0x60)),
+                                .font(egui::FontId::proportional(11.0)),
                         );
                     }
+                });
+            });
 
-                    // (FPS表示はビューポートオーバーレイに移動)
+        // ショートカットヒントバー（ステータスバーの上）
+        egui::TopBottomPanel::bottom("shortcut_hints")
+            .frame(panel_frame.clone())
+            .show(ctx, |ui| {
+                let hint_color = egui::Color32::WHITE;
+                let hint_font = egui::FontId::proportional(10.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(
+                            "左ドラッグ:回転  右ドラッグ:パン  ホイール:ズーム  ダブルクリック:フィット",
+                        )
+                        .font(hint_font.clone())
+                        .color(hint_color),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new("G:グリッド B:ボーン P:物理 W:ワイヤー N:法線 L:ライト")
+                                .font(hint_font)
+                                .color(hint_color),
+                        );
+                    });
                 });
             });
 
@@ -968,7 +1110,12 @@ impl eframe::App for ViewerApp {
                 if response.double_clicked() {
                     if let Some(ref loaded) = self.loaded {
                         let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
-                        self.camera.fit_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_width, self.last_viewport_height);
+                        self.camera.fit_to_bbox_with_margin(
+                            bbox_min,
+                            bbox_max,
+                            self.last_viewport_width,
+                            self.last_viewport_height,
+                        );
                     }
                 }
 
@@ -976,10 +1123,7 @@ impl eframe::App for ViewerApp {
                 if self.morph_dirty {
                     if let Some(ref mut loaded) = self.loaded {
                         let queue = &self.render_state.queue;
-                        loaded.gpu_model.apply_morphs(
-                            &self.morph_weights,
-                            queue,
-                        );
+                        loaded.gpu_model.apply_morphs(&self.morph_weights, queue);
                         self.morph_dirty = false;
                     }
                 }
@@ -993,8 +1137,8 @@ impl eframe::App for ViewerApp {
                             let device = &self.render_state.device;
                             let queue = &self.render_state.queue;
 
-                            let animated_globals = self.anim.state.as_ref()
-                                .map(|anim| anim.animated_globals());
+                            let animated_globals =
+                                self.anim.state.as_ref().map(|anim| anim.animated_globals());
                             let is_vrm0 = loaded.ir.source_format.is_vrm0();
 
                             let render_params = RenderParams {
@@ -1069,11 +1213,7 @@ impl eframe::App for ViewerApp {
                             "非対応の形式です（VRM/FBX/PMX/PMD/画像に対応）",
                         )
                     };
-                    viewport.painter().rect_filled(
-                        rect,
-                        0.0,
-                        overlay_color,
-                    );
+                    viewport.painter().rect_filled(rect, 0.0, overlay_color);
                     viewport.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
@@ -1092,7 +1232,12 @@ impl eframe::App for ViewerApp {
                     self.pending.refit = false;
                     if let Some(ref loaded) = self.loaded {
                         let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
-                        self.camera.reset_to_bbox_with_margin(bbox_min, bbox_max, self.last_viewport_width, self.last_viewport_height);
+                        self.camera.reset_to_bbox_with_margin(
+                            bbox_min,
+                            bbox_max,
+                            self.last_viewport_width,
+                            self.last_viewport_height,
+                        );
                     }
                 }
 
@@ -1115,37 +1260,13 @@ impl eframe::App for ViewerApp {
                         egui::FontId::monospace(11.0),
                         egui::Color32::BLACK,
                     );
-
-                    // フィット・リセットボタン（右上）
-                    let margin = 8.0;
-                    let btn_pos = egui::pos2(rect.right() - margin, rect.top() + margin);
-                    let btn_area = egui::Area::new(egui::Id::new("camera_btn_overlay"))
-                        .fixed_pos(btn_pos)
-                        .constrain(false)
-                        .interactable(true)
-                        .anchor(egui::Align2::RIGHT_TOP, egui::Vec2::ZERO);
-                    btn_area.show(ctx, |ui| {
-                        ui.horizontal(|ui| {
-                            if ui.small_button("フィット(F)").on_hover_text("モデルにフィット").clicked() {
-                                if let Some(ref loaded) = self.loaded {
-                                    let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
-                                    self.camera.fit_to_bbox_with_margin(bbox_min, bbox_max, rect.width(), rect.height());
-                                }
-                            }
-                            if ui.small_button("リセット(R)").on_hover_text("カメラをリセット").clicked() {
-                                if let Some(ref loaded) = self.loaded {
-                                    let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
-                                    self.camera.reset_to_bbox_with_margin(bbox_min, bbox_max, rect.width(), rect.height());
-                                }
-                            }
-                        });
-                    });
                 }
 
                 // FPS表示（右上オーバーレイ）
                 {
                     let rect = response.rect;
-                    let fps_text = format!("{:.0} fps  {:.1} ms", self.fps_display, self.frame_dt_ms);
+                    let fps_text =
+                        format!("{:.0} fps  {:.1} ms", self.fps_display, self.frame_dt_ms);
                     viewport.painter().text(
                         egui::pos2(rect.right() - 10.0, rect.top() + 10.0),
                         egui::Align2::RIGHT_TOP,
@@ -1159,13 +1280,12 @@ impl eframe::App for ViewerApp {
                 if self.normalize_pose || self.normalize_to_tstance {
                     if let Some(ref loaded) = self.loaded {
                         use crate::intermediate::types::AStanceResult;
-                        let label = if loaded.ir.source_format.is_pmx_pmd()
-                            || self.normalize_to_tstance
-                        {
-                            "Tスタンス"
-                        } else {
-                            "Aスタンス"
-                        };
+                        let label =
+                            if loaded.ir.source_format.is_pmx_pmd() || self.normalize_to_tstance {
+                                "Tスタンス"
+                            } else {
+                                "Aスタンス"
+                            };
                         let warn = match loaded.primary_astance_result {
                             AStanceResult::NotFound => Some((
                                 format!("⚠ {}変換失敗: 腕ボーンが見つかりません", label),
@@ -1192,38 +1312,16 @@ impl eframe::App for ViewerApp {
                 }
 
                 // 操作ヒント（左下、2行で常時表示）
-                {
+                // 未読込時のみビューポートにヒント表示（読込後はステータスバーに集約）
+                if self.loaded.is_none() {
                     let rect = response.rect;
-                    let hint_color = if self.loaded.is_some() {
-                        egui::Color32::BLACK
-                    } else {
-                        egui::Color32::from_gray(0xC0)
-                    };
-                    let font = egui::FontId::proportional(12.0);
-                    if self.loaded.is_some() {
-                        viewport.painter().text(
-                            egui::pos2(rect.left() + 8.0, rect.bottom() - 22.0),
-                            egui::Align2::LEFT_BOTTOM,
-                            "左ドラッグ:回転  右/中ドラッグ:パン  ホイール:ズーム  Shift:精密  ダブルクリック:フィット",
-                            font.clone(),
-                            hint_color,
-                        );
-                        viewport.painter().text(
-                            egui::pos2(rect.left() + 8.0, rect.bottom() - 8.0),
-                            egui::Align2::LEFT_BOTTOM,
-                            "R:リセット  F:フィット  G:グリッド  B:ボーン  P:物理  W:ワイヤー  N:法線  L:ライト",
-                            font,
-                            hint_color,
-                        );
-                    } else {
-                        viewport.painter().text(
-                            egui::pos2(rect.left() + 8.0, rect.bottom() - 8.0),
-                            egui::Align2::LEFT_BOTTOM,
-                            "Ctrl+O:開く  ドラッグ&ドロップ:VRM/FBXファイル読込",
-                            font,
-                            hint_color,
-                        );
-                    }
+                    viewport.painter().text(
+                        egui::pos2(rect.left() + 8.0, rect.bottom() - 8.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        "Ctrl+O:開く  ドラッグ&ドロップ:VRM/FBXファイル読込",
+                        egui::FontId::proportional(12.0),
+                        egui::Color32::from_gray(0xC0),
+                    );
                 }
 
                 // プログレスオーバーレイ（読み込み中 / 変換中）
@@ -1243,9 +1341,33 @@ impl eframe::App for ViewerApp {
                         };
                         let a = (alpha * 180.0) as u8;
                         let (msg, color) = match &cm.result {
-                            ConvertResult::Success(m) => (m.as_str(), egui::Color32::from_rgba_unmultiplied(0x30, 0xC0, 0x30, (alpha * 255.0) as u8)),
-                            ConvertResult::Warning(m) => (m.as_str(), egui::Color32::from_rgba_unmultiplied(0xE0, 0x40, 0x40, (alpha * 255.0) as u8)),
-                            ConvertResult::Failure(m) => (m.as_str(), egui::Color32::from_rgba_unmultiplied(0xE0, 0x40, 0x40, (alpha * 255.0) as u8)),
+                            ConvertResult::Success(m) => (
+                                m.as_str(),
+                                egui::Color32::from_rgba_unmultiplied(
+                                    0x30,
+                                    0xC0,
+                                    0x30,
+                                    (alpha * 255.0) as u8,
+                                ),
+                            ),
+                            ConvertResult::Warning(m) => (
+                                m.as_str(),
+                                egui::Color32::from_rgba_unmultiplied(
+                                    0xE0,
+                                    0x40,
+                                    0x40,
+                                    (alpha * 255.0) as u8,
+                                ),
+                            ),
+                            ConvertResult::Failure(m) => (
+                                m.as_str(),
+                                egui::Color32::from_rgba_unmultiplied(
+                                    0xE0,
+                                    0x40,
+                                    0x40,
+                                    (alpha * 255.0) as u8,
+                                ),
+                            ),
                         };
                         let rect = response.rect;
                         // 背景帯
@@ -1254,7 +1376,8 @@ impl eframe::App for ViewerApp {
                             egui::FontId::proportional(14.0),
                             color,
                         );
-                        let text_h = text_galley.size().y * (msg.lines().count().max(1) as f32) + 16.0;
+                        let text_h =
+                            text_galley.size().y * (msg.lines().count().max(1) as f32) + 16.0;
                         let bar_rect = egui::Rect::from_min_size(
                             egui::pos2(rect.left(), rect.bottom() - text_h),
                             egui::vec2(rect.width(), text_h),
@@ -1276,7 +1399,11 @@ impl eframe::App for ViewerApp {
                     }
                 }
                 // タイムアウトでメッセージクリア
-                if self.convert_message.as_ref().is_some_and(|cm| cm.elapsed_secs() >= 5.0) {
+                if self
+                    .convert_message
+                    .as_ref()
+                    .is_some_and(|cm| cm.elapsed_secs() >= 5.0)
+                {
                     self.convert_message = None;
                 }
             });

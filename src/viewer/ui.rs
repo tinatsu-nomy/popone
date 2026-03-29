@@ -21,16 +21,55 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
     // テクスチャ割り当てリクエスト（借用制約回避のためパネル外で処理）
     let mut tex_assign_request: Option<TexAssignRequest> = None;
 
+    let dark_panel = egui::Color32::from_rgb(0x1D, 0x1D, 0x1D);
+    let dark_border = egui::Stroke::new(1.0, egui::Color32::from_rgb(0x33, 0x33, 0x33));
+    let panel_frame = egui::Frame::new()
+        .fill(dark_panel)
+        .stroke(dark_border)
+        .inner_margin(egui::Margin::same(4));
+
     egui::SidePanel::right("info_panel")
-        .default_width(300.0)
-        .width_range(200.0..=500.0)
+        .default_width(280.0)
+        .width_range(280.0..=280.0)
+        .resizable(false)
+        .frame(panel_frame)
         .show(ctx, |ui| {
-            // タブバー
+            // サイドパネル内テキストを白に統一
+            ui.visuals_mut().widgets.noninteractive.fg_stroke =
+                egui::Stroke::new(1.0, egui::Color32::WHITE);
+            ui.visuals_mut().widgets.inactive.fg_stroke =
+                egui::Stroke::new(1.0, egui::Color32::WHITE);
+            ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
+
+            // タブバー（v0 デザイン: フラットスタイル、均等幅、隙間なし）
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut app.side_panel_tab, SidePanelTab::Info, "情報");
-                ui.selectable_value(&mut app.side_panel_tab, SidePanelTab::Control, "操作");
-                ui.selectable_value(&mut app.side_panel_tab, SidePanelTab::Display, "表示");
-                ui.selectable_value(&mut app.side_panel_tab, SidePanelTab::Export, "出力");
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let panel_w = ui.available_width();
+                let tab_width = (panel_w / 4.0).min(70.0);
+                for (tab, label) in [
+                    (SidePanelTab::Info, "情報"),
+                    (SidePanelTab::Control, "操作"),
+                    (SidePanelTab::Display, "表示"),
+                    (SidePanelTab::Export, "出力"),
+                ] {
+                    let is_active = app.side_panel_tab == tab;
+                    let text = egui::RichText::new(label).size(11.0);
+                    let text = if is_active {
+                        text.color(egui::Color32::WHITE).strong()
+                    } else {
+                        text.color(egui::Color32::from_gray(0xD0))
+                    };
+                    let btn = egui::Button::new(text)
+                        .fill(if is_active {
+                            egui::Color32::from_rgb(0x4A, 0x90, 0xD9)
+                        } else {
+                            egui::Color32::from_rgb(0x2A, 0x2A, 0x2A)
+                        })
+                        .min_size(egui::vec2(tab_width, 20.0));
+                    if ui.add(btn).clicked() {
+                        app.side_panel_tab = tab;
+                    }
+                }
             });
             ui.separator();
 
@@ -970,64 +1009,80 @@ pub fn execute_conversion(app: &mut ViewerApp) {
     }
 }
 
+/// 数値をカンマ区切りでフォーマット (例: 34059 → "34,059")
+fn format_number(n: usize) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.chars().rev().collect()
+}
+
 /// メタ情報をセクションごとに折り畳み可能な Grid で表示
 /// 情報タブ: モデル情報 + メタ情報
 fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
     let Some(ref loaded) = app.loaded else {
-        ui.label("VRM ファイルを読み込んでください (Ctrl+O)");
         return;
     };
     let ir = &loaded.ir;
 
-    ui.heading(egui::RichText::new("モデル情報").color(egui::Color32::from_gray(0x20)));
+    ui.heading(egui::RichText::new("モデル情報").color(egui::Color32::from_gray(0xD0)));
     ui.separator();
-    egui::Grid::new("model_info").show(ui, |ui| {
-        ui.label("名前");
-        ui.label(&ir.name);
-        ui.end_row();
-
-        ui.label("ボーン数");
-        ui.label(ir.bones.len().to_string());
-        ui.end_row();
-
-        ui.label("頂点数");
-        ui.label(ir.total_vertices().to_string());
-        ui.end_row();
-
-        ui.label("面数");
-        ui.label(ir.total_faces().to_string());
-        ui.end_row();
-
-        ui.label("材質数");
-        ui.label(ir.materials.len().to_string());
-        ui.end_row();
-
-        ui.label("テクスチャ数");
-        ui.label(ir.textures.len().to_string());
-        ui.end_row();
-
-        ui.label("モーフ数");
-        ui.label(ir.morphs.len().to_string());
-        ui.end_row();
-
-        ui.label("形式");
-        ui.label(ir.source_format.label());
-        ui.end_row();
-
-        if let Some(ref rig) = ir.rig_type {
-            ui.label("リグ");
-            ui.label(rig);
+    // 名前（単独行）
+    egui::Grid::new("model_info_name")
+        .num_columns(2)
+        .show(ui, |ui| {
+            ui.label("名前");
+            ui.label(&ir.name);
             ui.end_row();
 
-            ui.label("Humanoid");
-            if ir.humanoid_bone_count > 0 {
-                ui.label(format!("{}本マッピング済", ir.humanoid_bone_count));
-            } else {
-                ui.colored_label(egui::Color32::GRAY, "非対応");
-            }
+            ui.label("形式");
+            ui.label(ir.source_format.label());
             ui.end_row();
-        }
-    });
+        });
+    // 数値情報を4列（ラベル+値 × 2）でコンパクト表示
+    egui::Grid::new("model_info_stats")
+        .num_columns(4)
+        .spacing([4.0, 2.0])
+        .show(ui, |ui| {
+            ui.label("ボーン");
+            ui.label(format_number(ir.bones.len()));
+            ui.label("頂点");
+            ui.label(format_number(ir.total_vertices()));
+            ui.end_row();
+
+            ui.label("面");
+            ui.label(format_number(ir.total_faces()));
+            ui.label("材質");
+            ui.label(format_number(ir.materials.len()));
+            ui.end_row();
+
+            ui.label("テクスチャ");
+            ui.label(format_number(ir.textures.len()));
+            ui.label("モーフ");
+            ui.label(format_number(ir.morphs.len()));
+            ui.end_row();
+        });
+    if let Some(ref rig) = ir.rig_type {
+        egui::Grid::new("model_info_rig")
+            .num_columns(4)
+            .spacing([4.0, 2.0])
+            .show(ui, |ui| {
+                ui.label("リグ");
+                ui.label(rig);
+                ui.label("Humanoid");
+                if ir.humanoid_bone_count > 0 {
+                    ui.label(format!("{}本", ir.humanoid_bone_count));
+                } else {
+                    ui.colored_label(egui::Color32::GRAY, "非対応");
+                }
+                ui.end_row();
+            });
+    }
 
     ui.add_space(12.0);
 
@@ -1035,7 +1090,7 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
     if !ir.comment.is_empty() {
         if ir.source_format.is_pmx_pmd() {
             // PMX/PMD: 自由形式コメントをそのまま表示
-            ui.heading(egui::RichText::new("コメント").color(egui::Color32::from_gray(0x20)));
+            ui.heading(egui::RichText::new("コメント").color(egui::Color32::from_gray(0xD0)));
             ui.separator();
             egui::ScrollArea::vertical()
                 .max_height(200.0)
@@ -1085,7 +1140,7 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
         std::collections::HashSet::new()
     };
 
-    ui.heading(egui::RichText::new("表情モーフ").color(egui::Color32::from_gray(0x20)));
+    ui.heading(egui::RichText::new("表情モーフ").color(egui::Color32::from_gray(0xD0)));
     ui.separator();
     if ui.small_button("全リセット").clicked() {
         for (i, w) in app.morph_weights.iter_mut().enumerate() {
@@ -1146,7 +1201,7 @@ fn show_tab_display(
     tex_assign_request: &mut Option<TexAssignRequest>,
 ) {
     // 表示設定
-    ui.heading(egui::RichText::new("表示設定").color(egui::Color32::from_gray(0x20)));
+    ui.heading(egui::RichText::new("表示設定").color(egui::Color32::from_gray(0xD0)));
     ui.separator();
 
     if ui.small_button("ライト初期値").clicked() {
@@ -1440,7 +1495,7 @@ fn show_tab_display(
     let mat_src_tex = &loaded.mat_cache.source_tex_names;
     let num_draws = draw_info.len();
 
-    ui.heading(egui::RichText::new("材質表示").color(egui::Color32::from_gray(0x20)));
+    ui.heading(egui::RichText::new("材質表示").color(egui::Color32::from_gray(0xD0)));
     ui.separator();
     ui.horizontal(|ui| {
         if ui.small_button("全表示").clicked() {
@@ -1915,7 +1970,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         || app.pending.reload.is_some()
         || app.pending.pkg_load.is_some();
 
-    ui.heading(egui::RichText::new("PMX 変換").color(egui::Color32::from_gray(0x20)));
+    ui.heading(egui::RichText::new("PMX 変換").color(egui::Color32::from_gray(0xD0)));
     ui.separator();
 
     // 出力先ディレクトリ（converted_modelXX の作成場所）
@@ -2042,36 +2097,46 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             });
         }
     }
-    ui.add_enabled_ui(has_physics && !is_pmx_pmd, |ui| {
-        ui.checkbox(
-            &mut app.display.align_rigid_rotation,
-            "剛体回転をボーン方向に揃える",
-        )
-        .on_disabled_hover_text("物理設定がないか、PMX/PMD形式です");
-    });
-    ui.add_enabled_ui(has_physics && !is_pmx_pmd, |ui| {
-        ui.checkbox(&mut app.export.no_physics, "物理なしで出力")
-            .on_hover_text("剛体・ジョイントを出力しません")
+    // オプション2列グリッド
+    egui::Grid::new("export_options")
+        .num_columns(2)
+        .spacing([8.0, 2.0])
+        .show(ui, |ui| {
+            ui.add_enabled(
+                has_physics && !is_pmx_pmd,
+                egui::Checkbox::new(&mut app.display.align_rigid_rotation, "剛体回転揃え"),
+            )
             .on_disabled_hover_text("物理設定がないか、PMX/PMD形式です");
-    });
-    ui.add_enabled_ui(has_model && !is_pmx_pmd, |ui| {
-        ui.checkbox(&mut app.export.raw_structure, "元のボーン構造で出力")
-            .on_hover_text("標準ボーン（IK・捩り等）の挿入をスキップします")
+            ui.add_enabled(
+                has_physics && !is_pmx_pmd,
+                egui::Checkbox::new(&mut app.export.no_physics, "物理なし出力"),
+            )
+            .on_disabled_hover_text("物理設定がないか、PMX/PMD形式です");
+            ui.end_row();
+
+            ui.add_enabled(
+                has_model && !is_pmx_pmd,
+                egui::Checkbox::new(&mut app.export.raw_structure, "元ボーン構造"),
+            )
             .on_disabled_hover_text("PMX/PMD形式では使用できません");
-    });
-    ui.add_enabled_ui(has_model && !is_pmx_pmd, |ui| {
-        ui.checkbox(&mut app.export.export_visible_only, "表示材質のみ出力")
-            .on_hover_text("表示タブで非表示にした材質を出力から除外します");
-    });
-    ui.add_enabled_ui(!is_pmx_pmd, |ui| {
-        ui.checkbox(&mut app.export.output_log, "ログ出力")
+            ui.add_enabled(
+                has_model && !is_pmx_pmd,
+                egui::Checkbox::new(&mut app.export.export_visible_only, "表示材質のみ"),
+            );
+            ui.end_row();
+
+            ui.add_enabled(
+                !is_pmx_pmd,
+                egui::Checkbox::new(&mut app.export.output_log, "ログ出力"),
+            )
             .on_disabled_hover_text("PMX/PMD形式ではログ出力はできません");
-    });
+            ui.end_row();
+        });
 
     ui.add_space(12.0);
 
     // UVマップ出力
-    ui.heading(egui::RichText::new("UVマップ出力").color(egui::Color32::from_gray(0x20)));
+    ui.heading(egui::RichText::new("UVマップ出力").color(egui::Color32::from_gray(0xD0)));
     ui.separator();
     ui.add_enabled_ui(has_model && !is_processing, |ui| {
         if ui.button("UVマップ出力").clicked() {
@@ -2308,7 +2373,7 @@ fn write_convert_log(
 fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
     use super::animation::LoopMode;
 
-    ui.heading(egui::RichText::new("アニメーション").color(egui::Color32::from_gray(0x20)));
+    ui.heading(egui::RichText::new("アニメーション").color(egui::Color32::from_gray(0xD0)));
     ui.separator();
 
     // VRMAライブラリ
@@ -2322,17 +2387,19 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
         for (i, (name, _, _)) in app.anim.library.iter().enumerate() {
             ui.horizontal(|ui| {
                 let is_active = app.anim.active_index == Some(i);
-                let label = if is_active {
-                    format!("▶ {}", name)
+                // [▶][×] ファイル名（▶クリックで切替）
+                let play_icon = if is_active {
+                    egui::RichText::new("▶").color(egui::Color32::from_rgb(0x4A, 0x90, 0xD9))
                 } else {
-                    format!("   {}", name)
+                    egui::RichText::new("▶").color(egui::Color32::from_gray(0x60))
                 };
-                if ui.selectable_label(is_active, label).clicked() && !is_active {
+                if ui.small_button(play_icon).clicked() && !is_active {
                     switch_to = Some(i);
                 }
                 if ui.small_button("×").clicked() {
                     remove_idx = Some(i);
                 }
+                ui.label(name.as_str());
             });
         }
         if let Some(idx) = switch_to {
