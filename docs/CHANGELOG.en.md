@@ -74,6 +74,7 @@
 - **File hierarchy tree** — Below the material display in the Display tab, shows the load chain (opened file → intermediate files → final model) as a tree. For Prefab loads, displays `.unitypackage` → `.prefab` → individual FBX tree structure. Textures, animations, and package textures are also visible
 - **Always-on material grouping** — Materials are always grouped by model name with collapsible headers, even for single models. Unified UI experience with multi-model append
 - **Per-FBX material group splitting** — Multiple FBX files within a Prefab are shown as separate material groups. Each FBX's materials are managed under independent collapsible headers
+- **Per-group batch controls** — Group headers now include `[S]` (normal smoothing), `[C]` (custom normal clear), and `[☑]` (visibility) buttons for batch toggling all materials in the group. Hovering over the header row highlights all meshes in the group
 
 ### Improvements
 

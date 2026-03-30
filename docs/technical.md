@@ -1641,7 +1641,17 @@ Prefab: Body.fbx(0..12材質) + Hair.fbx(12..18材質)
 
 ### 材質表示の常時グループ化
 
-`material_groups` は単一モデルでも必ず 1 つ以上のグループを持つ。UI 側の `has_groups` 条件を `!group_names.is_empty()`（常に true）に変更し、フラットリスト表示パスを廃止。CollapsingHeader による統一的なグループ表示を実現。
+`material_groups` は単一モデルでも必ず 1 つ以上のグループを持つ。UI 側の `has_groups` 条件を `!group_names.is_empty()`（常に true）に変更し、フラットリスト表示パスを廃止。`CollapsingState` による統一的なグループ表示を実現。
+
+グループヘッダー行は `▶ [S] [C] [☑] グループ名` の構成で、`CollapsingState` + `ui.horizontal` で実装。各ボタンの動作:
+
+| ボタン | 対象 | 動作 |
+|--------|------|------|
+| `[S]` | `smooth_normals_per_mat` | グループ内の全材質（法線マップなし）の法線平滑化を一括トグル |
+| `[C]` | `clear_normals_per_mat` | グループ内の全材質（法線マップなし）のカスタム法線クリアを一括トグル |
+| `[☑]` | `material_visibility` | グループ内の全 DrawCall の表示/非表示を一括トグル |
+
+ヘッダー行のホバー判定は `contains_pointer()`（矩形内判定）を使用。`hovered()` は子ウィジェット（ボタン等）が hover を消費するため不適。
 
 ## リロード時テクスチャ正規化
 

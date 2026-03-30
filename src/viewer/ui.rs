@@ -1581,15 +1581,114 @@ fn show_tab_display(
             if group_draws.is_empty() {
                 continue;
             }
+            // グループ内のユニークな mat_idx を収集（S/C 一括用）
+            let group_mat_idxs: Vec<usize> = {
+                let mut set = std::collections::BTreeSet::new();
+                for &(_, mat_idx) in &group_draws {
+                    set.insert(mat_idx);
+                }
+                set.into_iter().collect()
+            };
+            let group_draw_idxs: Vec<usize> = group_draws.iter().map(|&(i, _)| i).collect();
+
             let id = ui.id().with(("mat_group", gi));
-            egui::CollapsingHeader::new(
-                egui::RichText::new(gname)
-                    .color(egui::Color32::from_rgb(0x60, 0xA0, 0xFF))
-                    .strong()
-            )
-            .id_salt(id)
-            .default_open(true)
-            .show(ui, |ui| {
+            let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                ui.ctx(),
+                id,
+                true,
+            );
+            // ヘッダ行: ▶[S][C][ ] グループ名
+            let header_res = ui.horizontal(|ui| {
+                // 折りたたみトグル
+                state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+                // [S] 法線平滑化（グループ一括）
+                {
+                    let eligible: Vec<usize> = group_mat_idxs
+                        .iter()
+                        .copied()
+                        .filter(|&mi| !mat_has_normal_map.get(mi).copied().unwrap_or(false))
+                        .collect();
+                    let all_on = !eligible.is_empty()
+                        && eligible.iter().all(|&mi| {
+                            app.smooth_normals_per_mat.get(mi).copied().unwrap_or(false)
+                        });
+                    let resp = ui.add_enabled(
+                        !eligible.is_empty(),
+                        egui::SelectableLabel::new(all_on, "S"),
+                    );
+                    if resp.clicked() && !eligible.is_empty() {
+                        let new_val = !all_on;
+                        for &mi in &eligible {
+                            if mi < app.smooth_normals_per_mat.len() {
+                                app.smooth_normals_per_mat[mi] = new_val;
+                            }
+                        }
+                        app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
+                    }
+                    resp.on_hover_text("法線平滑化（グループ一括）");
+                }
+                // [C] カスタム法線クリア（グループ一括）
+                {
+                    let eligible: Vec<usize> = group_mat_idxs
+                        .iter()
+                        .copied()
+                        .filter(|&mi| !mat_has_normal_map.get(mi).copied().unwrap_or(false))
+                        .collect();
+                    let all_on = !eligible.is_empty()
+                        && eligible
+                            .iter()
+                            .all(|&mi| app.clear_normals_per_mat.get(mi).copied().unwrap_or(false));
+                    let resp = ui.add_enabled(
+                        !eligible.is_empty(),
+                        egui::SelectableLabel::new(all_on, "C"),
+                    );
+                    if resp.clicked() && !eligible.is_empty() {
+                        let new_val = !all_on;
+                        for &mi in &eligible {
+                            if mi < app.clear_normals_per_mat.len() {
+                                app.clear_normals_per_mat[mi] = new_val;
+                            }
+                        }
+                        app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
+                    }
+                    resp.on_hover_text("カスタム法線クリア（グループ一括）");
+                }
+                // [ ] 表示/非表示（グループ一括）
+                {
+                    let all_visible = group_draw_idxs
+                        .iter()
+                        .all(|&di| app.material_visibility.get(di).copied().unwrap_or(true));
+                    let mut checked = all_visible;
+                    if ui.checkbox(&mut checked, "").clicked() {
+                        for &di in &group_draw_idxs {
+                            if di < app.material_visibility.len() {
+                                app.material_visibility[di] = checked;
+                            }
+                        }
+                    }
+                }
+                // グループ名
+                if ui
+                    .selectable_label(
+                        false,
+                        egui::RichText::new(gname)
+                            .color(egui::Color32::from_rgb(0x60, 0xA0, 0xFF))
+                            .strong(),
+                    )
+                    .clicked()
+                {
+                    state.toggle(ui);
+                }
+            });
+            // ヘッダ行ホバー → グループ内全 draw をハイライト
+            if header_res.response.contains_pointer() {
+                for &di in &group_draw_idxs {
+                    if app.material_visibility.get(di).copied().unwrap_or(true) {
+                        app.hovered_draw_indices.push(di);
+                    }
+                }
+            }
+            state.show_body_indented(&header_res.response, ui, |ui| {
                 let loaded = app.loaded.as_ref().unwrap();
                 let mat_tex_info = &loaded.mat_cache.tex_indices;
                 let mat_names = &loaded.mat_cache.names;

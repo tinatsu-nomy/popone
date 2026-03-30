@@ -1641,7 +1641,17 @@ Texture references are collected by `collect_material_tex_indices()`, which gath
 
 ### Always-On Material Grouping
 
-`material_groups` always contains at least one group, even for single models. The UI-side `has_groups` condition was changed to `!group_names.is_empty()` (always true), removing the flat list display path. Unified collapsible header grouping is now used for all cases.
+`material_groups` always contains at least one group, even for single models. The UI-side `has_groups` condition was changed to `!group_names.is_empty()` (always true), removing the flat list display path. Unified `CollapsingState`-based grouping is now used for all cases.
+
+Group header rows use the layout `▶ [S] [C] [☑] GroupName`, implemented with `CollapsingState` + `ui.horizontal`. Button behavior:
+
+| Button | Target | Behavior |
+|--------|--------|----------|
+| `[S]` | `smooth_normals_per_mat` | Batch toggle normal smoothing for all materials in the group (excluding normal-mapped) |
+| `[C]` | `clear_normals_per_mat` | Batch toggle custom normal clear for all materials in the group (excluding normal-mapped) |
+| `[☑]` | `material_visibility` | Batch toggle visibility for all DrawCalls in the group |
+
+Header row hover detection uses `contains_pointer()` (rect-based). `hovered()` is not suitable because child widgets (buttons, etc.) consume the hover event.
 
 ## Reload Texture Normalization
 
