@@ -80,8 +80,19 @@
 ### バグ修正
 
 - **Prefab モデルの A/T スタンス変換時テクスチャリセット修正** — Prefab 経由でロードしたモデルの A スタンス/T スタンス変換チェックボックスを切り替えると、テクスチャ割り当てがリセットされる問題を修正。原因は `reload_unitypackage` が Prefab の複数 FBX マージ構造を認識せず、単一 FBX として再読み込みしていたこと。`LoadedModel` に `prefab_entry_path` を保持し、リロード時に `UnityPackageIndex` を再構築して Prefab パスで再読み込みする `reload_as_prefab` メソッドを追加
+- **lilToon テクスチャスロット優先順修正** — lilToon シェーダーの `.mat` ファイルで `_BaseColorMap` が `_MainTex` と異なるテクスチャを参照する場合に、誤ったテクスチャが割り当てられる問題を修正。テクスチャスロット優先順を `_MainTex` > `_BaseMap` > `_BaseColorMap` に明示化
+- **アーカイブ内 Prefab リロード失敗修正** — ZIP / 7z 内の `.unitypackage` から Prefab 経由でロードしたモデルのリロード（Aスタンス変換等）が「GLBファイルの読み込みに失敗」エラーで失敗する問題を修正。`reload_as_prefab` が `Archive` ソースを引き継がず `File(zip_path)` にフォールバックしていたことが原因
 
 ### 改善
+
+- **FBX パーサー入力バリデーション強化** — 悪意のある FBX ファイルへの耐性を向上: プロパティ数上限（100万）、ノード再帰深さ制限（64）、配列サイズ上限（512MB）、`end_offset` 範囲検証、`checked_mul` によるオーバーフロー防止、`compressed_len` の残りバイト数検証
+- **unitypackage 展開サイズ計上改善** — `pathname` と `asset.meta` の読み込みバイト数を `total_bytes` に加算し、2GB 上限の迂回を防止
+- **モーフ適用パフォーマンス改善** — weights 差分判定による不要な全頂点コピー・GPU 転送のスキップ、`morph_visited` バッファの再利用化（毎フレーム alloc 排除）
+- **unitypackage メモリ使用量削減** — `ExtractedAsset.data` を `Vec<u8>` から `Arc<[u8]>` に変更し、`AssetEntry` とのデータ二重保持を解消
+- **FBX アニメーション二重読み込み統合** — FBX モデル読み込み後のアニメーション存在確認と適用を 1 回の読み込みに統合
+- **ボーンマージ `to_lowercase()` キャッシュ** — `IrModel::merge()` のボーン名比較で `to_lowercase()` を事前キャッシュし、一時 `String` の大量生成を回避
+- **スプリングボーンチェーン深さ制限** — `build_spring_chain_v0` に `MAX_SPRING_CHAIN_DEPTH = 64` の深さ制限を追加
+- **Win32 コンソールハンドル改善** — stdout と stderr に別々の `CONOUT$` ハンドルを割り当て
 
 - **UnityPackageIndex** — GUID ベースのインデックス構造で Prefab 解決・テクスチャ参照を効率化。アーカイブ（ZIP / 7z）経由の `.unitypackage` でもインデックスを構築
 - **FBX マテリアル名照合改善** — FBX `.meta` の `externalObjects` から FBX 内部マテリアル名（`fbx_material_name`）を取得し、`.mat` ファイル名と FBX 内部名が異なる場合でもテクスチャをマッチング

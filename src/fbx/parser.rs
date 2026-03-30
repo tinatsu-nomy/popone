@@ -5,6 +5,13 @@ use std::io::{Cursor, Read, Seek, SeekFrom};
 
 const MAGIC: &[u8; 23] = b"Kaydara FBX Binary  \x00\x1a\x00";
 
+/// プロパティ数の上限（DoS防止）
+const MAX_NUM_PROPERTIES: u64 = 1_000_000;
+/// ノード再帰深さの上限
+const MAX_NODE_DEPTH: u32 = 64;
+/// 配列データサイズの上限（512MB）
+const MAX_ARRAY_SIZE: usize = 512 * 1024 * 1024;
+
 #[derive(Debug)]
 pub struct FbxDocument {
     pub version: u32,
@@ -125,9 +132,10 @@ pub fn parse(data: &[u8]) -> Result<FbxDocument> {
     log::info!("FBX version: {}", version);
 
     // トップレベルノードを読み取り
+    let data_len = data.len() as u64;
     let mut nodes = Vec::new();
     loop {
-        let node = parse_node(&mut cursor, version)?;
+        let node = parse_node(&mut cursor, version, data_len, 0)?;
         match node {
             Some(n) => nodes.push(n),
             None => break, // 終端マーカー
@@ -137,7 +145,19 @@ pub fn parse(data: &[u8]) -> Result<FbxDocument> {
     Ok(FbxDocument { version, nodes })
 }
 
-fn parse_node(cursor: &mut Cursor<&[u8]>, version: u32) -> Result<Option<FbxNode>> {
+fn parse_node(
+    cursor: &mut Cursor<&[u8]>,
+    version: u32,
+    data_len: u64,
+    depth: u32,
+) -> Result<Option<FbxNode>> {
+    // B-8: 再帰深さ制限
+    if depth > MAX_NODE_DEPTH {
+        return Err(PoponeError::FbxParse(format!(
+            "ノード再帰深さが上限 ({MAX_NODE_DEPTH}) を超えました"
+        )));
+    }
+
     let (end_offset, num_properties, _property_list_len) = if version >= 7500 {
         (
             cursor.read_u64::<LittleEndian>()?,
@@ -157,13 +177,41 @@ fn parse_node(cursor: &mut Cursor<&[u8]>, version: u32) -> Result<Option<FbxNode
         return Ok(None);
     }
 
+    // B-5: end_offset の範囲検証
+    if end_offset <= cursor.position() || end_offset > data_len {
+        return Err(PoponeError::FbxParse(format!(
+            "不正な end_offset: {} (現在位置: {}, データ長: {})",
+            end_offset,
+            cursor.position(),
+            data_len
+        )));
+    }
+
+    // B-4: プロパティ数の検証
+    if num_properties > MAX_NUM_PROPERTIES {
+        return Err(PoponeError::FbxParse(format!(
+            "プロパティ数 ({num_properties}) が上限 ({MAX_NUM_PROPERTIES}) を超えています"
+        )));
+    }
+    let num_properties_usize = usize::try_from(num_properties).map_err(|_| {
+        PoponeError::FbxParse(format!(
+            "プロパティ数 ({num_properties}) が usize に変換できません"
+        ))
+    })?;
+    let remaining = data_len.saturating_sub(cursor.position());
+    if num_properties > remaining {
+        return Err(PoponeError::FbxParse(format!(
+            "プロパティ数 ({num_properties}) が残りバイト数 ({remaining}) を超えています"
+        )));
+    }
+
     let name_len = cursor.read_u8()? as usize;
     let mut name_buf = vec![0u8; name_len];
     cursor.read_exact(&mut name_buf)?;
     let name = String::from_utf8_lossy(&name_buf).to_string();
 
     // 属性読み取り
-    let mut properties = Vec::with_capacity(num_properties as usize);
+    let mut properties = Vec::with_capacity(num_properties_usize);
     let _prop_start = cursor.position();
     for _ in 0..num_properties {
         properties.push(parse_property(cursor)?);
@@ -172,7 +220,7 @@ fn parse_node(cursor: &mut Cursor<&[u8]>, version: u32) -> Result<Option<FbxNode
     // 子ノード読み取り
     let mut children = Vec::new();
     while cursor.position() < end_offset {
-        match parse_node(cursor, version)? {
+        match parse_node(cursor, version, end_offset, depth + 1)? {
             Some(child) => children.push(child),
             None => break,
         }
@@ -282,13 +330,38 @@ fn read_array_raw(cursor: &mut Cursor<&[u8]>, element_size: usize) -> Result<Vec
     let encoding = cursor.read_u32::<LittleEndian>()?;
     let compressed_len = cursor.read_u32::<LittleEndian>()? as usize;
 
+    // B-6: 乗算オーバーフロー検証とサイズ上限チェック
+    let expected_size = array_len.checked_mul(element_size).ok_or_else(|| {
+        PoponeError::FbxParse(format!(
+            "配列サイズのオーバーフロー: {array_len} * {element_size}"
+        ))
+    })?;
+    if expected_size > MAX_ARRAY_SIZE {
+        return Err(PoponeError::FbxParse(format!(
+            "配列サイズ ({expected_size}) が上限 ({MAX_ARRAY_SIZE}) を超えています"
+        )));
+    }
+
+    // B-7: compressed_len が残りバイト数を超えないことを検証
+    let data_len = cursor.get_ref().len() as u64;
+    let remaining = data_len.saturating_sub(cursor.position()) as usize;
+    if compressed_len > remaining {
+        return Err(PoponeError::FbxParse(format!(
+            "圧縮データ長 ({compressed_len}) が残りバイト数 ({remaining}) を超えています"
+        )));
+    }
+    if compressed_len > MAX_ARRAY_SIZE {
+        return Err(PoponeError::FbxParse(format!(
+            "圧縮データ長 ({compressed_len}) が上限 ({MAX_ARRAY_SIZE}) を超えています"
+        )));
+    }
+
     let mut compressed = vec![0u8; compressed_len];
     cursor.read_exact(&mut compressed)?;
 
     let raw = match encoding {
         0 => compressed,
         1 => {
-            let expected_size = array_len * element_size;
             let mut decoder = ZlibDecoder::new(&compressed[..]);
             let mut decompressed = vec![0u8; expected_size];
             decoder

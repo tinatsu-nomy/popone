@@ -84,6 +84,9 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
     // テクスチャ割り当て（借用解放後に処理）
     match tex_assign_request {
         Some(TexAssignRequest::FileDialog(mat_idx)) => {
+            // NOTE: rfd::FileDialog::pick_file() は同期ブロッキング呼び出しのため、
+            // ダイアログ表示中は UI が固まる。rfd::AsyncFileDialog + スレッド化で
+            // 非同期化すべきだが、影響箇所が多いため現時点ではブロッキングを許容する。
             let mat_name = app
                 .loaded
                 .as_ref()

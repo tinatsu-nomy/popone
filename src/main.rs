@@ -154,6 +154,7 @@ fn attach_parent_console() {
             SetStdHandle(STD_INPUT_HANDLE, h_in);
         }
 
+        // stdout 用ハンドル
         let h_out = CreateFileA(
             c"CONOUT$".as_ptr().cast(),
             GENERIC_WRITE,
@@ -165,7 +166,20 @@ fn attach_parent_console() {
         );
         if h_out != INVALID {
             SetStdHandle(STD_OUTPUT_HANDLE, h_out);
-            SetStdHandle(STD_ERROR_HANDLE, h_out);
+        }
+
+        // stderr 用に別ハンドルを開く（stdout と共有するとクローズ時に二重解放になる）
+        let h_err = CreateFileA(
+            c"CONOUT$".as_ptr().cast(),
+            GENERIC_WRITE,
+            FILE_SHARE_WRITE,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        );
+        if h_err != INVALID {
+            SetStdHandle(STD_ERROR_HANDLE, h_err);
         }
 
         // Rust の std::io が新しいハンドルを使うよう、

@@ -103,6 +103,8 @@ pub struct GpuModel {
     gpu_morphs: Vec<GpuMorphEntry>,
     /// グループモーフ循環検出用バッファ（毎回 alloc を回避）
     morph_visited: Vec<bool>,
+    /// 前回適用時の morph weights（変化がなければ再計算をスキップ）
+    last_weights: Vec<f32>,
     /// アニメーション済み頂点キャッシュ（法線表示同期用）
     animated_vertices: Option<Vec<Vertex>>,
 }
@@ -217,18 +219,24 @@ impl GpuModel {
     }
 
     /// モーフウェイトを適用して頂点バッファを更新
+    /// weights が前回と同一なら早期リターンして再計算をスキップする
     pub fn apply_morphs(&mut self, weights: &[f32], queue: &wgpu::Queue) {
+        // weights が前回から変化していなければ何もしない
+        if self.last_weights.len() == weights.len() && self.last_weights == weights {
+            return;
+        }
+
         self.morph_work.clear();
         self.morph_work.extend_from_slice(&self.base_vertices);
 
         let morph_len = self.gpu_morphs.len();
+        // visited バッファを1回だけ確保し、各モーフ後は fill(false) で再利用
+        self.morph_visited.resize(morph_len, false);
         for morph_idx in 0..morph_len {
             let w = weights.get(morph_idx).copied().unwrap_or(0.0);
             if w.abs() < 1e-6 {
                 continue;
             }
-            self.morph_visited.clear();
-            self.morph_visited.resize(morph_len, false);
             Self::apply_gpu_morph_recursive(
                 &self.gpu_morphs,
                 morph_idx,
@@ -236,6 +244,7 @@ impl GpuModel {
                 &mut self.morph_work,
                 &mut self.morph_visited,
             );
+            self.morph_visited.fill(false);
         }
 
         // CPU 側の現在頂点も同期 — swap でアロケーション回避
@@ -248,19 +257,24 @@ impl GpuModel {
             0,
             bytemuck::cast_slice(self.animated_vertices.as_ref().unwrap()),
         );
+
+        // 次回比較用に weights を記録
+        self.last_weights.clear();
+        self.last_weights.extend_from_slice(weights);
     }
 
     /// モーフウェイトを外部バッファに適用（アニメーション用：GPU アップロードはしない）
     pub fn apply_morphs_to_buf(&self, weights: &[f32], vertices: &mut [Vertex]) {
         let morph_len = self.gpu_morphs.len();
+        // ループ外で1回だけ確保し fill(false) で再利用（毎回 alloc を回避）
         let mut visited = vec![false; morph_len];
         for morph_idx in 0..morph_len {
             let w = weights.get(morph_idx).copied().unwrap_or(0.0);
             if w.abs() < 1e-6 {
                 continue;
             }
-            visited.fill(false);
             Self::apply_gpu_morph_recursive(&self.gpu_morphs, morph_idx, w, vertices, &mut visited);
+            visited.fill(false);
         }
     }
 
@@ -268,13 +282,13 @@ impl GpuModel {
     pub fn apply_morphs_to_animated(&mut self, weights: &[f32]) {
         if let Some(ref mut verts) = self.animated_vertices {
             let morph_len = self.gpu_morphs.len();
+            // visited バッファを1回だけ確保し fill(false) で再利用
+            self.morph_visited.resize(morph_len, false);
             for morph_idx in 0..morph_len {
                 let w = weights.get(morph_idx).copied().unwrap_or(0.0);
                 if w.abs() < 1e-6 {
                     continue;
                 }
-                self.morph_visited.clear();
-                self.morph_visited.resize(morph_len, false);
                 Self::apply_gpu_morph_recursive(
                     &self.gpu_morphs,
                     morph_idx,
@@ -282,6 +296,7 @@ impl GpuModel {
                     verts,
                     &mut self.morph_visited,
                 );
+                self.morph_visited.fill(false);
             }
         }
     }
@@ -991,6 +1006,7 @@ fn build_gpu_model_inner(
         morph_work,
         gpu_morphs,
         morph_visited: Vec::new(),
+        last_weights: Vec::new(),
         animated_vertices: None,
     })
 }

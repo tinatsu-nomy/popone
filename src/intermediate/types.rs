@@ -246,24 +246,32 @@ impl IrModel {
         }
 
         // Pass 1b: original_name 照合（親整合性チェック付き）
-        let mut orig_to_self: std::collections::HashMap<String, usize> =
+        // to_lowercase() を事前キャッシュして繰り返し呼び出しを回避
+        let self_lower_names: Vec<String> = self
+            .bones
+            .iter()
+            .map(|b| b.original_name.to_lowercase())
+            .collect();
+        let other_lower_names: Vec<String> = other
+            .bones
+            .iter()
+            .map(|b| b.original_name.to_lowercase())
+            .collect();
+        let mut orig_to_self: std::collections::HashMap<&str, usize> =
             std::collections::HashMap::new();
-        for (i, bone) in self.bones.iter().enumerate() {
-            let key = bone.original_name.to_lowercase();
-            orig_to_self.entry(key).or_insert(i);
+        for (i, key) in self_lower_names.iter().enumerate() {
+            orig_to_self.entry(key.as_str()).or_insert(i);
         }
         for (i, other_bone) in other.bones.iter().enumerate() {
             if candidate[i].is_some() {
                 continue;
             }
-            let key = other_bone.original_name.to_lowercase();
-            if let Some(&self_idx) = orig_to_self.get(&key) {
+            let key = &other_lower_names[i];
+            if let Some(&self_idx) = orig_to_self.get(key.as_str()) {
                 let parent_ok = match (other_bone.parent, self.bones[self_idx].parent) {
                     (None, None) => true,
                     (Some(op), Some(sp)) => {
-                        candidate[op] == Some(sp)
-                            || self.bones[sp].original_name.to_lowercase()
-                                == other.bones[op].original_name.to_lowercase()
+                        candidate[op] == Some(sp) || self_lower_names[sp] == other_lower_names[op]
                     }
                     _ => false,
                 };

@@ -80,8 +80,19 @@
 ### Bug Fixes
 
 - **Prefab model texture reset on A/T stance conversion** — Fixed an issue where toggling A-stance / T-stance conversion on a Prefab-loaded model would reset all texture assignments. The root cause was `reload_unitypackage` not recognizing the Prefab's multi-FBX merge structure and reloading as a single FBX instead. Added `prefab_entry_path` to `LoadedModel` and a `reload_as_prefab` method that rebuilds `UnityPackageIndex` and reloads via the Prefab path
+- **lilToon texture slot priority fix** — Fixed incorrect texture assignment when lilToon shader's `.mat` file has `_BaseColorMap` referencing a different texture than `_MainTex`. Texture slot priority is now explicitly `_MainTex` > `_BaseMap` > `_BaseColorMap`
+- **Archive Prefab reload failure fix** — Fixed "Failed to load GLB file" error when reloading (e.g., A-stance conversion) a model loaded via Prefab from a `.unitypackage` inside a ZIP / 7z archive. The cause was `reload_as_prefab` not preserving the `Archive` source and falling back to `File(zip_path)`
 
 ### Improvements
+
+- **FBX parser input validation hardening** — Improved resilience against malicious FBX files: property count limit (1M), node recursion depth limit (64), array size limit (512MB), `end_offset` range validation, `checked_mul` for overflow prevention, `compressed_len` vs remaining bytes validation
+- **unitypackage extraction size accounting** — `pathname` and `asset.meta` read bytes are now counted toward `total_bytes`, preventing bypass of the 2GB limit
+- **Morph application performance** — Weights diff check skips unnecessary full vertex copy + GPU upload; `morph_visited` buffer reuse eliminates per-frame allocation
+- **unitypackage memory reduction** — Changed `ExtractedAsset.data` from `Vec<u8>` to `Arc<[u8]>` to eliminate data duplication with `AssetEntry`
+- **FBX animation double-read elimination** — Merged animation existence check and application into a single read after FBX model loading
+- **Bone merge `to_lowercase()` caching** — Pre-cache `to_lowercase()` results in `IrModel::merge()` to avoid mass temporary `String` allocation
+- **Spring bone chain depth limit** — Added `MAX_SPRING_CHAIN_DEPTH = 64` to `build_spring_chain_v0`
+- **Win32 console handle fix** — Assign separate `CONOUT$` handles for stdout and stderr
 
 - **UnityPackageIndex** — GUID-based index structure for efficient Prefab resolution and texture references. Index is also built for `.unitypackage` files loaded via archives (ZIP / 7z)
 - **FBX material name matching improvement** — Extracts FBX internal material names (`fbx_material_name`) from FBX `.meta` `externalObjects`, enabling texture matching even when `.mat` file names differ from FBX internal names

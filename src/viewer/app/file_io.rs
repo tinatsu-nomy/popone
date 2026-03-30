@@ -156,16 +156,9 @@ impl ViewerApp {
                 self.anim.active_index = None;
 
                 // FBXモデル読み込み後、同じファイルにアニメーションがあれば自動適用
+                // try_load_fbx_animation 内で読み込みと適用を一括実行（二重読込を回避）
                 if ext == "fbx" {
-                    let anim_result = match self.read_or_preloaded(&path) {
-                        Ok(data) => crate::fbx::animation::load_fbx_animation_from_data(&data),
-                        Err(_) => crate::fbx::animation::load_fbx_animation(&path),
-                    };
-                    if let Ok(anims) = anim_result {
-                        if !anims.is_empty() {
-                            self.try_load_fbx_animation(&path);
-                        }
-                    }
+                    self.try_load_fbx_animation(&path);
                 }
             }
             Err(e) => {
@@ -293,13 +286,13 @@ impl ViewerApp {
         let pkg_index = Arc::new(crate::unitypackage::build_unity_package_index(
             &archive_data,
         )?);
-        // 既存コードとの互換性のため ExtractedAsset も構築
+        // 既存コードとの互換性のため ExtractedAsset も構築（Arc 共有でコピー回避）
         let assets: Vec<crate::unitypackage::ExtractedAsset> = pkg_index
             .entries
             .iter()
             .map(|e| crate::unitypackage::ExtractedAsset {
                 pathname: e.pathname.clone(),
-                data: e.data.to_vec(),
+                data: Arc::clone(&e.data),
             })
             .collect();
 
@@ -370,7 +363,7 @@ impl ViewerApp {
             .iter()
             .map(|e| crate::unitypackage::ExtractedAsset {
                 pathname: e.pathname.clone(),
-                data: e.data.to_vec(),
+                data: Arc::clone(&e.data),
             })
             .collect();
 
@@ -541,13 +534,13 @@ impl ViewerApp {
     ) -> anyhow::Result<()> {
         // UnityPackageIndex を構築（Prefab 解決に必要）
         let pkg_index = Arc::new(crate::unitypackage::build_unity_package_index(&pkg_data)?);
-        // 既存コードとの互換性のため ExtractedAsset も構築
+        // 既存コードとの互換性のため ExtractedAsset も構築（Arc 共有でコピー回避）
         let assets: Vec<crate::unitypackage::ExtractedAsset> = pkg_index
             .entries
             .iter()
             .map(|e| crate::unitypackage::ExtractedAsset {
                 pathname: e.pathname.clone(),
-                data: e.data.to_vec(),
+                data: Arc::clone(&e.data),
             })
             .collect();
 
@@ -2358,6 +2351,7 @@ impl ViewerApp {
                 snapshot,
                 path,
                 &prefab_path,
+                source,
                 saved_pkg_textures,
                 saved_pkg_tex_assignments,
             );
@@ -2529,6 +2523,7 @@ impl ViewerApp {
         snapshot: Option<Arc<[u8]>>,
         path: &Path,
         prefab_entry_path: &str,
+        archive_source: &ReloadableSource,
         saved_pkg_textures: &Option<Vec<(String, Vec<u8>)>>,
         saved_pkg_tex_assignments: &HashMap<usize, String>,
     ) -> anyhow::Result<()> {
@@ -2543,11 +2538,16 @@ impl ViewerApp {
                 anyhow::anyhow!("Prefab エントリが見つかりません: {}", prefab_entry_path)
             })?;
 
-        let source_override = snapshot.map(|snap| ReloadableSource::Snapshot {
-            original_path: path.to_path_buf(),
-            main_bytes: snap,
-            aux_files: HashMap::new(),
-        });
+        // リロード後も Archive ソースを維持（snapshot があれば Snapshot、なければ元の Archive を引き継ぐ）
+        let source_override: Option<ReloadableSource> = if let Some(snap) = snapshot {
+            Some(ReloadableSource::Snapshot {
+                original_path: path.to_path_buf(),
+                main_bytes: snap,
+                aux_files: HashMap::new(),
+            })
+        } else {
+            Some(archive_source.clone())
+        };
 
         self.load_prefab_from_assets(
             Vec::new(),
@@ -2645,6 +2645,7 @@ impl ViewerApp {
                 snapshot_arc,
                 original_path,
                 &prefab_path,
+                archive_source,
                 saved_pkg_textures,
                 saved_pkg_tex_assignments,
             );

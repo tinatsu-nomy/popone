@@ -76,6 +76,7 @@
   - [Model Append Loading](#model-append-loading)
     - [Bone Merge 3-Level Fallback Method](#bone-merge-3-level-fallback-method)
     - [ASCII FBX Content Block Processing](#ascii-fbx-content-block-processing)
+    - [FBX Parser Input Validation](#fbx-parser-input-validation)
     - [pkg Texture Namespace](#pkg-texture-namespace)
   - [Direct Archive Loading](#direct-archive-loading)
     - [archive Module](#archive-module)
@@ -1284,6 +1285,21 @@ Content: {
 
 During texture extraction (`texture.rs`), retrieval is done via `as_binary()` only, so images are not decoded from ASCII FBX Content strings. Instead, recovery is done via external file fallback using `RelativeFilename` / `FileName`.
 
+### FBX Parser Input Validation
+
+To prevent OOM / stack overflow / infinite loops from malicious FBX files, `parser.rs` enforces the following limits:
+
+| Limit | Constant | Value | Purpose |
+|-------|----------|-------|---------|
+| Property count | `MAX_NUM_PROPERTIES` | 1,000,000 | Prevent `Vec::with_capacity` OOM |
+| Node recursion depth | `MAX_NODE_DEPTH` | 64 | Prevent stack overflow |
+| Array size | `MAX_ARRAY_SIZE` | 512 MB | Prevent huge allocation |
+
+Additional checks:
+- `end_offset` range validation: error if not `cursor.position() < end_offset <= data_len`. Child node recursion passes parent's `end_offset` as boundary
+- `array_len * element_size` uses `checked_mul` (prevents overflow wrap in release builds)
+- `compressed_len` validated against remaining bytes before buffer allocation
+
 #### FBX External Texture Nearby Search
 
 When `RelativeFilename` / `FileName` paths don't match the actual directory structure (common with Unity/Blender project exports), `TextureSearchCache` is used to recursively search directories near the FBX file (max depth 3). The cache is a `HashMap` of filename (lowercase) → path, targeting only image file extensions (png/jpg/tga/bmp/dds/psd, etc.). Directory scanning runs only once per conversion.
@@ -1599,7 +1615,7 @@ handling nested Prefabs (where m_SourcePrefab points to a `.prefab` rather than 
 - `parse_prefab_new()` — 2-pass approach: `m_Modifications` then `m_SourcePrefab`
 - `parse_prefab_old()` — Extracts `m_Mesh` + `m_Materials` from `--- !u!137` (SkinnedMeshRenderer) sections
 - `parse_fbx_meta()` — Extracts material name → GUID mapping from `externalObjects`
-- `parse_material_textures()` — Extracts `_MainTex` texture GUID from `m_TexEnvs`
+- `parse_material_textures()` — Extracts main texture GUID from `m_TexEnvs`. Slot priority: `_MainTex` > `_BaseMap` > `_BaseColorMap` (handles lilToon cases where `_BaseColorMap` references a different texture than `_MainTex`)
 - `decode_unity_escape()` — `\uXXXX` → Unicode conversion, YAML quote trimming
 
 ### Key Data Types
@@ -1672,6 +1688,8 @@ reload_current()
 ```
 
 `assign_texture_data_to_material()` can apply textures after GPU model construction (adds IrTexture + rebuilds bind group). For borrow checker compliance, restoration data is first collected into a `Vec<(usize, String, Vec<u8>)>` before application.
+
+`reload_as_prefab` receives `archive_source: &ReloadableSource` and, when `snapshot` is `None` (archive loaded from a regular file, not a temp file), preserves the original `Archive` source. This ensures reloads correctly enter the `reload_archive_unitypackage` path and prevents ZIP files from being parsed as GLB.
 
 ## Reload Texture Normalization
 

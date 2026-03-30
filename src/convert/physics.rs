@@ -221,6 +221,9 @@ fn build_spring_mask(collider_group_refs: &[i32], num_collider_groups: usize) ->
     mask
 }
 
+/// スプリングチェーンの最大深さ（無限ループ防止）
+const MAX_SPRING_CHAIN_DEPTH: u32 = 64;
+
 #[allow(clippy::too_many_arguments)]
 fn build_spring_chain_v0(
     root_node: usize,
@@ -242,10 +245,18 @@ fn build_spring_chain_v0(
     let spring_rot_val = stiffness * 5.0;
     let spring_move_val = spring_rot_val * 2.0;
 
-    // チェーンをDFS走査
-    let mut stack = vec![(root_bone, None::<usize>)]; // (ボーンIndex, 親剛体Index)
+    // チェーンをDFS走査（深さ制限付き）
+    let mut stack = vec![(root_bone, None::<usize>, 0u32)]; // (ボーンIndex, 親剛体Index, 深さ)
 
-    while let Some((bone_idx, parent_rigid_idx)) = stack.pop() {
+    while let Some((bone_idx, parent_rigid_idx, depth)) = stack.pop() {
+        if depth >= MAX_SPRING_CHAIN_DEPTH {
+            log::warn!(
+                "スプリングチェーンが最大深さ({})に到達 — 打ち切り (bone={})",
+                MAX_SPRING_CHAIN_DEPTH,
+                bones.get(bone_idx).map(|b| b.name.as_str()).unwrap_or("?")
+            );
+            continue;
+        }
         let bone = &bones[bone_idx];
 
         // 次ボーン位置（剛体形状・ジョイント共用）
@@ -293,7 +304,7 @@ fn build_spring_chain_v0(
 
         // 子骨を処理
         for &child_idx in &bone.children {
-            stack.push((child_idx, Some(rigid_idx)));
+            stack.push((child_idx, Some(rigid_idx), depth + 1));
         }
     }
 }

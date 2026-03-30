@@ -95,8 +95,8 @@ pub type FbxWithTextures = (Vec<u8>, String, Vec<(String, Vec<u8>)>);
 pub struct ExtractedAsset {
     /// Unity プロジェクト内パス（例: "Assets/Models/xxx.fbx"）
     pub pathname: String,
-    /// アセット本体データ
-    pub data: Vec<u8>,
+    /// アセット本体データ（Arc で AssetEntry と共有し二重コピーを回避）
+    pub data: Arc<[u8]>,
 }
 
 impl ExtractedAsset {
@@ -137,7 +137,7 @@ pub fn extract_all_assets(archive_data: &[u8]) -> Result<Vec<ExtractedAsset>> {
         .into_iter()
         .map(|entry| ExtractedAsset {
             pathname: entry.pathname,
-            data: entry.data.to_vec(),
+            data: entry.data,
         })
         .collect();
     Ok(result)
@@ -183,6 +183,14 @@ fn build_unity_package_index_with_limit(
                 entry
                     .read_to_string(&mut s)
                     .context("pathname読み込み失敗")?;
+                // B-9: pathname の読み込みバイト数も加算
+                total_bytes += s.len() as u64;
+                if total_bytes > max_bytes {
+                    return Err(PoponeError::UnityPackage(format!(
+                        ".unitypackage 展開サイズが上限 ({}MB) を超えました",
+                        max_bytes / (1024 * 1024)
+                    )));
+                }
                 pathnames.insert(guid, s.trim().to_string());
             }
             "asset" => {
@@ -209,6 +217,14 @@ fn build_unity_package_index_with_limit(
                 entry
                     .read_to_end(&mut data)
                     .context("asset.meta読み込み失敗")?;
+                // B-9: asset.meta の読み込みバイト数も加算
+                total_bytes += data.len() as u64;
+                if total_bytes > max_bytes {
+                    return Err(PoponeError::UnityPackage(format!(
+                        ".unitypackage 展開サイズが上限 ({}MB) を超えました",
+                        max_bytes / (1024 * 1024)
+                    )));
+                }
                 let cow = String::from_utf8_lossy(&data);
                 if matches!(&cow, std::borrow::Cow::Owned(_)) {
                     log::warn!("asset.meta (GUID={}) に不正な UTF-8 が含まれています", guid);
@@ -278,7 +294,7 @@ pub fn take_fbx_and_textures(
     // FBX を取り出す
     let fbx_asset = assets.swap_remove(fbx_index);
     let fbx_name = fbx_asset.filename();
-    let fbx_data = fbx_asset.data;
+    let fbx_data = fbx_asset.data.to_vec();
 
     // テクスチャ（画像ファイル）を収集
     let texture_exts = ["png", "jpg", "jpeg", "tga", "bmp", "psd", "tif", "tiff"];
@@ -290,7 +306,7 @@ pub fn take_fbx_and_textures(
         })
         .map(|a| {
             let name = a.filename();
-            (name, a.data)
+            (name, a.data.to_vec())
         })
         .collect();
 
@@ -325,7 +341,7 @@ pub fn take_vrm(mut assets: Vec<ExtractedAsset>, vrm_index: usize) -> Result<(Ve
     }
     let vrm_asset = assets.swap_remove(vrm_index);
     let vrm_name = vrm_asset.filename();
-    let vrm_data = vrm_asset.data;
+    let vrm_data = vrm_asset.data.to_vec();
     log::info!(
         ".unitypackage 展開: VRM={} ({}KB)",
         vrm_name,
@@ -502,11 +518,6 @@ fn extract_array_index(line: &str) -> Option<usize> {
     let rest = line.get(start..)?;
     let end = rest.find(']')?;
     rest[..end].parse().ok()
-}
-
-/// テクスチャスロット名がメインテクスチャかどうか
-fn is_main_texture_slot(slot: &str) -> bool {
-    matches!(slot, "_MainTex" | "_BaseMap" | "_BaseColorMap")
 }
 
 /// Unity YAML の `\uXXXX` エスケープをデコードする
@@ -755,8 +766,10 @@ fn parse_fbx_meta(meta_content: &str) -> PkgResult<(Vec<FbxMetaMaterial>, Option
             // second: で始まる GUID
             if trimmed.starts_with("second:") && current_name.is_some() {
                 if let Some(guid) = extract_guid_from_line(trimmed) {
+                    let name = current_name.take().unwrap();
+                    log::debug!("  externalObjects: name='{}' → guid={}", name, guid);
                     materials.push(FbxMetaMaterial {
-                        material_name: current_name.take().unwrap(),
+                        material_name: name,
                         material_guid: guid.to_string(),
                     });
                 } else {
@@ -1518,15 +1531,34 @@ fn resolve_material_guids_to_textures_with_meta(
             }
         };
 
+        // _MainTex を最優先、次に _BaseMap、最後に _BaseColorMap（lilToon 等では
+        // _BaseColorMap が _MainTex と異なるテクスチャを参照する場合があるため）
         let main_tex_guid = parsed
             .textures
             .iter()
-            .find(|t| is_main_texture_slot(&t.slot_name))
+            .find(|t| t.slot_name == "_MainTex")
+            .or_else(|| parsed.textures.iter().find(|t| t.slot_name == "_BaseMap"))
+            .or_else(|| {
+                parsed
+                    .textures
+                    .iter()
+                    .find(|t| t.slot_name == "_BaseColorMap")
+            })
             .map(|t| Arc::from(t.texture_guid.as_str()));
 
         let fbx_name = meta_guid_to_fbx_name
             .get(mat_guid.as_str())
             .map(|n| Arc::from(n.as_str()));
+
+        log::debug!(
+            "  材質解決: slot={} mat_guid={} → .mat name='{}' fbx_name={:?} main_tex={:?} slots=[{}]",
+            slot_idx,
+            mat_guid,
+            parsed.name,
+            fbx_name,
+            main_tex_guid,
+            parsed.textures.iter().map(|t| format!("{}:{}", t.slot_name, &t.texture_guid[..8.min(t.texture_guid.len())])).collect::<Vec<_>>().join(", ")
+        );
 
         resolved_mats.push(ResolvedMaterialTextures {
             source_material: None,
