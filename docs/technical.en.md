@@ -100,6 +100,9 @@
     - [Three-Stage Texture Matching Fallback](#three-stage-texture-matching-fallback)
     - [Unity YAML Parsers](#unity-yaml-parsers)
     - [Key Data Types](#key-data-types)
+    - [Per-FBX MaterialGroup Splitting from Prefab](#per-fbx-materialgroup-splitting-from-prefab)
+    - [File Hierarchy Tree](#file-hierarchy-tree)
+    - [Always-On Material Grouping](#always-on-material-grouping)
   - [Reload Texture Normalization](#reload-texture-normalization)
     - [reload_unitypackage Texture Restoration](#reload_unitypackage-texture-restoration)
     - [IrTexture Deduplication in assign_texture_source_to_material](#irtexture-deduplication-in-assign_texture_source_to_material)
@@ -1610,6 +1613,35 @@ handling nested Prefabs (where m_SourcePrefab points to a `.prefab` rather than 
 | `FbxResolveEntry` | Single FBX GUID + index + resolved materials |
 | `PrefabResolveResult` | Entire Prefab resolution result (may contain multiple FBX) |
 | `SourceMaterialRef` | renderer_path + slot_index (stable key for FBX mesh → material) |
+
+### Per-FBX MaterialGroup Splitting from Prefab
+
+During the `load_prefab_from_assets` merge loop, each FBX's material range `(name, mat_start, mat_count)` is tracked. After `finish_load()`, `gpu_model.draws` is scanned to compute `draw_range`, and the single `MaterialGroup` is split into per-FBX groups.
+
+```
+Prefab: Body.fbx(0..12 materials) + Hair.fbx(12..18 materials)
+  → MaterialGroup[0] { name:"Body.fbx", material_range:0..12, draw_range:0..15 }
+  → MaterialGroup[1] { name:"Hair.fbx", material_range:12..18, draw_range:15..20 }
+```
+
+### File Hierarchy Tree
+
+The `show_file_tree()` function displays the load chain as a tree below the material display in the Display tab.
+
+**Display Structure:**
+
+| Load Method | Tree Structure |
+|---|---|
+| Direct VRM/FBX/PMX | `source.vrm` → textures |
+| Archive (ZIP/7z) | `archive.zip` → `entry.vrm` → textures |
+| UnityPackage (direct FBX) | `pkg.unitypackage` → textures |
+| UnityPackage (Prefab) | `pkg.unitypackage` → `Prefab.prefab` → `Body.fbx` / `Hair.fbx` → textures |
+
+Texture references are collected by `collect_material_tex_indices()`, which gathers all texture indices referenced by a material (base_color, normal, emissive, sphere, toon, 6 MToon types).
+
+### Always-On Material Grouping
+
+`material_groups` always contains at least one group, even for single models. The UI-side `has_groups` condition was changed to `!group_names.is_empty()` (always true), removing the flat list display path. Unified collapsible header grouping is now used for all cases.
 
 ## Reload Texture Normalization
 

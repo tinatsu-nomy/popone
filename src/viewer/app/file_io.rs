@@ -1124,6 +1124,13 @@ impl ViewerApp {
 
         log::info!("Prefab 解決: {} FBX を検出", resolve_result.entries.len());
 
+        // Prefab ファイル名を保存（ファイル階層表示用）
+        let prefab_filename = std::path::Path::new(&pkg.entries[prefab_index].pathname)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
         // テクスチャ収集
         let textures: Vec<crate::unitypackage::PackageTexture> = pkg
             .entries
@@ -1158,6 +1165,8 @@ impl ViewerApp {
         let mut base_ir: Option<crate::intermediate::types::IrModel> = None;
         let mut all_pkg_keys: Vec<Option<crate::unitypackage::PkgMaterialKey>> = Vec::new();
         let mut all_unmatched: Vec<usize> = Vec::new();
+        // FBX ごとの材質範囲を追跡（MaterialGroup 分割用）
+        let mut fbx_ranges: Vec<(String, usize, usize)> = Vec::new(); // (name, mat_start, mat_count)
 
         for (i, fbx_entry_info) in resolve_result.entries.iter().enumerate() {
             let fbx_entry = &pkg.entries[fbx_entry_info.fbx_index];
@@ -1207,12 +1216,16 @@ impl ViewerApp {
             if let Some(ref mut base) = base_ir {
                 // 2つ目以降: merge
                 let mat_offset = base.materials.len();
+                let mat_count = ir.materials.len();
                 base.merge(ir);
+                fbx_ranges.push((fbx_name, mat_offset, mat_count));
                 // unmatched のインデックスを offset
                 all_unmatched.extend(unmatched.iter().map(|&idx| idx + mat_offset));
                 all_pkg_keys.extend(keys);
             } else {
                 // 最初の FBX: ベースモデル
+                let mat_count = ir.materials.len();
+                fbx_ranges.push((fbx_name.clone(), 0, mat_count));
                 self.selected_fbx_name = Some(fbx_name);
                 all_unmatched = unmatched;
                 all_pkg_keys = keys;
@@ -1232,10 +1245,38 @@ impl ViewerApp {
             source_override.unwrap_or_else(|| ReloadableSource::File(source_path.to_path_buf()));
         self.finish_load(ir, source)?;
 
-        // finish_load 後に pkg_material_keys を設定
-        if !all_pkg_keys.is_empty() {
-            if let Some(ref mut loaded) = self.loaded {
+        // finish_load 後に Prefab 情報と per-FBX MaterialGroup を設定
+        if let Some(ref mut loaded) = self.loaded {
+            loaded.prefab_name = Some(prefab_filename);
+
+            if !all_pkg_keys.is_empty() {
                 loaded.pkg_material_keys = all_pkg_keys;
+            }
+
+            // 複数 FBX がある場合、単一 MaterialGroup を FBX 別に分割
+            if fbx_ranges.len() > 1 {
+                let mut new_groups = Vec::with_capacity(fbx_ranges.len());
+                for (name, mat_start, mat_count) in &fbx_ranges {
+                    let mat_range = *mat_start..*mat_start + *mat_count;
+                    // draw_range: 材質インデックスが範囲内に含まれる draw を検索
+                    let mut draw_start = usize::MAX;
+                    let mut draw_end = 0usize;
+                    for (di, draw) in loaded.gpu_model.draws.iter().enumerate() {
+                        if mat_range.contains(&draw.material_index) {
+                            draw_start = draw_start.min(di);
+                            draw_end = draw_end.max(di + 1);
+                        }
+                    }
+                    if draw_start == usize::MAX {
+                        draw_start = draw_end;
+                    }
+                    new_groups.push(MaterialGroup {
+                        name: name.clone(),
+                        material_range: mat_range,
+                        draw_range: draw_start..draw_end,
+                    });
+                }
+                loaded.material_groups = new_groups;
             }
         }
 

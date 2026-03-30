@@ -93,6 +93,8 @@ pub struct LoadedModel {
     pub stats_cache: CachedStats,
     /// 材質ごとの安定キー（pkg_index 経由ロード時に構築）
     pub pkg_material_keys: Vec<Option<crate::unitypackage::PkgMaterialKey>>,
+    /// Prefab 経由ロード時の Prefab ファイル名（ファイル階層表示用）
+    pub prefab_name: Option<String>,
 }
 
 /// 変換結果の種類
@@ -720,6 +722,7 @@ impl ViewerApp {
             mat_cache,
             stats_cache,
             pkg_material_keys: Vec::new(),
+            prefab_name: None,
         });
 
         // シェーダー状態を正規化（PMX/PMD → 自動 MMD、VRM → 標準パスに戻す）

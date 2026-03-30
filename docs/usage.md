@@ -58,7 +58,8 @@ popone.exe input.fbx
 - **3D 表示** — egui + wgpu によるリアルタイムレンダリング。テクスチャ付き Lambert シェーディング、両面描画、アルファブレンド。VRM の MToon 材質は 2 色トゥーンシェーディング（lit/shade smoothstep 補間）+ アウトライン描画（inverted hull 法）+ リムライティング（パラメトリックリム + MatCap テクスチャ）+ 補助テクスチャ（shadeMultiply / shadingShift / rimMultiply、texCoord / KHR_texture_transform 対応）+ UV アニメーション（スクロール・回転）+ emissive（発光）+ 法線マップ（MikkTSpace 接線生成による TBN 構築、doubleSided 背面法線反転対応）+ MToon 仕様準拠 4 段階描画順制御（OPAQUE → MASK → BlendZWrite → Blend、`transparentWithZWrite` / `renderQueueOffsetNumber` + BLEND 内カメラ距離動的ソート対応）で表示。VRM 0.x MToon の全プロパティを VRM 1.0 に正規化（UniVRM マイグレーション準拠）。ベースカラーテクスチャを含む全テクスチャで `texCoord` / `KHR_texture_transform` に対応。glTF sampler のアドレスモード（Repeat / ClampToEdge / MirroredRepeat）・フィルタモード（minFilter の mipmap 選択方式を含む 6 値保持）をテクスチャごとに個別のサンプラーで反映。UTS2（Unity-Chan Toon Shader）材質は自動検出し MToon 近似表示（1st shade / outline / rim / MatCap / emissive / normal 対応、HighColor は PMX 出力のみ）。PMX/PMD は MMD レンダリングモード（NdotL 依存トゥーンシェーディング・エッジ・スフィアマップ）で表示。ライティングはライトカラー + 半球 ambient（Sky/Ground 2色補間）で VRoidHub に近い環境光を再現
 - **カメラ操作** — 左ドラッグ:回転、右ドラッグ:パン、ホイール:ズーム。F:フィット、R:リセット、ダブルクリック:フィット、Shift:精密操作（1/3速度）。FOV 30°（MMD準拠）
 - **表情モーフ** — スライダで Expression を調整（0/1 ボタン・直接入力対応）
-- **材質表示切替** — 材質ごとの ON/OFF、検索フィルタ。材質行ホバーで 3D ビュー上の該当メッシュを半透明オレンジでハイライト
+- **材質表示切替** — 材質ごとの ON/OFF、検索フィルタ。材質行ホバーで 3D ビュー上の該当メッシュを半透明オレンジでハイライト。常にモデル名で折り畳みグループ化（Prefab 内の複数 FBX は個別グループ）
+- **ファイル構成ツリー** — 開いたファイルから最終モデルまでのロードチェーンを階層表示。テクスチャ・アニメーション・パッケージテクスチャの一覧も確認可能
 - **テクスチャ割り当て** — 材質に外部テクスチャ（PNG/JPG/TGA/BMP/PSD）を D&D またはダイアログで割り当て。リアルタイムプレビュー付き。VRM 埋め込みテクスチャの差し替えにも対応（リセットボタンで復元可能）
 - **同名材質連動** — 同じ名前の材質に同時にテクスチャを割り当てる ON/OFF スイッチ
 - **UnityPackage 対応** — Prefab / VRM / FBX モデル選択ダイアログ。Prefab 選択時は Unity GUID 参照チェーン（`.prefab` → FBX `.meta` → `.mat` → テクスチャ）でテクスチャを自動マッピング。新形式・旧形式・Unpacked・Mixed・Variant に対応。複数 FBX を参照する Prefab はマージ表示。テクスチャ自動割当（サムネイルプレビュー・検索フィルタ付き手動割当も可能）

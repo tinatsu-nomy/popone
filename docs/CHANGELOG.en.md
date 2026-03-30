@@ -71,6 +71,10 @@
 - **Multi-FBX merge from Prefab** — When a single Prefab references multiple FBX files (via Nested PrefabInstance / m_Mesh mix, etc.), all FBX are extracted and merged for display
 - **Unified model selection dialog** — Prefab / FBX / VRM entries shown in a single selection dialog when loading `.unitypackage`. Prefab entries labeled with `[Prefab]`
 
+- **File hierarchy tree** — Below the material display in the Display tab, shows the load chain (opened file → intermediate files → final model) as a tree. For Prefab loads, displays `.unitypackage` → `.prefab` → individual FBX tree structure. Textures, animations, and package textures are also visible
+- **Always-on material grouping** — Materials are always grouped by model name with collapsible headers, even for single models. Unified UI experience with multi-model append
+- **Per-FBX material group splitting** — Multiple FBX files within a Prefab are shown as separate material groups. Each FBX's materials are managed under independent collapsible headers
+
 ### Improvements
 
 - **UnityPackageIndex** — GUID-based index structure for efficient Prefab resolution and texture references. Index is also built for `.unitypackage` files loaded via archives (ZIP / 7z)

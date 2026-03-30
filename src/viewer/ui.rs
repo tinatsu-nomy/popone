@@ -1550,7 +1550,7 @@ fn show_tab_display(
                 .unzip()
         })
         .unwrap_or_default();
-    let has_groups = group_names.len() > 1;
+    let has_groups = !group_names.is_empty();
 
     if has_groups {
         // DrawCall Index → グループIndex
@@ -1757,193 +1757,295 @@ fn show_tab_display(
                 }
             });
         }
-    } else {
-        for &(i, mat_idx) in draw_info.iter() {
-            if i >= app.material_visibility.len() {
-                continue;
-            }
-            let loaded = app.loaded.as_ref().unwrap();
-            let mat_tex_info = &loaded.mat_cache.tex_indices;
-            let mat_names = &loaded.mat_cache.names;
-            let mat_src_tex = &loaded.mat_cache.source_tex_names;
-            let name = mat_names
-                .get(mat_idx)
-                .map(|s: &String| s.as_str())
-                .unwrap_or("?");
-            if !filter_lower.is_empty() && !name.to_lowercase().contains(&filter_lower) {
-                continue;
-            }
-            let row_resp = ui.horizontal(|ui| {
-                let mut row_highlight = false;
-                // テクスチャ状態インジケータ
-                {
-                    let has_tex = mat_tex_info.get(mat_idx).and_then(|t| *t).is_some();
-                    let indicator = if has_tex {
-                        egui::RichText::new("\u{25A3}")
-                            .color(egui::Color32::from_rgb(0x40, 0xC0, 0x40))
-                            .size(16.0)
-                    } else {
-                        egui::RichText::new("\u{25A1}")
-                            .color(egui::Color32::from_rgb(0xA0, 0x60, 0x60))
-                            .size(16.0)
-                    };
-                    let src_name = mat_src_tex
-                        .get(mat_idx)
-                        .and_then(|s: &Option<String>| s.as_deref());
-                    let tooltip = match (has_tex, src_name) {
-                        (true, Some(s)) => format!("テクスチャ設定済 ({})\nクリックで変更", s),
-                        (true, None) => "テクスチャ設定済\nクリックで変更".to_string(),
-                        (false, Some(s)) => format!("テクスチャ未設定 ({})\nクリックで割り当て", s),
-                        (false, None) => "テクスチャ未設定\nクリックで割り当て".to_string(),
-                    };
-                    let resp = ui
-                        .add(egui::Label::new(indicator).sense(egui::Sense::click()))
-                        .on_hover_text(&tooltip);
-                    if resp.contains_pointer() {
-                        row_highlight = true;
-                    }
-                    let has_pkg = app.tex.pkg_textures.is_some();
-                    let popup_id = ui.id().with(("pkg_tex_popup", mat_idx));
-                    // ポップアップ開放中もハイライト
-                    if ui.memory(|m| m.is_popup_open(popup_id)) {
-                        row_highlight = true;
-                    }
-                    if resp.clicked() {
-                        if has_pkg {
-                            ui.memory_mut(|m| m.toggle_popup(popup_id));
-                        } else {
-                            *tex_assign_request = Some(TexAssignRequest::FileDialog(mat_idx));
-                        }
-                    }
-                    if has_pkg {
-                        egui::popup_below_widget(
-                            ui,
-                            popup_id,
-                            &resp,
-                            egui::PopupCloseBehavior::CloseOnClickOutside,
-                            |ui| {
-                                ui.set_min_width(280.0);
-                                if ui.button("ファイルから選択...").clicked() {
-                                    *tex_assign_request =
-                                        Some(TexAssignRequest::FileDialog(mat_idx));
-                                    ui.memory_mut(|m| m.toggle_popup(popup_id));
-                                    app.tex.pkg_popup_filter.clear();
-                                }
-                                ui.separator();
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut app.tex.pkg_popup_filter)
-                                        .desired_width(ui.available_width())
-                                        .hint_text("テクスチャ名で絞り込み…"),
-                                );
-                                let filter_lower = app.tex.pkg_popup_filter.to_lowercase();
-                                egui::ScrollArea::vertical()
-                                    .max_height(400.0)
-                                    .scroll_bar_visibility(
-                                        egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
-                                    )
-                                    .show(ui, |ui| {
-                                        if let Some(ref pkg) = app.tex.pkg_textures {
-                                            for (ti, (tname, _)) in pkg.iter().enumerate() {
-                                                if !filter_lower.is_empty()
-                                                    && !tname.to_lowercase().contains(&filter_lower)
-                                                {
-                                                    continue;
-                                                }
-                                                let clicked = ui
-                                                    .horizontal(|ui| {
-                                                        if let Some(Some(tex_id)) =
-                                                            thumb_ids.get(ti)
-                                                        {
-                                                            ui.image(
-                                                                egui::load::SizedTexture::new(
-                                                                    *tex_id,
-                                                                    [32.0, 32.0],
-                                                                ),
-                                                            );
-                                                        }
-                                                        ui.button(tname).clicked()
-                                                    })
-                                                    .inner;
-                                                if clicked {
-                                                    *tex_assign_request = Some(
-                                                        TexAssignRequest::PkgTexture(mat_idx, ti),
-                                                    );
-                                                    ui.memory_mut(|m| m.toggle_popup(popup_id));
-                                                    app.tex.pkg_popup_filter.clear();
-                                                }
-                                            }
-                                        }
-                                    });
-                            },
-                        );
-                    }
-                }
-                let assigned_name = app.tex.assignments.get(&mat_idx).map(|ts| {
-                    let name = ts.display_name();
-                    std::path::Path::new(&name)
-                        .file_name()
-                        .map(|f| f.to_string_lossy().into_owned())
-                        .unwrap_or(name)
-                });
-                let display_tex = assigned_name
-                    .as_deref()
-                    .or_else(|| mat_src_tex.get(mat_idx).and_then(|s| s.as_deref()));
-                // 法線 per-material トグル（S=平滑化, C=カスタム法線クリア）
-                let has_nmap = mat_has_normal_map.get(mat_idx).copied().unwrap_or(false);
-                if mat_idx < app.smooth_normals_per_mat.len() {
-                    let old = app.smooth_normals_per_mat[mat_idx];
-                    let resp = ui.add_enabled(
-                        !has_nmap,
-                        egui::SelectableLabel::new(app.smooth_normals_per_mat[mat_idx], "S"),
-                    );
-                    if resp.clicked() && !has_nmap {
-                        app.smooth_normals_per_mat[mat_idx] = !old;
-                        app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
-                    }
-                    if resp.hovered() {
-                        row_highlight = true;
-                    }
-                    resp.on_hover_text("法線平滑化");
-                }
-                if mat_idx < app.clear_normals_per_mat.len() {
-                    let old = app.clear_normals_per_mat[mat_idx];
-                    let resp = ui.add_enabled(
-                        !has_nmap,
-                        egui::SelectableLabel::new(app.clear_normals_per_mat[mat_idx], "C"),
-                    );
-                    if resp.clicked() && !has_nmap {
-                        app.clear_normals_per_mat[mat_idx] = !old;
-                        app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
-                    }
-                    if resp.hovered() {
-                        row_highlight = true;
-                    }
-                    resp.on_hover_text("カスタム法線クリア");
-                }
+    }
 
-                let cb = if let Some(tex_name) = display_tex {
-                    ui.checkbox(
-                        &mut app.material_visibility[i],
-                        format!("{} [{}]", name, tex_name),
-                    )
+    // ── ファイル構成 ──
+    show_file_tree(ui, app);
+}
+
+/// ファイル構成ツリー: ロードチェーン（開いたファイル → 経由 → 最終モデル）を階層表示
+fn show_file_tree(ui: &mut egui::Ui, app: &ViewerApp) {
+    let Some(ref loaded) = app.loaded else { return };
+
+    ui.add_space(12.0);
+    ui.heading(egui::RichText::new("ファイル構成").color(egui::Color32::from_gray(0xD0)));
+    ui.separator();
+
+    let dir_color = egui::Color32::from_rgb(0xE0, 0xC0, 0x60);
+    let file_color = egui::Color32::from_gray(0xC0);
+    let tex_color = egui::Color32::from_rgb(0x80, 0xD0, 0x80);
+    let anim_color = egui::Color32::from_rgb(0x80, 0xB0, 0xE0);
+    let path_color = egui::Color32::from_gray(0x80);
+
+    // ── ロードチェーン構築 ──
+    // Level 0: 開いたファイル（source）
+    // Level 1: 中間ファイル（Archive 内エントリ / Prefab）
+    // Level 2: 最終モデルファイル（FBX群 / 単一モデル）
+
+    let source_path = loaded.source.display_path();
+    let source_name = source_path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| source_path.to_string_lossy().to_string());
+    let source_full = source_path.to_string_lossy().to_string();
+
+    // Archive 内エントリ名（ZIP/7z 経由の場合）
+    let archive_entry = if let super::app::ReloadableSource::Archive {
+        selected_entry_path,
+        ..
+    } = &loaded.source
+    {
+        Some(selected_entry_path.clone())
+    } else {
+        None
+    };
+
+    // グループが複数 or Prefab なら最終モデルファイルとしてグループ名を表示
+    let groups = &loaded.material_groups;
+    let has_prefab = loaded.prefab_name.is_some();
+    let has_multi_groups = groups.len() > 1;
+
+    // ── ツリー描画 ──
+    // Level 0: ソースファイル
+    egui::CollapsingHeader::new(egui::RichText::new(&source_name).color(dir_color).strong())
+        .id_salt(ui.id().with("file_chain_root"))
+        .default_open(true)
+        .show(ui, |ui| {
+            // パス表示
+            ui.label(egui::RichText::new(&source_full).color(path_color).small());
+
+            // Level 1: Archive 内エントリ
+            if let Some(ref entry) = archive_entry {
+                let entry_name = std::path::Path::new(entry)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_else(|| entry.clone());
+                // Archive 内のエントリがさらに Prefab を持つ場合
+                if has_prefab {
+                    egui::CollapsingHeader::new(egui::RichText::new(&entry_name).color(file_color))
+                        .id_salt(ui.id().with("file_chain_archive_entry"))
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            show_prefab_subtree(ui, loaded, dir_color, file_color, tex_color);
+                        });
                 } else {
-                    ui.checkbox(&mut app.material_visibility[i], name)
-                };
-                if cb.contains_pointer() {
-                    row_highlight = true;
+                    ui.label(egui::RichText::new(&entry_name).color(file_color));
+                    // テクスチャ
+                    show_texture_subtree(ui, loaded, groups, dir_color, tex_color);
                 }
-                row_highlight
+            } else if has_prefab {
+                // Level 1: Prefab（unitypackage 直接）
+                show_prefab_subtree(ui, loaded, dir_color, file_color, tex_color);
+            } else if has_multi_groups {
+                // 複数グループ（append 等）: グループ別にテクスチャ表示
+                show_texture_subtree(ui, loaded, groups, dir_color, tex_color);
+            } else {
+                // 単一モデル: テクスチャのみ表示
+                show_texture_subtree(ui, loaded, groups, dir_color, tex_color);
+            }
+        });
+
+    // ── 追加モデル ──
+    for (ai, appended) in loaded.appended_models.iter().enumerate() {
+        let ap = appended.source.display_path();
+        let aname = ap
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| ap.to_string_lossy().to_string());
+        egui::CollapsingHeader::new(
+            egui::RichText::new(format!("+ {}", aname))
+                .color(dir_color)
+                .strong(),
+        )
+        .id_salt(ui.id().with(("file_chain_append", ai)))
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(ap.to_string_lossy().to_string())
+                    .color(path_color)
+                    .small(),
+            );
+        });
+    }
+
+    // ── アニメーション ──
+    if !app.anim.library.is_empty() {
+        let header = format!("アニメーション ({})", app.anim.library.len());
+        egui::CollapsingHeader::new(egui::RichText::new(&header).color(anim_color).strong())
+            .id_salt(ui.id().with("file_chain_anim"))
+            .default_open(false)
+            .show(ui, |ui| {
+                for (name, path, _) in &app.anim.library {
+                    ui.label(egui::RichText::new(name).color(file_color))
+                        .on_hover_text(path.to_string_lossy().to_string());
+                }
             });
-            // 行ホバー検出 → 同一材質の全 draw をハイライト（非表示は除外）
-            if row_resp.inner {
-                if let Some(ref loaded) = app.loaded {
-                    for (di, d) in loaded.gpu_model.draws.iter().enumerate() {
-                        if d.material_index == mat_idx
-                            && app.material_visibility.get(di).copied().unwrap_or(true)
-                        {
-                            app.hovered_draw_indices.push(di);
+    }
+
+    // ── パッケージテクスチャ ──
+    if let Some(ref pkg) = app.tex.pkg_textures {
+        if !pkg.is_empty() {
+            let header = format!("pkg テクスチャ ({})", pkg.len());
+            egui::CollapsingHeader::new(egui::RichText::new(&header).color(dir_color).strong())
+                .id_salt(ui.id().with("file_chain_pkg"))
+                .default_open(false)
+                .show(ui, |ui| {
+                    for (name, _) in pkg {
+                        ui.label(egui::RichText::new(name).color(tex_color));
+                    }
+                });
+        }
+    }
+}
+
+/// Prefab サブツリー: Prefab名 → FBX群（テクスチャ付き）
+fn show_prefab_subtree(
+    ui: &mut egui::Ui,
+    loaded: &super::app::LoadedModel,
+    _dir_color: egui::Color32,
+    file_color: egui::Color32,
+    tex_color: egui::Color32,
+) {
+    let prefab_name = loaded.prefab_name.as_deref().unwrap_or("Prefab");
+    let groups = &loaded.material_groups;
+
+    egui::CollapsingHeader::new(egui::RichText::new(prefab_name).color(file_color))
+        .id_salt(ui.id().with("file_chain_prefab"))
+        .default_open(true)
+        .show(ui, |ui| {
+            for (gi, group) in groups.iter().enumerate() {
+                // グループごとのテクスチャを収集
+                let mut tex_indices = Vec::new();
+                for mat_idx in group.material_range.clone() {
+                    if let Some(mat) = loaded.ir.materials.get(mat_idx) {
+                        collect_material_tex_indices(mat, &mut tex_indices);
+                    }
+                }
+                tex_indices.sort();
+                tex_indices.dedup();
+
+                if tex_indices.is_empty() {
+                    ui.label(egui::RichText::new(&group.name).color(file_color));
+                } else {
+                    egui::CollapsingHeader::new(
+                        egui::RichText::new(format!("{} (tex: {})", group.name, tex_indices.len()))
+                            .color(file_color),
+                    )
+                    .id_salt(ui.id().with(("file_chain_prefab_fbx", gi)))
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        for &ti in &tex_indices {
+                            if let Some(tex) = loaded.ir.textures.get(ti) {
+                                ui.label(egui::RichText::new(&tex.filename).color(tex_color));
+                            }
+                        }
+                    });
+                }
+            }
+        });
+}
+
+/// テクスチャサブツリー: グループ別または全テクスチャを表示
+fn show_texture_subtree(
+    ui: &mut egui::Ui,
+    loaded: &super::app::LoadedModel,
+    groups: &[super::app::MaterialGroup],
+    dir_color: egui::Color32,
+    tex_color: egui::Color32,
+) {
+    let tex_count = loaded.ir.textures.len();
+    if tex_count == 0 {
+        return;
+    }
+
+    if groups.len() > 1 {
+        // 複数グループ: グループ別に表示
+        for (gi, group) in groups.iter().enumerate() {
+            let mut tex_indices = Vec::new();
+            for mat_idx in group.material_range.clone() {
+                if let Some(mat) = loaded.ir.materials.get(mat_idx) {
+                    collect_material_tex_indices(mat, &mut tex_indices);
+                }
+            }
+            tex_indices.sort();
+            tex_indices.dedup();
+            if tex_indices.is_empty() {
+                continue;
+            }
+            let header = format!("テクスチャ: {} ({})", group.name, tex_indices.len());
+            egui::CollapsingHeader::new(egui::RichText::new(&header).color(dir_color).strong())
+                .id_salt(ui.id().with(("file_chain_tex_group", gi)))
+                .default_open(false)
+                .show(ui, |ui| {
+                    for &ti in &tex_indices {
+                        if let Some(tex) = loaded.ir.textures.get(ti) {
+                            ui.label(egui::RichText::new(&tex.filename).color(tex_color));
                         }
                     }
+                });
+        }
+    } else {
+        // 単一グループ: フラット表示
+        let header = format!("テクスチャ ({})", tex_count);
+        egui::CollapsingHeader::new(egui::RichText::new(&header).color(dir_color).strong())
+            .id_salt(ui.id().with("file_chain_tex_all"))
+            .default_open(false)
+            .show(ui, |ui| {
+                for tex in &loaded.ir.textures {
+                    ui.label(egui::RichText::new(&tex.filename).color(tex_color));
+                }
+            });
+    }
+}
+
+/// 材質が参照するすべてのテクスチャインデックスを収集する
+fn collect_material_tex_indices(
+    mat: &crate::intermediate::types::IrMaterial,
+    out: &mut Vec<usize>,
+) {
+    if let Some(idx) = mat.texture_index {
+        if !out.contains(&idx) {
+            out.push(idx);
+        }
+    }
+    if let Some(ref info) = mat.base_color_tex_info {
+        if !out.contains(&info.index) {
+            out.push(info.index);
+        }
+    }
+    if let Some(ref info) = mat.normal_texture {
+        if !out.contains(&info.index) {
+            out.push(info.index);
+        }
+    }
+    if let Some(ref info) = mat.emissive_texture {
+        if !out.contains(&info.index) {
+            out.push(info.index);
+        }
+    }
+    if let Some(idx) = mat.sphere_texture_index {
+        if !out.contains(&idx) {
+            out.push(idx);
+        }
+    }
+    if let Some(idx) = mat.toon_texture_index {
+        if !out.contains(&idx) {
+            out.push(idx);
+        }
+    }
+    // MToon 追加テクスチャ
+    if let Some(ref mtoon) = mat.mtoon {
+        for opt_info in [
+            &mtoon.shade_texture,
+            &mtoon.shading_shift_texture,
+            &mtoon.matcap_texture,
+            &mtoon.rim_multiply_texture,
+            &mtoon.outline_width_texture,
+            &mtoon.uv_animation_mask_texture,
+        ] {
+            if let Some(ref info) = opt_info {
+                if !out.contains(&info.index) {
+                    out.push(info.index);
                 }
             }
         }

@@ -105,7 +105,7 @@
   <text x="55" y="662" font-size="11" fill="#444">gpu.rs — wgpu パイプライン・描画</text>
   <text x="55" y="678" font-size="11" fill="#444">mesh.rs — IrModel → GPU バッファ / サンプラーキャッシュ</text>
   <text x="55" y="694" font-size="11" fill="#444">camera.rs — FOV30° / 視点依存fit / Shift精密</text>
-  <text x="55" y="710" font-size="11" fill="#444">ui.rs — 情報パネル・モーフ・変換・ダークテーマ</text>
+  <text x="55" y="710" font-size="11" fill="#444">ui.rs — 情報パネル・モーフ・変換・ダークテーマ・ファイル構成ツリー・材質グループ</text>
   <text x="55" y="726" font-size="11" fill="#444">export_filter.rs — 材質フィルタ出力</text>
   <text x="55" y="742" font-size="11" fill="#444">MToon 2色トゥーン+アウトライン+リム+MatCap+補助Tex+UVアニメ+emissive+法線マップTBN+CullMode+4段階描画順+動的距離ソート+ライトカラー+半球ambient / UTS2近似 / MMD: トゥーン・エッジ・スフィア / Wire: 全パイプライン統一</text>
   <text x="55" y="758" font-size="11" fill="#444">animation.rs — VRMA再生・リターゲ・付与(grant)</text>
