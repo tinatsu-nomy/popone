@@ -85,6 +85,7 @@
 
 ### Improvements
 
+- **State reset on new model load** — When opening a different model, shader settings (reset to Auto) and A-stance / T-stance conversion flags are now reset to defaults. Prevents unintended carry-over of previous model's settings
 - **FBX parser input validation hardening** — Improved resilience against malicious FBX files: property count limit (1M), node recursion depth limit (64), array size limit (512MB), `end_offset` range validation, `checked_mul` for overflow prevention, `compressed_len` vs remaining bytes validation
 - **unitypackage extraction size accounting** — `pathname` and `asset.meta` read bytes are now counted toward `total_bytes`, preventing bypass of the 2GB limit
 - **Morph application performance** — Weights diff check skips unnecessary full vertex copy + GPU upload; `morph_visited` buffer reuse eliminates per-frame allocation

@@ -11,6 +11,7 @@ use crate::unitypackage::UnityPackageIndex;
 use crate::vrm;
 
 use super::pending::PendingOverlay;
+use crate::viewer::gpu::ShaderOverride;
 
 use super::super::animation::AnimationState;
 use super::helpers::{
@@ -132,6 +133,13 @@ impl ViewerApp {
 
     /// モデルとしてファイルを読み込む（FBX選択ダイアログ不要時のパス）
     fn load_file_as_model(&mut self, path: PathBuf) {
+        // 新規モデルロード時: スタンス・シェーダーを初期値にリセット
+        self.normalize_pose = false;
+        self.normalize_to_tstance = false;
+        self.display.shader_override = ShaderOverride::Default;
+        self.display.use_mmd_path = false;
+        self.display.auto_shader = true;
+
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
