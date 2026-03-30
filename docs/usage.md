@@ -32,7 +32,7 @@
 | FBX バイナリ (`.fbx`) | 自前パーサーによる解析。Mixamo / Blender / VRoid / Unreal 等のリグを自動検出。名前空間プレフィックス（`Model::` 等）対応 |
 | PMX 2.0 / 2.1 (`.pmx`) | MikuMikuDance モデル形式。ビューア表示 + UVマップ出力 |
 | PMD (`.pmd`) | MikuMikuDance モデル形式。Shift_JIS 対応 |
-| UnityPackage (`.unitypackage`) | tar.gz アーカイブから VRM / FBX + テクスチャを自動抽出 |
+| UnityPackage (`.unitypackage`) | tar.gz アーカイブから Prefab / VRM / FBX + テクスチャを自動抽出。Prefab 経由のテクスチャマッピング対応 |
 | ZIP (`.zip`) | アーカイブ内の VRM / FBX / PMX / PMD / UnityPackage を自動検出・展開 |
 | 7z (`.7z`) | アーカイブ内の VRM / FBX / PMX / PMD / UnityPackage を自動検出・展開 |
 
@@ -61,7 +61,7 @@ popone.exe input.fbx
 - **材質表示切替** — 材質ごとの ON/OFF、検索フィルタ。材質行ホバーで 3D ビュー上の該当メッシュを半透明オレンジでハイライト
 - **テクスチャ割り当て** — 材質に外部テクスチャ（PNG/JPG/TGA/BMP/PSD）を D&D またはダイアログで割り当て。リアルタイムプレビュー付き。VRM 埋め込みテクスチャの差し替えにも対応（リセットボタンで復元可能）
 - **同名材質連動** — 同じ名前の材質に同時にテクスチャを割り当てる ON/OFF スイッチ
-- **UnityPackage 対応** — VRM / FBX モデル選択ダイアログ、テクスチャ自動割当（サムネイルプレビュー・検索フィルタ付き手動割当も可能）
+- **UnityPackage 対応** — Prefab / VRM / FBX モデル選択ダイアログ。Prefab 選択時は Unity GUID 参照チェーン（`.prefab` → FBX `.meta` → `.mat` → テクスチャ）でテクスチャを自動マッピング。新形式・旧形式・Unpacked・Mixed・Variant に対応。複数 FBX を参照する Prefab はマージ表示。テクスチャ自動割当（サムネイルプレビュー・検索フィルタ付き手動割当も可能）
 - **ワイヤーフレーム** — 3 モード切替（Solid / Wire / S+W）。W キーで巡回。Wire モードではアウトライン・MMD エッジも含め全描画がワイヤーフレームに統一される
 - **ボーン表示** — フラグ別の形状描画。通常=◎（二重円＋中心塗り）、移動=◻（正方形＋中心塗り）、軸制限=⊗（円＋✕）、IKコントローラ=◻（青枠＋オレンジ塗り＋青中心）。IK影響下ボーン（Link）はオレンジ。テイルベース描画で PMXEditor 準拠の方向表示。カメラ距離に関わらず一定サイズ
 - **物理可視化** — 剛体（球体・カプセル・ボックス）を 1px ワイヤーフレームで表示。PMX/PMD は physics_mode 色分け（ボーン追従=グリーン、物理演算=レッド、物理+ボーン=ブルー）、VRM は group 色分け（コライダー=レッド、スプリング=グリーン）。カプセルは半球ワイヤーフレーム付き（PMX/PMD）

@@ -348,21 +348,90 @@ fn run_main(mut args: Args) -> Result<()> {
         "unitypackage" => {
             let archive_data = std::fs::read(&input)
                 .with_context(|| format!("unitypackage読み込み失敗: {}", input.display()))?;
-            let (fbx_data, fbx_name, textures) =
-                popone::unitypackage::extract_fbx_from_unitypackage(
-                    &archive_data,
-                    args.fbx_name.as_deref(),
-                )
+            let pkg = popone::unitypackage::build_unity_package_index(&archive_data)
                 .context("unitypackage展開失敗")?;
-            log::info!("unitypackage内FBX: {}", fbx_name);
+
+            // FBX 一覧を取得
+            let fbx_indices: Vec<(usize, String)> = pkg
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.pathname.to_lowercase().ends_with(".fbx"))
+                .map(|(i, e)| {
+                    let name = std::path::Path::new(&e.pathname)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    (i, name)
+                })
+                .collect();
+
+            if fbx_indices.is_empty() {
+                return Err(anyhow::anyhow!(
+                    ".unitypackage 内に FBX ファイルが見つかりません"
+                ));
+            }
+
+            if fbx_indices.len() > 1 {
+                log::info!(
+                    ".unitypackage 内に {} 個の FBX が見つかりました:",
+                    fbx_indices.len()
+                );
+                for (_, name) in &fbx_indices {
+                    log::info!("  FBX: {}", name);
+                }
+            }
+
+            // FBX 選択
+            let selected_idx = if let Some(ref target) = args.fbx_name {
+                let target_lower = target.to_lowercase();
+                fbx_indices
+                    .iter()
+                    .find(|(_, name)| name.to_lowercase().contains(&target_lower))
+                    .map(|(idx, _)| *idx)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "指定された FBX '{}' が見つかりません。利用可能: {}",
+                            target,
+                            fbx_indices
+                                .iter()
+                                .map(|(_, n)| n.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })?
+            } else {
+                popone::unitypackage::select_best_fbx_index(&pkg, &fbx_indices)
+            };
+
+            let prepared = popone::unitypackage::prepare_pkg_fbx(&pkg, selected_idx)
+                .context("Prefab テクスチャ解決失敗")?;
+            log::info!("unitypackage内FBX: {}", prepared.model.pathname);
+
             let mut ir = popone::fbx::extract::extract_ir_model_from_fbx_with_options(
-                &fbx_data,
+                &prepared.fbx_data,
                 Some(&input),
                 args.normalize_pose,
                 args.normalize_to_tstance,
             )
             .context("FBX中間表現の抽出に失敗")?;
-            popone::unitypackage::embed_textures_into_ir(&mut ir, &textures);
+
+            if !prepared.resolved.is_empty() {
+                popone::unitypackage::embed_textures_with_prefab(
+                    &mut ir,
+                    &prepared.textures,
+                    &prepared.resolved,
+                );
+            } else {
+                // フォールバック: 既存のファイル名マッチング
+                let textures: Vec<(String, Vec<u8>)> = prepared
+                    .textures
+                    .iter()
+                    .map(|t| (t.display_name.to_string(), t.data.to_vec()))
+                    .collect();
+                popone::unitypackage::embed_textures_into_ir(&mut ir, &textures);
+            }
             (ir, None)
         }
         _ => {
@@ -600,25 +669,72 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         }
         ArchiveModelKind::UnityPackage => {
             // アーカイブ内 .unitypackage を二重展開
-            let (fbx_data, fbx_name, textures) =
-                popone::unitypackage::extract_fbx_from_unitypackage(
-                    &bundle.model.data,
-                    args.fbx_name.as_deref(),
-                )
+            let pkg = popone::unitypackage::build_unity_package_index(&bundle.model.data)
                 .context("アーカイブ内 unitypackage 展開失敗")?;
+
+            // FBX 一覧を取得
+            let fbx_indices: Vec<(usize, String)> = pkg
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.pathname.to_lowercase().ends_with(".fbx"))
+                .map(|(i, e)| {
+                    let name = std::path::Path::new(&e.pathname)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    (i, name)
+                })
+                .collect();
+
+            if fbx_indices.is_empty() {
+                anyhow::bail!("アーカイブ内 .unitypackage に FBX が見つかりません");
+            }
+
+            let selected_idx = if let Some(ref target) = args.fbx_name {
+                let target_lower = target.to_lowercase();
+                fbx_indices
+                    .iter()
+                    .find(|(_, name)| name.to_lowercase().contains(&target_lower))
+                    .map(|(idx, _)| *idx)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("指定された FBX '{}' が見つかりません", target)
+                    })?
+            } else {
+                popone::unitypackage::select_best_fbx_index(&pkg, &fbx_indices)
+            };
+
+            let prepared = popone::unitypackage::prepare_pkg_fbx(&pkg, selected_idx)
+                .context("Prefab テクスチャ解決失敗")?;
             log::info!(
                 "unitypackage内FBX: {} テクスチャ: {}個",
-                fbx_name,
-                textures.len()
+                prepared.model.pathname,
+                prepared.textures.len()
             );
+
             let mut ir = popone::fbx::extract::extract_ir_model_from_fbx_with_options(
-                &fbx_data,
+                &prepared.fbx_data,
                 Some(input),
                 args.normalize_pose,
                 args.normalize_to_tstance,
             )
             .context("FBX中間表現の抽出に失敗")?;
-            popone::unitypackage::embed_textures_into_ir(&mut ir, &textures);
+
+            if !prepared.resolved.is_empty() {
+                popone::unitypackage::embed_textures_with_prefab(
+                    &mut ir,
+                    &prepared.textures,
+                    &prepared.resolved,
+                );
+            } else {
+                let textures: Vec<(String, Vec<u8>)> = prepared
+                    .textures
+                    .iter()
+                    .map(|t| (t.display_name.to_string(), t.data.to_vec()))
+                    .collect();
+                popone::unitypackage::embed_textures_into_ir(&mut ir, &textures);
+            }
             ir
         }
     };

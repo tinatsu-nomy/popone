@@ -92,6 +92,14 @@
     - [テクスチャD&Dプレビューキャッシュ](#%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3dd%E3%83%97%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E3%82%AD%E3%83%A3%E3%83%83%E3%82%B7%E3%83%A5)
     - [UnityPackage アーカイブスナップショット](#unitypackage-%E3%82%A2%E3%83%BC%E3%82%AB%E3%82%A4%E3%83%96%E3%82%B9%E3%83%8A%E3%83%83%E3%83%97%E3%82%B7%E3%83%A7%E3%83%83%E3%83%88)
     - [.gltf の除外](#gltf-%E3%81%AE%E9%99%A4%E5%A4%96)
+  - [Prefab テクスチャマッピング（v0.2.16）](#prefab-%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E3%83%9E%E3%83%83%E3%83%94%E3%83%B3%E3%82%B0v0216)
+    - [GUID 参照チェーン](#guid-%E5%8F%82%E7%85%A7%E3%83%81%E3%82%A7%E3%83%BC%E3%83%B3)
+    - [UnityPackageIndex](#unitypackageindex)
+    - [Prefab 形式判別](#prefab-%E5%BD%A2%E5%BC%8F%E5%88%A4%E5%88%A5)
+    - [Prefab Variant 解決](#prefab-variant-%E8%A7%A3%E6%B1%BA)
+    - [テクスチャ照合の三段階フォールバック](#%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E7%85%A7%E5%90%88%E3%81%AE%E4%B8%89%E6%AE%B5%E9%9A%8E%E3%83%95%E3%82%A9%E3%83%BC%E3%83%AB%E3%83%90%E3%83%83%E3%82%AF)
+    - [Unity YAML パーサー](#unity-yaml-%E3%83%91%E3%83%BC%E3%82%B5%E3%83%BC)
+    - [主要データ型](#%E4%B8%BB%E8%A6%81%E3%83%87%E3%83%BC%E3%82%BF%E5%9E%8B)
   - [リロード時テクスチャ正規化](#%E3%83%AA%E3%83%AD%E3%83%BC%E3%83%89%E6%99%82%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E6%AD%A3%E8%A6%8F%E5%8C%96)
     - [reload_unitypackage のテクスチャ復元](#reload_unitypackage-%E3%81%AE%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E5%BE%A9%E5%85%83)
     - [assign_texture_source_to_material の IrTexture 重複排除](#assign_texture_source_to_material-%E3%81%AE-irtexture-%E9%87%8D%E8%A4%87%E6%8E%92%E9%99%A4)
@@ -1527,6 +1535,82 @@ try_load_unitypackage / try_load_unitypackage_for_append
 
 `.gltf` ファイルは外部バッファ参照（`.bin`・画像ファイル）を持つため、スナップショット化の対象外。`gltf::import_slice` では外部URI を解決できないため、通常の `load_glb(path)` パスを使用。
 
+## Prefab テクスチャマッピング（v0.2.16）
+
+`.unitypackage` 内の `.prefab` ファイルから Unity GUID 参照チェーンを辿り、FBX モデルにテクスチャを自動マッピングする。
+
+### GUID 参照チェーン
+
+```
+.prefab → m_SourcePrefab / m_Mesh (FBX GUID)
+       → FBX .meta → externalObjects (マテリアル名 → .mat GUID)
+       → .mat → m_TexEnvs → _MainTex (テクスチャ GUID)
+       → テクスチャファイル
+```
+
+### UnityPackageIndex
+
+GUID ベースのインデックス構造で、GUID から pathname・data・meta への O(1) 参照を実現する。
+
+```rust
+pub struct UnityPackageIndex {
+    pub entries: Vec<AssetEntry>,
+    pub by_guid: HashMap<String, usize>,
+    pub by_path: HashMap<String, usize>,
+}
+```
+
+`build_unity_package_index()` で tar.gz を一度だけ展開し、以降は `by_guid` / `by_path` で参照。
+ビューア直接読み込みとアーカイブ（ZIP / 7z）経由の両方で構築される。
+
+### Prefab 形式判別
+
+| 形式 | 判別条件 | 代表パッケージ |
+|------|----------|---------------|
+| New | 独立した `PrefabInstance:` 行がある | Shinano, FC_Milltina |
+| Old | `--- !u!137` (SkinnedMeshRenderer) + `m_Mesh` のみ | 幽狐族のお姉様 |
+| Unpacked | Old スタイルだが `m_CorrespondingSourceObject` を含む | Nekoyama, CHR_LML01 |
+| Mixed | New (`PrefabInstance`) + Old (`m_Mesh`) が共存 | SVST01_common |
+| Variant | `m_SourcePrefab` が別の `.prefab` を参照 | SVST01_01_VRC |
+
+`detect_prefab_format()` は行単位で `PrefabInstance:` を検出（`m_PrefabInstance:` との誤マッチ防止）。
+Mixed 形式では New パーサーの後に Old パーサーも常に実行し、両方の FBX 参照を収集する。
+
+### Prefab Variant 解決
+
+`resolve_variant_multi()` で再帰的に Variant チェーンを辿り、全参照先 FBX GUID を収集する。
+循環検出（`HashSet<String>`）と深度制限（32 段）で無限ループを防止。
+
+`resolve_single_prefab()` は `resolve_single_prefab_inner()` に再帰対応を委譲し、
+ネスト Prefab（m_SourcePrefab が `.prefab` を指す場合）を再帰的に解決する。
+
+### テクスチャ照合の三段階フォールバック
+
+1. **source_material** — `SourceMaterialRef`（renderer_path + slot_index）で FBX メッシュの材質スロットを一意に特定
+2. **material_name / fbx_material_name** — `.mat` のマテリアル名と FBX 内部マテリアル名（`.meta` の `externalObjects` から取得）の両方で照合
+3. **source_texture_name** — 既存のファイル名ベースマッチング（フォールバック）
+
+### Unity YAML パーサー
+
+- `parse_prefab_new()` — `m_Modifications` + `m_SourcePrefab` の 2 パス方式
+- `parse_prefab_old()` — `--- !u!137` (SkinnedMeshRenderer) セクションから `m_Mesh` + `m_Materials` を抽出
+- `parse_fbx_meta()` — `externalObjects` からマテリアル名 → GUID マッピングを取得
+- `parse_material_textures()` — `m_TexEnvs` から `_MainTex` のテクスチャ GUID を取得
+- `decode_unity_escape()` — `\uXXXX` → Unicode 変換、YAML 引用符のトリム
+
+### 主要データ型
+
+| 型 | 役割 |
+|---|---|
+| `PkgModelLocator` | モデル選択キー（GUID + pathname + kind） |
+| `PkgModelListItem` | モデル選択ダイアログの表示項目 |
+| `PackageTexture` | GUID + 表示名 + データバイト列 |
+| `PreparedPkgFbx` | FBX データ + テクスチャ + 解決済みマテリアル |
+| `ResolvedMaterialTextures` | マテリアル名 + テクスチャ GUID + fbx_material_name |
+| `FbxResolveEntry` | 単一 FBX の GUID + インデックス + 解決済みマテリアル |
+| `PrefabResolveResult` | Prefab 全体の解決結果（複数 FBX を含む可能性あり） |
+| `SourceMaterialRef` | renderer_path + slot_index（FBX メッシュ→材質の安定キー） |
+
 ## リロード時テクスチャ正規化
 
 ### reload_unitypackage のテクスチャ復元
@@ -1811,7 +1895,7 @@ src/
 ├── main.rs              エントリポイント（引数なし or 出力未指定→ビューア / 出力指定→CLI変換）
 ├── lib.rs               ライブラリ API
 ├── error.rs             エラー型定義（PoponeError enum、thiserror、ResultExt トレイト）
-├── unitypackage.rs      .unitypackage (tar.gz) アセット展開（VRM / FBX 検出・抽出）
+├── unitypackage.rs      .unitypackage (tar.gz) アセット展開 + Prefab テクスチャマッピング（GUID 解決・Variant 再帰・複数形式対応）
 ├── archive/
 │   ├── mod.rs           ZIP / 7z 統一 API（list_models, extract_model_bundle）
 │   ├── zip_extract.rs   ZIP 展開（2パス: メタデータ一覧→選択展開）

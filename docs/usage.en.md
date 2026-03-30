@@ -32,7 +32,7 @@
 | FBX Binary (`.fbx`) | Custom parser. Auto-detects Mixamo / Blender / VRoid / Unreal rigs. Namespace prefixes (`Model::`, etc.) supported |
 | PMX 2.0 / 2.1 (`.pmx`) | MikuMikuDance model format. Viewer display + UV map export |
 | PMD (`.pmd`) | MikuMikuDance model format. Shift_JIS support |
-| UnityPackage (`.unitypackage`) | Extracts VRM / FBX + textures from tar.gz archive |
+| UnityPackage (`.unitypackage`) | Extracts Prefab / VRM / FBX + textures from tar.gz archive. Prefab-based texture mapping supported |
 | ZIP (`.zip`) | Auto-detects and extracts VRM / FBX / PMX / PMD / UnityPackage from archive |
 | 7z (`.7z`) | Auto-detects and extracts VRM / FBX / PMX / PMD / UnityPackage from archive |
 
@@ -61,7 +61,7 @@ If the viewer is already running, subsequent launches pass the file path to the 
 - **Material Visibility** — Per-material ON/OFF toggle with search filter. Hovering over a material row highlights the corresponding mesh in the 3D view with semi-transparent orange overlay
 - **Texture Assignment** — Assign external textures (PNG/JPG/TGA/BMP/PSD) via drag & drop or dialog. Real-time preview. VRM embedded texture replacement supported (reset button to restore)
 - **Same-Name Material Linking** — ON/OFF toggle to assign textures to all materials sharing the same name simultaneously
-- **UnityPackage Support** — VRM / FBX model selection dialog, auto texture matching (manual assignment with thumbnail preview and search filter)
+- **UnityPackage Support** — Prefab / VRM / FBX model selection dialog. When selecting a Prefab, textures are auto-mapped via Unity's GUID reference chain (`.prefab` → FBX `.meta` → `.mat` → texture). Supports New, Old, Unpacked, Mixed, and Variant formats. Prefabs referencing multiple FBX files are merged for display. Auto texture matching (manual assignment with thumbnail preview and search filter)
 - **Wireframe** — 3 modes (Solid / Wire / S+W). W key to cycle. Wire mode unifies all rendering (including outlines and MMD edges) into wireframe
 - **Bone Display** — Flag-based shape rendering. Normal = ◎ (double circle + filled center), Move = ◻ (square + filled center), Axis-fixed = ⊗ (circle + ✕), IK Controller = ◻ (blue outline + orange fill + blue center). IK-affected bones (Link) in orange. Tail-based drawing for PMXEditor-compliant direction display. Constant screen-space size
 - **Physics Visualization** — Rigid bodies (sphere/capsule/box) in 1px wireframe. PMX/PMD colored by physics_mode (bone-follow = green, physics = red, physics+bone = blue), VRM colored by group (collider = red, spring = green). Capsules include hemisphere wireframes (PMX/PMD)

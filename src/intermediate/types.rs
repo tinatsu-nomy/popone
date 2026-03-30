@@ -771,6 +771,15 @@ impl Default for MtoonParams {
 static MTOON_DEFAULT: std::sync::LazyLock<MtoonParams> =
     std::sync::LazyLock::new(MtoonParams::default);
 
+/// FBX 内のマテリアルのソース位置（renderer 階層パス + スロット番号）
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SourceMaterialRef {
+    /// renderer の階層パス（同名 sibling は ordinal 付き: "Root/Body[1]"）
+    pub renderer_path: std::sync::Arc<str>,
+    /// メッシュ内のマテリアルスロット番号
+    pub slot_index: u16,
+}
+
 /// 中間材質
 #[derive(Debug, Clone)]
 pub struct IrMaterial {
@@ -815,6 +824,8 @@ pub struct IrMaterial {
     pub normal_texture: Option<IrTextureInfo>,
     /// glTF normalTexture.scale (デフォルト 1.0)
     pub normal_texture_scale: f32,
+    /// FBX 内のマテリアルソース位置（Prefab テクスチャマッピング用）
+    pub source_material: Option<SourceMaterialRef>,
 }
 
 impl IrMaterial {
@@ -870,6 +881,7 @@ impl Default for IrMaterial {
             emissive_texture: None,
             normal_texture: None,
             normal_texture_scale: 1.0,
+            source_material: None,
         }
     }
 }

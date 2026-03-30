@@ -3,52 +3,55 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.15](#v0215)
+  - [v0.2.16](#v0216)
     - [New Features](#new-features)
     - [Improvements](#improvements)
-  - [v0.2.14](#v0214)
+  - [v0.2.15](#v0215)
+    - [New Features](#new-features-1)
     - [Improvements](#improvements-1)
-  - [v0.2.13](#v0213)
+  - [v0.2.14](#v0214)
     - [Improvements](#improvements-2)
+  - [v0.2.13](#v0213)
+    - [Improvements](#improvements-3)
   - [v0.2.12](#v0212)
     - [Bug Fixes](#bug-fixes)
-    - [New Features](#new-features-1)
-    - [Improvements](#improvements-3)
-  - [v0.2.11](#v0211)
     - [New Features](#new-features-2)
     - [Improvements](#improvements-4)
-  - [v0.2.10](#v0210)
+  - [v0.2.11](#v0211)
     - [New Features](#new-features-3)
+    - [Improvements](#improvements-5)
+  - [v0.2.10](#v0210)
+    - [New Features](#new-features-4)
     - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
     - [Bug Fixes](#bug-fixes-1)
-    - [Improvements](#improvements-5)
+    - [Improvements](#improvements-6)
     - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
   - [v0.2.9](#v029)
-    - [New Features](#new-features-4)
-    - [Improvements](#improvements-6)
+    - [New Features](#new-features-5)
+    - [Improvements](#improvements-7)
     - [Bug Fixes](#bug-fixes-2)
     - [Implementation Details](#implementation-details)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
-    - [New Features](#new-features-5)
-    - [Improvements](#improvements-7)
-  - [v0.2.7](#v027)
     - [New Features](#new-features-6)
-    - [Bug Fixes](#bug-fixes-3)
     - [Improvements](#improvements-8)
+  - [v0.2.7](#v027)
+    - [New Features](#new-features-7)
+    - [Bug Fixes](#bug-fixes-3)
+    - [Improvements](#improvements-9)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
     - [Bug Fixes](#bug-fixes-4)
-    - [New Features](#new-features-7)
-    - [Improvements](#improvements-9)
+    - [New Features](#new-features-8)
+    - [Improvements](#improvements-10)
     - [Code Quality & Performance](#code-quality--performance-1)
   - [v0.2.5](#v025)
-    - [Improvements](#improvements-10)
+    - [Improvements](#improvements-11)
     - [Code Quality & Performance](#code-quality--performance-2)
   - [v0.2.4](#v024)
-    - [Improvements](#improvements-11)
-  - [v0.2.3](#v023)
     - [Improvements](#improvements-12)
+  - [v0.2.3](#v023)
+    - [Improvements](#improvements-13)
   - [v0.2.2](#v022)
     - [Code Quality & Performance](#code-quality--performance-3)
   - [FBX Support](#fbx-support)
@@ -58,6 +61,22 @@
 # Changelog
 
 [日本語](CHANGELOG.md)
+
+## v0.2.16
+
+### New Features
+
+- **Prefab-based texture mapping** — Select `.prefab` entries from `.unitypackage` files. Resolves textures by following Unity's GUID reference chain (`.prefab` → FBX `.meta` → `.mat` → texture), enabling accurate texture assignment independent of file names
+- **Multiple Prefab format support** — Supports New (Unity 2018.3+), Old, Unpacked, and Mixed (Old + New coexisting) formats. Recursive Prefab Variant resolution with cycle detection and depth limiting
+- **Multi-FBX merge from Prefab** — When a single Prefab references multiple FBX files (via Nested PrefabInstance / m_Mesh mix, etc.), all FBX are extracted and merged for display
+- **Unified model selection dialog** — Prefab / FBX / VRM entries shown in a single selection dialog when loading `.unitypackage`. Prefab entries labeled with `[Prefab]`
+
+### Improvements
+
+- **UnityPackageIndex** — GUID-based index structure for efficient Prefab resolution and texture references. Index is also built for `.unitypackage` files loaded via archives (ZIP / 7z)
+- **FBX material name matching improvement** — Extracts FBX internal material names (`fbx_material_name`) from FBX `.meta` `externalObjects`, enabling texture matching even when `.mat` file names differ from FBX internal names
+- **Unity YAML escape support** — Auto-decode `\uXXXX` escape sequences and YAML quoted strings. Japanese material names are processed accurately
+- **Three-stage texture matching** — `source_material` (renderer_path + slot) → `material_name` / `fbx_material_name` → `source_texture_name` (filename match) — 3-level fallback for maximum match rate
 
 ## v0.2.15
 

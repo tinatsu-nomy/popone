@@ -231,6 +231,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                 .show(ui, |ui| {
                     for (asset_idx, name, model_type) in &pending.model_list {
                         let type_label = match model_type {
+                            super::app::PkgModelType::Prefab => "[Prefab]",
                             super::app::PkgModelType::Vrm => "[VRM]",
                             super::app::PkgModelType::Fbx => "[FBX]",
                         };
@@ -261,6 +262,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             suppress_tex_match: false,
             archive_snapshot: pending.archive_snapshot,
             nested_archive_source: pending.nested_archive_source,
+            pkg_index: pending.pkg_index,
         });
     } else if cancelled || !open {
         app.pending.unity_pkg = None;

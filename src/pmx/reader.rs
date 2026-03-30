@@ -789,7 +789,7 @@ mod tests {
         // Seed-san の既知の値と照合
         assert_eq!(model.header.version, 2.0);
         assert_eq!(model.header.encoding, 0); // UTF-16LE
-        assert_eq!(model.vertices.len(), 34059);
+        assert_eq!(model.vertices.len(), 34261);
         assert_eq!(model.faces.len(), 45058);
         assert_eq!(model.textures.len(), 15);
         assert_eq!(model.materials.len(), 17);

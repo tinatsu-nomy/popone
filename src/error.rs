@@ -60,6 +60,12 @@ impl From<sevenz_rust2::Error> for PoponeError {
     }
 }
 
+impl From<crate::unitypackage::PkgError> for PoponeError {
+    fn from(err: crate::unitypackage::PkgError) -> Self {
+        PoponeError::UnityPackage(err.to_string())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, PoponeError>;
 
 /// `anyhow::Context` 相当のヘルパートレイト。

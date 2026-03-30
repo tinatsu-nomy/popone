@@ -443,6 +443,7 @@ fn extract_materials(pmd: &PmdModel, textures: &[IrTexture]) -> Vec<IrMaterial> 
                 emissive_texture: None,
                 normal_texture: None,
                 normal_texture_scale: 1.0,
+                source_material: None,
             }
         })
         .collect()

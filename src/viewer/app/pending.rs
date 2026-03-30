@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use eframe::egui;
 
+use crate::unitypackage::UnityPackageIndex;
+
 use super::helpers::{FbxLoadMode, PkgModelType, ReloadableSource};
 use super::{ConvertMessage, ViewerApp};
 
@@ -21,6 +23,8 @@ pub struct PendingUnityPackage {
     pub archive_snapshot: Option<Arc<[u8]>>,
     /// アーカイブ(ZIP/7z)内 .unitypackage の場合、リロード用のソース情報
     pub nested_archive_source: Option<ReloadableSource>,
+    /// Phase 3: パッケージインデックス（Prefab テクスチャ解決用）
+    pub pkg_index: Option<Arc<UnityPackageIndex>>,
 }
 
 /// unitypackage モデル遅延読み込み状態
@@ -39,6 +43,8 @@ pub struct PendingPkgModelLoad {
     pub archive_snapshot: Option<Arc<[u8]>>,
     /// アーカイブ(ZIP/7z)内 .unitypackage の場合、リロード用のソース情報
     pub nested_archive_source: Option<ReloadableSource>,
+    /// Phase 3: パッケージインデックス（Prefab テクスチャ解決用）
+    pub pkg_index: Option<Arc<UnityPackageIndex>>,
 }
 
 /// アーカイブ内モデル選択待ち
@@ -83,6 +89,8 @@ pub struct PendingFbxChoicePkg {
     pub archive_snapshot: Option<Arc<[u8]>>,
     /// アーカイブ(ZIP/7z)内 .unitypackage の場合、リロード用のソース情報
     pub nested_archive_source: Option<ReloadableSource>,
+    /// Phase 3: パッケージインデックス（Prefab テクスチャ解決用）
+    pub pkg_index: Option<Arc<UnityPackageIndex>>,
 }
 
 /// 遅延処理のオーバーレイ表示状態
@@ -314,6 +322,7 @@ impl ViewerApp {
                 self.suppress_tex_match = false;
                 // 以下の通常ロードをスキップ
             } else {
+                let pkg_index = p.pkg_index;
                 match p.model_type {
                     PkgModelType::Fbx => {
                         if self.loaded.is_some() {
@@ -339,6 +348,7 @@ impl ViewerApp {
                                         source_path,
                                         archive_snapshot: p.archive_snapshot,
                                         nested_archive_source: source_override,
+                                        pkg_index,
                                     }),
                                     preloaded: None,
                                 });
@@ -349,6 +359,7 @@ impl ViewerApp {
                                     &source_path,
                                     FbxLoadMode::ModelOnly,
                                     source_override,
+                                    pkg_index.as_deref(),
                                 ) {
                                     Ok(()) => {
                                         self.convert_message = None;
@@ -368,6 +379,7 @@ impl ViewerApp {
                                 &source_path,
                                 FbxLoadMode::Both,
                                 source_override,
+                                pkg_index.as_deref(),
                             ) {
                                 Ok(()) => {
                                     log::info!("読み込み成功: {}", source_path.display());
@@ -397,6 +409,26 @@ impl ViewerApp {
                                 log::error!("読み込み失敗: {e}");
                                 self.convert_message = Some(ConvertMessage::failure(format!(
                                     "ファイルを読み込めませんでした。\n詳細: {e}"
+                                )));
+                            }
+                        }
+                    }
+                    PkgModelType::Prefab => {
+                        match self.load_prefab_from_assets(
+                            p.assets,
+                            p.fbx_index,
+                            &source_path,
+                            source_override,
+                            pkg_index,
+                        ) {
+                            Ok(()) => {
+                                log::info!("Prefab読み込み成功: {}", source_path.display());
+                                self.convert_message = None;
+                            }
+                            Err(e) => {
+                                log::error!("Prefab読み込み失敗: {e}");
+                                self.convert_message = Some(ConvertMessage::failure(format!(
+                                    "Prefabを読み込めませんでした。\n詳細: {e}"
                                 )));
                             }
                         }

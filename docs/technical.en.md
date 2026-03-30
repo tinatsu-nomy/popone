@@ -92,6 +92,14 @@
     - [Texture D&D Preview Cache](#texture-dd-preview-cache)
     - [UnityPackage Archive Snapshot](#unitypackage-archive-snapshot)
     - [.gltf Exclusion](#gltf-exclusion)
+  - [Prefab Texture Mapping (v0.2.16)](#prefab-texture-mapping-v0216)
+    - [GUID Reference Chain](#guid-reference-chain)
+    - [UnityPackageIndex](#unitypackageindex)
+    - [Prefab Format Detection](#prefab-format-detection)
+    - [Prefab Variant Resolution](#prefab-variant-resolution)
+    - [Three-Stage Texture Matching Fallback](#three-stage-texture-matching-fallback)
+    - [Unity YAML Parsers](#unity-yaml-parsers)
+    - [Key Data Types](#key-data-types)
   - [Reload Texture Normalization](#reload-texture-normalization)
     - [reload_unitypackage Texture Restoration](#reload_unitypackage-texture-restoration)
     - [IrTexture Deduplication in assign_texture_source_to_material](#irtexture-deduplication-in-assign_texture_source_to_material)
@@ -1527,6 +1535,82 @@ Signature changed from `path: &Path` to `source: &ReloadableSource`. For the Sna
 
 `.gltf` files have external buffer references (`.bin`, image files), so they are excluded from snapshotting. `gltf::import_slice` cannot resolve external URIs, so the normal `load_glb(path)` path is used.
 
+## Prefab Texture Mapping (v0.2.16)
+
+Automatically maps textures to FBX models by following Unity's GUID reference chain from `.prefab` files within `.unitypackage`.
+
+### GUID Reference Chain
+
+```
+.prefab → m_SourcePrefab / m_Mesh (FBX GUID)
+       → FBX .meta → externalObjects (material name → .mat GUID)
+       → .mat → m_TexEnvs → _MainTex (texture GUID)
+       → texture file
+```
+
+### UnityPackageIndex
+
+GUID-based index structure providing O(1) lookup from GUID to pathname, data, and meta.
+
+```rust
+pub struct UnityPackageIndex {
+    pub entries: Vec<AssetEntry>,
+    pub by_guid: HashMap<String, usize>,
+    pub by_path: HashMap<String, usize>,
+}
+```
+
+`build_unity_package_index()` extracts the tar.gz once, then all subsequent lookups use `by_guid` / `by_path`.
+Built for both direct viewer loading and archive (ZIP / 7z) loading paths.
+
+### Prefab Format Detection
+
+| Format | Detection | Example Packages |
+|--------|-----------|-----------------|
+| New | Standalone `PrefabInstance:` line exists | Shinano, FC_Milltina |
+| Old | `--- !u!137` (SkinnedMeshRenderer) + `m_Mesh` only | Yukitsune no Oneesama |
+| Unpacked | Old-style but contains `m_CorrespondingSourceObject` | Nekoyama, CHR_LML01 |
+| Mixed | New (`PrefabInstance`) + Old (`m_Mesh`) coexist | SVST01_common |
+| Variant | `m_SourcePrefab` references another `.prefab` | SVST01_01_VRC |
+
+`detect_prefab_format()` uses line-level matching for `PrefabInstance:` (prevents false matches with `m_PrefabInstance:`).
+For Mixed format, the Old parser always runs after the New parser to collect FBX references from both patterns.
+
+### Prefab Variant Resolution
+
+`resolve_variant_multi()` recursively follows Variant chains, collecting all referenced FBX GUIDs.
+Cycle detection (`HashSet<String>`) and depth limiting (32 levels) prevent infinite loops.
+
+`resolve_single_prefab()` delegates to `resolve_single_prefab_inner()` for recursive resolution,
+handling nested Prefabs (where m_SourcePrefab points to a `.prefab` rather than `.fbx`).
+
+### Three-Stage Texture Matching Fallback
+
+1. **source_material** — `SourceMaterialRef` (renderer_path + slot_index) uniquely identifies the material slot in the FBX mesh
+2. **material_name / fbx_material_name** — Matches using both `.mat` material name and FBX internal material name (from `.meta` `externalObjects`)
+3. **source_texture_name** — Existing filename-based matching (fallback)
+
+### Unity YAML Parsers
+
+- `parse_prefab_new()` — 2-pass approach: `m_Modifications` then `m_SourcePrefab`
+- `parse_prefab_old()` — Extracts `m_Mesh` + `m_Materials` from `--- !u!137` (SkinnedMeshRenderer) sections
+- `parse_fbx_meta()` — Extracts material name → GUID mapping from `externalObjects`
+- `parse_material_textures()` — Extracts `_MainTex` texture GUID from `m_TexEnvs`
+- `decode_unity_escape()` — `\uXXXX` → Unicode conversion, YAML quote trimming
+
+### Key Data Types
+
+| Type | Purpose |
+|------|---------|
+| `PkgModelLocator` | Model selection key (GUID + pathname + kind) |
+| `PkgModelListItem` | Model selection dialog display item |
+| `PackageTexture` | GUID + display name + data bytes |
+| `PreparedPkgFbx` | FBX data + textures + resolved materials |
+| `ResolvedMaterialTextures` | Material name + texture GUID + fbx_material_name |
+| `FbxResolveEntry` | Single FBX GUID + index + resolved materials |
+| `PrefabResolveResult` | Entire Prefab resolution result (may contain multiple FBX) |
+| `SourceMaterialRef` | renderer_path + slot_index (stable key for FBX mesh → material) |
+
 ## Reload Texture Normalization
 
 ### reload_unitypackage Texture Restoration
@@ -1811,7 +1895,7 @@ src/
 ├── main.rs              Entry point (no args or no output specified → viewer / output specified → CLI conversion)
 ├── lib.rs               Library API
 ├── error.rs             Error type definitions (PoponeError enum, thiserror, ResultExt trait)
-├── unitypackage.rs      .unitypackage (tar.gz) asset extraction (VRM / FBX detection and extraction)
+├── unitypackage.rs      .unitypackage (tar.gz) asset extraction + Prefab texture mapping (GUID resolution, Variant recursion, multi-format support)
 ├── archive/
 │   ├── mod.rs           ZIP / 7z unified API (list_models, extract_model_bundle)
 │   ├── zip_extract.rs   ZIP extraction (2-pass: metadata listing → selective extraction)

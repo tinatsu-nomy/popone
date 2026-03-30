@@ -147,21 +147,25 @@ pub const MODEL_EXTENSIONS: &[&str] = &[
     "7z",
 ];
 
-/// unitypackage 内のモデルファイル種別
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PkgModelType {
-    Fbx,
-    Vrm,
-}
+// PkgModelType は unitypackage.rs に移動（CLI でも使用するため）
+pub use crate::unitypackage::PkgModelType;
 
-/// unitypackage アセット群から VRM/FBX モデルリストを構築
+/// unitypackage アセット群から Prefab/VRM/FBX モデルリストを構築
 pub fn build_pkg_model_list(
     assets: &[crate::unitypackage::ExtractedAsset],
 ) -> Vec<(usize, String, PkgModelType)> {
     let mut list = Vec::new();
+    // Prefab を先に追加（Prefab 経由が推奨されるため）
+    for (idx, asset) in assets.iter().enumerate() {
+        if asset.pathname.to_lowercase().ends_with(".prefab") {
+            list.push((idx, asset.filename(), PkgModelType::Prefab));
+        }
+    }
+    // VRM
     for (idx, name) in crate::unitypackage::find_vrm_list(assets) {
         list.push((idx, name, PkgModelType::Vrm));
     }
+    // FBX
     for (idx, name) in crate::unitypackage::find_fbx_list(assets) {
         list.push((idx, name, PkgModelType::Fbx));
     }

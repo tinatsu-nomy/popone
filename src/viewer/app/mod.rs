@@ -14,6 +14,7 @@ use eframe::egui;
 use eframe::egui_wgpu;
 
 use crate::intermediate::types::IrModel;
+use crate::unitypackage::PkgModelLocator;
 
 use super::animation::AnimationState;
 use super::camera::OrbitCamera;
@@ -64,6 +65,8 @@ pub struct AppendedModel {
     pub source: ReloadableSource,
     /// unitypackage内の選択モデル名（FBX/VRM直接の場合はNone）
     pub pkg_model_name: Option<String>,
+    /// Phase 3: unitypackage モデルの安定キー（段階移行用）
+    pub pkg_model: Option<PkgModelLocator>,
 }
 
 /// モデル別の材質・DrawCall 区間情報
@@ -88,6 +91,8 @@ pub struct LoadedModel {
     pub mat_cache: CachedMaterialInfo,
     /// 統計キャッシュ
     pub stats_cache: CachedStats,
+    /// 材質ごとの安定キー（pkg_index 経由ロード時に構築）
+    pub pkg_material_keys: Vec<Option<crate::unitypackage::PkgMaterialKey>>,
 }
 
 /// 変換結果の種類
@@ -375,6 +380,8 @@ pub struct ViewerApp {
     pub last_model_dir: Option<PathBuf>,
     /// unitypackage 内で選択された FBX ファイル名（reload 時の照合用）
     pub selected_fbx_name: Option<String>,
+    /// unitypackage 内で選択されたモデルの安定キー（Phase 3 移行用）
+    pub selected_pkg_model: Option<PkgModelLocator>,
     /// アニメーションライブラリ
     pub anim: AnimLibrary,
     /// 右パネルの現在のタブ
@@ -389,6 +396,8 @@ pub struct ViewerApp {
     pub(crate) preloaded: Option<PreloadedData>,
     /// 起動時刻（UVアニメーション用累積時間の基準）
     start_time: Instant,
+    /// append 時のインスタンス ID カウンタ（ベースモデルは常に 0）
+    pub next_instance_id: u32,
 }
 
 impl ViewerApp {
@@ -444,6 +453,7 @@ impl ViewerApp {
             log_path,
             last_model_dir: None,
             selected_fbx_name: None,
+            selected_pkg_model: None,
             anim: AnimLibrary::default(),
             side_panel_tab: SidePanelTab::Info,
             window_title: None,
@@ -451,7 +461,20 @@ impl ViewerApp {
             hovered_draw_indices: Vec::new(),
             preloaded: None,
             start_time: Instant::now(),
+            next_instance_id: 1,
         }
+    }
+
+    /// mat_idx から stable key を引く
+    pub fn pkg_key_for_material(
+        &self,
+        mat_idx: usize,
+    ) -> Option<crate::unitypackage::PkgMaterialKey> {
+        self.loaded
+            .as_ref()?
+            .pkg_material_keys
+            .get(mat_idx)?
+            .clone()
     }
 
     fn setup_japanese_font(ctx: &egui::Context) {
@@ -696,6 +719,7 @@ impl ViewerApp {
             }],
             mat_cache,
             stats_cache,
+            pkg_material_keys: Vec::new(),
         });
 
         // シェーダー状態を正規化（PMX/PMD → 自動 MMD、VRM → 標準パスに戻す）
