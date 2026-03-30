@@ -103,6 +103,7 @@
     - [Prefab 複数 FBX の MaterialGroup 分割](#prefab-%E8%A4%87%E6%95%B0-fbx-%E3%81%AE-materialgroup-%E5%88%86%E5%89%B2)
     - [ファイル構成ツリー](#%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB%E6%A7%8B%E6%88%90%E3%83%84%E3%83%AA%E3%83%BC)
     - [材質表示の常時グループ化](#%E6%9D%90%E8%B3%AA%E8%A1%A8%E7%A4%BA%E3%81%AE%E5%B8%B8%E6%99%82%E3%82%B0%E3%83%AB%E3%83%BC%E3%83%97%E5%8C%96)
+    - [Prefab リロード（A/T スタンス変換対応）](#prefab-%E3%83%AA%E3%83%AD%E3%83%BC%E3%83%89at-%E3%82%B9%E3%82%BF%E3%83%B3%E3%82%B9%E5%A4%89%E6%8F%9B%E5%AF%BE%E5%BF%9C)
   - [リロード時テクスチャ正規化](#%E3%83%AA%E3%83%AD%E3%83%BC%E3%83%89%E6%99%82%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E6%AD%A3%E8%A6%8F%E5%8C%96)
     - [reload_unitypackage のテクスチャ復元](#reload_unitypackage-%E3%81%AE%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E5%BE%A9%E5%85%83)
     - [assign_texture_source_to_material の IrTexture 重複排除](#assign_texture_source_to_material-%E3%81%AE-irtexture-%E9%87%8D%E8%A4%87%E6%8E%92%E9%99%A4)
@@ -1652,6 +1653,25 @@ Prefab: Body.fbx(0..12材質) + Hair.fbx(12..18材質)
 | `[☑]` | `material_visibility` | グループ内の全 DrawCall の表示/非表示を一括トグル |
 
 ヘッダー行のホバー判定は `contains_pointer()`（矩形内判定）を使用。`hovered()` は子ウィジェット（ボタン等）が hover を消費するため不適。
+
+### Prefab リロード（A/T スタンス変換対応）
+
+A スタンス/T スタンス変換チェックボックスの切り替えは `reload_current()` → `reload_unitypackage()` を経由するが、`reload_unitypackage()` は単一 FBX のみをロードするため、Prefab の複数 FBX マージ構造が失われていた。
+
+**修正**: `LoadedModel` に `prefab_entry_path: Option<String>`（pkg_index 内のパス名）を追加。`reload_unitypackage()` / `reload_archive_unitypackage()` で Prefab モデルを検出した場合、`reload_as_prefab()` に分岐する。
+
+```
+reload_current()
+  → reload_unitypackage() / reload_archive_unitypackage()
+    → prefab_entry_path あり？
+      → reload_as_prefab()
+        1. build_unity_package_index() で pkg_index を再構築
+        2. by_path[prefab_entry_path] で Prefab エントリを特定
+        3. load_prefab_from_assets() で複数 FBX マージ再実行
+        4. 手動テクスチャ割当を assign_texture_data_to_material() で事後復元
+```
+
+`assign_texture_data_to_material()` は GPU モデル構築後でもテクスチャを適用可能（IrTexture 追加 + bind group 再構築）。借用チェッカー対策として、復元データを先に `Vec<(usize, String, Vec<u8>)>` に収集してから適用する。
 
 ## リロード時テクスチャ正規化
 

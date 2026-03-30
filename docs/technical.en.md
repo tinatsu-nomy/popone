@@ -103,6 +103,7 @@
     - [Per-FBX MaterialGroup Splitting from Prefab](#per-fbx-materialgroup-splitting-from-prefab)
     - [File Hierarchy Tree](#file-hierarchy-tree)
     - [Always-On Material Grouping](#always-on-material-grouping)
+    - [Prefab Reload (A/T Stance Conversion Support)](#prefab-reload-at-stance-conversion-support)
   - [Reload Texture Normalization](#reload-texture-normalization)
     - [reload_unitypackage Texture Restoration](#reload_unitypackage-texture-restoration)
     - [IrTexture Deduplication in assign_texture_source_to_material](#irtexture-deduplication-in-assign_texture_source_to_material)
@@ -1652,6 +1653,25 @@ Group header rows use the layout `▶ [S] [C] [☑] GroupName`, implemented with
 | `[☑]` | `material_visibility` | Batch toggle visibility for all DrawCalls in the group |
 
 Header row hover detection uses `contains_pointer()` (rect-based). `hovered()` is not suitable because child widgets (buttons, etc.) consume the hover event.
+
+### Prefab Reload (A/T Stance Conversion Support)
+
+Toggling A-stance / T-stance conversion triggers `reload_current()` → `reload_unitypackage()`, but `reload_unitypackage()` only loads a single FBX, losing the Prefab's multi-FBX merge structure.
+
+**Fix**: Added `prefab_entry_path: Option<String>` (pathname within pkg_index) to `LoadedModel`. When `reload_unitypackage()` / `reload_archive_unitypackage()` detects a Prefab model, it branches to `reload_as_prefab()`.
+
+```
+reload_current()
+  → reload_unitypackage() / reload_archive_unitypackage()
+    → prefab_entry_path present?
+      → reload_as_prefab()
+        1. Rebuild pkg_index via build_unity_package_index()
+        2. Locate Prefab entry via by_path[prefab_entry_path]
+        3. Re-execute multi-FBX merge via load_prefab_from_assets()
+        4. Restore manual texture assignments via assign_texture_data_to_material()
+```
+
+`assign_texture_data_to_material()` can apply textures after GPU model construction (adds IrTexture + rebuilds bind group). For borrow checker compliance, restoration data is first collected into a `Vec<(usize, String, Vec<u8>)>` before application.
 
 ## Reload Texture Normalization
 

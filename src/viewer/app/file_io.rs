@@ -1248,6 +1248,7 @@ impl ViewerApp {
         // finish_load 後に Prefab 情報と per-FBX MaterialGroup を設定
         if let Some(ref mut loaded) = self.loaded {
             loaded.prefab_name = Some(prefab_filename);
+            loaded.prefab_entry_path = Some(pkg.entries[prefab_index].pathname.clone());
 
             if !all_pkg_keys.is_empty() {
                 loaded.pkg_material_keys = all_pkg_keys;
@@ -2345,6 +2346,23 @@ impl ViewerApp {
             }
         };
         let path = source.display_path();
+
+        // Prefab モデルの場合は Prefab パスで再読み込み
+        if let Some(prefab_path) = self
+            .loaded
+            .as_ref()
+            .and_then(|l| l.prefab_entry_path.clone())
+        {
+            return self.reload_as_prefab(
+                &archive_data,
+                snapshot,
+                path,
+                &prefab_path,
+                saved_pkg_textures,
+                saved_pkg_tex_assignments,
+            );
+        }
+
         let assets = crate::unitypackage::extract_all_assets(&archive_data)?;
 
         // 現在のモデルが VRM の場合は VRM として再読み込み
@@ -2504,6 +2522,77 @@ impl ViewerApp {
         result
     }
 
+    /// Prefab モデルのリロード（pkg_index を再構築して load_prefab_from_assets を呼び直す）
+    fn reload_as_prefab(
+        &mut self,
+        archive_data: &[u8],
+        snapshot: Option<Arc<[u8]>>,
+        path: &Path,
+        prefab_entry_path: &str,
+        saved_pkg_textures: &Option<Vec<(String, Vec<u8>)>>,
+        saved_pkg_tex_assignments: &HashMap<usize, String>,
+    ) -> anyhow::Result<()> {
+        let pkg_index = Arc::new(crate::unitypackage::build_unity_package_index(
+            archive_data,
+        )?);
+        let prefab_index = pkg_index
+            .by_path
+            .get(prefab_entry_path)
+            .copied()
+            .ok_or_else(|| {
+                anyhow::anyhow!("Prefab エントリが見つかりません: {}", prefab_entry_path)
+            })?;
+
+        let source_override = snapshot.map(|snap| ReloadableSource::Snapshot {
+            original_path: path.to_path_buf(),
+            main_bytes: snap,
+            aux_files: HashMap::new(),
+        });
+
+        self.load_prefab_from_assets(
+            Vec::new(),
+            prefab_index,
+            path,
+            source_override,
+            Some(pkg_index),
+        )?;
+
+        // pkg テクスチャが load_prefab_from_assets 内で設定されなかった場合に復元
+        if self.tex.pkg_textures.is_none() {
+            if let Some(ref saved) = saved_pkg_textures {
+                self.tex.pkg_textures = Some(saved.clone());
+                self.rebuild_pkg_thumb_cache();
+            }
+        }
+
+        // 手動テクスチャ割当を GPU モデル構築後に復元
+        // （借用チェッカー対策: データを先に収集してから適用）
+        if !saved_pkg_tex_assignments.is_empty() {
+            let assignments_to_restore: Vec<(usize, String, Vec<u8>)> = {
+                let pkg_src = self.tex.pkg_textures.as_deref().unwrap_or(&[]);
+                let name_to_data: HashMap<&str, &[u8]> = pkg_src
+                    .iter()
+                    .map(|(name, data)| (name.as_str(), data.as_slice()))
+                    .collect();
+                saved_pkg_tex_assignments
+                    .iter()
+                    .filter_map(|(idx, tex_name)| {
+                        name_to_data
+                            .get(tex_name.as_str())
+                            .map(|data| (*idx, tex_name.clone(), data.to_vec()))
+                    })
+                    .collect()
+            };
+            for (mat_idx, tex_name, data) in &assignments_to_restore {
+                if self.assign_texture_data_to_material(*mat_idx, tex_name, data) {
+                    self.tex.pkg_assignments.insert(*mat_idx, tex_name.clone());
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// アーカイブ(ZIP/7z)内 .unitypackage のリロード
     fn reload_archive_unitypackage(
         &mut self,
@@ -2543,6 +2632,24 @@ impl ViewerApp {
         let bundle = crate::archive::extract_model_bundle(data, format, contents, model_index)?;
 
         let pkg_data = bundle.model.data;
+
+        // Prefab モデルの場合は Prefab パスで再読み込み
+        if let Some(prefab_path) = self
+            .loaded
+            .as_ref()
+            .and_then(|l| l.prefab_entry_path.clone())
+        {
+            let snapshot_arc: Option<Arc<[u8]>> = archive_bytes.cloned();
+            return self.reload_as_prefab(
+                &pkg_data,
+                snapshot_arc,
+                original_path,
+                &prefab_path,
+                saved_pkg_textures,
+                saved_pkg_tex_assignments,
+            );
+        }
+
         let assets = crate::unitypackage::extract_all_assets(&pkg_data)?;
 
         let is_vrm = self.loaded.as_ref().is_some_and(|l| {

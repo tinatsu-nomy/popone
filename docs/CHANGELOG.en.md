@@ -5,6 +5,7 @@
 - [Changelog](#changelog)
   - [v0.2.16](#v0216)
     - [New Features](#new-features)
+    - [Bug Fixes](#bug-fixes)
     - [Improvements](#improvements)
   - [v0.2.15](#v0215)
     - [New Features](#new-features-1)
@@ -14,7 +15,7 @@
   - [v0.2.13](#v0213)
     - [Improvements](#improvements-3)
   - [v0.2.12](#v0212)
-    - [Bug Fixes](#bug-fixes)
+    - [Bug Fixes](#bug-fixes-1)
     - [New Features](#new-features-2)
     - [Improvements](#improvements-4)
   - [v0.2.11](#v0211)
@@ -23,13 +24,13 @@
   - [v0.2.10](#v0210)
     - [New Features](#new-features-4)
     - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
-    - [Bug Fixes](#bug-fixes-1)
+    - [Bug Fixes](#bug-fixes-2)
     - [Improvements](#improvements-6)
     - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
   - [v0.2.9](#v029)
     - [New Features](#new-features-5)
     - [Improvements](#improvements-7)
-    - [Bug Fixes](#bug-fixes-2)
+    - [Bug Fixes](#bug-fixes-3)
     - [Implementation Details](#implementation-details)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
@@ -37,11 +38,11 @@
     - [Improvements](#improvements-8)
   - [v0.2.7](#v027)
     - [New Features](#new-features-7)
-    - [Bug Fixes](#bug-fixes-3)
+    - [Bug Fixes](#bug-fixes-4)
     - [Improvements](#improvements-9)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
-    - [Bug Fixes](#bug-fixes-4)
+    - [Bug Fixes](#bug-fixes-5)
     - [New Features](#new-features-8)
     - [Improvements](#improvements-10)
     - [Code Quality & Performance](#code-quality--performance-1)
@@ -75,6 +76,10 @@
 - **Always-on material grouping** — Materials are always grouped by model name with collapsible headers, even for single models. Unified UI experience with multi-model append
 - **Per-FBX material group splitting** — Multiple FBX files within a Prefab are shown as separate material groups. Each FBX's materials are managed under independent collapsible headers
 - **Per-group batch controls** — Group headers now include `[S]` (normal smoothing), `[C]` (custom normal clear), and `[☑]` (visibility) buttons for batch toggling all materials in the group. Hovering over the header row highlights all meshes in the group
+
+### Bug Fixes
+
+- **Prefab model texture reset on A/T stance conversion** — Fixed an issue where toggling A-stance / T-stance conversion on a Prefab-loaded model would reset all texture assignments. The root cause was `reload_unitypackage` not recognizing the Prefab's multi-FBX merge structure and reloading as a single FBX instead. Added `prefab_entry_path` to `LoadedModel` and a `reload_as_prefab` method that rebuilds `UnityPackageIndex` and reloads via the Prefab path
 
 ### Improvements
 
