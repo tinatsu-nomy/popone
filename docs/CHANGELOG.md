@@ -82,6 +82,7 @@
 - **Prefab モデルの A/T スタンス変換時テクスチャリセット修正** — Prefab 経由でロードしたモデルの A スタンス/T スタンス変換チェックボックスを切り替えると、テクスチャ割り当てがリセットされる問題を修正。原因は `reload_unitypackage` が Prefab の複数 FBX マージ構造を認識せず、単一 FBX として再読み込みしていたこと。`LoadedModel` に `prefab_entry_path` を保持し、リロード時に `UnityPackageIndex` を再構築して Prefab パスで再読み込みする `reload_as_prefab` メソッドを追加
 - **lilToon テクスチャスロット優先順修正** — lilToon シェーダーの `.mat` ファイルで `_BaseColorMap` が `_MainTex` と異なるテクスチャを参照する場合に、誤ったテクスチャが割り当てられる問題を修正。テクスチャスロット優先順を `_MainTex` > `_BaseMap` > `_BaseColorMap` に明示化
 - **アーカイブ内 Prefab リロード失敗修正** — ZIP / 7z 内の `.unitypackage` から Prefab 経由でロードしたモデルのリロード（Aスタンス変換等）が「GLBファイルの読み込みに失敗」エラーで失敗する問題を修正。`reload_as_prefab` が `Archive` ソースを引き継がず `File(zip_path)` にフォールバックしていたことが原因
+- **FBX ロード時の A/T スタンス変換テクスチャリセット修正** — `.unitypackage` 内の FBX を直接選択してロードした場合、A スタンス/T スタンス変換を切り替えるとテクスチャ割り当てが全てリセットされる問題を修正。`reload_unitypackage` が Prefab 対応テクスチャマッピング（`embed_textures_with_prefab`）を使わず単純名前マッチング（`embed_textures_into_ir`）にフォールバックしていたことが原因。`pkg_material_keys` の有無で Prefab 対応ロードを判定し、`prepare_pkg_fbx` + `embed_textures_with_prefab` で再マッピングするパスを追加
 
 ### 改善
 

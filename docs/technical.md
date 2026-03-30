@@ -105,6 +105,7 @@
     - [ファイル構成ツリー](#%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB%E6%A7%8B%E6%88%90%E3%83%84%E3%83%AA%E3%83%BC)
     - [材質表示の常時グループ化](#%E6%9D%90%E8%B3%AA%E8%A1%A8%E7%A4%BA%E3%81%AE%E5%B8%B8%E6%99%82%E3%82%B0%E3%83%AB%E3%83%BC%E3%83%97%E5%8C%96)
     - [Prefab リロード（A/T スタンス変換対応）](#prefab-%E3%83%AA%E3%83%AD%E3%83%BC%E3%83%89at-%E3%82%B9%E3%82%BF%E3%83%B3%E3%82%B9%E5%A4%89%E6%8F%9B%E5%AF%BE%E5%BF%9C)
+    - [FBX 直接選択時の Prefab 対応リロード](#fbx-%E7%9B%B4%E6%8E%A5%E9%81%B8%E6%8A%9E%E6%99%82%E3%81%AE-prefab-%E5%AF%BE%E5%BF%9C%E3%83%AA%E3%83%AD%E3%83%BC%E3%83%89)
   - [リロード時テクスチャ正規化](#%E3%83%AA%E3%83%AD%E3%83%BC%E3%83%89%E6%99%82%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E6%AD%A3%E8%A6%8F%E5%8C%96)
     - [reload_unitypackage のテクスチャ復元](#reload_unitypackage-%E3%81%AE%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E5%BE%A9%E5%85%83)
     - [assign_texture_source_to_material の IrTexture 重複排除](#assign_texture_source_to_material-%E3%81%AE-irtexture-%E9%87%8D%E8%A4%87%E6%8E%92%E9%99%A4)
@@ -1690,6 +1691,27 @@ reload_current()
 `assign_texture_data_to_material()` は GPU モデル構築後でもテクスチャを適用可能（IrTexture 追加 + bind group 再構築）。借用チェッカー対策として、復元データを先に `Vec<(usize, String, Vec<u8>)>` に収集してから適用する。
 
 `reload_as_prefab` は `archive_source: &ReloadableSource` を受け取り、`snapshot` が `None`（通常ファイルからのアーカイブ読み込み）の場合は元の `Archive` ソースをそのまま引き継ぐ。これにより、リロード時も正しく `reload_archive_unitypackage` パスに入り、ZIP ファイルが GLB として解析される問題を防止する。
+
+### FBX 直接選択時の Prefab 対応リロード
+
+`.unitypackage` 内の FBX を直接選択した場合（Prefab ではなく FBX を選択）、`load_fbx_from_assets` が `pkg_index` 経由で `prepare_pkg_fbx` + `embed_textures_with_prefab` を使用し Prefab 対応テクスチャマッピングを行う。しかし `prefab_entry_path` は設定されないため、リロード時に `reload_as_prefab` には分岐しない。
+
+**問題**: `reload_unitypackage` は `embed_textures_into_ir`（単純名前マッチング）を使用するため、材質名とテクスチャ名が一致しないモデルでテクスチャが全て失われる。
+
+**修正**: `reload_unitypackage` で `loaded.pkg_material_keys` が非空（= 初回ロードで Prefab 対応マッピングが使われた）かを判定し、非空の場合は `UnityPackageIndex` を再構築して Prefab 対応パスを使用する。
+
+```
+reload_current()
+  → reload_unitypackage()
+    → pkg_material_keys が非空？
+      → Yes: Prefab 対応パス
+        1. build_unity_package_index() で pkg_index を再構築
+        2. assets 内の FBX パス名から pkg_index 内インデックスを取得
+        3. prepare_pkg_fbx() で Prefab テクスチャ解決
+        4. embed_textures_with_prefab() でテクスチャ埋め込み
+        5. finish_load() 後に pkg_material_keys を再構築
+      → No: 従来パス（embed_textures_into_ir）
+```
 
 ## リロード時テクスチャ正規化
 

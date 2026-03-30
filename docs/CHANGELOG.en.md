@@ -82,6 +82,7 @@
 - **Prefab model texture reset on A/T stance conversion** — Fixed an issue where toggling A-stance / T-stance conversion on a Prefab-loaded model would reset all texture assignments. The root cause was `reload_unitypackage` not recognizing the Prefab's multi-FBX merge structure and reloading as a single FBX instead. Added `prefab_entry_path` to `LoadedModel` and a `reload_as_prefab` method that rebuilds `UnityPackageIndex` and reloads via the Prefab path
 - **lilToon texture slot priority fix** — Fixed incorrect texture assignment when lilToon shader's `.mat` file has `_BaseColorMap` referencing a different texture than `_MainTex`. Texture slot priority is now explicitly `_MainTex` > `_BaseMap` > `_BaseColorMap`
 - **Archive Prefab reload failure fix** — Fixed "Failed to load GLB file" error when reloading (e.g., A-stance conversion) a model loaded via Prefab from a `.unitypackage` inside a ZIP / 7z archive. The cause was `reload_as_prefab` not preserving the `Archive` source and falling back to `File(zip_path)`
+- **FBX texture reset on A/T stance conversion fix** — Fixed an issue where toggling A-stance / T-stance conversion on an FBX directly selected from a `.unitypackage` would reset all texture assignments. The cause was `reload_unitypackage` falling back to simple name matching (`embed_textures_into_ir`) instead of Prefab-aware texture mapping (`embed_textures_with_prefab`). Added a branch that detects Prefab-aware loading via `pkg_material_keys` and uses `prepare_pkg_fbx` + `embed_textures_with_prefab` for re-mapping
 
 ### Improvements
 

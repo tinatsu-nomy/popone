@@ -105,6 +105,7 @@
     - [File Hierarchy Tree](#file-hierarchy-tree)
     - [Always-On Material Grouping](#always-on-material-grouping)
     - [Prefab Reload (A/T Stance Conversion Support)](#prefab-reload-at-stance-conversion-support)
+    - [FBX Direct Selection: Prefab-Aware Reload](#fbx-direct-selection-prefab-aware-reload)
   - [Reload Texture Normalization](#reload-texture-normalization)
     - [reload_unitypackage Texture Restoration](#reload_unitypackage-texture-restoration)
     - [IrTexture Deduplication in assign_texture_source_to_material](#irtexture-deduplication-in-assign_texture_source_to_material)
@@ -1690,6 +1691,27 @@ reload_current()
 `assign_texture_data_to_material()` can apply textures after GPU model construction (adds IrTexture + rebuilds bind group). For borrow checker compliance, restoration data is first collected into a `Vec<(usize, String, Vec<u8>)>` before application.
 
 `reload_as_prefab` receives `archive_source: &ReloadableSource` and, when `snapshot` is `None` (archive loaded from a regular file, not a temp file), preserves the original `Archive` source. This ensures reloads correctly enter the `reload_archive_unitypackage` path and prevents ZIP files from being parsed as GLB.
+
+### FBX Direct Selection: Prefab-Aware Reload
+
+When an FBX is directly selected from a `.unitypackage` (not via Prefab), `load_fbx_from_assets` uses `pkg_index` to call `prepare_pkg_fbx` + `embed_textures_with_prefab` for Prefab-aware texture mapping. However, `prefab_entry_path` is not set, so reloads do not branch to `reload_as_prefab`.
+
+**Problem**: `reload_unitypackage` uses `embed_textures_into_ir` (simple name matching), causing all textures to be lost on models where material names don't match texture names.
+
+**Fix**: `reload_unitypackage` checks whether `loaded.pkg_material_keys` is non-empty (indicating Prefab-aware mapping was used during initial load). If so, it rebuilds `UnityPackageIndex` and uses the Prefab-aware path.
+
+```
+reload_current()
+  → reload_unitypackage()
+    → pkg_material_keys non-empty?
+      → Yes: Prefab-aware path
+        1. Rebuild pkg_index via build_unity_package_index()
+        2. Look up FBX index in pkg_index from assets pathname
+        3. Resolve Prefab textures via prepare_pkg_fbx()
+        4. Embed textures via embed_textures_with_prefab()
+        5. Rebuild pkg_material_keys after finish_load()
+      → No: Legacy path (embed_textures_into_ir)
+```
 
 ## Reload Texture Normalization
 

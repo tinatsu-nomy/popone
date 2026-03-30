@@ -2397,6 +2397,12 @@ impl ViewerApp {
             return self.load_vrm_from_assets(assets, vrm_idx, path, source_override);
         }
 
+        // 初回ロードで Prefab 対応テクスチャマッピングが使われたか判定
+        let use_prefab_mapping = self
+            .loaded
+            .as_ref()
+            .is_some_and(|l| !l.pkg_material_keys.is_empty());
+
         let fbx_list = crate::unitypackage::find_fbx_list(&assets);
         if fbx_list.is_empty() {
             anyhow::bail!(".unitypackage 内に FBX ファイルが見つかりません");
@@ -2412,6 +2418,155 @@ impl ViewerApp {
             fbx_list[0].0
         };
 
+        if use_prefab_mapping {
+            // Prefab 対応パス: UnityPackageIndex を構築し prepare_pkg_fbx で Prefab テクスチャ解決
+            let pkg_index = std::sync::Arc::new(crate::unitypackage::build_unity_package_index(
+                &archive_data,
+            )?);
+            // assets 内の FBX インデックスを pkg_index 内のインデックスに変換
+            let fbx_pathname = &assets[fbx_idx].pathname;
+            let pkg_fbx_idx = pkg_index
+                .by_path
+                .get(fbx_pathname.as_str())
+                .copied()
+                .unwrap_or(fbx_idx);
+
+            let prepared = crate::unitypackage::prepare_pkg_fbx(&pkg_index, pkg_fbx_idx)?;
+            let fbx_name = std::path::Path::new(prepared.model.pathname.as_ref())
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            log::info!(
+                "unitypackage再読み込み (Prefab): {} テクスチャ: {}個",
+                fbx_name,
+                prepared.textures.len()
+            );
+
+            let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                &prepared.fbx_data,
+                Some(path),
+                self.normalize_pose,
+                self.normalize_to_tstance,
+            )?;
+
+            // Prefab 対応テクスチャ埋め込み
+            crate::unitypackage::embed_textures_with_prefab(
+                &mut ir,
+                &prepared.textures,
+                &prepared.resolved,
+            );
+
+            // pkg_textures を legacy 形式で保持
+            let legacy_textures: Vec<(String, Vec<u8>)> = prepared
+                .textures
+                .iter()
+                .map(|t| (t.display_name.to_string(), t.data.to_vec()))
+                .collect();
+            if !legacy_textures.is_empty() {
+                self.tex.pkg_textures = Some(legacy_textures);
+                self.rebuild_pkg_thumb_cache();
+            }
+
+            // 手動割当の復元（GPU構築前にIrModelに適用）
+            if !saved_pkg_tex_assignments.is_empty() {
+                let pkg_src = self.tex.pkg_textures.as_deref().unwrap_or(&[]);
+                let name_to_data: HashMap<&str, &[u8]> = pkg_src
+                    .iter()
+                    .map(|(name, data)| (name.as_str(), data.as_slice()))
+                    .collect();
+                let mut name_to_ir: HashMap<String, usize> = HashMap::new();
+                for (mat_idx, tex_name) in saved_pkg_tex_assignments {
+                    if *mat_idx >= ir.materials.len() {
+                        continue;
+                    }
+                    let ir_idx = if let Some(&cached) = name_to_ir.get(tex_name) {
+                        cached
+                    } else if let Some(data) = name_to_data.get(tex_name.as_str()) {
+                        let is_psd = super::super::texture::is_psd_filename(tex_name);
+                        let basename = std::path::Path::new(tex_name)
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+                        let (ir_data, ir_filename, ir_mime) = if is_psd {
+                            match Self::psd_to_png(data) {
+                                Ok(png_data) => (
+                                    png_data,
+                                    format!("{}.png", basename),
+                                    "image/png".to_string(),
+                                ),
+                                Err(e) => {
+                                    log::warn!("PSD→PNG変換失敗 (pkg復元): {e}");
+                                    continue;
+                                }
+                            }
+                        } else {
+                            let ext = std::path::Path::new(tex_name)
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
+                            (data.to_vec(), tex_name.clone(), mime)
+                        };
+                        let idx = ir.textures.len();
+                        ir.textures.push(crate::intermediate::types::IrTexture {
+                            filename: ir_filename,
+                            data: ir_data,
+                            mime_type: ir_mime,
+                        });
+                        name_to_ir.insert(tex_name.clone(), idx);
+                        idx
+                    } else {
+                        continue;
+                    };
+                    ir.materials[*mat_idx].texture_index = Some(ir_idx);
+                    ir.materials[*mat_idx].apply_textured_defaults();
+                    log::info!(
+                        "テクスチャ復元: 材質[{}] '{}' ← '{}'",
+                        mat_idx,
+                        ir.materials[*mat_idx].name,
+                        tex_name
+                    );
+                }
+            }
+
+            // pkg_material_keys を再構築
+            let pkg_keys: Vec<Option<crate::unitypackage::PkgMaterialKey>> = {
+                let fbx_guid: std::sync::Arc<str> = prepared.model.guid.as_ref().into();
+                let instance_id = crate::unitypackage::BASE_INSTANCE_ID;
+                ir.materials
+                    .iter()
+                    .map(|mat| {
+                        Some(crate::unitypackage::PkgMaterialKey {
+                            instance_id,
+                            model_guid: fbx_guid.clone(),
+                            source_material: mat.source_material.clone(),
+                            material_name: mat.name.as_str().into(),
+                        })
+                    })
+                    .collect()
+            };
+
+            let reload_source = match snapshot {
+                Some(snap) => ReloadableSource::Snapshot {
+                    original_path: path.to_path_buf(),
+                    main_bytes: snap,
+                    aux_files: HashMap::new(),
+                },
+                None => ReloadableSource::File(path.to_path_buf()),
+            };
+            let result = self.finish_load(ir, reload_source);
+            // finish_load がクリアするので、その後に復元
+            self.tex.pkg_assignments = saved_pkg_tex_assignments.clone();
+            if let Some(ref mut loaded) = self.loaded {
+                loaded.pkg_material_keys = pkg_keys;
+            }
+            return result;
+        }
+
+        // 通常パス: 単純名前マッチング
         let (fbx_data, fbx_name, textures) =
             crate::unitypackage::take_fbx_and_textures(assets, fbx_idx)?;
         log::info!(
