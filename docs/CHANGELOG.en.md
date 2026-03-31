@@ -3,9 +3,11 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.2.17](#v0217)
+    - [Bug Fixes](#bug-fixes)
   - [v0.2.16](#v0216)
     - [New Features](#new-features)
-    - [Bug Fixes](#bug-fixes)
+    - [Bug Fixes](#bug-fixes-1)
     - [Improvements](#improvements)
   - [v0.2.15](#v0215)
     - [New Features](#new-features-1)
@@ -15,7 +17,7 @@
   - [v0.2.13](#v0213)
     - [Improvements](#improvements-3)
   - [v0.2.12](#v0212)
-    - [Bug Fixes](#bug-fixes-1)
+    - [Bug Fixes](#bug-fixes-2)
     - [New Features](#new-features-2)
     - [Improvements](#improvements-4)
   - [v0.2.11](#v0211)
@@ -24,13 +26,13 @@
   - [v0.2.10](#v0210)
     - [New Features](#new-features-4)
     - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
-    - [Bug Fixes](#bug-fixes-2)
+    - [Bug Fixes](#bug-fixes-3)
     - [Improvements](#improvements-6)
     - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
   - [v0.2.9](#v029)
     - [New Features](#new-features-5)
     - [Improvements](#improvements-7)
-    - [Bug Fixes](#bug-fixes-3)
+    - [Bug Fixes](#bug-fixes-4)
     - [Implementation Details](#implementation-details)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
@@ -38,11 +40,11 @@
     - [Improvements](#improvements-8)
   - [v0.2.7](#v027)
     - [New Features](#new-features-7)
-    - [Bug Fixes](#bug-fixes-4)
+    - [Bug Fixes](#bug-fixes-5)
     - [Improvements](#improvements-9)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
-    - [Bug Fixes](#bug-fixes-5)
+    - [Bug Fixes](#bug-fixes-6)
     - [New Features](#new-features-8)
     - [Improvements](#improvements-10)
     - [Code Quality & Performance](#code-quality--performance-1)
@@ -62,6 +64,14 @@
 # Changelog
 
 [日本語](CHANGELOG.md)
+
+## v0.2.17
+
+### Bug Fixes
+
+- **Zero-weight bind filtering for VRM 0.0 morph conversion** — VRM 0.0 BlendShapeGroup processing did not filter `weight=0` binds, causing zero-offset entries from all morph targets to leak into IrMorph. This generated tens of thousands of unnecessary entries per Expression, bloating PMX files. Fixed by skipping `weight == 0.0` binds, matching VRM 1.0 behavior
+- **Viewer morph offset accumulation bug fix** — GPU morph data construction used `HashMap::collect()`, which overwrote duplicate vertex offsets (only the last entry survived). For Expressions where multiple morph target binds affect the same vertex (e.g., mouth_a + mouth_small sharing lip vertices), earlier offsets were silently lost. Fixed by using `entry().or_insert() += off` for proper additive blending
+- **PMX morph vertex deduplication** — PMX export now merges multiple offsets for the same vertex by summing, and removes zero-result entries. Improves compatibility with PMXEditor
 
 ## v0.2.16
 

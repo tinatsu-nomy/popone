@@ -2041,6 +2041,9 @@ fn extract_morphs_v0(
         let mut tangent_offsets_all: Vec<(usize, Vec3)> = Vec::new();
 
         for bind in &group.binds {
+            if bind.weight == 0.0 {
+                continue;
+            }
             let target_mesh_idx = bind.mesh as usize;
             let mesh_name = document
                 .meshes()

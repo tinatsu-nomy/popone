@@ -995,6 +995,8 @@ Blender / Substance Painter 風のダークテーマを `setup_dark_theme()` で
 - モーフ適用時の法線・接線追従: `IrMorphTarget` は `position_offsets` に加えて `normal_offsets` / `tangent_offsets` を疎表現（閾値 1e-7）で保持。GPU モーフ適用（`apply_gpu_morph_recursive`）で位置・法線・接線に weight × delta を加算。tangent.w（handedness）は変更しない。Aスタンス変換（`pose.rs`）・頂点分割（`tangent.rs`）・エクスポートフィルタ（`export_filter.rs`）でも法線・接線デルタを正しく伝搬
 - NORMAL/TANGENT のみモーフ対応: POSITION デルタを持たず NORMAL/TANGENT のみの morph target（glTF 2.0 仕様で合法）を end-to-end でサポート。`IrMorph` 生成条件・エクスポートフィルタ生存判定・GPU モーフ変換の全段で、影響頂点を positions/normals/tangents の和集合（`BTreeSet`）で収集
 - モーフ適用時の CPU 側頂点同期: `apply_morphs()` で GPU バッファと同時に `animated_vertices`（CPU 側キャッシュ）も更新。`current_vertices()` がモーフのみ変更フレームでも morphed 頂点を返し、半透明距離ソートが正確に機能する
+- VRM モーフバインド重複頂点の合算: 1 つの Expression が複数の morph target bind を持ち、異なる morph target が同一頂点に影響する場合（例: mouth_a と mouth_small が口周辺頂点を共有）、各 bind のオフセットを `HashMap::entry().or_insert() += off` で加算合成する。VRM 0.0 / 1.0 共通。PMX 出力側でも同一頂点オフセットを合算し、結果がゼロのエントリを除去する
+- VRM 0.0 ゼロウェイトバインドフィルタ: VRM 0.0 の BlendShapeGroup で `weight=0` のバインドをスキップ（VRM 1.0 と同様）。全 morph target をバインドに含めるモデル（weight=0 で無効化）に対応し、不要なゼロオフセットエントリの混入を防止
 - glTF sampler 未指定時のデフォルト `min_filter` は `LinearMipmapLinear`（UniVRM `SamplerParam.Default` 準拠: Bilinear + mipmap 有効）
 
 ### 描画順

@@ -898,9 +898,18 @@ fn build_gpu_model_inner(
                 ref normals,
                 ref tangents,
             } => {
-                let pos_map: HashMap<usize, Vec3> = positions.iter().copied().collect();
-                let nrm_map: HashMap<usize, Vec3> = normals.iter().copied().collect();
-                let tan_map: HashMap<usize, Vec3> = tangents.iter().copied().collect();
+                let mut pos_map: HashMap<usize, Vec3> = HashMap::new();
+                for &(vi, off) in positions {
+                    *pos_map.entry(vi).or_insert(Vec3::ZERO) += off;
+                }
+                let mut nrm_map: HashMap<usize, Vec3> = HashMap::new();
+                for &(vi, off) in normals {
+                    *nrm_map.entry(vi).or_insert(Vec3::ZERO) += off;
+                }
+                let mut tan_map: HashMap<usize, Vec3> = HashMap::new();
+                for &(vi, off) in tangents {
+                    *tan_map.entry(vi).or_insert(Vec3::ZERO) += off;
+                }
                 // positions / normals / tangents の和集合で影響頂点を収集
                 let affected: std::collections::BTreeSet<usize> = positions
                     .iter()

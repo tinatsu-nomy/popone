@@ -1786,11 +1786,18 @@ fn build_morphs(ir: &IrModel, use_vrm0_coords: bool) -> Vec<PmxMorph> {
                         positions.len()
                     );
                     vertex_count += 1;
-                    let pmx_offs = positions
-                        .iter()
+                    // 同一頂点の重複オフセットを合算
+                    let mut merged: std::collections::HashMap<u32, glam::Vec3> =
+                        std::collections::HashMap::new();
+                    for &(vi, off) in positions {
+                        *merged.entry(vi as u32).or_insert(glam::Vec3::ZERO) += pos_fn(off);
+                    }
+                    let pmx_offs: Vec<VertexMorphOffset> = merged
+                        .into_iter()
+                        .filter(|(_, off)| off.length_squared() > 1e-12)
                         .map(|(vi, off)| VertexMorphOffset {
-                            vertex_index: *vi as u32,
-                            offset: pos_fn(*off),
+                            vertex_index: vi,
+                            offset: off,
                         })
                         .collect();
                     (1u8, PmxMorphOffsets::Vertex(pmx_offs))
