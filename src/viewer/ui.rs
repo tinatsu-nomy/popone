@@ -1217,6 +1217,7 @@ fn show_tab_display(
         app.display.ambient_sky_color = d.ambient_sky_color;
         app.display.ambient_ground_color = d.ambient_ground_color;
         app.display.bg_brightness = d.bg_brightness;
+        // Bloom は専用の初期値ボタンがあるため、ここでは触らない
     }
     // ライト・環境光・Ground のカラーボタン位置を Grid で揃える
     egui::Grid::new("light_color_grid")
@@ -1429,6 +1430,24 @@ fn show_tab_display(
 
     ui.separator();
     ui.checkbox(&mut app.display.msaa, "MSAA (アンチエイリアス)");
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut app.display.bloom_enabled, "Bloom (グロー)");
+        if app.display.bloom_enabled && ui.small_button("初期値").clicked() {
+            let d = DisplaySettings::default();
+            app.display.bloom_intensity = d.bloom_intensity;
+            app.display.bloom_threshold = d.bloom_threshold;
+            app.display.bloom_radius = d.bloom_radius;
+        }
+    });
+    if app.display.bloom_enabled {
+        ui.add(egui::Slider::new(&mut app.display.bloom_intensity, 0.0..=4.0).text("Bloom 強度"));
+        ui.add(
+            egui::Slider::new(&mut app.display.bloom_threshold, 0.0..=1.0)
+                .max_decimals(2)
+                .text("Bloom 閾値"),
+        );
+        ui.add(egui::Slider::new(&mut app.display.bloom_radius, 3..=6).text("Bloom 半径"));
+    }
     ui.checkbox(&mut app.display.show_normals, "法線表示 (N)");
     if app.display.show_normals {
         ui.add(egui::Slider::new(&mut app.display.normal_length, 0.1..=3.0).text("法線長さ"));

@@ -32,7 +32,7 @@
 | FBX バイナリ (`.fbx`) | 自前パーサーによる解析。Mixamo / Blender / VRoid / Unreal 等のリグを自動検出。名前空間プレフィックス（`Model::` 等）対応 |
 | PMX 2.0 / 2.1 (`.pmx`) | MikuMikuDance モデル形式。ビューア表示 + UVマップ出力 |
 | PMD (`.pmd`) | MikuMikuDance モデル形式。Shift_JIS 対応 |
-| UnityPackage (`.unitypackage`) | tar.gz アーカイブから Prefab / VRM / FBX + テクスチャを自動抽出。Prefab 経由のテクスチャマッピング対応 |
+| UnityPackage (`.unitypackage`) | tar.gz アーカイブから Prefab / VRM / FBX + テクスチャを自動抽出。Prefab 経由のテクスチャ・ノーマルマップ自動マッピング対応 |
 | ZIP (`.zip`) | アーカイブ内の VRM / FBX / PMX / PMD / UnityPackage を自動検出・展開 |
 | 7z (`.7z`) | アーカイブ内の VRM / FBX / PMX / PMD / UnityPackage を自動検出・展開 |
 
@@ -62,7 +62,7 @@ popone.exe input.fbx
 - **ファイル構成ツリー** — 開いたファイルから最終モデルまでのロードチェーンを階層表示。テクスチャ・アニメーション・パッケージテクスチャの一覧も確認可能
 - **テクスチャ割り当て** — 材質に外部テクスチャ（PNG/JPG/TGA/BMP/PSD）を D&D またはダイアログで割り当て。リアルタイムプレビュー付き。VRM 埋め込みテクスチャの差し替えにも対応（リセットボタンで復元可能）
 - **同名材質連動** — 同じ名前の材質に同時にテクスチャを割り当てる ON/OFF スイッチ
-- **UnityPackage 対応** — Prefab / VRM / FBX モデル選択ダイアログ。Prefab 選択時は Unity GUID 参照チェーン（`.prefab` → FBX `.meta` → `.mat` → テクスチャ）でテクスチャを自動マッピング。新形式・旧形式・Unpacked・Mixed・Variant に対応。複数 FBX を参照する Prefab はマージ表示。テクスチャ自動割当（サムネイルプレビュー・検索フィルタ付き手動割当も可能）
+- **UnityPackage 対応** — Prefab / VRM / FBX モデル選択ダイアログ。Prefab 選択時は Unity GUID 参照チェーン（`.prefab` → FBX `.meta` → `.mat` → テクスチャ）でテクスチャ・ノーマルマップを自動マッピング（`_BumpMap` / `_NormalMap` + `_BumpScale` 対応）。新形式・旧形式・Unpacked・Mixed・Variant に対応。複数 FBX を参照する Prefab はマージ表示。テクスチャ自動割当（サムネイルプレビュー・検索フィルタ付き手動割当も可能）
 - **ワイヤーフレーム** — 3 モード切替（Solid / Wire / S+W）。W キーで巡回。Wire モードではアウトライン・MMD エッジも含め全描画がワイヤーフレームに統一される
 - **ボーン表示** — フラグ別の形状描画。通常=◎（二重円＋中心塗り）、移動=◻（正方形＋中心塗り）、軸制限=⊗（円＋✕）、IKコントローラ=◻（青枠＋オレンジ塗り＋青中心）。IK影響下ボーン（Link）はオレンジ。テイルベース描画で PMXEditor 準拠の方向表示。カメラ距離に関わらず一定サイズ
 - **物理可視化** — 剛体（球体・カプセル・ボックス）を 1px ワイヤーフレームで表示。PMX/PMD は physics_mode 色分け（ボーン追従=グリーン、物理演算=レッド、物理+ボーン=ブルー）、VRM は group 色分け（コライダー=レッド、スプリング=グリーン）。カプセルは半球ワイヤーフレーム付き（PMX/PMD）
@@ -70,6 +70,7 @@ popone.exe input.fbx
 - **シェーダーオーバーライド** — 6 種のシェーダーモード切替（▲ ComboBox ▼）: Auto（モデル形式で自動選択）/ MToon/Lambert（Standard 強制）/ Unlit（テクスチャ色のみ）/ GGX Preview（簡易 Cook-Torrance スペキュラ）/ 法線（法線→RGB 可視化）/ MMD（MMD 専用パス）。新規モデルロード時は Auto にリセットされる
 - **法線ツール** — 法線平滑化・カスタム法線クリア（いずれも法線マップ付き材質がある場合は自動無効化）、法線方向の可視化
 - **MSAA** — 4x アンチエイリアシング（ON/OFF 切替可能）。MASK（cutout）材質ではサーフェスとアウトラインの両パスで alpha_to_coverage を有効化し、まつ毛・髪カード等のジャギーを軽減
+- **Bloom（グロー）** — Dual Kawase 方式のポストエフェクト。emissive 成分のみが光る（MRT で分離）。強度・閾値・半径を UI で調整可能。PMX/PMD では specular=(0,0,0) かつ specular_power≥100 の材質が自動的に Bloom 対象になる。Prefab Emission テクスチャ/色にも対応。無効時は GPU 負荷ゼロ
 - **UVマップ出力** — 材質レイヤー分けの PSD として出力（1024〜8192 解像度）。UV 境界をまたぐ三角形のラップ描画対応。複数モデルマージ時はモデル別にレイヤーグループフォルダに格納
 - **モデル追加読み込み** — 衣装 FBX 等を既存モデルにマージ。ボーンマッチングは 3 段フォールバック（VRM ヒューマノイド名 → FBX ノード名 → PMX 名）で異なる命名規則のモデル間でも正しく統合
 

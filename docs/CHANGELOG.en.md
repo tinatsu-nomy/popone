@@ -3,58 +3,61 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.2.18](#v0218)
+    - [New Features](#new-features)
+    - [Improvements](#improvements)
   - [v0.2.17](#v0217)
     - [Bug Fixes](#bug-fixes)
   - [v0.2.16](#v0216)
-    - [New Features](#new-features)
-    - [Bug Fixes](#bug-fixes-1)
-    - [Improvements](#improvements)
-  - [v0.2.15](#v0215)
     - [New Features](#new-features-1)
+    - [Bug Fixes](#bug-fixes-1)
     - [Improvements](#improvements-1)
-  - [v0.2.14](#v0214)
+  - [v0.2.15](#v0215)
+    - [New Features](#new-features-2)
     - [Improvements](#improvements-2)
-  - [v0.2.13](#v0213)
+  - [v0.2.14](#v0214)
     - [Improvements](#improvements-3)
+  - [v0.2.13](#v0213)
+    - [Improvements](#improvements-4)
   - [v0.2.12](#v0212)
     - [Bug Fixes](#bug-fixes-2)
-    - [New Features](#new-features-2)
-    - [Improvements](#improvements-4)
-  - [v0.2.11](#v0211)
     - [New Features](#new-features-3)
     - [Improvements](#improvements-5)
-  - [v0.2.10](#v0210)
+  - [v0.2.11](#v0211)
     - [New Features](#new-features-4)
+    - [Improvements](#improvements-6)
+  - [v0.2.10](#v0210)
+    - [New Features](#new-features-5)
     - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
     - [Bug Fixes](#bug-fixes-3)
-    - [Improvements](#improvements-6)
+    - [Improvements](#improvements-7)
     - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
   - [v0.2.9](#v029)
-    - [New Features](#new-features-5)
-    - [Improvements](#improvements-7)
+    - [New Features](#new-features-6)
+    - [Improvements](#improvements-8)
     - [Bug Fixes](#bug-fixes-4)
     - [Implementation Details](#implementation-details)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
-    - [New Features](#new-features-6)
-    - [Improvements](#improvements-8)
-  - [v0.2.7](#v027)
     - [New Features](#new-features-7)
-    - [Bug Fixes](#bug-fixes-5)
     - [Improvements](#improvements-9)
+  - [v0.2.7](#v027)
+    - [New Features](#new-features-8)
+    - [Bug Fixes](#bug-fixes-5)
+    - [Improvements](#improvements-10)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
     - [Bug Fixes](#bug-fixes-6)
-    - [New Features](#new-features-8)
-    - [Improvements](#improvements-10)
+    - [New Features](#new-features-9)
+    - [Improvements](#improvements-11)
     - [Code Quality & Performance](#code-quality--performance-1)
   - [v0.2.5](#v025)
-    - [Improvements](#improvements-11)
+    - [Improvements](#improvements-12)
     - [Code Quality & Performance](#code-quality--performance-2)
   - [v0.2.4](#v024)
-    - [Improvements](#improvements-12)
-  - [v0.2.3](#v023)
     - [Improvements](#improvements-13)
+  - [v0.2.3](#v023)
+    - [Improvements](#improvements-14)
   - [v0.2.2](#v022)
     - [Code Quality & Performance](#code-quality--performance-3)
   - [FBX Support](#fbx-support)
@@ -64,6 +67,21 @@
 # Changelog
 
 [日本語](CHANGELOG.md)
+
+## v0.2.18
+
+### New Features
+
+- **Prefab-based normal map application** — Resolves normal map textures (`_BumpMap` / `_NormalMap`) from `.mat` files within `.unitypackage` and applies them to FBX model viewer display. Also reads `_BumpScale` from the `.mat` `m_Floats` section to reflect normal map intensity. Prioritizes `_BumpMap` (Standard / lilToon / Poiyomi / AXCS / WF) with fallback to `_NormalMap` (UTS2)
+- **Bloom (glow) post-effect** — Dual Kawase (Dual Filtering) bloom implementation. MRT (Multiple Render Target) separates emissive components only — grids and non-emissive surfaces do not glow. Render pass split into mesh drawing (MRT 2 targets) and overlay (1 target). Bloom intermediate buffers use Rgba8Unorm (linear) to avoid sRGB arithmetic artifacts. UI parameters: ON/OFF, intensity (0.0–4.0, default 0.8), threshold (0.0–1.0, default 0.0), radius (3–6 downsample stages, default 4). Bloom pass skipped when disabled (MRT 2-target rendering remains active; only additional bandwidth cost)
+- **PMX/PMD self-emissive material bloom** — Materials with specular=(0,0,0) and specular_power≥100 are detected as self-emissive. Bloom intensity = (specular_power − 100) / 10 (sp=110 equals VRM emissive=1.0). bloom_emissive is output only to MRT @location(1), not added to scene color
+- **Prefab Emission texture/color auto-application** — Added `m_Colors` section and `m_ShaderKeywords` / `m_ValidKeywords` parsing in `.mat` files. Auto-assigns `_EmissionColor` / `_EmissionMap`. Emission enabled by priority: `_Emission` float → `_EMISSION` keyword → `_EmissionMap` presence → `_EmissionColor` non-black non-white. When `_EmissionMap` is present but `_EmissionColor` is black, color is corrected to white
+
+### Improvements
+
+- **`.mat` parser MatSection enum refactoring** — Section transitions between `m_TexEnvs`, `m_Floats`, `m_Colors`, and `m_ShaderKeywords` are now safely managed via a `MatSection` enum. Supports YAML multi-line list format (`- _EMISSION`)
+- **Texture assignment log improvements** — `embed_textures_with_prefab()` logs now separate base color and normal map counts (`base=X/Y, normal=Z/Y`). Unmatched detection remains base-color-only, preserving manual assignment dialog behavior
+- **PMX output determinism** — `build_morphs()` now sorts by `vertex_index` after HashMap merge, ensuring stable PMX binary output across runs
 
 ## v0.2.17
 

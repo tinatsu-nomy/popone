@@ -195,6 +195,14 @@ pub struct DisplaySettings {
     pub mmd_edge_enabled: bool,
     /// MMD エッジ太さ全体スケール (0.1〜3.0)
     pub mmd_edge_thickness: f32,
+    /// Bloom エフェクト
+    pub bloom_enabled: bool,
+    /// Bloom 合成強度 (0.0〜4.0、2.0 = VRM 標準)
+    pub bloom_intensity: f32,
+    /// Bloom 輝度抽出閾値 (0.0〜1.0)
+    pub bloom_threshold: f32,
+    /// Bloom 拡散段数 (3〜6、大きいほど広い glow)
+    pub bloom_radius: u32,
 }
 
 impl Default for DisplaySettings {
@@ -227,6 +235,10 @@ impl Default for DisplaySettings {
             outline_enabled: true,
             mmd_edge_enabled: true,
             mmd_edge_thickness: 1.0,
+            bloom_enabled: false,
+            bloom_intensity: 0.8,
+            bloom_threshold: 0.0,
+            bloom_radius: super::bloom::DEFAULT_BLOOM_RADIUS,
         }
     }
 }

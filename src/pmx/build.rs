@@ -1792,7 +1792,7 @@ fn build_morphs(ir: &IrModel, use_vrm0_coords: bool) -> Vec<PmxMorph> {
                     for &(vi, off) in positions {
                         *merged.entry(vi as u32).or_insert(glam::Vec3::ZERO) += pos_fn(off);
                     }
-                    let pmx_offs: Vec<VertexMorphOffset> = merged
+                    let mut pmx_offs: Vec<VertexMorphOffset> = merged
                         .into_iter()
                         .filter(|(_, off)| off.length_squared() > 1e-12)
                         .map(|(vi, off)| VertexMorphOffset {
@@ -1800,6 +1800,8 @@ fn build_morphs(ir: &IrModel, use_vrm0_coords: bool) -> Vec<PmxMorph> {
                             offset: off,
                         })
                         .collect();
+                    // HashMap の走査順は非決定的なので vertex_index でソート（出力安定化）
+                    pmx_offs.sort_by_key(|o| o.vertex_index);
                     (1u8, PmxMorphOffsets::Vertex(pmx_offs))
                 }
                 IrMorphKind::Group(goffs) => {

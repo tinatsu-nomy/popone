@@ -1,5 +1,6 @@
 pub mod animation;
 pub mod app;
+pub mod bloom;
 pub mod camera;
 pub mod export_filter;
 pub mod gpu;

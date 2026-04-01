@@ -32,7 +32,7 @@
 | FBX Binary (`.fbx`) | Custom parser. Auto-detects Mixamo / Blender / VRoid / Unreal rigs. Namespace prefixes (`Model::`, etc.) supported |
 | PMX 2.0 / 2.1 (`.pmx`) | MikuMikuDance model format. Viewer display + UV map export |
 | PMD (`.pmd`) | MikuMikuDance model format. Shift_JIS support |
-| UnityPackage (`.unitypackage`) | Extracts Prefab / VRM / FBX + textures from tar.gz archive. Prefab-based texture mapping supported |
+| UnityPackage (`.unitypackage`) | Extracts Prefab / VRM / FBX + textures from tar.gz archive. Prefab-based texture and normal map auto-mapping supported |
 | ZIP (`.zip`) | Auto-detects and extracts VRM / FBX / PMX / PMD / UnityPackage from archive |
 | 7z (`.7z`) | Auto-detects and extracts VRM / FBX / PMX / PMD / UnityPackage from archive |
 
@@ -62,7 +62,7 @@ If the viewer is already running, subsequent launches pass the file path to the 
 - **File Hierarchy Tree** — Displays the load chain from opened file to final model in a tree view. Textures, animations, and package textures are also listed
 - **Texture Assignment** — Assign external textures (PNG/JPG/TGA/BMP/PSD) via drag & drop or dialog. Real-time preview. VRM embedded texture replacement supported (reset button to restore)
 - **Same-Name Material Linking** — ON/OFF toggle to assign textures to all materials sharing the same name simultaneously
-- **UnityPackage Support** — Prefab / VRM / FBX model selection dialog. When selecting a Prefab, textures are auto-mapped via Unity's GUID reference chain (`.prefab` → FBX `.meta` → `.mat` → texture). Supports New, Old, Unpacked, Mixed, and Variant formats. Prefabs referencing multiple FBX files are merged for display. Auto texture matching (manual assignment with thumbnail preview and search filter)
+- **UnityPackage Support** — Prefab / VRM / FBX model selection dialog. When selecting a Prefab, textures and normal maps are auto-mapped via Unity's GUID reference chain (`.prefab` → FBX `.meta` → `.mat` → texture/normal map, with `_BumpMap` / `_NormalMap` + `_BumpScale` support). Supports New, Old, Unpacked, Mixed, and Variant formats. Prefabs referencing multiple FBX files are merged for display. Auto texture matching (manual assignment with thumbnail preview and search filter)
 - **Wireframe** — 3 modes (Solid / Wire / S+W). W key to cycle. Wire mode unifies all rendering (including outlines and MMD edges) into wireframe
 - **Bone Display** — Flag-based shape rendering. Normal = ◎ (double circle + filled center), Move = ◻ (square + filled center), Axis-fixed = ⊗ (circle + ✕), IK Controller = ◻ (blue outline + orange fill + blue center). IK-affected bones (Link) in orange. Tail-based drawing for PMXEditor-compliant direction display. Constant screen-space size
 - **Physics Visualization** — Rigid bodies (sphere/capsule/box) in 1px wireframe. PMX/PMD colored by physics_mode (bone-follow = green, physics = red, physics+bone = blue), VRM colored by group (collider = red, spring = green). Capsules include hemisphere wireframes (PMX/PMD)
@@ -70,6 +70,7 @@ If the viewer is already running, subsequent launches pass the file path to the 
 - **Shader Override** — 6 shader modes switchable via ▲ ComboBox ▼: Auto (auto-selects based on model format) / MToon/Lambert (force Standard path) / Unlit (texture color only) / GGX Preview (simplified Cook-Torrance specular) / Normal (normal→RGB visualization) / MMD (MMD dedicated path). Resets to Auto when loading a new model
 - **Normal Tools** — Normal smoothing, custom normal clear (both auto-disabled when normal-mapped materials are present), normal direction visualization
 - **MSAA** — 4x anti-aliasing (toggleable). MASK (cutout) materials enable alpha_to_coverage on both surface and outline passes for reduced jaggies on eyelashes, hair cards, etc.
+- **Bloom (Glow)** — Dual Kawase post-effect. Only emissive components glow (separated via MRT). Intensity, threshold, and radius adjustable in the UI. PMX/PMD materials with specular=(0,0,0) and specular_power≥100 are automatically bloom targets. Also supports Prefab Emission textures/colors. Zero GPU cost when disabled
 - **UV Map Export** — PSD output with per-material layers (1024–8192 resolution). UV boundary wrap handling for triangles crossing 0/1 edges. Groups layers into folders by model name when multiple models are merged
 - **Model Append Loading** — Merge costume FBX etc. into existing model. Bone matching uses 3-level fallback (VRM humanoid name → FBX node name → PMX name) for correct merging across different naming conventions
 

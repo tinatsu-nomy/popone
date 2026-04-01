@@ -98,7 +98,8 @@ pub struct MmdMaterialUniform {
     pub flags: u32, // bit0=has_sphere, bit1=sphere_add, bit2=has_toon
     pub edge_color: [f32; 4],
     pub edge_size: f32,
-    pub _pad: [f32; 3],
+    /// PMX/PMD 自己発光色（Bloom 用、derive_pmx_bloom で算出）
+    pub bloom_emissive: [f32; 3],
 }
 
 /// 材質 uniform バッファ（MToon パラメータ含む）
@@ -292,9 +293,14 @@ macro_rules! wgsl_mmd_material_uniform {
     flags: u32,
     edge_color: vec4<f32>,
     edge_size: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    bloom_emissive_r: f32,
+    bloom_emissive_g: f32,
+    bloom_emissive_b: f32,
+};
+
+struct MmdFsOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) bloom: vec4<f32>,
 };"#
     };
 }
@@ -512,8 +518,13 @@ fn apply_alpha_mode(alpha: f32, cutoff: f32) -> f32 {
     return alpha;
 }
 
+struct FsOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) bloom: vec4<f32>,
+};
+
 @fragment
-fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput {
     // doubleSided 材質の背面法線反転（UniVRM 準拠: 法線マップ適用前に反転）
     let face_sign = select(-1.0, 1.0, is_front);
     var n = normalize(in.normal) * face_sign;
@@ -550,7 +561,10 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
         let raw_alpha = textureSample(t_diffuse, s_diffuse, base_uv).a * material.diffuse.a;
         if raw_alpha <= 0.001 { discard; }
         let vis_n = normalize(in.normal) * face_sign;
-        return vec4<f32>(vis_n * 0.5 + vec3<f32>(0.5), raw_alpha);
+        var out_n: FsOutput;
+        out_n.color = vec4<f32>(vis_n * 0.5 + vec3<f32>(0.5), raw_alpha);
+        out_n.bloom = vec4<f32>(0.0);
+        return out_n;
     }
     if camera.shader_mode == 2u {
         // Unlit: テクスチャ色のみ、ライティングなし
@@ -558,7 +572,10 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
         let tex = textureSample(t_diffuse, s_diffuse, base_uv);
         let c = tex * material.diffuse;
         if c.a <= 0.001 { discard; }
-        return vec4<f32>(c.rgb, c.a);
+        var out_u: FsOutput;
+        out_u.color = vec4<f32>(c.rgb, c.a);
+        out_u.bloom = vec4<f32>(0.0);
+        return out_u;
     }
     if camera.shader_mode == 3u {
         // GGX Preview: 簡易 Cook-Torrance スペキュラ
@@ -610,11 +627,15 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
         let ambient = mix(camera.ambient_ground, camera.ambient, vec3<f32>(hemi_t));
         let indirect = base_color.rgb * ambient;
 
-        return vec4<f32>(direct + indirect, out_a);
+        var out_g: FsOutput;
+        out_g.color = vec4<f32>(direct + indirect, out_a);
+        out_g.bloom = vec4<f32>(0.0);
+        return out_g;
     }
 
     var lit: vec3<f32>;
     var out_alpha: f32 = 1.0;
+    var bloom_color: vec3<f32> = vec3<f32>(0.0);
     if material.is_mtoon > 0.5 {
 
         // テクスチャサンプリング（UVアニメーション + texCoord/KHR_texture_transform 適用）
@@ -706,6 +727,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
             emissive *= textureSample(t_emissive, s_emissive, emissive_uv).rgb;
         }
 
+        bloom_color = emissive;
         lit = lighting + rim_lit + emissive;
     } else {
         // 非MToon: 既存 Half-Lambert（texCoord + KHR_texture_transform 適用）
@@ -725,11 +747,15 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
             let emissive_uv = resolve_mtoon_uv(in.uv, in.uv1, material.emissive_uv_a, material.emissive_uv_b);
             emissive *= textureSample(t_emissive, s_emissive, emissive_uv).rgb;
         }
+        bloom_color = emissive;
         lit += emissive;
     }
 
     out_alpha = apply_alpha_mode(out_alpha, material.alpha_cutoff);
-    return vec4<f32>(lit, out_alpha);
+    var out: FsOutput;
+    out.color = vec4<f32>(lit, out_alpha);
+    out.bloom = vec4<f32>(bloom_color, out_alpha);
+    return out;
 }
 "#
 );
@@ -873,10 +899,13 @@ const MMD_EDGE_SHADER_SRC: &str = concat!(
     wgsl_mmd_edge_body!(),
     r#"
 @fragment
-fn fs_edge() -> @location(0) vec4<f32> {
+fn fs_edge() -> MmdFsOutput {
     // sRGBレンダーターゲットの自動エンコードを打ち消す
     let c = material.edge_color;
-    return vec4<f32>(pow(max(c.rgb, vec3<f32>(0.0)), vec3<f32>(2.2)), c.a);
+    var out: MmdFsOutput;
+    out.color = vec4<f32>(pow(max(c.rgb, vec3<f32>(0.0)), vec3<f32>(2.2)), c.a);
+    out.bloom = vec4<f32>(0.0);
+    return out;
 }
 "#
 );
@@ -889,11 +918,14 @@ const MMD_MAIN_SHADER_SRC: &str = concat!(
     wgsl_mmd_main_body!(),
     r#"
 @fragment
-fn fs_mmd(in: MmdVertexOutput) -> @location(0) vec4<f32> {
+fn fs_mmd(in: MmdVertexOutput) -> MmdFsOutput {
     let result = compute_mmd_lighting(in);
     // sRGBレンダーターゲットの自動エンコードを打ち消す（MMDはガンマ空間で計算）
     let output = pow(max(result.rgb, vec3<f32>(0.0)), vec3<f32>(2.2));
-    return vec4<f32>(output, result.a);
+    var out: MmdFsOutput;
+    out.color = vec4<f32>(output, result.a);
+    out.bloom = vec4<f32>(material.bloom_emissive_r, material.bloom_emissive_g, material.bloom_emissive_b, result.a);
+    return out;
 }
 "#
 );
@@ -906,9 +938,12 @@ const MMD_EDGE_SHADER_UNORM_SRC: &str = concat!(
     wgsl_mmd_edge_body!(),
     r#"
 @fragment
-fn fs_edge() -> @location(0) vec4<f32> {
+fn fs_edge() -> MmdFsOutput {
     // Unorm ターゲット: ガンマ空間値をそのまま出力（pow(2.2) 不要）
-    return material.edge_color;
+    var out: MmdFsOutput;
+    out.color = material.edge_color;
+    out.bloom = vec4<f32>(0.0);
+    return out;
 }
 "#
 );
@@ -921,10 +956,13 @@ const MMD_MAIN_SHADER_UNORM_SRC: &str = concat!(
     wgsl_mmd_main_body!(),
     r#"
 @fragment
-fn fs_mmd(in: MmdVertexOutput) -> @location(0) vec4<f32> {
+fn fs_mmd(in: MmdVertexOutput) -> MmdFsOutput {
     let result = compute_mmd_lighting(in);
     // Unorm ターゲット: ガンマ空間値をそのまま出力（pow(2.2) 不要）
-    return vec4<f32>(clamp(result.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), result.a);
+    var out: MmdFsOutput;
+    out.color = vec4<f32>(clamp(result.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), result.a);
+    out.bloom = vec4<f32>(material.bloom_emissive_r, material.bloom_emissive_g, material.bloom_emissive_b, result.a);
+    return out;
 }
 "#
 );
@@ -1004,14 +1042,25 @@ fn vs_main(
     return out;
 }
 
+struct FsOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) bloom: vec4<f32>,
+};
+
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+fn fs_main(in: VertexOutput) -> FsOutput {
+    var out: FsOutput;
+    out.color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    out.bloom = vec4<f32>(0.0);
+    return out;
 }
 
 @fragment
-fn fs_highlight_fill(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(1.0, 0.5, 0.0, 0.35);
+fn fs_highlight_fill(in: VertexOutput) -> FsOutput {
+    var out: FsOutput;
+    out.color = vec4<f32>(1.0, 0.5, 0.0, 0.35);
+    out.bloom = vec4<f32>(0.0);
+    return out;
 }
 "#
 );
@@ -1322,8 +1371,13 @@ const OUTLINE_SHADER_SRC: &str = concat!(
     wgsl_material_uniform!(),
     wgsl_outline_body!(),
     r#"
+struct FsOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) bloom: vec4<f32>,
+};
+
 @fragment
-fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput {
     let base = material.outline_color;
     // doubleSided 背面法線反転（UniVRM 準拠）
     let face_sign = select(-1.0, 1.0, is_front);
@@ -1352,7 +1406,10 @@ fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) ->
     let surface = compute_mtoon_surface_lighting(n, in.uv, in.uv1, in.world_pos);
     // UniVRM 準拠: outlineColor * lerp(1, baseCol, outlineLightingMix)
     let lit = base.rgb * mix(vec3<f32>(1.0), surface.rgb, material.outline_lighting_mix);
-    return vec4<f32>(lit, surface.a);
+    var out: FsOutput;
+    out.color = vec4<f32>(lit, surface.a);
+    out.bloom = vec4<f32>(0.0);
+    return out;
 }
 "#
 );
@@ -1365,8 +1422,13 @@ const OUTLINE_SHADER_UNORM_SRC: &str = concat!(
     wgsl_material_uniform!(),
     wgsl_outline_body!(),
     r#"
+struct FsOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) bloom: vec4<f32>,
+};
+
 @fragment
-fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput {
     let base = material.outline_color;
     // doubleSided 背面法線反転（UniVRM 準拠）
     let face_sign = select(-1.0, 1.0, is_front);
@@ -1395,7 +1457,10 @@ fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) ->
     let surface = compute_mtoon_surface_lighting(n, in.uv, in.uv1, in.world_pos);
     // UniVRM 準拠: outlineColor * lerp(1, baseCol, outlineLightingMix)
     let lit = base.rgb * mix(vec3<f32>(1.0), surface.rgb, material.outline_lighting_mix);
-    return vec4<f32>(clamp(lit, vec3<f32>(0.0), vec3<f32>(1.0)), surface.a);
+    var out: FsOutput;
+    out.color = vec4<f32>(clamp(lit, vec3<f32>(0.0), vec3<f32>(1.0)), surface.a);
+    out.bloom = vec4<f32>(0.0);
+    return out;
 }
 "#
 );
@@ -1611,6 +1676,8 @@ pub struct GpuRenderer {
     shared_toon_textures_unorm: [wgpu::TextureView; 10],
     shared_toon_sampler: wgpu::Sampler,
     default_mmd_aux_bind_group: wgpu::BindGroup,
+    /// Bloom ポストエフェクト
+    bloom: super::bloom::BloomPass,
 }
 
 /// MSAA サンプル数
@@ -1625,6 +1692,12 @@ struct OffscreenTarget {
     msaa_color_view_unorm: Option<wgpu::TextureView>,
     _depth: wgpu::Texture,
     depth_view: wgpu::TextureView,
+    /// MRT bloom source テクスチャ (Rgba8Unorm, linear, sample_count=1)
+    _bloom_source: wgpu::Texture,
+    bloom_source_view: wgpu::TextureView,
+    /// MRT bloom source MSAA テクスチャ（MSAA 有効時のみ）
+    _msaa_bloom_source: Option<wgpu::Texture>,
+    msaa_bloom_source_view: Option<wgpu::TextureView>,
     width: u32,
     height: u32,
     msaa: bool,
@@ -1898,6 +1971,7 @@ impl GpuRenderer {
         }
 
         // sRGB パイプラインセット（現行シェーダー: pow(2.2) 付き）
+        let bloom_format = wgpu::TextureFormat::Rgba8Unorm;
         let pipelines_msaa_srgb = Self::create_pipeline_set(
             device,
             &shader,
@@ -1911,6 +1985,7 @@ impl GpuRenderer {
             &mmd_edge_pipeline_layout,
             &mmd_main_pipeline_layout,
             wgpu::TextureFormat::Rgba8UnormSrgb,
+            bloom_format,
             MSAA_SAMPLE_COUNT,
             supports_wireframe,
         );
@@ -1927,6 +2002,7 @@ impl GpuRenderer {
             &mmd_edge_pipeline_layout,
             &mmd_main_pipeline_layout,
             wgpu::TextureFormat::Rgba8UnormSrgb,
+            bloom_format,
             1,
             supports_wireframe,
         );
@@ -1944,6 +2020,7 @@ impl GpuRenderer {
             &mmd_edge_pipeline_layout,
             &mmd_main_pipeline_layout,
             wgpu::TextureFormat::Rgba8Unorm,
+            bloom_format,
             MSAA_SAMPLE_COUNT,
             supports_wireframe,
         );
@@ -1960,6 +2037,7 @@ impl GpuRenderer {
             &mmd_edge_pipeline_layout,
             &mmd_main_pipeline_layout,
             wgpu::TextureFormat::Rgba8Unorm,
+            bloom_format,
             1,
             supports_wireframe,
         );
@@ -2048,6 +2126,7 @@ impl GpuRenderer {
             shared_toon_textures_unorm,
             shared_toon_sampler,
             default_mmd_aux_bind_group,
+            bloom: super::bloom::BloomPass::new(device),
         }
     }
 
@@ -2082,6 +2161,7 @@ impl GpuRenderer {
         mmd_edge_pipeline_layout: &wgpu::PipelineLayout,
         mmd_main_pipeline_layout: &wgpu::PipelineLayout,
         target_format: wgpu::TextureFormat,
+        bloom_format: wgpu::TextureFormat,
         sample_count: u32,
         supports_wireframe: bool,
     ) -> PipelineSet {
@@ -2148,6 +2228,18 @@ impl GpuRenderer {
             write_mask: wgpu::ColorWrites::ALL,
         };
 
+        // bloom MRT ターゲット（emissive-only、Rgba8Unorm linear）
+        let bloom_target = wgpu::ColorTargetState {
+            format: bloom_format,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        };
+        let bloom_target_mask = wgpu::ColorTargetState {
+            format: bloom_format,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        };
+
         let format_suffix = if target_format == wgpu::TextureFormat::Rgba8Unorm {
             "_unorm"
         } else {
@@ -2176,7 +2268,7 @@ impl GpuRenderer {
             fragment: Some(wgpu::FragmentState {
                 module: shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(color_target.clone())],
+                targets: &[Some(color_target.clone()), Some(bloom_target.clone())],
                 compilation_options: Default::default(),
             }),
             multiview: None,
@@ -2203,7 +2295,7 @@ impl GpuRenderer {
             fragment: Some(wgpu::FragmentState {
                 module: shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(color_target.clone())],
+                targets: &[Some(color_target.clone()), Some(bloom_target.clone())],
                 compilation_options: Default::default(),
             }),
             multiview: None,
@@ -2230,7 +2322,10 @@ impl GpuRenderer {
             fragment: Some(wgpu::FragmentState {
                 module: shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(color_target_mask.clone())],
+                targets: &[
+                    Some(color_target_mask.clone()),
+                    Some(bloom_target_mask.clone()),
+                ],
                 compilation_options: Default::default(),
             }),
             multiview: None,
@@ -2258,7 +2353,10 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
                     entry_point: Some("fs_main"),
-                    targets: &[Some(color_target_mask.clone())],
+                    targets: &[
+                        Some(color_target_mask.clone()),
+                        Some(bloom_target_mask.clone()),
+                    ],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -2288,7 +2386,7 @@ impl GpuRenderer {
                     fragment: Some(wgpu::FragmentState {
                         module: shader,
                         entry_point: Some("fs_main"),
-                        targets: &[Some(color_target.clone())],
+                        targets: &[Some(color_target.clone()), Some(bloom_target.clone())],
                         compilation_options: Default::default(),
                     }),
                     multiview: None,
@@ -2340,7 +2438,7 @@ impl GpuRenderer {
                     fragment: Some(wgpu::FragmentState {
                         module: wire_overlay_shader,
                         entry_point: Some("fs_main"),
-                        targets: &[Some(wire_color_target)],
+                        targets: &[Some(wire_color_target), Some(bloom_target.clone())],
                         compilation_options: Default::default(),
                     }),
                     multiview: None,
@@ -2387,7 +2485,7 @@ impl GpuRenderer {
                     fragment: Some(wgpu::FragmentState {
                         module: wire_overlay_shader,
                         entry_point: Some("fs_highlight_fill"),
-                        targets: &[Some(highlight_color_target)],
+                        targets: &[Some(highlight_color_target), Some(bloom_target.clone())],
                         compilation_options: Default::default(),
                     }),
                     multiview: None,
@@ -2416,7 +2514,7 @@ impl GpuRenderer {
             fragment: Some(wgpu::FragmentState {
                 module: shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(color_target.clone())],
+                targets: &[Some(color_target.clone()), Some(bloom_target.clone())],
                 compilation_options: Default::default(),
             }),
             multiview: None,
@@ -2444,7 +2542,7 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
                     entry_point: Some("fs_main"),
-                    targets: &[Some(color_target.clone())],
+                    targets: &[Some(color_target.clone()), Some(bloom_target.clone())],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -2473,7 +2571,7 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
                     entry_point: Some("fs_main"),
-                    targets: &[Some(color_target.clone())],
+                    targets: &[Some(color_target.clone()), Some(bloom_target.clone())],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -2501,7 +2599,7 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
                     entry_point: Some("fs_main"),
-                    targets: &[Some(color_target.clone())],
+                    targets: &[Some(color_target.clone()), Some(bloom_target.clone())],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -2530,7 +2628,7 @@ impl GpuRenderer {
             fragment: Some(wgpu::FragmentState {
                 module: shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(color_target.clone())],
+                targets: &[Some(color_target.clone()), Some(bloom_target.clone())],
                 compilation_options: Default::default(),
             }),
             multiview: None,
@@ -2552,7 +2650,10 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
                     entry_point: Some("fs_main"),
-                    targets: &[Some(color_target_mask.clone())],
+                    targets: &[
+                        Some(color_target_mask.clone()),
+                        Some(bloom_target_mask.clone()),
+                    ],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -2574,7 +2675,7 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
                     entry_point: Some("fs_main"),
-                    targets: &[Some(color_target.clone())],
+                    targets: &[Some(color_target.clone()), Some(bloom_target.clone())],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -2596,7 +2697,7 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
                     entry_point: Some("fs_main"),
-                    targets: &[Some(color_target.clone())],
+                    targets: &[Some(color_target.clone()), Some(bloom_target.clone())],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -2738,7 +2839,7 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: mmd_edge_shader,
                     entry_point: Some("fs_edge"),
-                    targets: &[Some(mmd_color_target.clone())],
+                    targets: &[Some(mmd_color_target.clone()), Some(bloom_target.clone())],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -2768,7 +2869,7 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: mmd_main_shader,
                     entry_point: Some("fs_mmd"),
-                    targets: &[Some(mmd_color_target.clone())],
+                    targets: &[Some(mmd_color_target.clone()), Some(bloom_target.clone())],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -2796,7 +2897,7 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: mmd_main_shader,
                     entry_point: Some("fs_mmd"),
-                    targets: &[Some(mmd_color_target.clone())],
+                    targets: &[Some(mmd_color_target.clone()), Some(bloom_target.clone())],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -2824,7 +2925,7 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: mmd_main_shader,
                     entry_point: Some("fs_mmd"),
-                    targets: &[Some(mmd_color_target.clone())],
+                    targets: &[Some(mmd_color_target.clone()), Some(bloom_target.clone())],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -2852,7 +2953,7 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: mmd_main_shader,
                     entry_point: Some("fs_mmd"),
-                    targets: &[Some(mmd_color_target)],
+                    targets: &[Some(mmd_color_target), Some(bloom_target.clone())],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -2883,7 +2984,7 @@ impl GpuRenderer {
             fragment: Some(wgpu::FragmentState {
                 module: outline_shader,
                 entry_point: Some("fs_outline"),
-                targets: &[Some(color_target.clone())],
+                targets: &[Some(color_target.clone()), Some(bloom_target.clone())],
                 compilation_options: Default::default(),
             }),
             multiview: None,
@@ -2911,7 +3012,7 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: outline_shader,
                     entry_point: Some("fs_outline"),
-                    targets: &[Some(color_target.clone())],
+                    targets: &[Some(color_target.clone()), Some(bloom_target.clone())],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -2939,7 +3040,10 @@ impl GpuRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module: outline_shader,
                     entry_point: Some("fs_outline"),
-                    targets: &[Some(color_target_mask.clone())],
+                    targets: &[
+                        Some(color_target_mask.clone()),
+                        Some(bloom_target_mask.clone()),
+                    ],
                     compilation_options: Default::default(),
                 }),
                 multiview: None,
@@ -3089,6 +3193,36 @@ impl GpuRenderer {
         });
         let depth_view = depth.create_view(&Default::default());
 
+        // MRT bloom source テクスチャ (Rgba8Unorm, linear)
+        let bloom_format = wgpu::TextureFormat::Rgba8Unorm;
+        let (msaa_bloom_tex, msaa_bloom_view) = if msaa {
+            let t = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("offscreen_msaa_bloom_source"),
+                size: tex_size,
+                mip_level_count: 1,
+                sample_count: MSAA_SAMPLE_COUNT,
+                dimension: wgpu::TextureDimension::D2,
+                format: bloom_format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let v = t.create_view(&Default::default());
+            (Some(t), Some(v))
+        } else {
+            (None, None)
+        };
+        let bloom_source = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("offscreen_bloom_source"),
+            size: tex_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: bloom_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let bloom_source_view = bloom_source.create_view(&Default::default());
+
         self.offscreen = Some(OffscreenTarget {
             _color: color,
             color_view,
@@ -3098,6 +3232,10 @@ impl GpuRenderer {
             msaa_color_view_unorm: msaa_view_unorm,
             _depth: depth,
             depth_view,
+            _bloom_source: bloom_source,
+            bloom_source_view,
+            _msaa_bloom_source: msaa_bloom_tex,
+            msaa_bloom_source_view: msaa_bloom_view,
             width,
             height,
             msaa,
@@ -3474,27 +3612,49 @@ impl GpuRenderer {
             params.display.bg_brightness as f64
         };
 
-        // ===== パス 1 (Clear): グリッド + Standard 不透明 + Standard 半透明 + Wire オーバーレイ =====
+        // bloom source ビュー選択（MRT 2つ目のターゲット、常に Rgba8Unorm）
+        let (bloom_view, bloom_resolve): (&wgpu::TextureView, Option<&wgpu::TextureView>) =
+            if offscreen.msaa {
+                if let Some(ref msaa_bv) = offscreen.msaa_bloom_source_view {
+                    (msaa_bv, Some(&offscreen.bloom_source_view))
+                } else {
+                    (&offscreen.bloom_source_view, None)
+                }
+            } else {
+                (&offscreen.bloom_source_view, None)
+            };
+
+        // ===== Pass 1 (MRT): メッシュ描画 — color + bloom_source の 2 ターゲット =====
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(if use_unorm {
-                    "pass1_unorm_clear"
+                    "pass1_mrt_unorm"
                 } else {
-                    "pass1_srgb_clear"
+                    "pass1_mrt_srgb"
                 }),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: color_view,
-                    resolve_target: resolve_target,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: bg,
-                            g: bg,
-                            b: bg,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: color_view,
+                        resolve_target: resolve_target,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: bg,
+                                g: bg,
+                                b: bg,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: bloom_view,
+                        resolve_target: bloom_resolve,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &offscreen.depth_view,
                     depth_ops: Some(wgpu::Operations {
@@ -3505,14 +3665,6 @@ impl GpuRenderer {
                 }),
                 ..Default::default()
             });
-
-            // グリッド描画
-            if params.display.show_grid {
-                pass.set_pipeline(&ps.pipeline_grid);
-                pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.grid_vbuf.slice(..));
-                pass.draw(0..self.grid_vertex_count, 0..1);
-            }
 
             // メッシュ描画（空モデルの場合はスキップ）
             if !model.draws.is_empty() {
@@ -3938,6 +4090,64 @@ impl GpuRenderer {
                 }
             }
 
+            // ===== 材質ホバーハイライト（オレンジワイヤーフレーム、MRT 化済み）=====
+            if !params.hovered_draw_indices.is_empty() && !model.draws.is_empty() {
+                if let Some(ref highlight_pl) = ps.pipeline_highlight {
+                    pass.set_pipeline(highlight_pl);
+                    pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
+                    pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    for &draw_idx in params.hovered_draw_indices {
+                        if let Some(draw) = model.draws.get(draw_idx) {
+                            let tex_bg = draw
+                                .texture_bind_group
+                                .as_ref()
+                                .unwrap_or(&self.default_tex_bind_group);
+                            pass.set_bind_group(1, tex_bg, &[]);
+                            pass.set_bind_group(2, &draw.material_bind_group, &[]);
+                            pass.set_bind_group(3, &self.default_mtoon_aux_bind_group, &[]);
+                            pass.draw_indexed(
+                                draw.index_offset..(draw.index_offset + draw.index_count),
+                                0,
+                                0..1,
+                            );
+                        }
+                    }
+                }
+            }
+        } // end Pass 1 (MRT)
+
+        // ===== Pass 2 (1ターゲット): グリッド + オーバーレイ（法線・ボーン・剛体・ジョイント）=====
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("pass2_overlay"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color_view,
+                    resolve_target: resolve_target,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // Pass 1 の結果を保持
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &offscreen.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // Pass 1 で書いた depth を再利用
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+
+            // グリッド描画
+            if params.display.show_grid {
+                pass.set_pipeline(&ps.pipeline_grid);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.grid_vbuf.slice(..));
+                pass.draw(0..self.grid_vertex_count, 0..1);
+            }
+
             // 描画順: 法線 → ボーン → 剛体 → ジョイント（後が最前面）
 
             // 法線表示（LineList オーバーレイ）
@@ -4012,45 +4222,42 @@ impl GpuRenderer {
                     }
                 }
             }
-
-            // ===== 材質ホバーハイライト（オレンジワイヤーフレーム）=====
-            if !params.hovered_draw_indices.is_empty() && !model.draws.is_empty() {
-                if let Some(ref highlight_pl) = ps.pipeline_highlight {
-                    pass.set_pipeline(highlight_pl);
-                    pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
-                    pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                    for &draw_idx in params.hovered_draw_indices {
-                        if let Some(draw) = model.draws.get(draw_idx) {
-                            let tex_bg = draw
-                                .texture_bind_group
-                                .as_ref()
-                                .unwrap_or(&self.default_tex_bind_group);
-                            pass.set_bind_group(1, tex_bg, &[]);
-                            pass.set_bind_group(2, &draw.material_bind_group, &[]);
-                            pass.set_bind_group(3, &self.default_mtoon_aux_bind_group, &[]);
-                            pass.draw_indexed(
-                                draw.index_offset..(draw.index_offset + draw.index_count),
-                                0,
-                                0..1,
-                            );
-                        }
-                    }
-                }
-            }
-        } // end single render pass
+        } // end Pass 2 (overlay)
 
         // 作業バッファを返却（容量を保持して次フレームで再利用）
         self.work_draw_centers = work_draw_centers;
         self.work_sorted_indices = work_sorted_indices;
 
+        // --- Bloom ポストエフェクト ---
+        let bloom_enabled = params.display.bloom_enabled && params.display.bloom_intensity > 0.0;
+        if bloom_enabled {
+            self.bloom.execute(
+                device,
+                queue,
+                &mut encoder,
+                &offscreen.bloom_source_view, // MRT の bloom 出力（emissive-only）
+                &offscreen.color_view,        // 元のシーンカラー（composite 用）
+                params.width,
+                params.height,
+                params.display.bloom_threshold,
+                params.display.bloom_intensity,
+                params.display.bloom_radius as usize,
+            );
+        }
+
         queue.submit(std::iter::once(encoder.finish()));
 
-        // テクスチャ登録（初回は register、以降は update で再登録を回避）
+        // テクスチャ登録（bloom 有効時は composite 出力を、無効時は offscreen をそのまま使う）
+        let present_view = if bloom_enabled {
+            self.bloom.composite_view().unwrap_or(&offscreen.color_view)
+        } else {
+            &offscreen.color_view
+        };
+
         let tex_id = if let Some(existing_id) = *cached_id {
             egui_renderer.update_egui_texture_from_wgpu_texture(
                 device,
-                &offscreen.color_view,
+                present_view,
                 wgpu::FilterMode::Linear,
                 existing_id,
             );
@@ -4058,7 +4265,7 @@ impl GpuRenderer {
         } else {
             let id = egui_renderer.register_native_texture(
                 device,
-                &offscreen.color_view,
+                present_view,
                 wgpu::FilterMode::Linear,
             );
             *cached_id = Some(id);
@@ -4098,6 +4305,8 @@ impl GpuRenderer {
                 flags |= 4; // has_toon
             }
 
+            let (bloom_emissive, _) = super::bloom::derive_pmx_bloom(mat);
+
             let uniform = MmdMaterialUniform {
                 ambient: mat.ambient.to_array(),
                 alpha: mat.diffuse.w.clamp(0.0, 1.0),
@@ -4107,7 +4316,7 @@ impl GpuRenderer {
                 flags,
                 edge_color: mat.edge_color.to_array(),
                 edge_size: mat.edge_size,
-                _pad: [0.0; 3],
+                bloom_emissive,
             };
 
             let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

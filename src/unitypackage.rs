@@ -806,82 +806,224 @@ struct MatTextureSlot {
     texture_guid: String,
 }
 
+/// .mat ファイル内の Float パラメータ情報
+struct MatFloatParam {
+    param_name: String,
+    value: f32,
+}
+
+/// .mat ファイル内の Color パラメータ情報
+#[allow(dead_code)]
+struct MatColorParam {
+    param_name: String,
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+}
+
 /// .mat ファイルの解析結果
 struct ParsedMaterial {
     name: String,
     textures: Vec<MatTextureSlot>,
+    floats: Vec<MatFloatParam>,
+    colors: Vec<MatColorParam>,
+    /// m_ShaderKeywords / m_ValidKeywords に含まれるキーワード
+    shader_keywords: Vec<String>,
 }
 
-/// .mat ファイルからマテリアル名とテクスチャスロットを抽出
+/// m_SavedProperties 内のセクション種別
+enum MatSection {
+    None,
+    TexEnvs,
+    Floats,
+    Colors,
+    Keywords,
+}
+
+/// .mat ファイルからマテリアル名・テクスチャスロット・Float パラメータを抽出
 fn parse_material_textures(mat_content: &str) -> PkgResult<ParsedMaterial> {
     let mut name = String::new();
     let mut textures: Vec<MatTextureSlot> = Vec::new();
-    let mut in_tex_envs = false;
+    let mut floats: Vec<MatFloatParam> = Vec::new();
+    let mut colors: Vec<MatColorParam> = Vec::new();
+    let mut shader_keywords: Vec<String> = Vec::new();
+    let mut section = MatSection::None;
     let mut current_slot: Option<String> = None;
 
     for line in mat_content.lines() {
         let trimmed = line.trim();
 
-        // m_Name:
+        // m_Name:（セクション外でも処理）
         if trimmed.starts_with("m_Name:") {
             name = trimmed.strip_prefix("m_Name:").unwrap().trim().to_string();
             continue;
         }
 
-        // m_TexEnvs: セクション開始
-        if trimmed == "m_TexEnvs:" {
-            in_tex_envs = true;
+        // m_ShaderKeywords / m_ValidKeywords: インライン "KEY1 KEY2 KEY3" または複数行リスト
+        if trimmed.starts_with("m_ShaderKeywords:") || trimmed.starts_with("m_ValidKeywords:") {
+            let val = trimmed.split_once(':').map(|(_, v)| v.trim()).unwrap_or("");
+            if val.is_empty() || val == "[]" {
+                // 値なし or 空配列 → 複数行リスト形式の可能性があるのでセクション切替
+                if val != "[]" {
+                    section = MatSection::Keywords;
+                }
+            } else {
+                // インライン形式: "KEY1 KEY2 KEY3"
+                let val = val.trim_matches('"').trim_matches('\'');
+                for kw in val.split_whitespace() {
+                    if !shader_keywords.contains(&kw.to_string()) {
+                        shader_keywords.push(kw.to_string());
+                    }
+                }
+            }
             continue;
         }
 
-        if in_tex_envs {
-            // m_TexEnvs セクション終了: 同レベルの m_ で始まる別セクション
-            if trimmed.starts_with("m_")
-                && !trimmed.starts_with("m_Texture:")
-                && !trimmed.starts_with("m_Scale:")
-                && !trimmed.starts_with("m_Offset:")
-            {
-                in_tex_envs = false;
-                continue;
-            }
+        // セクション切り替え
+        if trimmed == "m_TexEnvs:" {
+            section = MatSection::TexEnvs;
+            continue;
+        }
+        if trimmed == "m_Floats:" {
+            section = MatSection::Floats;
+            continue;
+        }
+        if trimmed == "m_Colors:" {
+            section = MatSection::Colors;
+            continue;
+        }
+        // 空配列インライン
+        if trimmed == "m_Floats: []" || trimmed == "m_TexEnvs: []" || trimmed == "m_Colors: []" {
+            section = MatSection::None;
+            continue;
+        }
+        // 他の m_ セクションヘッダーで終了
+        if trimmed.starts_with("m_")
+            && !trimmed.starts_with("m_Texture:")
+            && !trimmed.starts_with("m_Scale:")
+            && !trimmed.starts_with("m_Offset:")
+        {
+            section = MatSection::None;
+        }
 
-            // スロット名検出: "- _SlotName:" の形式
-            if trimmed.starts_with("- _") {
-                // "- _MainTex:" → "_MainTex"
-                let slot = trimmed
-                    .strip_prefix("- ")
-                    .unwrap()
-                    .trim_end_matches(':')
-                    .to_string();
-                current_slot = Some(slot);
-                continue;
-            }
+        match section {
+            MatSection::TexEnvs => {
+                // スロット名検出: "- _SlotName:" の形式
+                if trimmed.starts_with("- _") {
+                    // "- _MainTex:" → "_MainTex"
+                    let slot = trimmed
+                        .strip_prefix("- ")
+                        .unwrap()
+                        .trim_end_matches(':')
+                        .to_string();
+                    current_slot = Some(slot);
+                    continue;
+                }
 
-            // m_Texture: 行
-            if trimmed.starts_with("m_Texture:") {
-                if let Some(ref slot) = current_slot {
-                    // fileID: 0 はスキップ（テクスチャ未設定）
-                    if trimmed.contains("fileID: 0") {
+                // m_Texture: 行
+                if trimmed.starts_with("m_Texture:") {
+                    if let Some(ref slot) = current_slot {
+                        // fileID: 0 はスキップ（テクスチャ未設定）
+                        if trimmed.contains("fileID: 0") {
+                            current_slot = None;
+                            continue;
+                        }
+                        // fileID: 2800000 + guid
+                        if trimmed.contains("fileID: 2800000") {
+                            if let Some(guid) = extract_guid_from_line(trimmed) {
+                                textures.push(MatTextureSlot {
+                                    slot_name: slot.clone(),
+                                    texture_guid: guid.to_string(),
+                                });
+                            }
+                        }
                         current_slot = None;
-                        continue;
                     }
-                    // fileID: 2800000 + guid
-                    if trimmed.contains("fileID: 2800000") {
-                        if let Some(guid) = extract_guid_from_line(trimmed) {
-                            textures.push(MatTextureSlot {
-                                slot_name: slot.clone(),
-                                texture_guid: guid.to_string(),
+                    continue;
+                }
+            }
+            MatSection::Floats => {
+                // "- _BumpScale: 1" → param_name="_BumpScale", value=1.0
+                if trimmed.starts_with("- _") {
+                    if let Some((param_name, val_str)) =
+                        trimmed.strip_prefix("- ").and_then(|s| s.split_once(':'))
+                    {
+                        if let Ok(v) = val_str.trim().parse::<f32>() {
+                            floats.push(MatFloatParam {
+                                param_name: param_name.trim().to_string(),
+                                value: v,
                             });
                         }
                     }
-                    current_slot = None;
                 }
-                continue;
             }
+            MatSection::Colors => {
+                // "- _EmissionColor: {r: 1, g: 0.5, b: 0.2, a: 1}"
+                if trimmed.starts_with("- _") {
+                    if let Some((param_name, val_str)) =
+                        trimmed.strip_prefix("- ").and_then(|s| s.split_once(':'))
+                    {
+                        let val_str = val_str.trim();
+                        // {r: R, g: G, b: B, a: A} をパース
+                        if let Some(color) = parse_unity_color(val_str) {
+                            colors.push(MatColorParam {
+                                param_name: param_name.trim().to_string(),
+                                r: color.0,
+                                g: color.1,
+                                b: color.2,
+                                a: color.3,
+                            });
+                        }
+                    }
+                }
+            }
+            MatSection::Keywords => {
+                // 複数行リスト: "- _EMISSION" の形式
+                if let Some(kw) = trimmed.strip_prefix("- ") {
+                    let kw = kw.trim();
+                    if !kw.is_empty() && !shader_keywords.contains(&kw.to_string()) {
+                        shader_keywords.push(kw.to_string());
+                    }
+                } else if !trimmed.starts_with('-') {
+                    // リスト項目以外が来たらセクション終了
+                    section = MatSection::None;
+                }
+            }
+            MatSection::None => {}
         }
     }
 
-    Ok(ParsedMaterial { name, textures })
+    Ok(ParsedMaterial {
+        name,
+        textures,
+        floats,
+        colors,
+        shader_keywords,
+    })
+}
+
+/// Unity の色値 `{r: R, g: G, b: B, a: A}` をパース
+fn parse_unity_color(s: &str) -> Option<(f32, f32, f32, f32)> {
+    let s = s.trim().strip_prefix('{')?.strip_suffix('}')?;
+    let mut r = 0.0f32;
+    let mut g = 0.0f32;
+    let mut b = 0.0f32;
+    let mut a = 1.0f32;
+    for part in s.split(',') {
+        let part = part.trim();
+        if let Some((key, val)) = part.split_once(':') {
+            let val = val.trim().parse::<f32>().ok()?;
+            match key.trim() {
+                "r" => r = val,
+                "g" => g = val,
+                "b" => b = val,
+                "a" => a = val,
+                _ => {}
+            }
+        }
+    }
+    Some((r, g, b, a))
 }
 
 // ── Step 7: resolve_prefab_textures ──
@@ -891,8 +1033,18 @@ pub struct ResolvedMaterialTextures {
     pub source_material: Option<SourceMaterialRef>,
     pub material_name: Arc<str>,
     pub main_texture_guid: Option<Arc<str>>,
+    /// ノーマルマップテクスチャ GUID（_BumpMap > _NormalMap の優先順）
+    pub normal_texture_guid: Option<Arc<str>>,
+    /// ノーマルマップスケール（_BumpScale、デフォルト 1.0）
+    pub bump_scale: f32,
     /// FBX .meta の externalObjects に記載された FBX 内マテリアル名（IrModel の材質名と一致する）
     pub fbx_material_name: Option<Arc<str>>,
+    /// Emission テクスチャ GUID（_EmissionMap）
+    pub emission_texture_guid: Option<Arc<str>>,
+    /// Emission 色 (r, g, b)（_EmissionColor、デフォルト黒 = 無効）
+    pub emission_color: [f32; 3],
+    /// Emission 有効フラグ（_Emission float == 1.0）
+    pub emission_enabled: bool,
 }
 
 /// Prefab 候補（パスと解決済みマテリアル一覧）
@@ -1546,17 +1698,75 @@ fn resolve_material_guids_to_textures_with_meta(
             })
             .map(|t| Arc::from(t.texture_guid.as_str()));
 
+        // ノーマルマップ: _BumpMap (Standard/lilToon/Poiyomi/AXCS/WF) > _NormalMap (UTS2)
+        let bump_map = parsed.textures.iter().find(|t| t.slot_name == "_BumpMap");
+        let normal_map = parsed.textures.iter().find(|t| t.slot_name == "_NormalMap");
+        // 両方存在して GUID が異なる場合は warn
+        if let (Some(b), Some(n)) = (bump_map, normal_map) {
+            if b.texture_guid != n.texture_guid {
+                log::warn!(
+                    "材質 '{}': _BumpMap と _NormalMap の GUID が異なります（_BumpMap 優先）",
+                    parsed.name
+                );
+            }
+        }
+        let normal_tex_guid = bump_map
+            .or(normal_map)
+            .map(|t| Arc::from(t.texture_guid.as_str()));
+
+        let bump_scale = parsed
+            .floats
+            .iter()
+            .find(|f| f.param_name == "_BumpScale")
+            .map(|f| f.value)
+            .unwrap_or(1.0);
+
+        // Emission テクスチャ
+        let emission_tex_guid = parsed
+            .textures
+            .iter()
+            .find(|t| t.slot_name == "_EmissionMap")
+            .map(|t| Arc::from(t.texture_guid.as_str()));
+
+        // Emission 色（_EmissionColor）
+        let emission_color = parsed
+            .colors
+            .iter()
+            .find(|c| c.param_name == "_EmissionColor")
+            .map(|c| [c.r, c.g, c.b])
+            .unwrap_or([0.0; 3]);
+
+        // Emission 有効判定（優先順）:
+        // 1. _Emission float が明示的にある場合はその値で判定
+        // 2. m_ShaderKeywords / m_ValidKeywords に _EMISSION が含まれる場合は有効
+        // 3. _EmissionMap テクスチャがある場合は有効
+        // 4. _EmissionColor が非黒かつ非白の場合は有効
+        //    白 (1,1,1) 除外理由: 多くのシェーダーが emission 無効時でも白で初期化（実例: Masscat v1.02）
+        let has_emission_keyword = parsed.shader_keywords.iter().any(|kw| kw == "_EMISSION");
+        let emission_color_meaningful =
+            emission_color != [0.0; 3] && emission_color != [1.0, 1.0, 1.0];
+        let emission_enabled = parsed
+            .floats
+            .iter()
+            .find(|f| f.param_name == "_Emission")
+            .map(|f| f.value >= 0.5)
+            .unwrap_or(
+                has_emission_keyword || emission_tex_guid.is_some() || emission_color_meaningful,
+            );
+
         let fbx_name = meta_guid_to_fbx_name
             .get(mat_guid.as_str())
             .map(|n| Arc::from(n.as_str()));
 
         log::debug!(
-            "  材質解決: slot={} mat_guid={} → .mat name='{}' fbx_name={:?} main_tex={:?} slots=[{}]",
+            "  材質解決: slot={} mat_guid={} → .mat name='{}' fbx_name={:?} main_tex={:?} normal_tex={:?} bump_scale={} slots=[{}]",
             slot_idx,
             mat_guid,
             parsed.name,
             fbx_name,
             main_tex_guid,
+            normal_tex_guid,
+            bump_scale,
             parsed.textures.iter().map(|t| format!("{}:{}", t.slot_name, &t.texture_guid[..8.min(t.texture_guid.len())])).collect::<Vec<_>>().join(", ")
         );
 
@@ -1564,7 +1774,12 @@ fn resolve_material_guids_to_textures_with_meta(
             source_material: None,
             material_name: Arc::from(parsed.name.as_str()),
             main_texture_guid: main_tex_guid,
+            normal_texture_guid: normal_tex_guid,
+            bump_scale,
             fbx_material_name: fbx_name,
+            emission_texture_guid: emission_tex_guid,
+            emission_color,
+            emission_enabled,
         });
     }
 
@@ -1687,7 +1902,8 @@ pub fn embed_textures_with_prefab(
     // 既に追加済みのテクスチャ GUID → ir.textures index
     let mut added_guids: HashMap<Arc<str>, usize> = HashMap::new();
 
-    let mut matched = 0usize;
+    let mut matched_base = 0usize;
+    let mut matched_normal = 0usize;
 
     // ── 戦略1: source_material で照合（Phase 3 で有効化）──
     // 現在は IrMaterial.source_material が None なので実質スキップ
@@ -1740,10 +1956,6 @@ pub fn embed_textures_with_prefab(
         );
 
         for mat in &mut ir.materials {
-            if mat.texture_index.is_some() {
-                continue;
-            }
-
             // 完全一致 → 大文字小文字無視 → FBX名完全一致 → FBX名大小無視 → サフィックス一致
             let mat_lower = mat.name.to_lowercase();
             let res_opt = resolved_by_name
@@ -1772,44 +1984,158 @@ pub fn embed_textures_with_prefab(
                 });
 
             if let Some(res) = res_opt {
-                if let Some(ref tex_guid) = res.main_texture_guid {
-                    // 既に追加済みならインデックスを再利用
-                    if let Some(&existing_idx) = added_guids.get(tex_guid) {
-                        mat.texture_index = Some(existing_idx);
-                        matched += 1;
+                // ── メインテクスチャ ──
+                if mat.texture_index.is_none() {
+                    if let Some(ref tex_guid) = res.main_texture_guid {
+                        // 既に追加済みならインデックスを再利用
+                        if let Some(&existing_idx) = added_guids.get(tex_guid) {
+                            mat.texture_index = Some(existing_idx);
+                            matched_base += 1;
+                            log::info!(
+                                "Prefab テクスチャ割当 (名前, 再利用): {} → mat[{}]",
+                                tex_guid,
+                                mat.name
+                            );
+                        } else if let Some(pkg_tex) = tex_by_guid.get(tex_guid.as_ref()) {
+                            let tex_idx = ir.textures.len();
+                            let ext = std::path::Path::new(pkg_tex.display_name.as_ref())
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
+                            ir.textures.push(crate::intermediate::types::IrTexture {
+                                filename: pkg_tex.display_name.to_string(),
+                                data: pkg_tex.data.to_vec(),
+                                mime_type: mime,
+                            });
+                            mat.texture_index = Some(tex_idx);
+                            added_guids.insert(Arc::clone(tex_guid), tex_idx);
+                            matched_base += 1;
+                            log::info!(
+                                "Prefab テクスチャ割当 (名前): {} → mat[{}]",
+                                pkg_tex.display_name,
+                                mat.name
+                            );
+                        } else {
+                            log::debug!(
+                                "Prefab テクスチャ GUID {} が pkg 内に見つかりません (mat: {})",
+                                tex_guid,
+                                mat.name
+                            );
+                        }
+                    }
+                }
+
+                // ── ノーマルマップ ──
+                if mat.normal_texture.is_none() {
+                    if let Some(ref normal_guid) = res.normal_texture_guid {
+                        if let Some(&existing_idx) = added_guids.get(normal_guid) {
+                            mat.normal_texture = Some(
+                                crate::intermediate::types::IrTextureInfo::from_index(existing_idx),
+                            );
+                            mat.normal_texture_scale = res.bump_scale;
+                            matched_normal += 1;
+                            log::info!(
+                                "Prefab ノーマルマップ割当 (再利用): {} → mat[{}]",
+                                normal_guid,
+                                mat.name
+                            );
+                        } else if let Some(pkg_tex) = tex_by_guid.get(normal_guid.as_ref()) {
+                            let tex_idx = ir.textures.len();
+                            let ext = std::path::Path::new(pkg_tex.display_name.as_ref())
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
+                            ir.textures.push(crate::intermediate::types::IrTexture {
+                                filename: pkg_tex.display_name.to_string(),
+                                data: pkg_tex.data.to_vec(),
+                                mime_type: mime,
+                            });
+                            mat.normal_texture = Some(
+                                crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
+                            );
+                            mat.normal_texture_scale = res.bump_scale;
+                            added_guids.insert(Arc::clone(normal_guid), tex_idx);
+                            matched_normal += 1;
+                            log::info!(
+                                "Prefab ノーマルマップ割当: {} → mat[{}]",
+                                pkg_tex.display_name,
+                                mat.name
+                            );
+                        } else {
+                            log::debug!(
+                                "Prefab ノーマルマップ GUID {} が pkg 内に見つかりません (mat: {})",
+                                normal_guid,
+                                mat.name
+                            );
+                        }
+                    }
+                }
+
+                // ── Emission ──
+                if res.emission_enabled {
+                    // emissive_factor に Emission 色をセット
+                    let ec = res.emission_color;
+                    if ec != [0.0; 3] && mat.emissive_factor == glam::Vec3::ZERO {
+                        mat.emissive_factor = glam::Vec3::new(ec[0], ec[1], ec[2]);
                         log::info!(
-                            "Prefab テクスチャ割当 (名前, 再利用): {} → mat[{}]",
-                            tex_guid,
+                            "Prefab Emission 色割当: [{:.2},{:.2},{:.2}] → mat[{}]",
+                            ec[0],
+                            ec[1],
+                            ec[2],
                             mat.name
                         );
-                        continue;
                     }
 
-                    if let Some(pkg_tex) = tex_by_guid.get(tex_guid.as_ref()) {
-                        let tex_idx = ir.textures.len();
-                        let ext = std::path::Path::new(pkg_tex.display_name.as_ref())
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("")
-                            .to_lowercase();
-                        let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
-                        ir.textures.push(crate::intermediate::types::IrTexture {
-                            filename: pkg_tex.display_name.to_string(),
-                            data: pkg_tex.data.to_vec(),
-                            mime_type: mime,
-                        });
-                        mat.texture_index = Some(tex_idx);
-                        added_guids.insert(Arc::clone(tex_guid), tex_idx);
-                        matched += 1;
+                    // Emission テクスチャ
+                    if mat.emissive_texture.is_none() {
+                        if let Some(ref em_guid) = res.emission_texture_guid {
+                            if let Some(&existing_idx) = added_guids.get(em_guid) {
+                                mat.emissive_texture =
+                                    Some(crate::intermediate::types::IrTextureInfo::from_index(
+                                        existing_idx,
+                                    ));
+                                log::info!(
+                                    "Prefab Emission テクスチャ割当 (再利用): {} → mat[{}]",
+                                    em_guid,
+                                    mat.name
+                                );
+                            } else if let Some(pkg_tex) = tex_by_guid.get(em_guid.as_ref()) {
+                                let tex_idx = ir.textures.len();
+                                let ext = std::path::Path::new(pkg_tex.display_name.as_ref())
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .unwrap_or("")
+                                    .to_lowercase();
+                                let mime =
+                                    crate::intermediate::types::mime_for_ext(&ext).to_string();
+                                ir.textures.push(crate::intermediate::types::IrTexture {
+                                    filename: pkg_tex.display_name.to_string(),
+                                    data: pkg_tex.data.to_vec(),
+                                    mime_type: mime,
+                                });
+                                mat.emissive_texture = Some(
+                                    crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
+                                );
+                                added_guids.insert(Arc::clone(em_guid), tex_idx);
+                                log::info!(
+                                    "Prefab Emission テクスチャ割当: {} → mat[{}]",
+                                    pkg_tex.display_name,
+                                    mat.name
+                                );
+                            }
+                        }
+                    }
+
+                    // emissive_texture があるのに emissive_factor がゼロだと
+                    // シェーダーで 0 * texture = 0 になり発光しない。白に補正。
+                    if mat.emissive_texture.is_some() && mat.emissive_factor == glam::Vec3::ZERO {
+                        mat.emissive_factor = glam::Vec3::ONE;
                         log::info!(
-                            "Prefab テクスチャ割当 (名前): {} → mat[{}]",
-                            pkg_tex.display_name,
-                            mat.name
-                        );
-                    } else {
-                        log::debug!(
-                            "Prefab テクスチャ GUID {} が pkg 内に見つかりません (mat: {})",
-                            tex_guid,
+                            "Prefab Emission 色補正: (0,0,0) → (1,1,1) (テクスチャあり) mat[{}]",
                             mat.name
                         );
                     }
@@ -1862,7 +2188,7 @@ pub fn embed_textures_with_prefab(
                 // GUID 重複チェック
                 if let Some(&existing_idx) = added_guids.get(&pkg_tex.guid) {
                     mat.texture_index = Some(existing_idx);
-                    matched += 1;
+                    matched_base += 1;
                     log::info!(
                         "テクスチャ割当 (ファイル名, 再利用): {} → mat[{}]",
                         pkg_tex.display_name,
@@ -1885,7 +2211,7 @@ pub fn embed_textures_with_prefab(
                 });
                 mat.texture_index = Some(tex_idx);
                 added_guids.insert(Arc::clone(&pkg_tex.guid), tex_idx);
-                matched += 1;
+                matched_base += 1;
                 log::info!(
                     "テクスチャ割当 (ファイル名): {} → mat[{}]",
                     pkg_tex.display_name,
@@ -1904,8 +2230,10 @@ pub fn embed_textures_with_prefab(
         .collect();
 
     log::info!(
-        "Prefab テクスチャ: {}/{}材質マッチ, 未割当: {}",
-        matched,
+        "Prefab テクスチャ: base={}/{}, normal={}/{}, 未割当: {}",
+        matched_base,
+        ir.materials.len(),
+        matched_normal,
         ir.materials.len(),
         unmatched.len()
     );
@@ -2013,15 +2341,6 @@ Material:
         assert_eq!(extract_array_index(line2), Some(12));
 
         assert_eq!(extract_array_index("no array here"), None);
-    }
-
-    #[test]
-    fn test_is_main_texture_slot() {
-        assert!(is_main_texture_slot("_MainTex"));
-        assert!(is_main_texture_slot("_BaseMap"));
-        assert!(is_main_texture_slot("_BaseColorMap"));
-        assert!(!is_main_texture_slot("_BumpMap"));
-        assert!(!is_main_texture_slot("_EmissionMap"));
     }
 
     #[test]
@@ -2159,6 +2478,204 @@ materials:
             parsed.textures[1].texture_guid,
             "aabbccdd11223344aabbccdd11223344"
         );
+        // m_Floats なし → floats 空
+        assert!(parsed.floats.is_empty());
+    }
+
+    #[test]
+    fn test_parse_material_textures_with_normal() {
+        let mat = r#"
+%YAML 1.1
+--- !u!21 &2100000
+Material:
+  m_Name: Body_Mat
+  m_SavedProperties:
+    m_TexEnvs:
+    - _MainTex:
+        m_Texture: {fileID: 2800000, guid: 8cb30821603cd844dbee97db4c216501, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _BumpMap:
+        m_Texture: {fileID: 2800000, guid: aaaa1111bbbb2222cccc3333dddd4444, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Floats:
+    - _BumpScale: 0.75
+    - _Cutoff: 0.5
+    m_Ints: []
+"#;
+        let parsed = parse_material_textures(mat).unwrap();
+        assert_eq!(parsed.name, "Body_Mat");
+        assert_eq!(parsed.textures.len(), 2);
+        assert_eq!(parsed.textures[0].slot_name, "_MainTex");
+        assert_eq!(parsed.textures[1].slot_name, "_BumpMap");
+        assert_eq!(
+            parsed.textures[1].texture_guid,
+            "aaaa1111bbbb2222cccc3333dddd4444"
+        );
+        // floats
+        assert_eq!(parsed.floats.len(), 2);
+        let bump_scale = parsed.floats.iter().find(|f| f.param_name == "_BumpScale");
+        assert!(bump_scale.is_some());
+        assert!((bump_scale.unwrap().value - 0.75).abs() < f32::EPSILON);
+        let cutoff = parsed.floats.iter().find(|f| f.param_name == "_Cutoff");
+        assert!((cutoff.unwrap().value - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_parse_material_floats_empty_inline() {
+        // m_Floats: [] （空配列インライン形式）は floats 空
+        let mat = r#"
+Material:
+  m_Name: EmptyFloats
+  m_SavedProperties:
+    m_TexEnvs: []
+    m_Floats: []
+    m_Ints: []
+"#;
+        let parsed = parse_material_textures(mat).unwrap();
+        assert_eq!(parsed.name, "EmptyFloats");
+        assert!(parsed.textures.is_empty());
+        assert!(parsed.floats.is_empty());
+    }
+
+    #[test]
+    fn test_embed_assigns_normal_when_base_already_exists() {
+        let mut ir = crate::intermediate::types::IrModel::default();
+        let mut mat = crate::intermediate::types::IrMaterial::default();
+        mat.name = "Body".into();
+        mat.texture_index = Some(0); // ベースカラーは既にある
+        ir.materials.push(mat);
+        ir.textures.push(crate::intermediate::types::IrTexture {
+            filename: "base.png".into(),
+            data: vec![0u8; 4],
+            mime_type: "image/png".into(),
+        });
+
+        let textures = vec![PackageTexture {
+            guid: Arc::from("normal-guid"),
+            display_name: Arc::from("body_n.png"),
+            data: Arc::from(vec![1u8; 4].as_slice()),
+        }];
+        let resolved = vec![ResolvedMaterialTextures {
+            source_material: None,
+            material_name: Arc::from("Body"),
+            main_texture_guid: None,
+            normal_texture_guid: Some(Arc::from("normal-guid")),
+            bump_scale: 0.7,
+            fbx_material_name: None,
+            emission_texture_guid: None,
+            emission_color: [0.0; 3],
+            emission_enabled: false,
+        }];
+
+        let unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved);
+
+        // ベースカラーは設定済みなので unmatched は空
+        assert!(unmatched.is_empty());
+        // ノーマルマップが割り当てられている
+        assert_eq!(
+            ir.materials[0].normal_texture.as_ref().map(|t| t.index),
+            Some(1)
+        );
+        assert!((ir.materials[0].normal_texture_scale - 0.7).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_embed_unmatched_based_on_base_texture_only() {
+        // ベースカラーなし + ノーマルマップありでも unmatched に入る
+        let mut ir = crate::intermediate::types::IrModel::default();
+        let mut mat = crate::intermediate::types::IrMaterial::default();
+        mat.name = "Body".into();
+        ir.materials.push(mat);
+
+        let textures = vec![PackageTexture {
+            guid: Arc::from("normal-guid"),
+            display_name: Arc::from("body_n.png"),
+            data: Arc::from(vec![1u8; 4].as_slice()),
+        }];
+        let resolved = vec![ResolvedMaterialTextures {
+            source_material: None,
+            material_name: Arc::from("Body"),
+            main_texture_guid: None,
+            normal_texture_guid: Some(Arc::from("normal-guid")),
+            bump_scale: 1.0,
+            fbx_material_name: None,
+            emission_texture_guid: None,
+            emission_color: [0.0; 3],
+            emission_enabled: false,
+        }];
+
+        let unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved);
+
+        // ベースカラーが None のまま → unmatched に含まれる
+        assert_eq!(unmatched, vec![0]);
+        // ノーマルマップは割り当てられている
+        assert!(ir.materials[0].normal_texture.is_some());
+    }
+
+    #[test]
+    fn test_embed_normal_reuses_added_guid() {
+        // 同じノーマルマップ GUID を2つの材質で共有
+        let mut ir = crate::intermediate::types::IrModel::default();
+        for name in &["Body", "Face"] {
+            let mut mat = crate::intermediate::types::IrMaterial::default();
+            mat.name = (*name).into();
+            mat.texture_index = Some(0);
+            ir.materials.push(mat);
+        }
+        ir.textures.push(crate::intermediate::types::IrTexture {
+            filename: "base.png".into(),
+            data: vec![0u8; 4],
+            mime_type: "image/png".into(),
+        });
+
+        let textures = vec![PackageTexture {
+            guid: Arc::from("shared-normal"),
+            display_name: Arc::from("shared_n.png"),
+            data: Arc::from(vec![2u8; 4].as_slice()),
+        }];
+        let resolved = vec![
+            ResolvedMaterialTextures {
+                source_material: None,
+                material_name: Arc::from("Body"),
+                main_texture_guid: None,
+                normal_texture_guid: Some(Arc::from("shared-normal")),
+                bump_scale: 1.0,
+                fbx_material_name: None,
+                emission_texture_guid: None,
+                emission_color: [0.0; 3],
+                emission_enabled: false,
+            },
+            ResolvedMaterialTextures {
+                source_material: None,
+                material_name: Arc::from("Face"),
+                main_texture_guid: None,
+                normal_texture_guid: Some(Arc::from("shared-normal")),
+                bump_scale: 1.0,
+                fbx_material_name: None,
+                emission_texture_guid: None,
+                emission_color: [0.0; 3],
+                emission_enabled: false,
+            },
+        ];
+
+        let _unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved);
+
+        // 両方の材質が同じテクスチャインデックスを参照
+        let idx0 = ir.materials[0]
+            .normal_texture
+            .as_ref()
+            .map(|t| t.index)
+            .unwrap();
+        let idx1 = ir.materials[1]
+            .normal_texture
+            .as_ref()
+            .map(|t| t.index)
+            .unwrap();
+        assert_eq!(idx0, idx1);
+        // テクスチャは1回だけ追加されている（base + normal = 2）
+        assert_eq!(ir.textures.len(), 2);
     }
 
     #[test]

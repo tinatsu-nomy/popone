@@ -47,6 +47,12 @@
     - [VRM Parameter Mapping](#vrm-parameter-mapping)
     - [UV Animation](#uv-animation)
     - [Transparent Draw Order Control (alphaMode / transparentWithZWrite / renderQueueOffsetNumber)](#transparent-draw-order-control-alphamode--transparentwithzwrite--renderqueueoffsetnumber)
+  - [Bloom Post-Effect (v0.2.18)](#bloom-post-effect-v0218)
+    - [Dual Kawase Algorithm](#dual-kawase-algorithm)
+    - [MRT (Multiple Render Target) Emissive Separation](#mrt-multiple-render-target-emissive-separation)
+    - [UI Parameters](#ui-parameters)
+    - [PMX/PMD Self-Emissive Material Bloom Detection](#pmxpmd-self-emissive-material-bloom-detection)
+    - [Prefab Emission Support](#prefab-emission-support)
   - [Viewer Display Styles](#viewer-display-styles)
     - [Dark Theme (v0.2.15)](#dark-theme-v0215)
     - [Bone Display](#bone-display-1)
@@ -915,6 +921,57 @@ if material.alpha_cutoff < -0.75 {
 | outline_mask | Front | on | MToon outline (MASK). With depth bias + AlphaToCoverage |
 | outline_blend | Front | off | MToon outline (Blend). With depth bias |
 
+## Bloom Post-Effect (v0.2.18)
+
+### Dual Kawase Algorithm
+
+Dual Kawase (Dual Filtering) bloom implemented in `bloom.rs` (~500 lines). Alternates between downsample and upsample passes to achieve wide-area blur at low cost.
+
+1. **Brightness extraction**: Extract pixels above threshold from emissive buffer
+2. **Downsample**: 3–6 progressive half-resolution passes (Kawase filter kernel)
+3. **Upsample**: Reverse-order upscale with additive blending
+4. **Final composite**: Add bloom result to scene color with intensity factor
+
+### MRT (Multiple Render Target) Emissive Separation
+
+The render pass is split into mesh drawing (MRT with 2 targets) and overlay drawing (1 target). The mesh drawing pass outputs scene color at `@location(0)` and emissive component at `@location(1)`. Grids and non-emissive surfaces write zero to `@location(1)`, so they are excluded from bloom.
+
+Bloom intermediate buffers use `Rgba8Unorm` (linear) to avoid arithmetic artifacts from sRGB texture formats.
+
+### UI Parameters
+
+| Parameter | Range | Default | Description |
+|-----------|-------|---------|-------------|
+| ON/OFF | — | OFF | Enable bloom. When disabled, bloom pass execution is skipped (MRT 2-target rendering remains active; only additional bandwidth cost) |
+| Intensity | 0.0–4.0 | 0.8 | Bloom brightness |
+| Threshold | 0.0–1.0 | 0.0 | Cuts emissive below this luminance |
+| Radius | 3–6 | 4 | Downsample stages. Larger = wider blur |
+
+### PMX/PMD Self-Emissive Material Bloom Detection
+
+`derive_pmx_bloom()` common function detects self-emissive PMX/PMD materials:
+
+- **Condition**: `specular == (0, 0, 0)` and `specular_power >= 100`
+- **Bloom intensity**: `(specular_power - 100) / 10` (sp=110 equals VRM emissive=1.0)
+- `bloom_emissive` is output only to MRT `@location(1)` (not added to scene color)
+- Added `bloom_emissive` field to `MmdMaterialUniform`, referenced by shaders
+- Emissive values are clamped to 0.0–1.0 (Rgba8Unorm MRT saturation avoidance)
+- 6 unit tests validate detection logic and clamping
+
+### Prefab Emission Support
+
+Added `m_Colors` section and `m_ShaderKeywords` / `m_ValidKeywords` parsing to the `.mat` file parser.
+
+- Auto-assigns `_EmissionColor` / `_EmissionMap` textures
+- Emission enabled by priority:
+  1. `_Emission` float if explicitly present
+  2. `_EMISSION` keyword in `m_ShaderKeywords` / `m_ValidKeywords`
+  3. `_EmissionMap` texture present
+  4. `_EmissionColor` non-black and non-white (white excluded as default in many shaders)
+- When `_EmissionMap` is present but `_EmissionColor` is black, emissive_factor corrected to white (1,1,1) to avoid shader 0 × texture = 0
+- `m_ShaderKeywords` / `m_ValidKeywords` supports both YAML inline format (space-separated string) and multi-line list format (`- _EMISSION`)
+- Added `emission_texture_guid` / `emission_color` / `emission_enabled` fields to `ResolvedMaterialTextures`
+
 ## Viewer Display Styles
 
 ### Dark Theme (v0.2.15)
@@ -1618,7 +1675,7 @@ handling nested Prefabs (where m_SourcePrefab points to a `.prefab` rather than 
 - `parse_prefab_new()` — 2-pass approach: `m_Modifications` then `m_SourcePrefab`
 - `parse_prefab_old()` — Extracts `m_Mesh` + `m_Materials` from `--- !u!137` (SkinnedMeshRenderer) sections
 - `parse_fbx_meta()` — Extracts material name → GUID mapping from `externalObjects`
-- `parse_material_textures()` — Extracts main texture GUID from `m_TexEnvs`. Slot priority: `_MainTex` > `_BaseMap` > `_BaseColorMap` (handles lilToon cases where `_BaseColorMap` references a different texture than `_MainTex`)
+- `parse_material_textures()` — Extracts main texture and normal map GUIDs from `m_TexEnvs`, and reads `_BumpScale` from `m_Floats`. Section transitions are safely managed via a `MatSection` enum. Slot priority: main=`_MainTex` > `_BaseMap` > `_BaseColorMap`, normal=`_BumpMap` > `_NormalMap`
 - `decode_unity_escape()` — `\uXXXX` → Unicode conversion, YAML quote trimming
 
 ### Key Data Types
@@ -1629,7 +1686,7 @@ handling nested Prefabs (where m_SourcePrefab points to a `.prefab` rather than 
 | `PkgModelListItem` | Model selection dialog display item |
 | `PackageTexture` | GUID + display name + data bytes |
 | `PreparedPkgFbx` | FBX data + textures + resolved materials |
-| `ResolvedMaterialTextures` | Material name + texture GUID + fbx_material_name |
+| `ResolvedMaterialTextures` | Material name + main texture GUID + normal map GUID + bump_scale + fbx_material_name |
 | `FbxResolveEntry` | Single FBX GUID + index + resolved materials |
 | `PrefabResolveResult` | Entire Prefab resolution result (may contain multiple FBX) |
 | `SourceMaterialRef` | renderer_path + slot_index (stable key for FBX mesh → material) |
