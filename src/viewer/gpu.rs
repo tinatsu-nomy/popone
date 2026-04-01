@@ -4276,7 +4276,13 @@ impl GpuRenderer {
     }
 
     /// MMD 用 GPU リソースを DrawCall に構築（全 GPU モデル生成経路から呼ぶ）
-    pub fn prepare_mmd_resources(&self, device: &wgpu::Device, model: &mut GpuModel, ir: &IrModel) {
+    pub fn prepare_mmd_resources(
+        &self,
+        device: &wgpu::Device,
+        model: &mut GpuModel,
+        ir: &IrModel,
+        bloom_per_mat: &[bool],
+    ) {
         use super::mesh::RenderStyle;
 
         // draws を一時的に取り出して借用衝突を回避
@@ -4305,7 +4311,15 @@ impl GpuRenderer {
                 flags |= 4; // has_toon
             }
 
-            let (bloom_emissive, _) = super::bloom::derive_pmx_bloom(mat);
+            let bloom_emissive = if bloom_per_mat
+                .get(draw.material_index)
+                .copied()
+                .unwrap_or(true)
+            {
+                super::bloom::derive_pmx_bloom(mat).0
+            } else {
+                [0.0; 3]
+            };
 
             let uniform = MmdMaterialUniform {
                 ambient: mat.ambient.to_array(),

@@ -362,6 +362,8 @@ pub fn build_gpu_model(
     queue: &wgpu::Queue,
     smooth_per_mat: &[bool],
     clear_per_mat: &[bool],
+    normal_map_per_mat: &[bool],
+    bloom_per_mat: &[bool],
 ) -> Result<GpuModel> {
     let gpu_textures = super::texture::upload_textures(ir, images, device, queue)?;
     build_gpu_model_inner(
@@ -371,6 +373,8 @@ pub fn build_gpu_model(
         queue,
         smooth_per_mat,
         clear_per_mat,
+        normal_map_per_mat,
+        bloom_per_mat,
     )
 }
 
@@ -449,6 +453,8 @@ pub fn build_gpu_model_from_ir(
     queue: &wgpu::Queue,
     smooth_per_mat: &[bool],
     clear_per_mat: &[bool],
+    normal_map_per_mat: &[bool],
+    bloom_per_mat: &[bool],
 ) -> Result<GpuModel> {
     let gpu_textures = super::texture::upload_textures_from_ir(ir, device, queue)?;
     build_gpu_model_inner(
@@ -458,6 +464,8 @@ pub fn build_gpu_model_from_ir(
         queue,
         smooth_per_mat,
         clear_per_mat,
+        normal_map_per_mat,
+        bloom_per_mat,
     )
 }
 
@@ -468,6 +476,8 @@ fn build_gpu_model_inner(
     queue: &wgpu::Queue,
     smooth_per_mat: &[bool],
     clear_per_mat: &[bool],
+    normal_map_per_mat: &[bool],
+    bloom_per_mat: &[bool],
 ) -> Result<GpuModel> {
     let pos_fn = if ir.source_format.is_vrm0() {
         gltf_pos_to_pmx_v0
@@ -536,9 +546,8 @@ fn build_gpu_model_inner(
         let mat = &ir.materials[mat_idx];
         let index_offset = all_indices.len() as u32;
 
-        // 材質ごとの法線平滑化フラグ（法線マップ付き材質は強制無効化）
-        let mat_smooth =
-            smooth_per_mat.get(mat_idx).copied().unwrap_or(false) && mat.normal_texture.is_none();
+        // 材質ごとの法線平滑化フラグ（法線マップと併用可: TBN 基底法線の平滑化で品質向上）
+        let mat_smooth = smooth_per_mat.get(mat_idx).copied().unwrap_or(false);
 
         // 材質ごとに vertex_dedup をリセット（異なる材質間で頂点を共有しない）
         vertex_dedup.clear();
@@ -683,10 +692,15 @@ fn build_gpu_model_inner(
             gpu::pack_uv_params(mp.rim_multiply_texture.as_ref()),
             gpu::pack_uv_params(mp.outline_width_texture.as_ref()),
             gpu::pack_uv_params(mp.uv_animation_mask_texture.as_ref()),
-            mat.emissive_factor.to_array(),
-            mat.emissive_texture.is_some(),
+            if bloom_per_mat.get(mat_idx).copied().unwrap_or(true) {
+                mat.emissive_factor.to_array()
+            } else {
+                [0.0; 3]
+            },
+            mat.emissive_texture.is_some() && bloom_per_mat.get(mat_idx).copied().unwrap_or(true),
             gpu::pack_uv_params(mat.emissive_texture.as_ref()),
-            mat.normal_texture.is_some(),
+            mat.normal_texture.is_some()
+                && normal_map_per_mat.get(mat_idx).copied().unwrap_or(true),
             mat.normal_texture_scale,
             gpu::pack_uv_params(mat.normal_texture.as_ref()),
             mp.gi_equalization_factor,

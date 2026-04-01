@@ -1561,6 +1561,21 @@ fn show_tab_display(
                 .collect()
         })
         .unwrap_or_default();
+    // 材質ごとの Bloom/Emissive 有無を事前抽出
+    let mat_has_bloom: Vec<bool> = app
+        .loaded
+        .as_ref()
+        .map(|l| {
+            l.ir.materials
+                .iter()
+                .map(|m| {
+                    m.emissive_factor != glam::Vec3::ZERO
+                        || m.emissive_texture.is_some()
+                        || (m.specular == glam::Vec3::ZERO && m.specular_power >= 100.0)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     // グループ情報を軽量抽出（名前と draw_range のみ。MaterialGroup 全体の clone を回避）
     let (group_names, group_draw_ranges): (Vec<String>, Vec<std::ops::Range<usize>>) = app
         .loaded
@@ -1619,28 +1634,23 @@ fn show_tab_display(
                 id,
                 true,
             );
-            // ヘッダ行: ▶[S][C][ ] グループ名
+            // ヘッダ行: ▶[S][C][N][B][ ] グループ名
             let header_res = ui.horizontal(|ui| {
                 // 折りたたみトグル
                 state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
-                // [S] 法線平滑化（グループ一括）
+                // [S] 法線平滑化（グループ一括）— 常に有効（ノーマルマップと併用可）
                 {
-                    let eligible: Vec<usize> = group_mat_idxs
-                        .iter()
-                        .copied()
-                        .filter(|&mi| !mat_has_normal_map.get(mi).copied().unwrap_or(false))
-                        .collect();
-                    let all_on = !eligible.is_empty()
-                        && eligible.iter().all(|&mi| {
+                    let all_on = !group_mat_idxs.is_empty()
+                        && group_mat_idxs.iter().all(|&mi| {
                             app.smooth_normals_per_mat.get(mi).copied().unwrap_or(false)
                         });
                     let resp = ui.add_enabled(
-                        !eligible.is_empty(),
+                        !group_mat_idxs.is_empty(),
                         egui::SelectableLabel::new(all_on, "S"),
                     );
-                    if resp.clicked() && !eligible.is_empty() {
+                    if resp.clicked() && !group_mat_idxs.is_empty() {
                         let new_val = !all_on;
-                        for &mi in &eligible {
+                        for &mi in &group_mat_idxs {
                             if mi < app.smooth_normals_per_mat.len() {
                                 app.smooth_normals_per_mat[mi] = new_val;
                             }
@@ -1651,22 +1661,17 @@ fn show_tab_display(
                 }
                 // [C] カスタム法線クリア（グループ一括）
                 {
-                    let eligible: Vec<usize> = group_mat_idxs
-                        .iter()
-                        .copied()
-                        .filter(|&mi| !mat_has_normal_map.get(mi).copied().unwrap_or(false))
-                        .collect();
-                    let all_on = !eligible.is_empty()
-                        && eligible
+                    let all_on = !group_mat_idxs.is_empty()
+                        && group_mat_idxs
                             .iter()
                             .all(|&mi| app.clear_normals_per_mat.get(mi).copied().unwrap_or(false));
                     let resp = ui.add_enabled(
-                        !eligible.is_empty(),
+                        !group_mat_idxs.is_empty(),
                         egui::SelectableLabel::new(all_on, "C"),
                     );
-                    if resp.clicked() && !eligible.is_empty() {
+                    if resp.clicked() && !group_mat_idxs.is_empty() {
                         let new_val = !all_on;
-                        for &mi in &eligible {
+                        for &mi in &group_mat_idxs {
                             if mi < app.clear_normals_per_mat.len() {
                                 app.clear_normals_per_mat[mi] = new_val;
                             }
@@ -1674,6 +1679,58 @@ fn show_tab_display(
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
                     resp.on_hover_text("カスタム法線クリア（グループ一括）");
+                }
+                // [N] ノーマルマップ ON/OFF（グループ一括）
+                {
+                    let eligible: Vec<usize> = group_mat_idxs
+                        .iter()
+                        .copied()
+                        .filter(|&mi| mat_has_normal_map.get(mi).copied().unwrap_or(false))
+                        .collect();
+                    let all_on = !eligible.is_empty()
+                        && eligible
+                            .iter()
+                            .all(|&mi| app.normal_map_per_mat.get(mi).copied().unwrap_or(true));
+                    let resp = ui.add_enabled(
+                        !eligible.is_empty(),
+                        egui::SelectableLabel::new(all_on, "N"),
+                    );
+                    if resp.clicked() && !eligible.is_empty() {
+                        let new_val = !all_on;
+                        for &mi in &eligible {
+                            if mi < app.normal_map_per_mat.len() {
+                                app.normal_map_per_mat[mi] = new_val;
+                            }
+                        }
+                        app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
+                    }
+                    resp.on_hover_text("ノーマルマップ（グループ一括）");
+                }
+                // [B] Bloom/Emissive ON/OFF（グループ一括）
+                {
+                    let eligible: Vec<usize> = group_mat_idxs
+                        .iter()
+                        .copied()
+                        .filter(|&mi| mat_has_bloom.get(mi).copied().unwrap_or(false))
+                        .collect();
+                    let all_on = !eligible.is_empty()
+                        && eligible
+                            .iter()
+                            .all(|&mi| app.bloom_per_mat.get(mi).copied().unwrap_or(true));
+                    let resp = ui.add_enabled(
+                        !eligible.is_empty(),
+                        egui::SelectableLabel::new(all_on, "B"),
+                    );
+                    if resp.clicked() && !eligible.is_empty() {
+                        let new_val = !all_on;
+                        for &mi in &eligible {
+                            if mi < app.bloom_per_mat.len() {
+                                app.bloom_per_mat[mi] = new_val;
+                            }
+                        }
+                        app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
+                    }
+                    resp.on_hover_text("Bloom/Emissive（グループ一括）");
                 }
                 // [ ] 表示/非表示（グループ一括）
                 {
@@ -1823,15 +1880,16 @@ fn show_tab_display(
                         mat_src_tex.get(mat_idx)
                             .and_then(|s| s.as_deref())
                     });
-                // 法線 per-material トグル（S=平滑化, C=カスタム法線クリア）
+                // 法線 per-material トグル（S=平滑化, C=カスタム法線クリア, N=ノーマルマップ, B=Bloom）
                 let has_nmap = mat_has_normal_map.get(mat_idx).copied().unwrap_or(false);
+                // [S][C] は常に有効（ノーマルマップと併用可: TBN 基底法線の平滑化で品質向上）
                 if mat_idx < app.smooth_normals_per_mat.len() {
                     let old = app.smooth_normals_per_mat[mat_idx];
                     let resp = ui.add_enabled(
-                        !has_nmap,
+                        true,
                         egui::SelectableLabel::new(app.smooth_normals_per_mat[mat_idx], "S"),
                     );
-                    if resp.clicked() && !has_nmap {
+                    if resp.clicked() {
                         app.smooth_normals_per_mat[mat_idx] = !old;
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
@@ -1841,15 +1899,44 @@ fn show_tab_display(
                 if mat_idx < app.clear_normals_per_mat.len() {
                     let old = app.clear_normals_per_mat[mat_idx];
                     let resp = ui.add_enabled(
-                        !has_nmap,
+                        true,
                         egui::SelectableLabel::new(app.clear_normals_per_mat[mat_idx], "C"),
                     );
-                    if resp.clicked() && !has_nmap {
+                    if resp.clicked() {
                         app.clear_normals_per_mat[mat_idx] = !old;
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
                     if resp.hovered() { row_highlight = true; }
                     resp.on_hover_text("カスタム法線クリア");
+                }
+                // [N] ノーマルマップ ON/OFF
+                if mat_idx < app.normal_map_per_mat.len() {
+                    let old = app.normal_map_per_mat[mat_idx];
+                    let resp = ui.add_enabled(
+                        has_nmap,
+                        egui::SelectableLabel::new(old, "N"),
+                    );
+                    if resp.clicked() && has_nmap {
+                        app.normal_map_per_mat[mat_idx] = !old;
+                        app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
+                    }
+                    if resp.hovered() { row_highlight = true; }
+                    resp.on_hover_text("ノーマルマップ");
+                }
+                // [B] Bloom/Emissive ON/OFF
+                if mat_idx < app.bloom_per_mat.len() {
+                    let old = app.bloom_per_mat[mat_idx];
+                    let has_bloom = mat_has_bloom.get(mat_idx).copied().unwrap_or(false);
+                    let resp = ui.add_enabled(
+                        has_bloom,
+                        egui::SelectableLabel::new(old, "B"),
+                    );
+                    if resp.clicked() && has_bloom {
+                        app.bloom_per_mat[mat_idx] = !old;
+                        app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
+                    }
+                    if resp.hovered() { row_highlight = true; }
+                    resp.on_hover_text("Bloom/Emissive");
                 }
 
                 let cb = if let Some(tex_name) = display_tex {

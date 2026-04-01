@@ -58,7 +58,7 @@ popone.exe input.fbx
 - **3D 表示** — egui + wgpu によるリアルタイムレンダリング。テクスチャ付き Lambert シェーディング、両面描画、アルファブレンド。VRM の MToon 材質は 2 色トゥーンシェーディング（lit/shade smoothstep 補間）+ アウトライン描画（inverted hull 法）+ リムライティング（パラメトリックリム + MatCap テクスチャ）+ 補助テクスチャ（shadeMultiply / shadingShift / rimMultiply、texCoord / KHR_texture_transform 対応）+ UV アニメーション（スクロール・回転）+ emissive（発光）+ 法線マップ（MikkTSpace 接線生成による TBN 構築、doubleSided 背面法線反転対応）+ MToon 仕様準拠 4 段階描画順制御（OPAQUE → MASK → BlendZWrite → Blend、`transparentWithZWrite` / `renderQueueOffsetNumber` + BLEND 内カメラ距離動的ソート対応）で表示。VRM 0.x MToon の全プロパティを VRM 1.0 に正規化（UniVRM マイグレーション準拠）。ベースカラーテクスチャを含む全テクスチャで `texCoord` / `KHR_texture_transform` に対応。glTF sampler のアドレスモード（Repeat / ClampToEdge / MirroredRepeat）・フィルタモード（minFilter の mipmap 選択方式を含む 6 値保持）をテクスチャごとに個別のサンプラーで反映。UTS2（Unity-Chan Toon Shader）材質は自動検出し MToon 近似表示（1st shade / outline / rim / MatCap / emissive / normal 対応、HighColor は PMX 出力のみ）。PMX/PMD は MMD レンダリングモード（NdotL 依存トゥーンシェーディング・エッジ・スフィアマップ）で表示。ライティングはライトカラー + 半球 ambient（Sky/Ground 2色補間）で VRoidHub に近い環境光を再現
 - **カメラ操作** — 左ドラッグ:回転、右ドラッグ:パン、ホイール:ズーム。F:フィット、R:リセット、ダブルクリック:フィット、Shift:精密操作（1/3速度）。FOV 30°（MMD準拠）
 - **表情モーフ** — スライダで Expression を調整（0/1 ボタン・直接入力対応）
-- **材質表示切替** — 材質ごとの ON/OFF、検索フィルタ。材質行ホバーで 3D ビュー上の該当メッシュを半透明オレンジでハイライト。常にモデル名で折り畳みグループ化（Prefab 内の複数 FBX は個別グループ）。グループヘッダーに `[S]`（法線平滑化）`[C]`（カスタム法線クリア）`[☑]`（表示/非表示）の一括操作ボタン付き。ヘッダー行ホバーでグループ内全メッシュをハイライト
+- **材質表示切替** — 材質ごとの ON/OFF、検索フィルタ。材質行ホバーで 3D ビュー上の該当メッシュを半透明オレンジでハイライト。常にモデル名で折り畳みグループ化（Prefab 内の複数 FBX は個別グループ）。グループヘッダーに `[S]`（法線平滑化）`[C]`（カスタム法線クリア）`[N]`（ノーマルマップ ON/OFF）`[B]`（Bloom/Emissive ON/OFF）`[☑]`（表示/非表示）の一括操作ボタン付き。ヘッダー行ホバーでグループ内全メッシュをハイライト
 - **ファイル構成ツリー** — 開いたファイルから最終モデルまでのロードチェーンを階層表示。テクスチャ・アニメーション・パッケージテクスチャの一覧も確認可能
 - **テクスチャ割り当て** — 材質に外部テクスチャ（PNG/JPG/TGA/BMP/PSD）を D&D またはダイアログで割り当て。リアルタイムプレビュー付き。VRM 埋め込みテクスチャの差し替えにも対応（リセットボタンで復元可能）
 - **同名材質連動** — 同じ名前の材質に同時にテクスチャを割り当てる ON/OFF スイッチ
@@ -68,9 +68,9 @@ popone.exe input.fbx
 - **物理可視化** — 剛体（球体・カプセル・ボックス）を 1px ワイヤーフレームで表示。PMX/PMD は physics_mode 色分け（ボーン追従=グリーン、物理演算=レッド、物理+ボーン=ブルー）、VRM は group 色分け（コライダー=レッド、スプリング=グリーン）。カプセルは半球ワイヤーフレーム付き（PMX/PMD）
 - **ジョイント表示** — PMX/PMD のジョイントをイエロー立方体（回転反映・アニメ同期）で可視化。濃さ調整可能
 - **シェーダーオーバーライド** — 6 種のシェーダーモード切替（▲ ComboBox ▼）: Auto（モデル形式で自動選択）/ MToon/Lambert（Standard 強制）/ Unlit（テクスチャ色のみ）/ GGX Preview（簡易 Cook-Torrance スペキュラ）/ 法線（法線→RGB 可視化）/ MMD（MMD 専用パス）。新規モデルロード時は Auto にリセットされる
-- **法線ツール** — 法線平滑化・カスタム法線クリア（いずれも法線マップ付き材質がある場合は自動無効化）、法線方向の可視化
+- **法線ツール** — 法線平滑化 `[S]` ・カスタム法線クリア `[C]` （法線マップと併用可: TBN 基底法線の平滑化でポリゴン境界を改善）、ノーマルマップ ON/OFF `[N]`、法線方向の可視化
 - **MSAA** — 4x アンチエイリアシング（ON/OFF 切替可能）。MASK（cutout）材質ではサーフェスとアウトラインの両パスで alpha_to_coverage を有効化し、まつ毛・髪カード等のジャギーを軽減
-- **Bloom（グロー）** — Dual Kawase 方式のポストエフェクト。emissive 成分のみが光る（MRT で分離）。強度・閾値・半径を UI で調整可能。PMX/PMD では specular=(0,0,0) かつ specular_power≥100 の材質が自動的に Bloom 対象になる。Prefab Emission テクスチャ/色にも対応。無効時は GPU 負荷ゼロ
+- **Bloom（グロー）** — Dual Kawase 方式のポストエフェクト。emissive 成分のみが光る（MRT で分離）。強度・閾値・半径を UI で調整可能。PMX/PMD では specular=(0,0,0) かつ specular_power≥100 の材質が自動的に Bloom 対象になる。Prefab Emission テクスチャ/色にも対応。無効時は GPU 負荷ゼロ。材質ごとの `[B]` トグルで Bloom/Emissive の ON/OFF を個別制御可能。HDR emissive（成分 > 1.0）の材質はデフォルト OFF で白飛びを自動回避
 - **UVマップ出力** — 材質レイヤー分けの PSD として出力（1024〜8192 解像度）。UV 境界をまたぐ三角形のラップ描画対応。複数モデルマージ時はモデル別にレイヤーグループフォルダに格納
 - **モデル追加読み込み** — 衣装 FBX 等を既存モデルにマージ。ボーンマッチングは 3 段フォールバック（VRM ヒューマノイド名 → FBX ノード名 → PMX 名）で異なる命名規則のモデル間でも正しく統合
 

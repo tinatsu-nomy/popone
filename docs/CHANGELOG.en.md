@@ -3,61 +3,64 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.18](#v0218)
+  - [v0.2.19](#v0219)
     - [New Features](#new-features)
     - [Improvements](#improvements)
+  - [v0.2.18](#v0218)
+    - [New Features](#new-features-1)
+    - [Improvements](#improvements-1)
   - [v0.2.17](#v0217)
     - [Bug Fixes](#bug-fixes)
   - [v0.2.16](#v0216)
-    - [New Features](#new-features-1)
-    - [Bug Fixes](#bug-fixes-1)
-    - [Improvements](#improvements-1)
-  - [v0.2.15](#v0215)
     - [New Features](#new-features-2)
+    - [Bug Fixes](#bug-fixes-1)
     - [Improvements](#improvements-2)
-  - [v0.2.14](#v0214)
+  - [v0.2.15](#v0215)
+    - [New Features](#new-features-3)
     - [Improvements](#improvements-3)
-  - [v0.2.13](#v0213)
+  - [v0.2.14](#v0214)
     - [Improvements](#improvements-4)
+  - [v0.2.13](#v0213)
+    - [Improvements](#improvements-5)
   - [v0.2.12](#v0212)
     - [Bug Fixes](#bug-fixes-2)
-    - [New Features](#new-features-3)
-    - [Improvements](#improvements-5)
-  - [v0.2.11](#v0211)
     - [New Features](#new-features-4)
     - [Improvements](#improvements-6)
-  - [v0.2.10](#v0210)
+  - [v0.2.11](#v0211)
     - [New Features](#new-features-5)
+    - [Improvements](#improvements-7)
+  - [v0.2.10](#v0210)
+    - [New Features](#new-features-6)
     - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
     - [Bug Fixes](#bug-fixes-3)
-    - [Improvements](#improvements-7)
+    - [Improvements](#improvements-8)
     - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
   - [v0.2.9](#v029)
-    - [New Features](#new-features-6)
-    - [Improvements](#improvements-8)
+    - [New Features](#new-features-7)
+    - [Improvements](#improvements-9)
     - [Bug Fixes](#bug-fixes-4)
     - [Implementation Details](#implementation-details)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
-    - [New Features](#new-features-7)
-    - [Improvements](#improvements-9)
-  - [v0.2.7](#v027)
     - [New Features](#new-features-8)
-    - [Bug Fixes](#bug-fixes-5)
     - [Improvements](#improvements-10)
+  - [v0.2.7](#v027)
+    - [New Features](#new-features-9)
+    - [Bug Fixes](#bug-fixes-5)
+    - [Improvements](#improvements-11)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
     - [Bug Fixes](#bug-fixes-6)
-    - [New Features](#new-features-9)
-    - [Improvements](#improvements-11)
+    - [New Features](#new-features-10)
+    - [Improvements](#improvements-12)
     - [Code Quality & Performance](#code-quality--performance-1)
   - [v0.2.5](#v025)
-    - [Improvements](#improvements-12)
+    - [Improvements](#improvements-13)
     - [Code Quality & Performance](#code-quality--performance-2)
   - [v0.2.4](#v024)
-    - [Improvements](#improvements-13)
-  - [v0.2.3](#v023)
     - [Improvements](#improvements-14)
+  - [v0.2.3](#v023)
+    - [Improvements](#improvements-15)
   - [v0.2.2](#v022)
     - [Code Quality & Performance](#code-quality--performance-3)
   - [FBX Support](#fbx-support)
@@ -67,6 +70,19 @@
 # Changelog
 
 [日本語](CHANGELOG.md)
+
+## v0.2.19
+
+### New Features
+
+- **Per-material normal map toggle [N]** — Added `[N]` button to the material panel. Allows toggling normal map application ON/OFF for individual materials that have normal textures. When OFF, `MaterialUniform.has_normal_tex` is zeroed, skipping normal map sampling in the shader. Group header `[N]` enables batch toggling
+- **Per-material Bloom/Emissive toggle [B]** — Added `[B]` button to the material panel. Allows toggling Bloom/Emissive ON/OFF for materials with emissive components. When OFF, `emissive_factor` is zeroed, disabling both the shader's `lit += emissive` addition and MRT bloom output. For PMX/PMD materials, `bloom_emissive` is also zeroed. Group header `[B]` enables batch toggling
+- **HDR Emissive auto-detection** — Materials with any `emissive_factor` component exceeding 1.0 (HDR) are initialized with `bloom_per_mat` defaulting to OFF. Automatically prevents white-out caused by `lit += emissive` clamping in the viewer (which lacks tonemapping)
+
+### Improvements
+
+- **Removed [S]/[C] gating on normal-mapped materials** — Normal smoothing `[S]` and custom normal clear `[C]` are now always available, even for materials with normal maps. Since normal maps perturb normals via the TBN matrix (built from vertex normals + tangents), smoothing the base normals improves polygon edge visibility. The `mat.normal_texture.is_none()` guard in `mesh.rs` has been removed
+- **Extended group header** — Now uses `▶ [S] [C] [N] [B] [☑] GroupName` layout with 4+1 buttons
 
 ## v0.2.18
 

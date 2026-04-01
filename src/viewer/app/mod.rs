@@ -357,6 +357,10 @@ pub struct ViewerApp {
     pub smooth_normals_per_mat: Vec<bool>,
     /// 材質ごとのカスタム法線クリア ON/OFF（mat_idx でインデックス）
     pub clear_normals_per_mat: Vec<bool>,
+    /// 材質ごとのノーマルマップ適用 ON/OFF（mat_idx でインデックス）
+    pub normal_map_per_mat: Vec<bool>,
+    /// 材質ごとの Bloom/Emissive 適用 ON/OFF（mat_idx でインデックス）
+    pub bloom_per_mat: Vec<bool>,
     /// 材質フィルター文字列
     pub material_filter: String,
     /// ドラッグオーバー中フラグ
@@ -448,6 +452,8 @@ impl ViewerApp {
             material_visibility: Vec::new(),
             smooth_normals_per_mat: Vec::new(),
             clear_normals_per_mat: Vec::new(),
+            normal_map_per_mat: Vec::new(),
+            bloom_per_mat: Vec::new(),
             export: ExportState::default(),
             material_filter: String::new(),
             drag_hovering: false,
@@ -592,12 +598,18 @@ impl ViewerApp {
         // 初回ロード時は per_mat 未初期化のため空スライス（全OFF扱い）
         let smooth_per_mat: Vec<bool>;
         let clear_per_mat: Vec<bool>;
+        let nmap_per_mat: Vec<bool>;
+        let bloom_per_mat: Vec<bool>;
         if self.smooth_normals_per_mat.len() == ir.materials.len() {
             smooth_per_mat = self.smooth_normals_per_mat.clone();
             clear_per_mat = self.clear_normals_per_mat.clone();
+            nmap_per_mat = self.normal_map_per_mat.clone();
+            bloom_per_mat = self.bloom_per_mat.clone();
         } else {
             smooth_per_mat = vec![false; ir.materials.len()];
             clear_per_mat = vec![false; ir.materials.len()];
+            nmap_per_mat = vec![true; ir.materials.len()];
+            bloom_per_mat = Self::default_bloom_per_mat(&ir);
         }
         let gpu_model = super::mesh::build_gpu_model_from_ir(
             &ir,
@@ -605,6 +617,8 @@ impl ViewerApp {
             queue,
             &smooth_per_mat,
             &clear_per_mat,
+            &nmap_per_mat,
+            &bloom_per_mat,
         )?;
         self.finish_load_with_gpu(ir, gpu_model, source)
     }
@@ -659,8 +673,14 @@ impl ViewerApp {
             renderer.invalidate_visualization_cache();
         }
 
+        // 材質ごとのフラグを先に初期化（MMD リソース構築で使用するため）
+        self.smooth_normals_per_mat = vec![false; ir.materials.len()];
+        self.clear_normals_per_mat = vec![false; ir.materials.len()];
+        self.normal_map_per_mat = vec![true; ir.materials.len()];
+        self.bloom_per_mat = Self::default_bloom_per_mat(&ir);
+
         // MMD リソース構築
-        self.prepare_mmd_for_model(&mut gpu_model, &ir);
+        self.prepare_mmd_for_model(&mut gpu_model, &ir, &self.bloom_per_mat.clone());
 
         // テクスチャ割り当て履歴クリア（別モデル読み込み時）
         self.tex.assignments.clear();
@@ -680,8 +700,6 @@ impl ViewerApp {
         self.morph_dirty = false;
         // 材質表示フラグ初期化（DrawCall数 = 材質数ではない場合があるのでdraws数に合わせる）
         self.material_visibility = vec![true; gpu_model.draws.len()];
-        self.smooth_normals_per_mat = vec![false; ir.materials.len()];
-        self.clear_normals_per_mat = vec![false; ir.materials.len()];
         self.export.export_visible_only = false;
         self.material_filter.clear();
         // カメラをモデルのバウンディングボックスにフィット
@@ -762,10 +780,11 @@ impl ViewerApp {
         &self,
         gpu_model: &mut super::mesh::GpuModel,
         ir: &crate::intermediate::types::IrModel,
+        bloom_per_mat: &[bool],
     ) {
         if let Some(ref renderer) = self.renderer {
             let device = &self.render_state.device;
-            renderer.prepare_mmd_resources(device, gpu_model, ir);
+            renderer.prepare_mmd_resources(device, gpu_model, ir, bloom_per_mat);
         }
     }
 
@@ -781,11 +800,18 @@ impl ViewerApp {
             queue,
             &self.smooth_normals_per_mat,
             &self.clear_normals_per_mat,
+            &self.normal_map_per_mat,
+            &self.bloom_per_mat,
         ) {
             Ok(mut new_model) => {
                 // MMD リソース構築
                 if let Some(ref renderer) = self.renderer {
-                    renderer.prepare_mmd_resources(device, &mut new_model, &loaded.ir);
+                    renderer.prepare_mmd_resources(
+                        device,
+                        &mut new_model,
+                        &loaded.ir,
+                        &self.bloom_per_mat,
+                    );
                 }
                 let mat_cache = Self::build_mat_cache(&loaded.ir, &new_model);
                 // draw数が同じなら材質表示状態を保持
@@ -822,12 +848,33 @@ impl ViewerApp {
         }
     }
 
+    /// Bloom per-mat のデフォルト値を生成（HDR emissive は OFF）
+    fn default_bloom_per_mat(ir: &IrModel) -> Vec<bool> {
+        ir.materials
+            .iter()
+            .map(|m| {
+                let ef = m.emissive_factor;
+                // 任意成分が 1.0 を超える場合は HDR → デフォルト OFF
+                !(ef.x > 1.0 || ef.y > 1.0 || ef.z > 1.0)
+            })
+            .collect()
+    }
+
     /// per_mat フラグが材質数と一致すればそのまま返し、不一致なら全 false で生成
     fn per_mat_or_default(flags: &[bool], mat_count: usize) -> Vec<bool> {
         if flags.len() == mat_count {
             flags.to_vec()
         } else {
             vec![false; mat_count]
+        }
+    }
+
+    /// per_mat フラグが材質数と一致すればそのまま返し、不一致なら全 true で生成
+    fn per_mat_or_default_true(flags: &[bool], mat_count: usize) -> Vec<bool> {
+        if flags.len() == mat_count {
+            flags.to_vec()
+        } else {
+            vec![true; mat_count]
         }
     }
 

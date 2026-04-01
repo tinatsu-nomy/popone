@@ -51,6 +51,7 @@
     - [Dual Kawase Algorithm](#dual-kawase-algorithm)
     - [MRT (Multiple Render Target) Emissive Separation](#mrt-multiple-render-target-emissive-separation)
     - [UI Parameters](#ui-parameters)
+    - [Per-Material Bloom/Emissive Toggle (v0.2.19)](#per-material-bloomemissive-toggle-v0219)
     - [PMX/PMD Self-Emissive Material Bloom Detection](#pmxpmd-self-emissive-material-bloom-detection)
     - [Prefab Emission Support](#prefab-emission-support)
   - [Viewer Display Styles](#viewer-display-styles)
@@ -947,6 +948,14 @@ Bloom intermediate buffers use `Rgba8Unorm` (linear) to avoid arithmetic artifac
 | Threshold | 0.0–1.0 | 0.0 | Cuts emissive below this luminance |
 | Radius | 3–6 | 4 | Downsample stages. Larger = wider blur |
 
+### Per-Material Bloom/Emissive Toggle (v0.2.19)
+
+`bloom_per_mat: Vec<bool>` controls Bloom/Emissive ON/OFF per material.
+
+- **glTF materials**: When `bloom_per_mat[i]` is false, `MaterialUniform.emissive_factor` is zeroed and `has_emissive_tex` is set to false. Both the shader's `lit += emissive` and `out.bloom = vec4(bloom_color, ...)` become zero
+- **PMX/PMD materials**: When `bloom_per_mat[i]` is false, `MmdMaterialUniform.bloom_emissive` is zeroed
+- **HDR auto-detection**: Materials with any `emissive_factor` component exceeding 1.0 are initialized with default OFF (`default_bloom_per_mat()`). Prevents white-out in the viewer which lacks tonemapping
+
 ### PMX/PMD Self-Emissive Material Bloom Detection
 
 `derive_pmx_bloom()` common function detects self-emissive PMX/PMD materials:
@@ -1049,6 +1058,8 @@ Notes:
 - Same logic applied to both main and outline shaders
 - Skinning TBN sync: `animation.rs` transforms tangent.xyz alongside normals using the skinning matrix, then applies Gram-Schmidt re-orthogonalization (`t' = normalize(t - n * dot(n, t))`) to maintain orthogonality with the normal. tangent.w (handedness) is preserved
 - Normal recalculation TBN sync: When `smooth_normals` / `clear_custom_normals` modifies normals, all vertex tangent.xyz are Gram-Schmidt re-orthogonalized against the new normals
+- Normal smoothing + normal map compatibility (v0.2.19): Normal maps perturb normals via the TBN matrix (built from vertex normals + tangents), so faceted base normals make polygon edges visible. Using `[S]` to smooth base normals and `[N]` to apply normal maps produces smoother results. The `mat.normal_texture.is_none()` guard in `mesh.rs` has been removed, allowing smoothing on normal-mapped materials
+- Per-material normal map toggle `[N]` (v0.2.19): Controlled by `normal_map_per_mat: Vec<bool>`. When OFF, `MaterialUniform.has_normal_tex` is set to 0.0, causing the shader's `if material.has_normal_tex > 0.5` branch to skip normal map sampling
 - Morph normal/tangent tracking: `IrMorphTarget` holds `normal_offsets` / `tangent_offsets` in sparse representation (threshold 1e-7) alongside `position_offsets`. GPU morph application (`apply_gpu_morph_recursive`) adds weight × delta to position, normal, and tangent. tangent.w (handedness) is preserved. Normal and tangent deltas are correctly propagated through A-stance conversion (`pose.rs`), vertex splitting (`tangent.rs`), and export filter (`export_filter.rs`)
 - NORMAL/TANGENT-only morph support: Morph targets with only NORMAL/TANGENT deltas (no POSITION, legal per glTF 2.0) are supported end-to-end. `IrMorph` generation, export filter liveness check, and GPU morph conversion all collect affected vertices as the union (`BTreeSet`) of positions/normals/tangents
 - Morph CPU vertex sync: `apply_morphs()` updates `animated_vertices` (CPU-side cache) alongside the GPU buffer. `current_vertices()` returns morphed vertices even on morph-only frames, ensuring accurate transparent distance sorting
@@ -1720,12 +1731,14 @@ Texture references are collected by `collect_material_tex_indices()`, which gath
 
 `material_groups` always contains at least one group, even for single models. The UI-side `has_groups` condition was changed to `!group_names.is_empty()` (always true), removing the flat list display path. Unified `CollapsingState`-based grouping is now used for all cases.
 
-Group header rows use the layout `▶ [S] [C] [☑] GroupName`, implemented with `CollapsingState` + `ui.horizontal`. Button behavior:
+Group header rows use the layout `▶ [S] [C] [N] [B] [☑] GroupName`, implemented with `CollapsingState` + `ui.horizontal`. Button behavior:
 
 | Button | Target | Behavior |
 |--------|--------|----------|
-| `[S]` | `smooth_normals_per_mat` | Batch toggle normal smoothing for all materials in the group (excluding normal-mapped) |
-| `[C]` | `clear_normals_per_mat` | Batch toggle custom normal clear for all materials in the group (excluding normal-mapped) |
+| `[S]` | `smooth_normals_per_mat` | Batch toggle normal smoothing for all materials in the group (compatible with normal maps: smoothing TBN base normals improves polygon edge visibility) |
+| `[C]` | `clear_normals_per_mat` | Batch toggle custom normal clear for all materials in the group (compatible with normal maps) |
+| `[N]` | `normal_map_per_mat` | Batch toggle normal map application for normal-mapped materials. When OFF, `MaterialUniform.has_normal_tex` is zeroed, skipping normal map sampling in the shader |
+| `[B]` | `bloom_per_mat` | Batch toggle Bloom/Emissive for emissive materials. When OFF, `emissive_factor` is zeroed, disabling both `lit += emissive` and MRT bloom output. HDR emissive (component > 1.0) defaults to OFF |
 | `[☑]` | `material_visibility` | Batch toggle visibility for all DrawCalls in the group |
 
 Header row hover detection uses `contains_pointer()` (rect-based). `hovered()` is not suitable because child widgets (buttons, etc.) consume the hover event.

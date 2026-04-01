@@ -1098,8 +1098,18 @@ impl ViewerApp {
         let mat_count = ir.materials.len();
         let smooth = Self::per_mat_or_default(&self.smooth_normals_per_mat, mat_count);
         let clear = Self::per_mat_or_default(&self.clear_normals_per_mat, mat_count);
-        let gpu_model =
-            super::super::mesh::build_gpu_model(&ir, &glb.images, device, queue, &smooth, &clear)?;
+        let nmap = Self::per_mat_or_default_true(&self.normal_map_per_mat, mat_count);
+        let bloom = Self::per_mat_or_default_true(&self.bloom_per_mat, mat_count);
+        let gpu_model = super::super::mesh::build_gpu_model(
+            &ir,
+            &glb.images,
+            device,
+            queue,
+            &smooth,
+            &clear,
+            &nmap,
+            &bloom,
+        )?;
 
         Self::encode_ir_textures_as_png(&mut ir, &glb.images);
         let source =
@@ -1715,6 +1725,8 @@ impl ViewerApp {
             let mc = ir.materials.len();
             let smooth = Self::per_mat_or_default(&self.smooth_normals_per_mat, mc);
             let clear = Self::per_mat_or_default(&self.clear_normals_per_mat, mc);
+            let nmap = Self::per_mat_or_default_true(&self.normal_map_per_mat, mc);
+            let bloom = Self::per_mat_or_default_true(&self.bloom_per_mat, mc);
             let gpu_model = super::super::mesh::build_gpu_model(
                 &ir,
                 &glb.images,
@@ -1722,6 +1734,8 @@ impl ViewerApp {
                 queue,
                 &smooth,
                 &clear,
+                &nmap,
+                &bloom,
             )?;
             Self::encode_ir_textures_as_png(&mut ir, &glb.images);
 
@@ -1754,8 +1768,18 @@ impl ViewerApp {
         let mc = ir.materials.len();
         let smooth = Self::per_mat_or_default(&self.smooth_normals_per_mat, mc);
         let clear = Self::per_mat_or_default(&self.clear_normals_per_mat, mc);
-        let gpu_model =
-            super::super::mesh::build_gpu_model(&ir, &glb.images, device, queue, &smooth, &clear)?;
+        let nmap = Self::per_mat_or_default_true(&self.normal_map_per_mat, mc);
+        let bloom = Self::per_mat_or_default_true(&self.bloom_per_mat, mc);
+        let gpu_model = super::super::mesh::build_gpu_model(
+            &ir,
+            &glb.images,
+            device,
+            queue,
+            &smooth,
+            &clear,
+            &nmap,
+            &bloom,
+        )?;
 
         // IrTexture を PNG エンコード済みに変換（convert_ir_to_pmx で統一的に使えるように）
         Self::encode_ir_textures_as_png(&mut ir, &glb.images);
@@ -1781,6 +1805,8 @@ impl ViewerApp {
         let saved_visibility = std::mem::take(&mut self.material_visibility);
         let saved_smooth_per_mat = std::mem::take(&mut self.smooth_normals_per_mat);
         let saved_clear_per_mat = std::mem::take(&mut self.clear_normals_per_mat);
+        let saved_normal_map_per_mat = std::mem::take(&mut self.normal_map_per_mat);
+        let saved_bloom_per_mat = std::mem::take(&mut self.bloom_per_mat);
         let saved_filter = std::mem::take(&mut self.material_filter);
         let saved_pmx_path = std::mem::take(&mut self.export.pmx_output_path);
         let saved_visible_only = self.export.export_visible_only;
@@ -1900,9 +1926,17 @@ impl ViewerApp {
         if saved_clear_per_mat.len() == self.clear_normals_per_mat.len() {
             self.clear_normals_per_mat = saved_clear_per_mat;
         }
+        if saved_normal_map_per_mat.len() == self.normal_map_per_mat.len() {
+            self.normal_map_per_mat = saved_normal_map_per_mat;
+        }
+        if saved_bloom_per_mat.len() == self.bloom_per_mat.len() {
+            self.bloom_per_mat = saved_bloom_per_mat;
+        }
         // per-mat フラグが復元された場合、GPU モデルを再構築して反映
         if self.smooth_normals_per_mat.iter().any(|&v| v)
             || self.clear_normals_per_mat.iter().any(|&v| v)
+            || self.normal_map_per_mat.iter().any(|&v| !v)
+            || self.bloom_per_mat.iter().any(|&v| !v)
         {
             self.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
         }
@@ -2058,6 +2092,8 @@ impl ViewerApp {
                             let mc = ir.materials.len();
                             let smooth = Self::per_mat_or_default(&self.smooth_normals_per_mat, mc);
                             let clear = Self::per_mat_or_default(&self.clear_normals_per_mat, mc);
+                            let nmap = Self::per_mat_or_default_true(&self.normal_map_per_mat, mc);
+                            let bloom = Self::per_mat_or_default_true(&self.bloom_per_mat, mc);
                             let gpu_model = super::super::mesh::build_gpu_model(
                                 &ir,
                                 &glb.images,
@@ -2065,6 +2101,8 @@ impl ViewerApp {
                                 queue,
                                 &smooth,
                                 &clear,
+                                &nmap,
+                                &bloom,
                             )?;
                             Self::encode_ir_textures_as_png(&mut ir, &glb.images);
                             self.finish_load_with_gpu(ir, gpu_model, source_clone.clone())
@@ -3477,16 +3515,25 @@ impl ViewerApp {
         let mc = loaded.ir.materials.len();
         self.smooth_normals_per_mat.resize(mc, false);
         self.clear_normals_per_mat.resize(mc, false);
+        self.normal_map_per_mat.resize(mc, true);
+        self.bloom_per_mat.resize(mc, true);
         match super::super::mesh::build_gpu_model_from_ir(
             &loaded.ir,
             device,
             queue,
             &self.smooth_normals_per_mat,
             &self.clear_normals_per_mat,
+            &self.normal_map_per_mat,
+            &self.bloom_per_mat,
         ) {
             Ok(mut gpu_model) => {
                 if let Some(ref renderer) = self.renderer {
-                    renderer.prepare_mmd_resources(device, &mut gpu_model, &loaded.ir);
+                    renderer.prepare_mmd_resources(
+                        device,
+                        &mut gpu_model,
+                        &loaded.ir,
+                        &self.bloom_per_mat,
+                    );
                 }
                 if let Some(tex_id) = self.viewport_texture_id.take() {
                     let mut renderer = self.render_state.renderer.write();
