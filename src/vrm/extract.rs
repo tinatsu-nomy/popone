@@ -372,13 +372,13 @@ fn extract_meta_comment(typed: &VrmTyped) -> String {
 
                 section!("Permissions");
                 field!("avatar permission", m.avatar_permission.as_deref());
-                field!("allow excessively violent usage", bool m.allow_excessively_violent_usage.map(|v| v.to_string()));
-                field!("allow excessively sexual usage", bool m.allow_excessively_sexual_usage.map(|v| v.to_string()));
+                field!("violent usage", bool m.allow_excessively_violent_usage.map(|v| v.to_string()));
+                field!("sexual usage", bool m.allow_excessively_sexual_usage.map(|v| v.to_string()));
                 field!("commercial usage", m.commercial_usage.as_deref());
-                field!("allow political or religious usage", bool m.allow_political_or_religious_usage.map(|v| v.to_string()));
-                field!("allow antisocial or hate usage", bool m.allow_antisocial_or_hate_usage.map(|v| v.to_string()));
+                field!("political/religious", bool m.allow_political_or_religious_usage.map(|v| v.to_string()));
+                field!("antisocial/hate", bool m.allow_antisocial_or_hate_usage.map(|v| v.to_string()));
                 field!("credit notation", m.credit_notation.as_deref());
-                field!("allow redistribution", bool m.allow_redistribution.map(|v| v.to_string()));
+                field!("redistribution", bool m.allow_redistribution.map(|v| v.to_string()));
                 field!("modification", m.modification.as_deref());
             }
         }

@@ -363,6 +363,8 @@ pub struct ViewerApp {
     pub bloom_per_mat: Vec<bool>,
     /// 材質フィルター文字列
     pub material_filter: String,
+    /// 表情モーフフィルター文字列
+    pub morph_filter: String,
     /// ドラッグオーバー中フラグ
     pub drag_hovering: bool,
     /// ビューポートテクスチャID
@@ -418,6 +420,8 @@ pub struct ViewerApp {
     start_time: Instant,
     /// append 時のインスタンス ID カウンタ（ベースモデルは常に 0）
     pub next_instance_id: u32,
+    /// スプラッシュ画像テクスチャ（モデル未ロード時に表示）
+    splash_texture: Option<egui::TextureHandle>,
 }
 
 impl ViewerApp {
@@ -432,6 +436,9 @@ impl ViewerApp {
 
         // ダークテーマ（Blender/Substance Painter 風）
         Self::setup_dark_theme(&cc.egui_ctx);
+
+        // スプラッシュ画像読み込み
+        let splash_texture = Self::load_splash_texture(&cc.egui_ctx);
 
         // シングルインスタンス: IPC パイプリスナー起動
         #[cfg(target_os = "windows")]
@@ -456,6 +463,7 @@ impl ViewerApp {
             bloom_per_mat: Vec::new(),
             export: ExportState::default(),
             material_filter: String::new(),
+            morph_filter: String::new(),
             drag_hovering: false,
             viewport_texture_id: None,
             render_state,
@@ -484,6 +492,7 @@ impl ViewerApp {
             preloaded: None,
             start_time: Instant::now(),
             next_instance_id: 1,
+            splash_texture,
         }
     }
 
@@ -519,6 +528,16 @@ impl ViewerApp {
             .expect("Monospace フォントファミリーは常に存在")
             .push("noto_jp".to_owned());
         ctx.set_fonts(fonts);
+    }
+
+    /// スプラッシュ画像を埋め込み PNG からデコードし egui テクスチャとして登録
+    fn load_splash_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+        static SPLASH_PNG: &[u8] = include_bytes!("../../../assets/popone_image.png");
+        let image = image::load_from_memory(SPLASH_PNG).ok()?.into_rgba8();
+        let size = [image.width() as usize, image.height() as usize];
+        let pixels = image.into_raw();
+        let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
+        Some(ctx.load_texture("splash", color_image, egui::TextureOptions::LINEAR))
     }
 
     /// v0 デザイン準拠のダークテーマを適用
@@ -1266,6 +1285,24 @@ impl eframe::App for ViewerApp {
                                 egui::Color32::WHITE,
                             );
                         }
+                    }
+                }
+
+                // スプラッシュ画像（モデル未ロード時にビューポート中央に角丸で表示）
+                if self.loaded.is_none() {
+                    if let Some(ref tex) = self.splash_texture {
+                        let tex_size = tex.size_vec2();
+                        let rect = response.rect;
+                        // ビューポートに収まるようスケール
+                        let scale = (rect.width() / tex_size.x)
+                            .min(rect.height() / tex_size.y)
+                            .min(1.0);
+                        let img_size = egui::vec2(tex_size.x * scale, tex_size.y * scale);
+                        let img_rect = egui::Rect::from_center_size(rect.center(), img_size);
+                        let image =
+                            egui::Image::new(egui::load::SizedTexture::new(tex.id(), tex_size))
+                                .corner_radius(egui::CornerRadius::same(16));
+                        viewport.put(img_rect, image);
                     }
                 }
 

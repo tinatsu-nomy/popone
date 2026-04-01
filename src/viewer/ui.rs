@@ -1147,6 +1147,13 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
 
     ui.heading(egui::RichText::new("表情モーフ").color(egui::Color32::from_gray(0xD0)));
     ui.separator();
+    ui.horizontal(|ui| {
+        ui.label("絞り込み:");
+        ui.text_edit_singleline(&mut app.morph_filter);
+        if !app.morph_filter.is_empty() && ui.small_button("✕").clicked() {
+            app.morph_filter.clear();
+        }
+    });
     if ui.small_button("全リセット").clicked() {
         for (i, w) in app.morph_weights.iter_mut().enumerate() {
             if !anim_expr_morphs.contains(&i) {
@@ -1156,7 +1163,15 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
         app.morph_dirty = true;
     }
     ui.separator();
+    let filter_lower = app.morph_filter.to_lowercase();
     for (i, morph) in ir.morphs.iter().enumerate() {
+        // フィルタに一致しないモーフはスキップ
+        if !filter_lower.is_empty()
+            && !morph.name.to_lowercase().contains(&filter_lower)
+            && !morph.name_en.to_lowercase().contains(&filter_lower)
+        {
+            continue;
+        }
         if i < app.morph_weights.len() {
             let is_anim_controlled = anim_expr_morphs.contains(&i);
             ui.horizontal(|ui| {
@@ -2512,6 +2527,238 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     });
 }
 
+/// パーミッション値のバッジ種別
+enum MetaBadge {
+    /// 許可（緑バッジ）
+    Allow,
+    /// 条件付き（黄バッジ）
+    Warn,
+    /// 禁止（赤バッジ）
+    Deny,
+    /// 中立（灰バッジ）
+    Neutral,
+}
+
+impl MetaBadge {
+    fn colors(&self) -> (egui::Color32, egui::Color32) {
+        match self {
+            MetaBadge::Allow => (
+                egui::Color32::from_rgb(0x20, 0x60, 0x20),
+                egui::Color32::from_rgb(0x80, 0xFF, 0x80),
+            ),
+            MetaBadge::Warn => (
+                egui::Color32::from_rgb(0x60, 0x50, 0x10),
+                egui::Color32::from_rgb(0xFF, 0xE0, 0x60),
+            ),
+            MetaBadge::Deny => (
+                egui::Color32::from_rgb(0x60, 0x18, 0x18),
+                egui::Color32::from_rgb(0xFF, 0x80, 0x80),
+            ),
+            MetaBadge::Neutral => (
+                egui::Color32::from_rgb(0x40, 0x40, 0x40),
+                egui::Color32::from_gray(0xA0),
+            ),
+        }
+    }
+
+    fn rich_text(&self, text: &str) -> egui::RichText {
+        let (bg, fg) = self.colors();
+        egui::RichText::new(format!(" {text} "))
+            .background_color(bg)
+            .color(fg)
+    }
+}
+
+/// VRM メタ情報の値をカラーバッジ + ツールチップに整形
+/// 戻り値: (表示用 RichText, ツールチップ文字列 or None)
+fn format_meta_value(value: &str) -> (egui::RichText, Option<&'static str>) {
+    match value {
+        // VRM 1.0 bool フィールド
+        "true" => (MetaBadge::Allow.rich_text("allow"), Some("許可されている")),
+        "false" => (
+            MetaBadge::Deny.rich_text("disallow"),
+            Some("許可されていない"),
+        ),
+        // VRM 0.0 usage 値
+        "Allow" => (
+            MetaBadge::Allow.rich_text("Allow"),
+            Some("この用途での利用が許可されています"),
+        ),
+        "Disallow" => (
+            MetaBadge::Deny.rich_text("Disallow"),
+            Some("この用途での利用は許可されていません"),
+        ),
+        // VRM 0.0 / 1.0 avatar permission
+        "OnlyAuthor" | "onlyAuthor" => (
+            MetaBadge::Warn.rich_text("OnlyAuthor"),
+            Some("アバターとして操演できるのは作者のみ"),
+        ),
+        "Everyone" | "everyone" => (
+            MetaBadge::Allow.rich_text("Everyone"),
+            Some("誰でもアバターとして操演できる"),
+        ),
+        "ExplicitlyLicensedPerson" | "onlySeparatelyLicensedPerson" => (
+            MetaBadge::Warn.rich_text("SeparatelyLicensed"),
+            Some("別途許諾を得た人のみアバターとして操演できる"),
+        ),
+        // VRM 1.0 commercial usage
+        "personalNonProfit" => (
+            MetaBadge::Deny.rich_text("personalNonProfit"),
+            Some("個人の非営利目的のみ許可されています"),
+        ),
+        "personalProfit" => (
+            MetaBadge::Warn.rich_text("personalProfit"),
+            Some("個人の営利利用まで許可されています"),
+        ),
+        "corporation" => (
+            MetaBadge::Allow.rich_text("corporation"),
+            Some("法人を含む商用利用が許可されています"),
+        ),
+        // VRM 1.0 credit notation
+        "required" => (
+            MetaBadge::Warn.rich_text("required"),
+            Some("クレジット表記が必須です"),
+        ),
+        "unnecessary" => (
+            MetaBadge::Neutral.rich_text("unnecessary"),
+            Some("クレジット表記は不要です"),
+        ),
+        // VRM 1.0 modification
+        "prohibited" => (
+            MetaBadge::Deny.rich_text("prohibited"),
+            Some("改変は禁止されています"),
+        ),
+        "allowModification" => (
+            MetaBadge::Allow.rich_text("allowModification"),
+            Some("改変が許可されています"),
+        ),
+        "allowModificationRedistribution" => (
+            MetaBadge::Allow.rich_text("allowModificationRedistribution"),
+            Some("改変および再配布が許可されています"),
+        ),
+        // VRM 0.0 license
+        "Redistribution_Prohibited" => (
+            MetaBadge::Deny.rich_text("Redistribution_Prohibited"),
+            Some("再配布は禁止されています"),
+        ),
+        "CC0" => (
+            MetaBadge::Allow.rich_text("CC0"),
+            Some("CC0: パブリックドメイン。制限なく自由に利用できます"),
+        ),
+        "CC_BY" => (
+            MetaBadge::Allow.rich_text("CC_BY"),
+            Some("CC BY: クレジット表記のみで自由に利用できます"),
+        ),
+        "CC_BY_NC" => (
+            MetaBadge::Warn.rich_text("CC_BY_NC"),
+            Some("CC BY-NC: クレジット表記が必要、非営利目的のみ"),
+        ),
+        "CC_BY_SA" => (
+            MetaBadge::Allow.rich_text("CC_BY_SA"),
+            Some("CC BY-SA: クレジット表記が必要、同一ライセンスで継承"),
+        ),
+        "CC_BY_NC_SA" => (
+            MetaBadge::Warn.rich_text("CC_BY_NC_SA"),
+            Some("CC BY-NC-SA: クレジット表記が必要、非営利のみ、同一ライセンスで継承"),
+        ),
+        "CC_BY_ND" => (
+            MetaBadge::Warn.rich_text("CC_BY_ND"),
+            Some("CC BY-ND: クレジット表記が必要、改変禁止"),
+        ),
+        "CC_BY_NC_ND" => (
+            MetaBadge::Deny.rich_text("CC_BY_NC_ND"),
+            Some("CC BY-NC-ND: クレジット表記が必要、非営利のみ、改変禁止"),
+        ),
+        "Other" => (
+            MetaBadge::Neutral.rich_text("Other"),
+            Some("独自ライセンス。other license URL を参照してください"),
+        ),
+        _ => (egui::RichText::new(value), None),
+    }
+}
+
+/// 英語ラベルを日本語表示名に変換（セクションタイトル）
+fn meta_section_ja(title: &str) -> &str {
+    match title {
+        "Model Info" => "モデル情報",
+        "Author" => "作者",
+        "Permissions" => "パーミッション",
+        "License" => "ライセンス",
+        _ => title,
+    }
+}
+
+/// 英語ラベルを日本語表示名に変換（フィールドラベル）
+fn meta_label_ja(label: &str) -> &str {
+    match label {
+        // Model Info
+        "model name" => "モデル名",
+        "version" => "バージョン",
+        // Author
+        "author" => "作者",
+        "contact information" => "連絡先",
+        "reference" => "参考文献",
+        "copyright information" => "著作権",
+        "third party licenses" => "サードパーティ",
+        // VRM 0.0 Permissions
+        "allowed user" => "使用許可対象",
+        "violent ussage" => "暴力表現",
+        "sexual ussage" => "性的表現",
+        "commercial ussage" | "commercial usage" => "商用利用",
+        "other permission" => "その他条件",
+        // VRM 1.0 Permissions
+        "avatar permission" => "アバター使用",
+        "violent usage" => "過度な暴力",
+        "sexual usage" => "過度な性的表現",
+        "political/religious" => "政治/宗教",
+        "antisocial/hate" => "反社会/ヘイト",
+        "credit notation" => "クレジット表記",
+        "redistribution" => "再配布",
+        "modification" => "改変",
+        // License
+        "license" => "ライセンス",
+        "other license" => "その他",
+        _ => label,
+    }
+}
+
+/// パーミッション・ライセンスのラベル（左列）に対するツールチップ
+fn meta_label_tooltip(label: &str) -> Option<&'static str> {
+    match label {
+        // VRM 0.0 Permissions
+        "allowed user" => Some("このモデルをアバターとして使用できる人の範囲 (allowedUserName)"),
+        "violent ussage" => Some("暴力表現を伴うコンテンツでの利用の許可 (violentUssageName)"),
+        "sexual ussage" => Some("性的表現を伴うコンテンツでの利用の許可 (sexualUssageName)"),
+        "commercial ussage" | "commercial usage" => {
+            Some("商業目的での利用の許可範囲 (commercialUsage)")
+        }
+        "other permission" => Some("その他の利用条件を記載した URL (otherPermissionUrl)"),
+        // License
+        "license" => Some("適用されるライセンスの種類"),
+        "other license" => Some("追加ライセンス情報の URL"),
+        // VRM 1.0 Permissions
+        "avatar permission" => {
+            Some("このモデルをアバターとして操演できる人の範囲 (avatarPermission)")
+        }
+        "violent usage" => {
+            Some("過度な暴力表現を伴うコンテンツでの利用の許可 (allowExcessivelyViolentUsage)")
+        }
+        "sexual usage" => {
+            Some("過度な性的表現を伴うコンテンツでの利用の許可 (allowExcessivelySexualUsage)")
+        }
+        "political/religious" => {
+            Some("政治的・宗教的なコンテンツでの利用の許可 (allowPoliticalOrReligiousUsage)")
+        }
+        "antisocial/hate" => {
+            Some("反社会的・ヘイト表現を伴うコンテンツでの利用の許可 (allowAntisocialOrHateUsage)")
+        }
+        "credit notation" => Some("利用時のクレジット表記の要否 (creditNotation)"),
+        "redistribution" => Some("モデルデータの再配布の許可 (allowRedistribution)"),
+        "modification" => Some("モデルデータの改変の許可範囲 (modification)"),
+        _ => None,
+    }
+}
+
 fn show_meta_info(ui: &mut egui::Ui, comment: &str) {
     // comment 形式: "[Section]" 行でセクション区切り、"  label: value" 行がフィールド
     // まずセクション単位にパースする
@@ -2547,7 +2794,8 @@ fn show_meta_info(ui: &mut egui::Ui, comment: &str) {
             continue;
         }
         let id = egui::Id::new(format!("meta_section_{i}"));
-        egui::CollapsingHeader::new(&sec.title)
+        let title_ja = meta_section_ja(&sec.title);
+        egui::CollapsingHeader::new(title_ja)
             .id_salt(id)
             .default_open(true)
             .show(ui, |ui| {
@@ -2556,8 +2804,16 @@ fn show_meta_info(ui: &mut egui::Ui, comment: &str) {
                     .spacing([8.0, 4.0])
                     .show(ui, |ui| {
                         for (label, value) in &sec.fields {
-                            ui.label(label.as_str());
-                            ui.label(value.as_str());
+                            let label_ja = meta_label_ja(label);
+                            let label_resp = ui.label(label_ja);
+                            if let Some(tip) = meta_label_tooltip(label) {
+                                label_resp.on_hover_text(tip);
+                            }
+                            let (rich, tooltip) = format_meta_value(value);
+                            let resp = ui.label(rich);
+                            if let Some(tip) = tooltip {
+                                resp.on_hover_text(tip);
+                            }
                             ui.end_row();
                         }
                     });
@@ -2722,6 +2978,23 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
             app.anim.library.remove(idx);
             if was_active {
                 if app.anim.library.is_empty() {
+                    // ポーズリセット（アニメーション解除と同じ処理）
+                    if let Some(ref anim) = app.anim.state {
+                        if let Some(ref mut loaded) = app.loaded {
+                            for (i, morph) in loaded.ir.morphs.iter().enumerate() {
+                                if anim
+                                    .animation
+                                    .expression_channels
+                                    .contains_key(&morph.name_en)
+                                {
+                                    if let Some(w) = app.morph_weights.get_mut(i) {
+                                        *w = 0.0;
+                                    }
+                                }
+                            }
+                            loaded.gpu_model.invalidate_morph_cache();
+                        }
+                    }
                     app.anim.state = None;
                     app.anim.active_index = None;
                     app.morph_dirty = true;
@@ -2896,6 +3169,22 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
         ));
 
         if ui.small_button("アニメーション解除").clicked() {
+            // アニメーション制御中のモーフウェイトを 0 にリセット
+            if let Some(ref mut loaded) = app.loaded {
+                for (i, morph) in loaded.ir.morphs.iter().enumerate() {
+                    if anim
+                        .animation
+                        .expression_channels
+                        .contains_key(&morph.name_en)
+                    {
+                        if let Some(w) = app.morph_weights.get_mut(i) {
+                            *w = 0.0;
+                        }
+                    }
+                }
+                // ボーンアニメーションで変形された頂点をリセットするためキャッシュ無効化
+                loaded.gpu_model.invalidate_morph_cache();
+            }
             app.anim.state = None;
             app.anim.active_index = None;
             app.morph_dirty = true;

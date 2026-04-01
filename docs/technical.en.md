@@ -56,6 +56,8 @@
     - [Prefab Emission Support](#prefab-emission-support)
   - [Viewer Display Styles](#viewer-display-styles)
     - [Dark Theme (v0.2.15)](#dark-theme-v0215)
+    - [VRM Meta Info Color Badges (v0.2.20)](#vrm-meta-info-color-badges-v0220)
+    - [Splash Image (v0.2.20)](#splash-image-v0220)
     - [Bone Display](#bone-display-1)
     - [Rigid Body Display](#rigid-body-display)
     - [Joint Display (PMX/PMD only)](#joint-display-pmxpmd-only)
@@ -74,6 +76,7 @@
   - [Single Instance](#single-instance)
   - [FPS Measurement](#fps-measurement)
   - [Animation Playback](#animation-playback)
+    - [Pose Reset on Animation Clear (v0.2.20)](#pose-reset-on-animation-clear-v0220)
     - [Supported Formats](#supported-formats)
     - [Animation Playback for PMX/PMD](#animation-playback-for-pmxpmd)
     - [Humanoid Retargeting](#humanoid-retargeting)
@@ -1002,6 +1005,29 @@ Notes:
 - `Button::stroke()` similarly overrides hover border color — do not use
 - Side panel width fixed with `width_range(280.0..=280.0)` + `resizable(false)`
 
+### VRM Meta Info Color Badges (v0.2.20)
+
+Permission and license values are displayed as colored badges using `egui::RichText::background_color()`. This approach is used because egui's default font lacks color emoji glyphs.
+
+| Badge Type | Background | Foreground | Usage |
+|-----------|------------|------------|-------|
+| Allow | `#206020` | `#80FF80` | Permitted / unrestricted (allow, Everyone, CC0, CC_BY, etc.) |
+| Warn | `#605010` | `#FFE060` | Conditional (OnlyAuthor, personalProfit, CC_BY_NC, etc.) |
+| Deny | `#601818` | `#FF8080` | Prohibited (disallow, prohibited, Redistribution_Prohibited, etc.) |
+| Neutral | `#404040` | `#A0A0A0` | Neutral (unnecessary, Other) |
+
+The data layer (`ir.comment`) retains English labels for PMX comment field output. Japanese labels are applied only at UI display time via `meta_section_ja()` / `meta_label_ja()`, with tooltips and badges from `meta_label_tooltip()` / `format_meta_value()`.
+
+### Splash Image (v0.2.20)
+
+Displays a logo image centered in the viewport when no model is loaded.
+
+- PNG embedded in the exe via `include_bytes!("../../../assets/popone_image.png")`
+- `image::load_from_memory` → `egui::ColorImage` → `ctx.load_texture` for egui texture registration
+- Auto-scaled to fit viewport with `min(width_ratio, height_ratio, 1.0)`, centered via `Rect::from_center_size`
+- Rounded corners via `egui::Image::corner_radius(CornerRadius::same(16))` (shader-level masking)
+- Placed using `viewport.put(img_rect, image)` for explicit layout positioning
+
 ### Bone Display
 
 - Shape: Double circle + triangle without base (◎△)
@@ -1199,6 +1225,16 @@ Displays FPS and frame time (ms) in the viewport top-right overlay.
 ## Animation Playback
 
 The viewer supports real-time playback of VRMA / glTF / FBX animations.
+
+### Pose Reset on Animation Clear (v0.2.20)
+
+When clearing or removing an animation, the following reset steps are performed:
+
+1. Reset animation-controlled expression morph weights to 0.0
+2. Invalidate morph cache via `GpuModel::invalidate_morph_cache()`
+3. On the next frame, `apply_morphs` rebuilds vertices from `base_vertices`, fully resetting bone deformations
+
+Since `apply_morphs` has an early-return optimization using `last_weights`, the `morph_cache_dirty` flag forces recalculation.
 
 ### Supported Formats
 

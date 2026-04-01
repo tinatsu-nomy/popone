@@ -54,11 +54,12 @@ If the viewer is already running, subsequent launches pass the file path to the 
 
 ### Viewer
 
-- **Dark Theme** — Blender / Substance Painter style dark theme. Unified color scheme for panels, buttons, and tooltips. Side panel fixed at 280px with flat tab bar
+- **Dark Theme** — Blender / Substance Painter style dark theme. Unified color scheme for panels, buttons, and tooltips. Side panel fixed at 280px with flat tab bar. Displays a rounded-corner splash image centered in the viewport when no model is loaded
 - **3D Rendering** — Real-time rendering with egui + wgpu. Textured Lambert shading, double-sided, alpha blending. VRM MToon materials are displayed with 2-color toon shading (lit/shade smoothstep interpolation) + outline rendering (inverted hull method) + rim lighting (parametric rim + MatCap texture) + auxiliary textures (shadeMultiply / shadingShift / rimMultiply, with texCoord / KHR_texture_transform support) + UV animation (scroll/rotation) + emissive (emission) + normal mapping (MikkTSpace tangent generation for TBN construction, doubleSided back-face normal flipping) + MToon spec-compliant 4-phase draw order control (OPAQUE → MASK → BlendZWrite → Blend, with `transparentWithZWrite` / `renderQueueOffsetNumber` + dynamic camera distance sorting within BLEND). VRM 0.x MToon properties are fully normalized to VRM 1.0 (UniVRM migration compliant). All textures including base color support `texCoord` / `KHR_texture_transform`. Per-texture glTF sampler address modes (Repeat / ClampToEdge / MirroredRepeat) and filter modes (including all 6 minFilter mipmap selection values) are honored with individual samplers per texture. UTS2 (Unity-Chan Toon Shader) materials are auto-detected and displayed via MToon approximation (1st shade / outline / rim / MatCap / emissive / normal supported; HighColor is PMX output only). PMX/PMD displayed in MMD rendering mode (NdotL-dependent toon shading, edges, sphere maps). Lighting uses light color + hemisphere ambient (Sky/Ground 2-color interpolation) for VRoidHub-like ambient lighting
 - **Camera** — Left drag: rotate, Right drag: pan, Scroll: zoom. F: fit, R: reset, Double-click: fit, Shift: precision mode (1/3 speed). FOV 30° (MMD-compliant)
-- **Expression Morphs** — Adjust with sliders (0/1 buttons, direct input)
+- **Expression Morphs** — Adjust with sliders (0/1 buttons, direct input). Text filter for narrowing by name (partial match on Japanese/English names, case-insensitive)
 - **Material Visibility** — Per-material ON/OFF toggle with search filter. Hovering over a material row highlights the corresponding mesh in the 3D view with semi-transparent orange overlay. Materials are always grouped by model name with collapsible headers (multiple FBX from Prefab shown as separate groups). Group headers include `[S]` (normal smoothing), `[C]` (custom normal clear), `[N]` (normal map ON/OFF), `[B]` (Bloom/Emissive ON/OFF), and `[☑]` (visibility) batch buttons. Hovering over the header highlights all meshes in the group
+- **Meta Info Panel** — Displays VRM model info, author, permissions, and license with Japanese labels. Permission/license values shown as color badges (allow = green / conditional = yellow / deny = red / neutral = gray). Hover tooltips on both labels and values. Supports VRM 0.0/1.0
 - **File Hierarchy Tree** — Displays the load chain from opened file to final model in a tree view. Textures, animations, and package textures are also listed
 - **Texture Assignment** — Assign external textures (PNG/JPG/TGA/BMP/PSD) via drag & drop or dialog. Real-time preview. VRM embedded texture replacement supported (reset button to restore)
 - **Same-Name Material Linking** — ON/OFF toggle to assign textures to all materials sharing the same name simultaneously
@@ -121,6 +122,7 @@ See [Changelog](CHANGELOG.en.md) for version-by-version changes.
 - Humanoid retargeting support (apply across different models)
 - 4 loop modes (None / Normal / A-B repeat / Ping-pong)
 - Speed control, frame stepping, seek bar, expression keyframe sync
+- Automatic bone pose and expression morph reset on animation clear/removal
 
 ### PMX (MikuMikuDance) Conversion
 

@@ -105,6 +105,8 @@ pub struct GpuModel {
     morph_visited: Vec<bool>,
     /// 前回適用時の morph weights（変化がなければ再計算をスキップ）
     last_weights: Vec<f32>,
+    /// morph weights キャッシュ無効化フラグ（アニメーション解除時等に使用）
+    morph_cache_dirty: bool,
     /// アニメーション済み頂点キャッシュ（法線表示同期用）
     animated_vertices: Option<Vec<Vertex>>,
 }
@@ -158,6 +160,11 @@ impl GpuModel {
     /// アニメーション済み頂点をキャッシュ
     pub fn set_animated_vertices(&mut self, verts: Vec<Vertex>) {
         self.animated_vertices = Some(verts);
+    }
+
+    /// モーフウェイトキャッシュを無効化（次回 apply_morphs で強制再計算）
+    pub fn invalidate_morph_cache(&mut self) {
+        self.morph_cache_dirty = true;
     }
 
     /// ベース頂点を animated_vertices にコピー（バッファ再利用、毎フレーム alloc 回避）
@@ -221,10 +228,14 @@ impl GpuModel {
     /// モーフウェイトを適用して頂点バッファを更新
     /// weights が前回と同一なら早期リターンして再計算をスキップする
     pub fn apply_morphs(&mut self, weights: &[f32], queue: &wgpu::Queue) {
-        // weights が前回から変化していなければ何もしない
-        if self.last_weights.len() == weights.len() && self.last_weights == weights {
+        // weights が前回から変化していなければ何もしない（キャッシュ無効化時は強制実行）
+        if !self.morph_cache_dirty
+            && self.last_weights.len() == weights.len()
+            && self.last_weights == weights
+        {
             return;
         }
+        self.morph_cache_dirty = false;
 
         self.morph_work.clear();
         self.morph_work.extend_from_slice(&self.base_vertices);
@@ -1030,6 +1041,7 @@ fn build_gpu_model_inner(
         gpu_morphs,
         morph_visited: Vec::new(),
         last_weights: Vec::new(),
+        morph_cache_dirty: false,
         animated_vertices: None,
     })
 }
