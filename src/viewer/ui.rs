@@ -1432,8 +1432,10 @@ fn show_tab_display(
         egui::Checkbox::new(&mut app.display.outline_enabled, "アウトライン描画"),
     );
 
-    // MMD サブオプション
-    if sel == ShaderSelection::Mmd {
+    // MMD サブオプション（明示的 Mmd 選択時、または Auto で MMD パスが有効な場合）
+    let show_mmd_options =
+        sel == ShaderSelection::Mmd || (sel == ShaderSelection::Auto && app.display.use_mmd_path);
+    if show_mmd_options {
         ui.checkbox(&mut app.display.mmd_edge_enabled, "エッジ描画");
         if app.display.mmd_edge_enabled {
             ui.add(
@@ -1962,6 +1964,41 @@ fn show_tab_display(
                 } else {
                     ui.checkbox(&mut app.material_visibility[i], name)
                 };
+                // 材質名ホバー時にテクスチャ参照ファイル名をツールチップ表示
+                if let Some(ref loaded) = app.loaded {
+                    if let Some(mat) = loaded.ir.materials.get(mat_idx) {
+                        let textures = &loaded.ir.textures;
+                        let mut lines = Vec::new();
+                        if let Some(idx) = mat.texture_index {
+                            if let Some(t) = textures.get(idx) {
+                                lines.push(format!("テクスチャ: {}", t.filename));
+                            }
+                        }
+                        if let Some(idx) = mat.sphere_texture_index {
+                            if let Some(t) = textures.get(idx) {
+                                lines.push(format!("スフィア: {}", t.filename));
+                            }
+                        }
+                        if let Some(idx) = mat.toon_texture_index {
+                            if let Some(t) = textures.get(idx) {
+                                lines.push(format!("トゥーン: {}", t.filename));
+                            }
+                        }
+                        if let Some(ref info) = mat.normal_texture {
+                            if let Some(t) = textures.get(info.index) {
+                                lines.push(format!("法線: {}", t.filename));
+                            }
+                        }
+                        if let Some(ref info) = mat.emissive_texture {
+                            if let Some(t) = textures.get(info.index) {
+                                lines.push(format!("エミッシブ: {}", t.filename));
+                            }
+                        }
+                        if !lines.is_empty() {
+                            cb.clone().on_hover_text(lines.join("\n"));
+                        }
+                    }
+                }
                 if cb.contains_pointer() { row_highlight = true; }
                 row_highlight
                     });
@@ -2475,7 +2512,21 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             let mut dialog = rfd::FileDialog::new()
                 .set_title("UVマップ出力先を選択")
                 .add_filter("PSD", &["psd"]);
-            if let Some(dir) = default_path.parent() {
+            // デフォルトディレクトリ: PMX出力パスがあればその親、なければモデルファイルの親
+            let default_dir = default_path
+                .parent()
+                .filter(|d| d.as_os_str().len() > 0)
+                .map(|d| d.to_path_buf())
+                .or_else(|| {
+                    app.loaded.as_ref().map(|l| {
+                        l.source
+                            .display_path()
+                            .parent()
+                            .unwrap_or(std::path::Path::new("."))
+                            .to_path_buf()
+                    })
+                });
+            if let Some(dir) = default_dir.as_deref() {
                 dialog = dialog.set_directory(dir);
             }
             if let Some(name) = default_path.file_name() {

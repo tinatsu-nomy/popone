@@ -578,6 +578,8 @@ Override modes (Unlit / GGX / Normal) output texture alpha directly without `app
 
 `normalize_shader_state()` is called on all model load / rebuild / append paths. Only Auto mode auto-sets `use_mmd_path` based on model format. Explicit user selections are preserved across model loads.
 
+The edge drawing UI (ON/OFF toggle and thickness slider) is shown both when MMD mode is explicitly selected and when Auto mode has `use_mmd_path == true` (i.e., PMX/PMD loaded).
+
 ## MToon Shading
 
 VRM MToon materials use a fragment shader branch within the Standard pipeline for 2-color toon shading + rim lighting + MatCap, and a dedicated pipeline for outline rendering.

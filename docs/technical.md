@@ -578,6 +578,8 @@ BLEND   (else):           完全透明 discard のみ
 
 `normalize_shader_state()` がモデルロード / rebuild / append の全経路で呼ばれ、Auto モードのみモデル形式に応じて `use_mmd_path` を自動設定する。ユーザーが明示選択した場合はモデル切替時も選択を維持する。
 
+エッジ描画の UI（ON/OFF スイッチ・太さスライダー）は、明示的な MMD モード選択時に加え、Auto モードで `use_mmd_path == true` の場合（PMX/PMD ロード時）にも表示される。
+
 ## MToon シェーディング
 
 VRM の MToon 材質は Standard パイプライン内のフラグメントシェーダー分岐で 2 色トゥーンシェーディング + リムライティング + MatCap を行い、専用パイプラインでアウトライン描画を行う。
