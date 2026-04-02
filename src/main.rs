@@ -62,6 +62,10 @@ struct Args {
     /// 標準ボーン挿入をスキップ（元のボーン構造を維持）
     #[arg(long)]
     raw_structure: bool,
+
+    /// PMX出力倍率（デフォルト: 1.0）
+    #[arg(long, default_value = "1.0")]
+    scale: f32,
 }
 
 /// ロガーセットアップ。
@@ -493,6 +497,7 @@ fn run_main(mut args: Args) -> Result<()> {
         align_rigid_rotation: args.align_rigid_rotation,
         no_physics: args.no_physics,
         raw_structure: args.raw_structure,
+        scale: args.scale,
     };
     let mut pmx_model = pmx::build::build_pmx_model_with_options(&ir, &build_options)
         .context("PMXモデル構築失敗")?;
@@ -771,6 +776,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         align_rigid_rotation: args.align_rigid_rotation,
         no_physics: args.no_physics,
         raw_structure: args.raw_structure,
+        scale: args.scale,
     };
     let mut pmx_model = pmx::build::build_pmx_model_with_options(&ir, &build_options)
         .context("PMXモデル構築失敗")?;

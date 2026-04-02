@@ -124,13 +124,21 @@ pub fn extract_texture_for_material(
         })
         .unwrap_or_else(|| tex_obj.name.clone());
 
+    // 拡張子ヒント（ファイル名から抽出、埋め込み・外部ファイル両方で使用）
+    let ext_owned: Option<String> = file_basename
+        .as_deref()
+        .and_then(|b| Path::new(b).extension())
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_owned());
+    let ext_hint = ext_owned.as_deref();
+
     // Try embedded Video content first (binary FBX only)
     // ASCII FBX の Content はテキスト表現のため画像デコードできない → 外部ファイルフォールバックに委ねる
     if let Some(video) = scene.video_for_texture(tex_obj.id) {
         if let Some(content) = video.node.child("Content") {
             if let Some(data) = content.properties.first().and_then(|p| p.as_binary()) {
                 if !data.is_empty() {
-                    if let Some(tex) = decode_image_data(data, &tex_name) {
+                    if let Some(tex) = decode_image_data_with_ext(data, &tex_name, ext_hint) {
                         return Some(tex);
                     }
                 }
@@ -146,7 +154,7 @@ pub fn extract_texture_for_material(
         if let Some(filename) = rel_node.properties.first().and_then(|p| p.as_string()) {
             let path = fbx_dir.join(filename.replace('\\', "/"));
             if let Ok(data) = std::fs::read(&path) {
-                if let Some(tex) = decode_image_data(&data, &tex_name) {
+                if let Some(tex) = decode_image_data_with_ext(&data, &tex_name, ext_hint) {
                     return Some(tex);
                 }
             }
@@ -160,7 +168,7 @@ pub fn extract_texture_for_material(
             let basename = Path::new(&normalized).file_name().unwrap_or_default();
             let path = fbx_dir.join(basename);
             if let Ok(data) = std::fs::read(&path) {
-                if let Some(tex) = decode_image_data(&data, &tex_name) {
+                if let Some(tex) = decode_image_data_with_ext(&data, &tex_name, ext_hint) {
                     return Some(tex);
                 }
             }
@@ -177,10 +185,15 @@ pub fn extract_texture_for_material(
             found.display()
         );
         if let Ok(data) = std::fs::read(&found) {
-            if let Some(tex) = decode_image_data(&data, &tex_name) {
+            if let Some(tex) = decode_image_data_with_ext(&data, &tex_name, ext_hint) {
                 return Some(tex);
             }
         }
+        log::warn!(
+            "テクスチャ '{}' はファイルとして存在しますがデコードに失敗しました",
+            basename
+        );
+        return None;
     }
 
     log::warn!(
@@ -197,22 +210,56 @@ pub fn extract_texture_name_for_material(scene: &FbxScene, mat_id: i64) -> Optio
     extract_basename_from_texture(tex_obj).or_else(|| Some(tex_obj.name.clone()))
 }
 
-fn decode_image_data(data: &[u8], name: &str) -> Option<TextureData> {
+fn decode_image_data_with_ext(
+    data: &[u8],
+    name: &str,
+    ext_hint: Option<&str>,
+) -> Option<TextureData> {
+    // まず自動判別を試行
     match image::load_from_memory(data) {
         Ok(img) => {
             let rgba = img.to_rgba8();
             let width = rgba.width();
             let height = rgba.height();
-            Some(TextureData {
+            return Some(TextureData {
                 name: name.to_string(),
                 rgba: rgba.into_raw(),
                 width,
                 height,
-            })
+            });
         }
-        Err(e) => {
-            log::warn!("Failed to decode texture '{}': {}", name, e);
-            None
+        Err(_) => {}
+    }
+
+    // TGA 等マジックナンバーのない形式は拡張子からフォーマットを推定してリトライ
+    let ext = ext_hint.or_else(|| Path::new(name).extension().and_then(|e| e.to_str()));
+    if let Some(ext) = ext {
+        if let Some(format) = image::ImageFormat::from_extension(ext) {
+            match image::load_from_memory_with_format(data, format) {
+                Ok(img) => {
+                    let rgba = img.to_rgba8();
+                    let width = rgba.width();
+                    let height = rgba.height();
+                    return Some(TextureData {
+                        name: name.to_string(),
+                        rgba: rgba.into_raw(),
+                        width,
+                        height,
+                    });
+                }
+                Err(e) => {
+                    log::warn!(
+                        "テクスチャ '{}' のデコード失敗 (format={:?}): {}",
+                        name,
+                        format,
+                        e
+                    );
+                    return None;
+                }
+            }
         }
     }
+
+    log::warn!("テクスチャ '{}' のフォーマットを判別できません", name);
+    None
 }

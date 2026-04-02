@@ -1428,7 +1428,7 @@ impl ViewerApp {
                 )));
             }
             Err(e) => {
-                log::error!("FBXアニメーション読み込み失敗: {e}");
+                log::warn!("FBXアニメーション読み込み失敗: {e}");
                 self.convert_message = Some(ConvertMessage::failure(format!(
                     "FBXアニメーション読み込み失敗: {e}"
                 )));

@@ -149,7 +149,8 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - VRM Expression to PMX morph conversion
 - VRM SpringBone to PMX rigid body / joint conversion (gravity, rotation/movement limits, collider masks)
 - A-stance conversion / T-stance conversion (for FBX, persistent viewport warning on failure/skip), rigid body rotation alignment options
-- No-physics export (skip rigid bodies/joints), raw structure export (skip standard bone insertion + keep original bone names)
+- No-physics export (skip rigid bodies/joints), raw structure export (skip standard bone insertion + keep original bone names), export scale multiplier (`--scale`)
+- Boneless models (static FBX, etc.) automatically get a single dummy bone at origin with all vertex weights assigned
 - MToon outline to PMX edge mapping
 - Auto-classified display frames (Root / Expression / Upper Body / Arms / Fingers / Legs / Other)
 - UV normalization (clamped to 0..1)
@@ -191,6 +192,7 @@ Options:
   --normalize-to-tstance  T-stance conversion (raise A-stance arms to horizontal, for FBX)
   --align-rigid-rotation  Align rigid body rotation to bone direction
   --raw-structure         Export with original bone structure (skip standard bone insertion + keep original bone names)
+  --scale <FLOAT>         PMX export scale multiplier (default: 1.0)
   --model-name <NAME>     Specify model filename inside archive (for ZIP/7z)
   --list-models           List models inside archive and exit (for ZIP/7z)
   --log-level <LEVEL>     Log level (error/warn/info/debug, default: info)

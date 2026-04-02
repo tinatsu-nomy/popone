@@ -31,7 +31,7 @@ pub struct ConvertStats {
 }
 
 /// VRM → PMX 変換オプション
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct VrmConvertOptions {
     /// 物理（剛体・ジョイント）を出力しない
     pub no_physics: bool,
@@ -41,6 +41,20 @@ pub struct VrmConvertOptions {
     pub normalize_pose: bool,
     /// 標準ボーン挿入をスキップ（元のボーン構造を維持）
     pub raw_structure: bool,
+    /// PMX出力倍率（デフォルト: 1.0）
+    pub scale: f32,
+}
+
+impl Default for VrmConvertOptions {
+    fn default() -> Self {
+        Self {
+            no_physics: false,
+            align_rigid_rotation: false,
+            normalize_pose: false,
+            raw_structure: false,
+            scale: 1.0,
+        }
+    }
 }
 
 pub fn convert_vrm_to_pmx(
@@ -70,7 +84,7 @@ pub fn convert_vrm_to_pmx(
         align_rigid_rotation: options.align_rigid_rotation,
         no_physics: options.no_physics,
         raw_structure: options.raw_structure,
-        ..Default::default()
+        scale: options.scale,
     };
     let pmx_model = pmx::build::build_pmx_model_with_options(&ir, &build_options)?;
     write_pmx_and_stats(&pmx_model, output_path, &tex_dir)
@@ -93,7 +107,7 @@ pub fn convert_fbx_to_pmx(
         align_rigid_rotation: options.align_rigid_rotation,
         no_physics: options.no_physics,
         raw_structure: options.raw_structure,
-        ..Default::default()
+        scale: options.scale,
     };
     convert_ir_to_pmx(&ir, output_path, &build_options)
 }

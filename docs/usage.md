@@ -149,7 +149,8 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - VRM Expression → PMX モーフ変換
 - VRM SpringBone → PMX 剛体・ジョイント変換（重力・回転/移動制限・コライダー衝突マスク）
 - Aスタンス変換 / Tスタンス変換（FBX用、変換失敗・スキップ時はビューポートに常時警告表示）、剛体回転をボーン方向に揃えるオプション
-- 物理なしで出力（剛体・ジョイント省略）、元のボーン構造で出力（標準ボーン挿入スキップ＋元のボーン名維持）
+- 物理なしで出力（剛体・ジョイント省略）、元のボーン構造で出力（標準ボーン挿入スキップ＋元のボーン名維持）、出力倍率指定（`--scale`）
+- ボーンなしモデル（静的 FBX 等）は原点にダミーボーンを 1 本自動作成し、全頂点ウェイトを割り当て
 - MToon アウトライン → PMX エッジ反映
 - 表示枠の自動分類（Root / 表情 / 体(上) / 腕 / 指 / 足 / その他）
 - UV 正規化（0..1 範囲に補正）
@@ -191,6 +192,7 @@ popone <入力> [出力.pmx] [オプション]
   --normalize-to-tstance  Tスタンス変換（Aスタンスの腕を水平にする、FBX用）
   --align-rigid-rotation  剛体回転をボーン方向に揃える
   --raw-structure         元のボーン構造で出力（標準ボーン挿入スキップ＋元のボーン名維持）
+  --scale <FLOAT>         PMX出力倍率（デフォルト: 1.0）
   --model-name <NAME>     アーカイブ内のモデルファイル名を指定（ZIP/7z用）
   --list-models           アーカイブ内のモデル一覧を表示して終了（ZIP/7z用）
   --log-level <LEVEL>     ログレベル（error/warn/info/debug、デフォルト: info）

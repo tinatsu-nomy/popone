@@ -314,6 +314,9 @@ PMX モデル構築時のオプションを `PmxBuildOptions` 構造体で管理
 | `align_rigid_rotation` | `--align-rigid-rotation` | 剛体回転をボーン方向に揃える |
 | `no_physics` | `--no-physics` | 剛体・ジョイントを出力しない |
 | `raw_structure` | `--raw-structure` | 標準ボーン挿入をスキップし、元のボーン名を維持 |
+| `scale` | `--scale` | PMX 出力倍率（デフォルト: 1.0）。ボーン位置・頂点位置・モーフオフセット・剛体位置/サイズ・ジョイント位置/移動制限に適用 |
+
+元ボーンが 0 本の場合（FBX 静的メッシュ等）、モデル名で原点にダミーボーンを 1 本自動作成し、全頂点ウェイトを BDEF1(bone=0) で割り当てる。この場合 `insert_standard_bones()` はスキップされる（IK 等のヒューマノイド前提ボーンが無効な参照を生成するため）。
 
 `raw_structure` 有効時は `insert_standard_bones()` を完全にスキップする。`fix_duplicate_names` と `sort_bones_topological` は常に実行される。ボーン名は `IrBone.original_name`（VRM: glTF ノード名、FBX: FBX ノード名）がそのまま PMX に出力される。
 
@@ -329,6 +332,7 @@ VRM → PMX 変換の公開 API は `VrmConvertOptions` 構造体でオプショ
 | `align_rigid_rotation` | 剛体回転をボーン方向に揃える |
 | `normalize_pose` | A スタンスへ正規化 |
 | `raw_structure` | 標準ボーン挿入をスキップ（元のボーン構造を維持） |
+| `scale` | PMX 出力倍率（デフォルト: 1.0） |
 
 `VrmConvertOptions` は内部で `PmxBuildOptions` に変換される。`convert_ir_to_pmx`（ビューア用）は `PmxBuildOptions` を直接受け取る。
 

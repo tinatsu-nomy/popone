@@ -314,6 +314,9 @@ PMX model build options are managed by the `PmxBuildOptions` struct.
 | `align_rigid_rotation` | `--align-rigid-rotation` | Align rigid body rotation to bone direction |
 | `no_physics` | `--no-physics` | Skip rigid body and joint output |
 | `raw_structure` | `--raw-structure` | Skip standard bone insertion and keep original bone names |
+| `scale` | `--scale` | PMX export scale multiplier (default: 1.0). Applied to bone positions, vertex positions, morph offsets, rigid body positions/sizes, joint positions/move limits |
+
+When the source model has 0 bones (e.g., static FBX meshes), a single dummy bone named after the model is automatically created at the origin, with all vertex weights assigned as BDEF1(bone=0). In this case, `insert_standard_bones()` is skipped (humanoid-specific bones like IK would generate invalid references).
 
 When `raw_structure` is enabled, `insert_standard_bones()` is completely skipped. `fix_duplicate_names` and `sort_bones_topological` are always executed. Bone names use `IrBone.original_name` (VRM: glTF node name, FBX: FBX node name) directly in PMX output.
 
@@ -329,6 +332,7 @@ The public API for VRM → PMX conversion manages options via the `VrmConvertOpt
 | `align_rigid_rotation` | Align rigid body rotation to bone direction |
 | `normalize_pose` | Normalize to A-stance |
 | `raw_structure` | Skip standard bone insertion (preserve original bone structure) |
+| `scale` | PMX export scale multiplier (default: 1.0) |
 
 `VrmConvertOptions` is internally converted to `PmxBuildOptions`. `convert_ir_to_pmx` (for the viewer) accepts `PmxBuildOptions` directly.
 

@@ -34,7 +34,7 @@ pub fn idx_size(n: usize) -> u8 {
 }
 
 /// PMXモデル構築オプション
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PmxBuildOptions {
     /// 剛体回転をボーン方向に揃える
     pub align_rigid_rotation: bool,
@@ -42,6 +42,19 @@ pub struct PmxBuildOptions {
     pub no_physics: bool,
     /// 標準ボーン挿入をスキップ（元のボーン構造を維持）
     pub raw_structure: bool,
+    /// PMX出力倍率（デフォルト: 1.0）
+    pub scale: f32,
+}
+
+impl Default for PmxBuildOptions {
+    fn default() -> Self {
+        Self {
+            align_rigid_rotation: false,
+            no_physics: false,
+            raw_structure: false,
+            scale: 1.0,
+        }
+    }
 }
 
 pub fn build_pmx_model(ir: &IrModel) -> Result<PmxModel> {
@@ -137,12 +150,34 @@ pub fn build_pmx_model_with_options(ir: &IrModel, options: &PmxBuildOptions) -> 
         edge_count
     );
 
+    let scale = options.scale;
+    if (scale - 1.0).abs() > f32::EPSILON {
+        log::info!("PMX出力倍率: {:.3}", scale);
+    }
+
     // ボーン変換
-    model.bones = build_bones(ir, options.raw_structure);
+    model.bones = build_bones(ir, options.raw_structure, scale);
+
+    // ボーンが0本の場合、モデル名で原点にダミーボーンを1本作成
+    let no_source_bones = model.bones.is_empty();
+    if no_source_bones {
+        log::info!("ボーンが0本のため、ダミーボーン「{}」を原点に作成", ir.name);
+        model.bones.push(PmxBone {
+            name: ir.name.clone(),
+            name_en: ir.name.clone(),
+            position: Vec3::ZERO,
+            parent_index: -1,
+            deform_layer: 0,
+            flags: BONE_FLAG_ROTATABLE | BONE_FLAG_OPERABLE | BONE_FLAG_VISIBLE,
+            tail: BoneTail::Offset(Vec3::ZERO),
+            ik: None,
+            grant: None,
+        });
+    }
 
     // 頂点・面 統合
     let (vertices, faces, mat_face_counts) =
-        build_vertices_and_faces(ir, ir.source_format.is_vrm0());
+        build_vertices_and_faces(ir, ir.source_format.is_vrm0(), scale);
     model.vertices = vertices;
     model.faces = faces;
 
@@ -164,19 +199,21 @@ pub fn build_pmx_model_with_options(ir: &IrModel, options: &PmxBuildOptions) -> 
     }
 
     // モーフ変換
-    model.morphs = build_morphs(ir, ir.source_format.is_vrm0());
+    model.morphs = build_morphs(ir, ir.source_format.is_vrm0(), scale);
 
     // 剛体・ジョイント
     if options.no_physics {
         log::info!("物理出力をスキップ（no_physics）");
     } else {
-        model.rigid_bodies = build_rigid_bodies(ir, options.align_rigid_rotation);
-        model.joints = build_joints(ir);
+        model.rigid_bodies = build_rigid_bodies(ir, options.align_rigid_rotation, scale);
+        model.joints = build_joints(ir, scale);
     }
 
     // 全データ揃った後に標準ボーン挿入（頂点・剛体・既存ボーンのindex調整もここで）
     if options.raw_structure {
         log::info!("標準ボーン挿入をスキップ（raw_structure）");
+    } else if no_source_bones {
+        log::info!("元ボーンなしのため標準ボーン挿入をスキップ");
     } else {
         insert_standard_bones(&mut model)?;
     }
@@ -1323,11 +1360,11 @@ fn add_twist_bones(model: &mut PmxModel) {
     for (parent_name, child_name, twist_jp, twist_en) in pairs {
         // 1. 最新の bones から親・子インデックスと位置を取得
         let Some(parent_idx) = find_bone_idx(&model.bones, parent_name) else {
-            log::warn!("[step15] \"{}\" が見つからないためスキップ", parent_name);
+            log::debug!("[step15] \"{}\" が見つからないためスキップ", parent_name);
             continue;
         };
         let Some(child_idx) = find_bone_idx(&model.bones, child_name) else {
-            log::warn!("[step15] \"{}\" が見つからないためスキップ", child_name);
+            log::debug!("[step15] \"{}\" が見つからないためスキップ", child_name);
             continue;
         };
         let parent_pos = model.bones[parent_idx as usize].position;
@@ -1407,11 +1444,11 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
     for (shoulder_name, arm_name, p_jp, p_en, c_jp, c_en) in pairs {
         // 1. 肩・腕のインデックスと位置を取得
         let Some(shoulder_idx) = find_bone_idx(&model.bones, shoulder_name) else {
-            log::warn!("[step16] \"{}\" が見つからないためスキップ", shoulder_name);
+            log::debug!("[step16] \"{}\" が見つからないためスキップ", shoulder_name);
             continue;
         };
         let Some(arm_idx) = find_bone_idx(&model.bones, arm_name) else {
-            log::warn!("[step16] \"{}\" が見つからないためスキップ", arm_name);
+            log::debug!("[step16] \"{}\" が見つからないためスキップ", arm_name);
             continue;
         };
 
@@ -1506,7 +1543,7 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
     Ok(())
 }
 
-fn build_bones(ir: &IrModel, raw_structure: bool) -> Vec<PmxBone> {
+fn build_bones(ir: &IrModel, raw_structure: bool, scale: f32) -> Vec<PmxBone> {
     let mut pmx_bones = Vec::with_capacity(ir.bones.len());
     let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if ir.source_format.is_vrm0() {
         gltf_pos_to_pmx_v0
@@ -1515,7 +1552,7 @@ fn build_bones(ir: &IrModel, raw_structure: bool) -> Vec<PmxBone> {
     };
 
     for bone in ir.bones.iter() {
-        let pmx_pos = pos_fn(bone.position);
+        let pmx_pos = pos_fn(bone.position) * scale;
 
         // VRM骨名 → PMX日本語名（raw_structure 時は元のボーン名を維持）
         let (jp_name, en_name) = if raw_structure {
@@ -1608,6 +1645,7 @@ fn build_bones(ir: &IrModel, raw_structure: bool) -> Vec<PmxBone> {
 fn build_vertices_and_faces(
     ir: &IrModel,
     use_vrm0_coords: bool,
+    scale: f32,
 ) -> (Vec<PmxVertex>, Vec<[u32; 3]>, Vec<u32>) {
     let total_verts: usize = ir.meshes.iter().map(|m| m.vertices.len()).sum();
     let total_faces: usize = ir.meshes.iter().map(|m| m.indices.len() / 3).sum();
@@ -1634,7 +1672,7 @@ fn build_vertices_and_faces(
         mesh_vertex_start.push(vertex_offset);
 
         for vtx in &mesh.vertices {
-            let pmx_pos = pos_fn(vtx.position);
+            let pmx_pos = pos_fn(vtx.position) * scale;
             let pmx_normal = nrm_fn(vtx.normal);
             let weight = build_weight(vtx.active_weights());
 
@@ -1751,7 +1789,7 @@ fn build_weight(weights: &[(usize, f32)]) -> PmxWeightType {
     }
 }
 
-fn build_morphs(ir: &IrModel, use_vrm0_coords: bool) -> Vec<PmxMorph> {
+fn build_morphs(ir: &IrModel, use_vrm0_coords: bool, scale: f32) -> Vec<PmxMorph> {
     let pos_fn: fn(glam::Vec3) -> glam::Vec3 = if use_vrm0_coords {
         gltf_pos_to_pmx_v0
     } else {
@@ -1790,7 +1828,7 @@ fn build_morphs(ir: &IrModel, use_vrm0_coords: bool) -> Vec<PmxMorph> {
                     let mut merged: std::collections::HashMap<u32, glam::Vec3> =
                         std::collections::HashMap::new();
                     for &(vi, off) in positions {
-                        *merged.entry(vi as u32).or_insert(glam::Vec3::ZERO) += pos_fn(off);
+                        *merged.entry(vi as u32).or_insert(glam::Vec3::ZERO) += pos_fn(off) * scale;
                     }
                     let mut pmx_offs: Vec<VertexMorphOffset> = merged
                         .into_iter()
@@ -2030,7 +2068,7 @@ fn build_display_frames(bones: &[PmxBone], morphs: &[PmxMorph]) -> Vec<PmxDispla
     frames
 }
 
-fn build_rigid_bodies(ir: &IrModel, align_rigid_rotation: bool) -> Vec<PmxRigidBody> {
+fn build_rigid_bodies(ir: &IrModel, align_rigid_rotation: bool, scale: f32) -> Vec<PmxRigidBody> {
     let mode_name = |m: u8| -> &'static str {
         match m {
             0 => "ボーン追従",
@@ -2072,8 +2110,8 @@ fn build_rigid_bodies(ir: &IrModel, align_rigid_rotation: bool) -> Vec<PmxRigidB
             group: rb.group,
             no_collision_mask: rb.no_collision_mask,
             shape,
-            size,
-            position: rb.position,
+            size: size * scale,
+            position: rb.position * scale,
             rotation: if align_rigid_rotation { rb.rotation } else { Vec3::ZERO },
             mass: rb.mass,
             linear_damping: rb.linear_damping,
@@ -2242,7 +2280,7 @@ fn sort_bones_topological(model: &mut PmxModel) {
     );
 }
 
-fn build_joints(ir: &IrModel) -> Vec<PmxJoint> {
+fn build_joints(ir: &IrModel, scale: f32) -> Vec<PmxJoint> {
     log::debug!("--- ジョイント一覧 ---");
     let joints: Vec<PmxJoint> = ir
         .physics
@@ -2281,10 +2319,10 @@ fn build_joints(ir: &IrModel) -> Vec<PmxJoint> {
                 joint_type: 0, // スプリング6DOF
                 rigid_a: j.rigid_a as i32,
                 rigid_b: j.rigid_b as i32,
-                position: j.position,
+                position: j.position * scale,
                 rotation: j.rotation,
-                move_limit_lo: j.move_limit_lo,
-                move_limit_hi: j.move_limit_hi,
+                move_limit_lo: j.move_limit_lo * scale,
+                move_limit_hi: j.move_limit_hi * scale,
                 rot_limit_lo: j.rot_limit_lo,
                 rot_limit_hi: j.rot_limit_hi,
                 spring_move: j.spring_move,

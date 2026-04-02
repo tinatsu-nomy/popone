@@ -160,6 +160,8 @@ pub struct ExportState {
     pub no_physics: bool,
     /// 元のボーン構造のまま出力（標準ボーン挿入スキップ）
     pub raw_structure: bool,
+    /// PMX出力倍率（デフォルト: 1.0）
+    pub scale: f32,
     /// converted_modelXX の作成先ベースディレクトリ（None = ソースファイルと同じ場所）
     pub output_base_dir: Option<std::path::PathBuf>,
 }
@@ -173,6 +175,7 @@ impl Default for ExportState {
             uv_map_size: crate::convert::uvmap::DEFAULT_UV_SIZE,
             no_physics: false,
             raw_structure: false,
+            scale: 1.0,
             output_base_dir: None,
         }
     }

@@ -935,6 +935,7 @@ pub fn execute_conversion(app: &mut ViewerApp) {
         } else {
             app.export.raw_structure
         },
+        scale: app.export.scale,
     };
     let result = crate::convert_ir_to_pmx(ir_ref, &output_path, &options);
 
@@ -2494,6 +2495,18 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 egui::Checkbox::new(&mut app.export.output_log, "ログ出力"),
             )
             .on_disabled_hover_text("PMX/PMD形式ではログ出力はできません");
+            ui.label("倍率");
+            ui.end_row();
+
+            ui.add(
+                egui::DragValue::new(&mut app.export.scale)
+                    .speed(0.01)
+                    .range(0.01..=100.0)
+                    .suffix("x"),
+            );
+            if ui.small_button("1x").clicked() {
+                app.export.scale = 1.0;
+            }
             ui.end_row();
         });
 
