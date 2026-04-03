@@ -2,11 +2,11 @@
 
 [日本語](README.md)
 
-A 3D viewer for VRM / FBX / PMX / PMD / UnityPackage / ZIP / 7z files.
+A 3D viewer for VRM / FBX / PMX / PMD / OBJ / STL / UnityPackage / ZIP / 7z files.
 
 ## Download
 
-Latest release: **[popone-v0.2.22.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.22/popone-v0.2.22.exe)**
+Latest release: **[popone-v0.2.23.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.23/popone-v0.2.23.exe)**
 
 All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -43,6 +43,7 @@ See [Usage](docs/usage.en.md) for details.
 | tar | .unitypackage (tar.gz) extraction |
 | zip | ZIP archive extraction |
 | sevenz-rust2 | 7z archive extraction |
+| tobj | OBJ/MTL parser |
 | clap | CLI argument parser |
 | anyhow / thiserror | Error handling |
 | log / fern / chrono | Logging |
@@ -79,6 +80,7 @@ See [Usage](docs/usage.en.md) for details.
 | [tar](https://github.com/alexcrichton/tar-rs) | MIT OR Apache-2.0 |
 | [zip](https://github.com/zip-rs/zip2) | MIT |
 | [sevenz-rust2](https://github.com/hasenbanck/sevenz-rust2) | Apache-2.0 |
+| [tobj](https://github.com/tatsy/tobj) | MIT |
 | [clap](https://github.com/clap-rs/clap) | MIT OR Apache-2.0 |
 | [anyhow](https://github.com/dtolnay/anyhow) / [thiserror](https://github.com/dtolnay/thiserror) | MIT OR Apache-2.0 |
 | [log](https://github.com/rust-lang/log) / [fern](https://github.com/daboross/fern) / [chrono](https://github.com/chronotope/chrono) | MIT (fern) / MIT OR Apache-2.0 (others) |

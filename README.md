@@ -2,11 +2,11 @@
 
 [English](README.en.md)
 
-VRM / FBX / PMX / PMD / UnityPackage / ZIP / 7z を 3D 表示します。
+VRM / FBX / PMX / PMD / OBJ / STL / UnityPackage / ZIP / 7z を 3D 表示します。
 
 ## ダウンロード
 
-最新リリース: **[popone-v0.2.22.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.22/popone-v0.2.22.exe)**
+最新リリース: **[popone-v0.2.23.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.23/popone-v0.2.23.exe)**
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -43,6 +43,7 @@ VRM / FBX / PMX / PMD / UnityPackage / ZIP / 7z を 3D 表示します。
 | tar | .unitypackage (tar.gz) 展開 |
 | zip | ZIP アーカイブ展開 |
 | sevenz-rust2 | 7z アーカイブ展開 |
+| tobj | OBJ/MTL パーサー |
 | clap | CLI 引数パーサー |
 | anyhow / thiserror | エラーハンドリング |
 | log / fern / chrono | ログ出力 |
@@ -79,6 +80,7 @@ VRM / FBX / PMX / PMD / UnityPackage / ZIP / 7z を 3D 表示します。
 | [tar](https://github.com/alexcrichton/tar-rs) | MIT OR Apache-2.0 |
 | [zip](https://github.com/zip-rs/zip2) | MIT |
 | [sevenz-rust2](https://github.com/hasenbanck/sevenz-rust2) | Apache-2.0 |
+| [tobj](https://github.com/tatsy/tobj) | MIT |
 | [clap](https://github.com/clap-rs/clap) | MIT OR Apache-2.0 |
 | [anyhow](https://github.com/dtolnay/anyhow) / [thiserror](https://github.com/dtolnay/thiserror) | MIT OR Apache-2.0 |
 | [log](https://github.com/rust-lang/log) / [fern](https://github.com/daboross/fern) / [chrono](https://github.com/chronotope/chrono) | MIT (fern) / MIT OR Apache-2.0 (others) |

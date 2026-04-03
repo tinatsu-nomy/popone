@@ -13,10 +13,19 @@ use std::sync::Arc;
 use crate::error::{PoponeError, Result};
 
 /// アーカイブ対応モデル拡張子（unitypackage も二重展開で対応）
-pub const MODEL_EXTENSIONS: &[&str] = &["vrm", "glb", "fbx", "pmx", "pmd", "unitypackage"];
+pub const MODEL_EXTENSIONS: &[&str] = &[
+    "vrm",
+    "glb",
+    "fbx",
+    "pmx",
+    "pmd",
+    "obj",
+    "stl",
+    "unitypackage",
+];
 
 /// テクスチャ拡張子（psd は数百MB級で OOM リスクのため除外）
-pub const TEXTURE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff"];
+pub const TEXTURE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff", "dds"];
 
 /// 展開サイズ上限: 2GB
 const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -48,6 +57,8 @@ pub enum ArchiveModelKind {
     Fbx,
     Pmx,
     Pmd,
+    Obj,
+    Stl,
     UnityPackage,
 }
 
@@ -59,6 +70,8 @@ impl ArchiveModelKind {
             "fbx" => Some(Self::Fbx),
             "pmx" => Some(Self::Pmx),
             "pmd" => Some(Self::Pmd),
+            "obj" => Some(Self::Obj),
+            "stl" => Some(Self::Stl),
             "unitypackage" => Some(Self::UnityPackage),
             _ => None,
         }
@@ -72,6 +85,8 @@ impl ArchiveModelKind {
             Self::Fbx => "FBX",
             Self::Pmx => "PMX",
             Self::Pmd => "PMD",
+            Self::Obj => "OBJ",
+            Self::Stl => "STL",
             Self::UnityPackage => "UnityPackage",
         }
     }
@@ -270,8 +285,8 @@ fn extract_bundle_from_zip(
                 aux_files,
             })
         }
-        ArchiveModelKind::UnityPackage => {
-            // UnityPackage: 本体のみ展開（テクスチャはパッケージ内に含まれるため不要）
+        ArchiveModelKind::Stl | ArchiveModelKind::UnityPackage => {
+            // STL / UnityPackage: 本体のみ展開（テクスチャ不要）
             let model_entries = zip_extract::extract_files(data, &[model_path], MAX_TOTAL_BYTES)?;
             let model_entry = model_entries
                 .into_iter()
@@ -290,13 +305,19 @@ fn extract_bundle_from_zip(
             })
         }
         _ => {
-            // VRM/GLB/FBX: モデル + 同ディレクトリ以下のテクスチャを展開
+            // VRM/GLB/FBX/OBJ/STL: モデル + 同ディレクトリ以下のテクスチャを展開
             let model_dir = model_path.parent().unwrap_or(Path::new(""));
             let mut paths_to_extract = vec![model_path.to_path_buf()];
 
             if let Some(metas) = metas {
                 for meta in metas {
                     if is_texture_in_scope(&meta.path, model_dir) {
+                        paths_to_extract.push(meta.path.clone());
+                    }
+                    // OBJ: .mtl sidecar も収集
+                    if kind == ArchiveModelKind::Obj
+                        && is_sidecar_in_scope(&meta.path, model_dir, "mtl")
+                    {
                         paths_to_extract.push(meta.path.clone());
                     }
                 }
@@ -307,9 +328,18 @@ fn extract_bundle_from_zip(
 
             let mut model_entry = None;
             let mut textures = Vec::new();
+            let mut aux_files: HashMap<PathBuf, Arc<[u8]>> = HashMap::new();
             for entry in entries {
                 if entry.path == model_path {
                     model_entry = Some(entry);
+                } else if kind == ArchiveModelKind::Obj {
+                    // OBJ: 相対パスを保持して aux_files に格納（MTL/テクスチャ解決用）
+                    let rel = entry
+                        .path
+                        .strip_prefix(model_dir)
+                        .unwrap_or(&entry.path)
+                        .to_path_buf();
+                    aux_files.insert(rel, Arc::from(entry.data.into_boxed_slice()));
                 } else {
                     let filename = entry
                         .path
@@ -326,7 +356,7 @@ fn extract_bundle_from_zip(
                     .ok_or_else(|| PoponeError::Archive("モデルファイルが展開できません".into()))?,
                 kind,
                 textures,
-                aux_files: HashMap::new(),
+                aux_files,
             })
         }
     }
@@ -368,8 +398,8 @@ fn extract_bundle_from_entries(
                 aux_files,
             })
         }
-        ArchiveModelKind::UnityPackage => {
-            // UnityPackage: 本体のみ（テクスチャはパッケージ内に含まれるため不要）
+        ArchiveModelKind::Stl | ArchiveModelKind::UnityPackage => {
+            // STL / UnityPackage: 本体のみ（テクスチャ不要）
             Ok(ModelBundle {
                 model: model_entry,
                 kind,
@@ -378,25 +408,52 @@ fn extract_bundle_from_entries(
             })
         }
         _ => {
-            let textures: Vec<(String, Vec<u8>)> = other_entries
+            let relevant: Vec<ArchiveEntry> = other_entries
                 .into_iter()
-                .filter(|e| is_texture_in_scope(&e.path, model_dir))
-                .map(|e| {
-                    let filename = e
-                        .path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    (filename, e.data)
+                .filter(|e| {
+                    is_texture_in_scope(&e.path, model_dir)
+                        || (kind == ArchiveModelKind::Obj
+                            && is_sidecar_in_scope(&e.path, model_dir, "mtl"))
                 })
                 .collect();
-            Ok(ModelBundle {
-                model: model_entry,
-                kind,
-                textures,
-                aux_files: HashMap::new(),
-            })
+
+            if kind == ArchiveModelKind::Obj {
+                // OBJ: 相対パスを保持して aux_files に格納
+                let mut aux_files: HashMap<PathBuf, Arc<[u8]>> = HashMap::new();
+                for e in relevant {
+                    let rel = e
+                        .path
+                        .strip_prefix(model_dir)
+                        .unwrap_or(&e.path)
+                        .to_path_buf();
+                    aux_files.insert(rel, Arc::from(e.data.into_boxed_slice()));
+                }
+                Ok(ModelBundle {
+                    model: model_entry,
+                    kind,
+                    textures: Vec::new(),
+                    aux_files,
+                })
+            } else {
+                let textures: Vec<(String, Vec<u8>)> = relevant
+                    .into_iter()
+                    .map(|e| {
+                        let filename = e
+                            .path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+                        (filename, e.data)
+                    })
+                    .collect();
+                Ok(ModelBundle {
+                    model: model_entry,
+                    kind,
+                    textures,
+                    aux_files: HashMap::new(),
+                })
+            }
         }
     }
 }
@@ -568,6 +625,19 @@ fn build_aux_from_entries_pmx(
 }
 
 /// テクスチャがモデルと同ディレクトリ + サブディレクトリ内かどうか
+/// 指定拡張子のサイドカーファイルがスコープ内にあるか
+fn is_sidecar_in_scope(path: &Path, model_dir: &Path, ext: &str) -> bool {
+    let file_ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    if file_ext != ext {
+        return false;
+    }
+    model_dir == Path::new("") || path.starts_with(model_dir)
+}
+
 fn is_texture_in_scope(path: &Path, model_dir: &Path) -> bool {
     let ext = path
         .extension()

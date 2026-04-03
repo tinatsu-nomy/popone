@@ -2130,6 +2130,19 @@ impl GpuRenderer {
         }
     }
 
+    /// モデルの bbox に合わせてグリッドバッファを再構築する
+    pub fn rebuild_grid(&mut self, device: &wgpu::Device, bbox_min: Vec3, bbox_max: Vec3) {
+        let (extent, step) = super::grid::compute_grid_params(bbox_min, bbox_max);
+        let (grid_verts, grid_vertex_count) =
+            super::grid::build_grid_vertices_with_params(extent, step);
+        self.grid_vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("grid_vbuf"),
+            contents: bytemuck::cast_slice(&grid_verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        self.grid_vertex_count = grid_vertex_count;
+    }
+
     /// 可視化バッファのキャッシュを無効化（モデル再読み込み時に呼ぶ）
     pub fn invalidate_visualization_cache(&mut self) {
         self.bone_cache_eye = Vec3::ZERO;

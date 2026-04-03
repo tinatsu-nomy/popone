@@ -117,7 +117,7 @@ pub fn collect_image_files_recursive(
             let ext_low = ext.to_lowercase();
             if matches!(
                 ext_low.as_str(),
-                "png" | "jpg" | "jpeg" | "tga" | "bmp" | "tif" | "tiff" | "dds"
+                "png" | "jpg" | "jpeg" | "tga" | "bmp" | "tif" | "tiff" | "dds" | "mtl"
             ) {
                 if let Ok(img_data) = std::fs::read(&ep) {
                     if let Ok(rel) = ep.strip_prefix(base_dir) {
@@ -138,6 +138,8 @@ pub const MODEL_EXTENSIONS: &[&str] = &[
     "fbx",
     "pmx",
     "pmd",
+    "obj",
+    "stl",
     "unitypackage",
     "vrma",
     "glb",

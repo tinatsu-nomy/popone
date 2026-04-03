@@ -17,6 +17,7 @@ fn should_extract(path: &Path) -> bool {
         || ext == "txt"
         || ext == "spa"
         || ext == "sph"
+        || ext == "mtl"
 }
 
 /// 7z を展開し、モデル/テクスチャ拡張子のみメモリ保持

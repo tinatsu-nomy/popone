@@ -32,9 +32,11 @@
 | FBX バイナリ (`.fbx`) | 自前パーサーによる解析。Mixamo / Blender / VRoid / Unreal 等のリグを自動検出。名前空間プレフィックス（`Model::` 等）対応 |
 | PMX 2.0 / 2.1 (`.pmx`) | MikuMikuDance モデル形式。ビューア表示 + UVマップ出力 |
 | PMD (`.pmd`) | MikuMikuDance モデル形式。Shift_JIS 対応 |
+| OBJ (`.obj`) | Wavefront OBJ 形式。MTL 材質ファイル・テクスチャ自動読み込み。座標は cm 単位と仮定 |
+| STL (`.stl`) | STL 形式（ASCII / バイナリ両対応）。座標は mm 単位・Z-Up と仮定し、Y-Up に自動変換 |
 | UnityPackage (`.unitypackage`) | tar.gz アーカイブから Prefab / VRM / FBX + テクスチャを自動抽出。Prefab 経由のテクスチャ・ノーマルマップ自動マッピング対応 |
-| ZIP (`.zip`) | アーカイブ内の VRM / FBX / PMX / PMD / UnityPackage を自動検出・展開 |
-| 7z (`.7z`) | アーカイブ内の VRM / FBX / PMX / PMD / UnityPackage を自動検出・展開 |
+| ZIP (`.zip`) | アーカイブ内の VRM / FBX / PMX / PMD / OBJ / STL / UnityPackage を自動検出・展開 |
+| 7z (`.7z`) | アーカイブ内の VRM / FBX / PMX / PMD / OBJ / STL / UnityPackage を自動検出・展開 |
 
 ## クイックスタート
 

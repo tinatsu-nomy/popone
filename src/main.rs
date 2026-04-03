@@ -348,9 +348,17 @@ fn run_main(mut args: Args) -> Result<()> {
 
     log::info!("入力ファイル: {}", input.display());
 
-    // 中間表現抽出（VRM / FBX / unitypackage 分岐）
+    // 中間表現抽出（VRM / FBX / OBJ / STL / unitypackage 分岐）
     // VRM の場合は glb を保持してテクスチャ書き出しに再利用（二重読み込み回避）
     let (ir, glb_for_tex) = match ext.as_str() {
+        "obj" => {
+            let ir = popone::obj::extract::load_obj(&input).context("OBJ中間表現の抽出に失敗")?;
+            (ir, None)
+        }
+        "stl" => {
+            let ir = popone::stl::extract::load_stl(&input).context("STL中間表現の抽出に失敗")?;
+            (ir, None)
+        }
         "fbx" => {
             let data = std::fs::read(&input)
                 .with_context(|| format!("FBXファイル読み込み失敗: {}", input.display()))?;
@@ -685,6 +693,36 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                 args.normalize_pose,
             )
             .context("VRM中間表現の抽出に失敗")?
+        }
+        ArchiveModelKind::Obj => {
+            let base_dir = bundle
+                .model
+                .path
+                .parent()
+                .unwrap_or(std::path::Path::new("."));
+            let name = bundle
+                .model
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Model");
+            popone::obj::extract::load_obj_from_data(
+                &bundle.model.data,
+                name,
+                base_dir,
+                Some(&bundle.aux_files),
+            )
+            .context("OBJ中間表現の抽出に失敗")?
+        }
+        ArchiveModelKind::Stl => {
+            let name = bundle
+                .model
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Model");
+            popone::stl::extract::load_stl_from_data(&bundle.model.data, name)
+                .context("STL中間表現の抽出に失敗")?
         }
         ArchiveModelKind::UnityPackage => {
             // アーカイブ内 .unitypackage を二重展開

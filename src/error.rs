@@ -19,6 +19,12 @@ pub enum PoponeError {
     #[error("PMD パース失敗: {0}")]
     PmdParse(String),
 
+    #[error("OBJ パース失敗: {0}")]
+    ObjParse(String),
+
+    #[error("STL パース失敗: {0}")]
+    StlParse(String),
+
     #[error("中間表現の抽出に失敗: {0}")]
     Extraction(String),
 

@@ -3,9 +3,11 @@ pub mod convert;
 pub mod error;
 pub mod fbx;
 pub mod intermediate;
+pub mod obj;
 pub mod pmd;
 pub mod pmx;
 pub mod psd;
+pub mod stl;
 pub mod unity;
 pub mod unitypackage;
 pub mod vrm;
@@ -103,6 +105,38 @@ pub fn convert_fbx_to_pmx(
         options.normalize_pose,
         false,
     )?;
+    let build_options = PmxBuildOptions {
+        align_rigid_rotation: options.align_rigid_rotation,
+        no_physics: options.no_physics,
+        raw_structure: options.raw_structure,
+        scale: options.scale,
+    };
+    convert_ir_to_pmx(&ir, output_path, &build_options)
+}
+
+/// OBJ → PMX 変換
+pub fn convert_obj_to_pmx(
+    input_path: &Path,
+    output_path: &Path,
+    options: &VrmConvertOptions,
+) -> Result<ConvertStats> {
+    let ir = obj::extract::load_obj(input_path)?;
+    let build_options = PmxBuildOptions {
+        align_rigid_rotation: options.align_rigid_rotation,
+        no_physics: options.no_physics,
+        raw_structure: options.raw_structure,
+        scale: options.scale,
+    };
+    convert_ir_to_pmx(&ir, output_path, &build_options)
+}
+
+/// STL → PMX 変換
+pub fn convert_stl_to_pmx(
+    input_path: &Path,
+    output_path: &Path,
+    options: &VrmConvertOptions,
+) -> Result<ConvertStats> {
+    let ir = stl::extract::load_stl(input_path)?;
     let build_options = PmxBuildOptions {
         align_rigid_rotation: options.align_rigid_rotation,
         no_physics: options.no_physics,
@@ -236,6 +270,8 @@ pub fn convert_to_pmx(
         .map(|e| e.to_lowercase());
     match ext.as_deref() {
         Some("fbx") => convert_fbx_to_pmx(input_path, output_path, options),
+        Some("obj") => convert_obj_to_pmx(input_path, output_path, options),
+        Some("stl") => convert_stl_to_pmx(input_path, output_path, options),
         _ => convert_vrm_to_pmx(input_path, output_path, options),
     }
 }

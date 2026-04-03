@@ -122,6 +122,8 @@ pub enum SourceFormat {
     Fbx,
     Pmx,
     Pmd,
+    Obj,
+    Stl,
 }
 
 impl SourceFormat {
@@ -132,6 +134,8 @@ impl SourceFormat {
             SourceFormat::Fbx => "FBX",
             SourceFormat::Pmx => "PMX",
             SourceFormat::Pmd => "PMD",
+            SourceFormat::Obj => "OBJ",
+            SourceFormat::Stl => "STL",
         }
     }
 

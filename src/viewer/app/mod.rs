@@ -729,6 +729,10 @@ impl ViewerApp {
             self.last_viewport_width,
             self.last_viewport_height,
         );
+        // グリッドをモデルサイズに合わせて再構築
+        if let Some(ref mut renderer) = self.renderer {
+            renderer.rebuild_grid(&self.render_state.device, bbox_min, bbox_max);
+        }
         // ビューポートサイズ確定後に refit（初回ロード時はサイズが未確定の場合がある）
         self.pending.refit = true;
 

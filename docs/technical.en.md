@@ -21,6 +21,12 @@
     - [D-bones Mechanism](#d-bones-mechanism)
     - [Processing Flow](#processing-flow)
     - [IrGrant Data Structure](#irgrant-data-structure)
+  - [OBJ/STL Loading](#objstl-loading)
+    - [OBJ Reader](#obj-reader)
+    - [STL Reader](#stl-reader)
+    - [Coordinate Conversion](#coordinate-conversion)
+    - [IrModel Construction](#irmodel-construction)
+    - [Dynamic Grid](#dynamic-grid)
   - [PMX/PMD Loading](#pmxpmd-loading)
     - [PMX Reader](#pmx-reader)
     - [PMD Reader](#pmd-reader)
@@ -372,6 +378,49 @@ Lower body
 | `is_rotation` | `bool` | Rotation grant flag |
 | `is_move` | `bool` | Move grant flag |
 | `is_local` | `bool` | Local grant flag |
+
+## OBJ/STL Loading
+
+### OBJ Reader
+
+- Parsed with `tobj` crate (`GPU_LOAD_OPTIONS`: triangulation + single-index)
+- Auto-loads MTL material files. Falls back to default white material with warning if MTL is missing
+- Textures embedded as byte data in `IrTexture` (not file path references)
+- Memory loading (archive/snapshot): custom MTL loader resolves from `aux_files`
+- Sidecar resolution (`resolve_sidecar`):
+  - Archive/snapshot source: path normalization → exact match → case-insensitive → basename fallback. Disk fallback disabled
+  - Normal file: `base_dir.join(rel)` direct disk read (`..` paths preserved as-is)
+- OBJ without normals: face normals accumulated and normalized for smooth shading
+
+### STL Reader
+
+- ASCII and binary format support (custom parser)
+- Format detection: binary length validation (`84 + tri_count × 50 == data.len()`) prioritized, falls back to ASCII on mismatch
+- Binary: 80-byte header + u32 triangle count + triangle data (normal 3×f32 + vertices 3×3×f32 + u16 attribute = 50 bytes/face)
+- Zero/invalid normals: recalculated from vertex positions when `length_squared < 1e-8`
+
+### Coordinate Conversion
+
+| Format | Assumed Unit | Assumed Coordinate System | Conversion |
+|--------|-------------|--------------------------|------------|
+| OBJ | cm | Y-Up right-hand | ÷100 (cm → m) only. No axis conversion |
+| STL | mm | Z-Up | ÷1000 (mm → m) + Y↔Z swap + face winding reversal (b↔c swap) |
+
+- Y↔Z swap has determinant = -1 → face winding reverses, requiring b↔c swap
+- After conversion: glTF space (Y-Up right-hand, meters) → viewer applies `gltf_pos_to_pmx` (×12.5) for PMX units
+
+### IrModel Construction
+
+- Static mesh: single root bone ("全ての親"), all vertex weights `(0, 1.0)` as BDEF1
+- OBJ: meshes split per material (tobj Model unit). MTL `Kd`/`Ks`/`Ns`/`d` → `IrMaterial`, `map_Kd` → `IrTexture`
+- STL: single default white material. No textures or UVs. Flat shading (3 independent vertices per triangle)
+
+### Dynamic Grid
+
+- `compute_grid_params()` auto-calculates grid extent and step from model bbox
+- Default (extent=100, step=5) is the minimum; only enlarged when bbox exceeds ±100 PMX units
+- Rounded to nice values: extent → 200, 500, 1000, ...; step → 10, 20, 50, ...
+- `GpuRenderer::rebuild_grid()` rebuilds GPU buffer (on model load + append)
 
 ## PMX/PMD Loading
 
@@ -2144,6 +2193,13 @@ src/
 │   ├── types.rs         PMD data type definitions
 │   ├── reader.rs        PMD binary loading (Shift_JIS, encoding_rs)
 │   └── extract.rs       PMD → intermediate representation (IrModel) extraction (material name text loading support)
+├── obj/
+│   ├── mod.rs           OBJ module definition
+│   └── extract.rs       OBJ → intermediate representation (tobj crate, MTL/texture resolution, cm→m normalization, auto normal generation)
+├── stl/
+│   ├── mod.rs           STL module definition
+│   ├── reader.rs        STL binary / ASCII parser (format detection by length validation)
+│   └── extract.rs       STL → intermediate representation (mm→m + Z-Up→Y-Up normalization, zero-normal recalculation)
 ├── unity/
 │   └── animation.rs     Unity .anim Muscle conversion (SwingTwist decomposition)
 ├── intermediate/
