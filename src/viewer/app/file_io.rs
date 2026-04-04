@@ -153,6 +153,7 @@ impl ViewerApp {
             "pmd" => self.try_load_pmd(&path),
             "obj" => self.try_load_obj(&path),
             "stl" => self.try_load_stl(&path),
+            "x" => self.try_load_x(&path),
             "zip" | "7z" => self.try_load_archive(&path),
             _ => self.try_load_vrm(&path),
         };
@@ -713,6 +714,26 @@ impl ViewerApp {
                     .and_then(|s| s.to_str())
                     .unwrap_or("Model");
                 let ir = crate::stl::extract::load_stl_from_data(&bundle.model.data, name)?;
+                Ok(ir)
+            }
+            ArchiveModelKind::DirectX => {
+                let base_dir = bundle
+                    .model
+                    .path
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."));
+                let name = bundle
+                    .model
+                    .path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Model");
+                let ir = crate::directx::extract::load_x_from_data(
+                    &bundle.model.data,
+                    name,
+                    base_dir,
+                    Some(&bundle.aux_files),
+                )?;
                 Ok(ir)
             }
             ArchiveModelKind::UnityPackage => {
@@ -1771,6 +1792,30 @@ impl ViewerApp {
         self.finish_load(ir, source)
     }
 
+    fn try_load_x(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
+        let source =
+            if is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path) {
+                let main_data: Arc<[u8]> = self.read_or_preloaded(path)?;
+                let x_dir = path.parent().unwrap_or(Path::new("."));
+                let aux = self.take_or_collect_aux(path);
+                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
+                let ir =
+                    crate::directx::extract::load_x_from_data(&main_data, name, x_dir, Some(&aux))?;
+
+                let source = ReloadableSource::Snapshot {
+                    original_path: path.to_path_buf(),
+                    main_bytes: main_data,
+                    aux_files: aux,
+                };
+                return self.finish_load(ir, source);
+            } else {
+                ReloadableSource::File(path.to_path_buf())
+            };
+
+        let ir = crate::directx::extract::load_x(path)?;
+        self.finish_load(ir, source)
+    }
+
     fn try_load_vrm(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         // .gltf は外部バッファ参照を持つためスナップショット化しない（.glb/.vrm のみ対象）
         let ext_lower = path
@@ -2065,6 +2110,7 @@ impl ViewerApp {
                         "pmd" => self.try_load_pmd(path),
                         "obj" => self.try_load_obj(path),
                         "stl" => self.try_load_stl(path),
+                        "x" => self.try_load_x(path),
                         _ => self.try_load_vrm(path),
                     }
                 }
@@ -2172,6 +2218,20 @@ impl ViewerApp {
                                 .and_then(|s| s.to_str())
                                 .unwrap_or("Model");
                             let ir = crate::stl::extract::load_stl_from_data(main_bytes, name)?;
+                            self.finish_load(ir, source_clone.clone())
+                        }
+                        "x" => {
+                            let x_dir = original_path.parent().unwrap_or(Path::new("."));
+                            let name = original_path
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("Model");
+                            let ir = crate::directx::extract::load_x_from_data(
+                                main_bytes,
+                                name,
+                                x_dir,
+                                Some(aux_files),
+                            )?;
                             self.finish_load(ir, source_clone.clone())
                         }
                         _ => {
@@ -2312,6 +2372,7 @@ impl ViewerApp {
                         }
                         "obj" => Ok(crate::obj::extract::load_obj(path)?),
                         "stl" => Ok(crate::stl::extract::load_stl(path)?),
+                        "x" => Ok(crate::directx::extract::load_x(path)?),
                         _ => self.load_vrm_as_ir(path),
                     }
                 }
@@ -2416,6 +2477,19 @@ impl ViewerApp {
                                 .and_then(|s| s.to_str())
                                 .unwrap_or("Model");
                             Ok(crate::stl::extract::load_stl_from_data(main_bytes, name)?)
+                        }
+                        "x" => {
+                            let x_dir = original_path.parent().unwrap_or(Path::new("."));
+                            let name = original_path
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("Model");
+                            Ok(crate::directx::extract::load_x_from_data(
+                                main_bytes,
+                                name,
+                                x_dir,
+                                Some(aux_files),
+                            )?)
                         }
                         _ => {
                             let glb = vrm::loader::load_glb_from_data(main_bytes)?;
@@ -3134,6 +3208,7 @@ impl ViewerApp {
                     "pmd",
                     "obj",
                     "stl",
+                    "x",
                     "unitypackage",
                     "vrma",
                     "zip",
@@ -3146,6 +3221,7 @@ impl ViewerApp {
             .add_filter("PMD (.pmd)", &["pmd"])
             .add_filter("OBJ (.obj)", &["obj"])
             .add_filter("STL (.stl)", &["stl"])
+            .add_filter("DirectX text (.x)", &["x"])
             .add_filter("UnityPackage (.unitypackage)", &["unitypackage"])
             .add_filter("アーカイブ (.zip, .7z)", &["zip", "7z"])
             .add_filter("VRMA (.vrma)", &["vrma"]);
@@ -3166,7 +3242,18 @@ impl ViewerApp {
             .set_title("モデルを追加読み込み")
             .add_filter(
                 "3Dモデル",
-                &["vrm", "fbx", "pmx", "pmd", "unitypackage", "zip", "7z"],
+                &[
+                    "vrm",
+                    "fbx",
+                    "pmx",
+                    "pmd",
+                    "obj",
+                    "stl",
+                    "x",
+                    "unitypackage",
+                    "zip",
+                    "7z",
+                ],
             )
             .add_filter("VRM (.vrm)", &["vrm"])
             .add_filter("FBX (.fbx)", &["fbx"])
@@ -3299,6 +3386,24 @@ impl ViewerApp {
                         Ok(crate::stl::extract::load_stl(&path)?)
                     }
                 }
+                "x" => {
+                    if is_temp_path(&path)
+                        || self.preloaded.as_ref().is_some_and(|pl| pl.path == path)
+                    {
+                        let data = self.read_or_preloaded(&path)?;
+                        let x_dir = path.parent().unwrap_or(Path::new("."));
+                        let aux = self.take_or_collect_aux(&path);
+                        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
+                        Ok(crate::directx::extract::load_x_from_data(
+                            &data,
+                            name,
+                            x_dir,
+                            Some(&aux),
+                        )?)
+                    } else {
+                        Ok(crate::directx::extract::load_x(&path)?)
+                    }
+                }
                 _ => self.load_vrm_as_ir(&path),
             }
         })();
@@ -3382,8 +3487,8 @@ impl ViewerApp {
                                 .unwrap_or_default();
                             aux.insert(txt_name, Arc::from(data.into_boxed_slice()));
                         }
-                    } else if ext == "obj" {
-                        // OBJ: 同ディレクトリの画像 + MTL を収集
+                    } else if ext == "obj" || ext == "x" {
+                        // OBJ/DirectX: 同ディレクトリの画像 + MTL を収集
                         if let Some(dir) = path.parent() {
                             collect_image_files_recursive(dir, dir, &mut aux);
                         }
@@ -3850,7 +3955,16 @@ impl ViewerApp {
                     .to_lowercase();
                 let is_appendable = matches!(
                     append_ext.as_str(),
-                    "vrm" | "fbx" | "pmx" | "pmd" | "obj" | "stl" | "unitypackage" | "zip" | "7z"
+                    "vrm"
+                        | "fbx"
+                        | "pmx"
+                        | "pmd"
+                        | "obj"
+                        | "stl"
+                        | "x"
+                        | "unitypackage"
+                        | "zip"
+                        | "7z"
                 );
 
                 if is_temp_path(&model_path) {

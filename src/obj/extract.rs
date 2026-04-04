@@ -78,16 +78,23 @@ fn resolve_sidecar(
     rel: &Path,
 ) -> Option<Vec<u8>> {
     if let Some(aux_map) = aux {
-        // aux lookup 用: パス正規化（バックスラッシュ→スラッシュ、"./" 除去、".." 解決）
-        let normalized = normalize_rel_path(rel);
-        // 完全一致
+        let rel_raw = PathBuf::from(rel.to_string_lossy().replace('\\', "/")); // ".." 保持
+        let normalized = normalize_rel_path(rel); // ".." 除去
+
+        // 1. 元パスで完全一致（"../shared/body.png" → "../shared/body.png"）
+        if let Some(bytes) = aux_map.get(&rel_raw) {
+            return Some(bytes.to_vec());
+        }
+        // 2. 正規化パスで完全一致（"shared/body.png" → "shared/body.png"）
         if let Some(bytes) = aux_map.get(&normalized) {
             return Some(bytes.to_vec());
         }
-        // case-insensitive fallback（PMX/PMD の archive 解決と同じ方針）
+        // 3. case-insensitive（元パス・正規化パス両方で検索）
+        let raw_lower = rel_raw.to_string_lossy().to_lowercase();
         let norm_lower = normalized.to_string_lossy().to_lowercase();
         if let Some(bytes) = aux_map.iter().find_map(|(k, v)| {
-            if k.to_string_lossy().to_lowercase() == norm_lower {
+            let k_lower = k.to_string_lossy().replace('\\', "/").to_lowercase();
+            if k_lower == raw_lower || k_lower == norm_lower {
                 Some(v)
             } else {
                 None
@@ -95,7 +102,7 @@ fn resolve_sidecar(
         }) {
             return Some(bytes.to_vec());
         }
-        // ファイル名のみでも探す（case-insensitive）
+        // 4. ファイル名のみでも探す（case-insensitive）
         if let Some(filename) = normalized.file_name() {
             let fname_lower = filename.to_string_lossy().to_lowercase();
             if let Some(bytes) = aux_map.iter().find_map(|(k, v)| {

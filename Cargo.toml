@@ -1,6 +1,6 @@
 [package]
 name = "popone"
-version = "0.2.23"
+version = "0.2.24"
 edition = "2021"
 license = "0BSD"
 
@@ -20,7 +20,7 @@ byteorder   = "1.5"
 glam        = "0.29"
 flate2      = "1"
 tar         = "0.4"
-image       = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tga"] }
+image       = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tga", "dds"] }
 anyhow      = "1"
 thiserror   = "2"
 log         = "0.4"

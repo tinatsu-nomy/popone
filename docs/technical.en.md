@@ -27,6 +27,9 @@
     - [Coordinate Conversion](#coordinate-conversion)
     - [IrModel Construction](#irmodel-construction)
     - [Dynamic Grid](#dynamic-grid)
+  - [DirectX .x Loading](#directx-x-loading)
+    - [Parser (`directx/parser.rs`)](#parser-directxparserrs)
+    - [IrModel Conversion (`directx/extract.rs`)](#irmodel-conversion-directxextractrs)
   - [PMX/PMD Loading](#pmxpmd-loading)
     - [PMX Reader](#pmx-reader)
     - [PMD Reader](#pmd-reader)
@@ -421,6 +424,37 @@ Lower body
 - Default (extent=100, step=5) is the minimum; only enlarged when bbox exceeds ±100 PMX units
 - Rounded to nice values: extent → 200, 500, 1000, ...; step → 10, 20, 50, ...
 - `GpuRenderer::rebuild_grid()` rebuilds GPU buffer (on model load + append)
+
+## DirectX .x Loading
+
+### Parser (`directx/parser.rs`)
+
+- Text format only (`xof 0303txt 0032` header). Binary/compressed formats detected and rejected with clear error
+- UTF-8 / Shift_JIS auto-detection (`encoding_rs`)
+- Tokenizer: `{` `}` `;` `,` + Ident + Num + Str. `<UUID>` auto-skipped
+- Dot-separated names (`Cube.001`): `read_optional_name()` concatenates Ident+Num tokens until `{`
+- Supported templates: `Frame`, `FrameTransformMatrix`, `Mesh`, `MeshNormals`, `MeshTextureCoords`, `MeshMaterialList`, `Material`, `TextureFilename`
+- Unknown templates: skipped by counting `{` `}` brace depth
+- `SkinWeights` / `XSkinMeshHeader` detection: `has_skin_weights` flag triggers error in extract
+- Material references: `{ MaterialName }` resolved via `global_materials` table. Named Materials inside `MeshMaterialList` also registered. Forward references stored in `unresolved_refs` and re-bound in 2nd pass
+- Declared material count > resolved count: padded with placeholder gray materials
+- Quads and n-gons: fan subdivision to triangles
+
+### IrModel Conversion (`directx/extract.rs`)
+
+- **Coordinate conversion**: DirectX left-hand Y-Up → glTF right-hand Y-Up. Position `(x, y, -z) × 0.8`, normal `(x, y, -z)`
+  - Scale 0.8 = 10 / PMX_SCALE(12.5): PMX output is 10× original coordinates
+- **Frame hierarchy**: `compute_world_transform()` walks parent chain to accumulate world matrix. Normals transformed with inverse-transpose
+- **Face winding**: Z-flip (det=-1) × world transform determinant dynamically determines swap
+- **Hard edges**: `(position_index, normal_index)` key for vertex deduplication. Same position with different normals creates separate vertices
+- **Missing normals**: `compute_face_normals()` auto-generates smooth shading normals from face normals (computed with post-swap indices)
+- **UV**: DirectX V → `1.0 - v` flip
+- **Texture resolution** (`resolve_texture`):
+  - Archive/snapshot source: raw path exact match → normalized exact match → case-insensitive. Disk fallback disabled
+  - Normal file: `base_dir.join(rel)` direct disk read (`..` paths preserved for OS resolution)
+  - `IrTexture.filename` normalized to filename only (prevents path traversal in PMX export)
+- **Bones**: Single root bone "ルート". All vertex weights BDEF1. Material-less meshes share a lazy-initialized default material
+- **DDS textures**: `mime_for_ext` registers `image/vnd.ms-dds`. Decoded via `image` crate `dds` feature
 
 ## PMX/PMD Loading
 

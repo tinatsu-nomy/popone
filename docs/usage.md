@@ -12,7 +12,7 @@
   - [おまけ](#%E3%81%8A%E3%81%BE%E3%81%91)
     - [アニメーション再生](#%E3%82%A2%E3%83%8B%E3%83%A1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E5%86%8D%E7%94%9F)
     - [PMX（MikuMikuDance）形式に変換](#pmxmikumikudance%E5%BD%A2%E5%BC%8F%E3%81%AB%E5%A4%89%E6%8F%9B)
-  - [制限事項](#%E5%88%B6%E9%99%90%E4%BA%8B%E9%A0%85)
+  - [注意事項・制限事項](#%E6%B3%A8%E6%84%8F%E4%BA%8B%E9%A0%85%E3%83%BB%E5%88%B6%E9%99%90%E4%BA%8B%E9%A0%85)
   - [ビルド](#%E3%83%93%E3%83%AB%E3%83%89)
   - [CLI オプション](#cli-%E3%82%AA%E3%83%97%E3%82%B7%E3%83%A7%E3%83%B3)
   - [出力ファイル](#%E5%87%BA%E5%8A%9B%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB)
@@ -34,9 +34,10 @@
 | PMD (`.pmd`) | MikuMikuDance モデル形式。Shift_JIS 対応 |
 | OBJ (`.obj`) | Wavefront OBJ 形式。MTL 材質ファイル・テクスチャ自動読み込み。座標は cm 単位と仮定 |
 | STL (`.stl`) | STL 形式（ASCII / バイナリ両対応）。座標は mm 単位・Z-Up と仮定し、Y-Up に自動変換 |
+| DirectX text (`.x`) | DirectX テキスト形式。MMD アクセサリ・ステージ等の静的メッシュ対応。Frame 階層変換・材質参照・DDS テクスチャ対応 |
 | UnityPackage (`.unitypackage`) | tar.gz アーカイブから Prefab / VRM / FBX + テクスチャを自動抽出。Prefab 経由のテクスチャ・ノーマルマップ自動マッピング対応 |
-| ZIP (`.zip`) | アーカイブ内の VRM / FBX / PMX / PMD / OBJ / STL / UnityPackage を自動検出・展開 |
-| 7z (`.7z`) | アーカイブ内の VRM / FBX / PMX / PMD / OBJ / STL / UnityPackage を自動検出・展開 |
+| ZIP (`.zip`) | アーカイブ内の VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage を自動検出・展開 |
+| 7z (`.7z`) | アーカイブ内の VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage を自動検出・展開 |
 
 ## クイックスタート
 
@@ -157,8 +158,9 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - 表示枠の自動分類（Root / 表情 / 体(上) / 腕 / 指 / 足 / その他）
 - UV 正規化（0..1 範囲に補正）
 
-## 制限事項
+## 注意事項・制限事項
 
+- **出力 PMX** — PmxEditor 等での後段調整を想定しています
 - **PMX/PMD は閲覧専用** — PMX 変換（再出力）は非対応。ビューア表示と UVマップ出力のみ
 - **スフィアモード 3（サブテクスチャ）未対応** — 追加 UV が必要なため未実装。検出時は警告ログを出力し無効化
 - **テクスチャサイズ制限** — GPU の `max_texture_dimension_2d`（一般的に 8192px）を超えるテクスチャは自動的に縮小される。画質が若干低下する場合がある。PMX 変換出力には影響しない（ビューア表示のみ）

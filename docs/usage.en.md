@@ -12,7 +12,7 @@
   - [Extras](#extras)
     - [Animation Playback](#animation-playback)
     - [PMX (MikuMikuDance) Conversion](#pmx-mikumikudance-conversion)
-  - [Limitations](#limitations)
+  - [Notes & Limitations](#notes--limitations)
   - [Build](#build)
   - [CLI Options](#cli-options)
   - [Output Files](#output-files)
@@ -34,9 +34,10 @@
 | PMD (`.pmd`) | MikuMikuDance model format. Shift_JIS support |
 | OBJ (`.obj`) | Wavefront OBJ format. Auto-loads MTL material files and textures. Coordinates assumed as cm units |
 | STL (`.stl`) | STL format (ASCII and binary). Coordinates assumed as mm units with Z-Up, auto-converted to Y-Up |
+| DirectX text (`.x`) | DirectX text format. Supports static meshes for MMD accessories and stages. Frame hierarchy transforms, material references, and DDS textures |
 | UnityPackage (`.unitypackage`) | Extracts Prefab / VRM / FBX + textures from tar.gz archive. Prefab-based texture and normal map auto-mapping supported |
-| ZIP (`.zip`) | Auto-detects and extracts VRM / FBX / PMX / PMD / OBJ / STL / UnityPackage from archive |
-| 7z (`.7z`) | Auto-detects and extracts VRM / FBX / PMX / PMD / OBJ / STL / UnityPackage from archive |
+| ZIP (`.zip`) | Auto-detects and extracts VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage from archive |
+| 7z (`.7z`) | Auto-detects and extracts VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage from archive |
 
 ## Quick Start
 
@@ -157,8 +158,9 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - Auto-classified display frames (Root / Expression / Upper Body / Arms / Fingers / Legs / Other)
 - UV normalization (clamped to 0..1)
 
-## Limitations
+## Notes & Limitations
 
+- **PMX output** — Output PMX files are intended for further adjustment in tools like PmxEditor
 - **PMX/PMD is view-only** — PMX conversion (re-export) is not supported. Viewer display and UV map export only
 - **Sphere Mode 3 (sub-texture) unsupported** — Requires additional UVs, not implemented. Detected with warning log and disabled
 - **Texture size limit** — Textures exceeding the GPU's `max_texture_dimension_2d` (typically 8192px) are automatically downscaled. This may result in slight quality loss. Does not affect PMX conversion output (viewer display only)

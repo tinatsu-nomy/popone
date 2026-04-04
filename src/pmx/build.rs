@@ -2335,8 +2335,12 @@ fn build_joints(ir: &IrModel, scale: f32) -> Vec<PmxJoint> {
 }
 
 /// UV値を 0..1 に正規化（負値対応の fract）
+/// [0, 1] 範囲内の値はそのまま保持（1.0 % 1.0 = 0.0 への丸めを防止）
 #[inline]
 fn fract_uv(v: f32) -> f32 {
+    if v >= 0.0 && v <= 1.0 {
+        return v;
+    }
     let f = v % 1.0;
     if f < 0.0 {
         f + 1.0

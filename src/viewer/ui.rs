@@ -95,7 +95,7 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                 .unwrap_or("?");
             let mut dialog = rfd::FileDialog::new()
                 .set_title(format!("テクスチャ画像を選択 - {}", mat_name))
-                .add_filter("Image", &["png", "jpg", "jpeg", "tga", "bmp", "psd"]);
+                .add_filter("Image", &["png", "jpg", "jpeg", "tga", "bmp", "psd", "dds"]);
             if let Some(ref loaded) = app.loaded {
                 if let Some(src_name) = loaded
                     .mat_cache

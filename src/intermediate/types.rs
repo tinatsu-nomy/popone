@@ -124,6 +124,7 @@ pub enum SourceFormat {
     Pmd,
     Obj,
     Stl,
+    DirectX,
 }
 
 impl SourceFormat {
@@ -136,6 +137,7 @@ impl SourceFormat {
             SourceFormat::Pmd => "PMD",
             SourceFormat::Obj => "OBJ",
             SourceFormat::Stl => "STL",
+            SourceFormat::DirectX => "DirectX",
         }
     }
 
@@ -914,6 +916,7 @@ pub fn mime_for_ext(ext: &str) -> &'static str {
         "png" => "image/png",
         "tga" => "image/x-tga",
         "bmp" => "image/bmp",
+        "dds" => "image/vnd.ms-dds",
         _ => "image/jpeg",
     }
 }

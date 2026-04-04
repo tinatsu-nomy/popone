@@ -89,10 +89,11 @@ pub fn export_uv_map_grouped(
                         });
 
                         let px: [(i32, i32); 3] = std::array::from_fn(|i| {
-                            (
-                                (shifted[i].0 * dim as f32) as i32,
-                                (shifted[i].1 * dim as f32) as i32,
-                            )
+                            // u=1.0 や v=1.0 の場合にピクセル範囲外にならないようクランプ
+                            let x = (shifted[i].0 * dim as f32) as i32;
+                            let y = (shifted[i].1 * dim as f32) as i32;
+                            let max = dim as i32 - 1;
+                            (x.min(max), y.min(max))
                         });
 
                         draw_line(&mut buf, dim, px[0], px[1]);
@@ -229,8 +230,12 @@ fn build_entries<'a>(
 // ── UV 描画ヘルパー ──────────────────────────────────────
 
 /// UV値を 0..1 に正規化（負値対応の fract）
+/// [0, 1] 範囲内の値はそのまま保持（1.0 % 1.0 = 0.0 への丸めを防止）
 #[inline]
 fn fract_uv(v: f32) -> f32 {
+    if v >= 0.0 && v <= 1.0 {
+        return v;
+    }
     let f = v % 1.0;
     if f < 0.0 {
         f + 1.0

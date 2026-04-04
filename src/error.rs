@@ -25,6 +25,9 @@ pub enum PoponeError {
     #[error("STL パース失敗: {0}")]
     StlParse(String),
 
+    #[error("DirectX パース失敗: {0}")]
+    DirectXParse(String),
+
     #[error("中間表現の抽出に失敗: {0}")]
     Extraction(String),
 

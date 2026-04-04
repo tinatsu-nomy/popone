@@ -359,6 +359,11 @@ fn run_main(mut args: Args) -> Result<()> {
             let ir = popone::stl::extract::load_stl(&input).context("STL中間表現の抽出に失敗")?;
             (ir, None)
         }
+        "x" => {
+            let ir =
+                popone::directx::extract::load_x(&input).context("DirectX中間表現の抽出に失敗")?;
+            (ir, None)
+        }
         "fbx" => {
             let data = std::fs::read(&input)
                 .with_context(|| format!("FBXファイル読み込み失敗: {}", input.display()))?;
@@ -723,6 +728,26 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                 .unwrap_or("Model");
             popone::stl::extract::load_stl_from_data(&bundle.model.data, name)
                 .context("STL中間表現の抽出に失敗")?
+        }
+        ArchiveModelKind::DirectX => {
+            let base_dir = bundle
+                .model
+                .path
+                .parent()
+                .unwrap_or(std::path::Path::new("."));
+            let name = bundle
+                .model
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Model");
+            popone::directx::extract::load_x_from_data(
+                &bundle.model.data,
+                name,
+                base_dir,
+                Some(&bundle.aux_files),
+            )
+            .context("DirectX中間表現の抽出に失敗")?
         }
         ArchiveModelKind::UnityPackage => {
             // アーカイブ内 .unitypackage を二重展開

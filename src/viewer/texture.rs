@@ -190,6 +190,9 @@ pub fn decode_image_to_rgba_with_hint(
         Some("image/bmp") => Some(image::ImageFormat::Bmp),
         Some("image/png") => Some(image::ImageFormat::Png),
         Some("image/jpeg") => Some(image::ImageFormat::Jpeg),
+        Some("image/vnd.ms-dds") | Some("image/x-dds") | Some("image/dds") => {
+            Some(image::ImageFormat::Dds)
+        }
         _ => None,
     };
 

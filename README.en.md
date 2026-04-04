@@ -2,19 +2,16 @@
 
 [日本語](README.md)
 
-A 3D viewer for VRM / FBX / PMX / PMD / OBJ / STL / UnityPackage / ZIP / 7z files.
+A 3D viewer for VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x files.
 
 ## Download
 
-Latest release: **[popone-v0.2.23.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.23/popone-v0.2.23.exe)**
+Latest release: **[popone-v0.2.24.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.24/popone-v0.2.24.exe)**
 
 All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
 ## Disclaimer
 
-- The output PMX files are intended for further adjustment in tools like PmxEditor.
-- Textures exceeding the GPU's maximum texture size (typically 8192px) are automatically downscaled in the viewer (does not affect PMX output).
-- Archive (ZIP / 7z) and `.unitypackage` extraction is capped at 2GB total.
 - The author assumes no responsibility for any issues arising from the use of this tool.
 
 ## License

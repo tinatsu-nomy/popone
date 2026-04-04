@@ -3,75 +3,78 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.23](#v0223)
+  - [v0.2.24](#v0224)
     - [New Features](#new-features)
     - [Improvements](#improvements)
-  - [v0.2.22](#v0222)
+  - [v0.2.23](#v0223)
     - [New Features](#new-features-1)
-    - [Bug Fixes](#bug-fixes)
     - [Improvements](#improvements-1)
-  - [v0.2.21](#v0221)
-    - [Improvements](#improvements-2)
-  - [v0.2.20](#v0220)
-    - [Improvements](#improvements-3)
-  - [v0.2.19](#v0219)
+  - [v0.2.22](#v0222)
     - [New Features](#new-features-2)
+    - [Bug Fixes](#bug-fixes)
+    - [Improvements](#improvements-2)
+  - [v0.2.21](#v0221)
+    - [Improvements](#improvements-3)
+  - [v0.2.20](#v0220)
     - [Improvements](#improvements-4)
-  - [v0.2.18](#v0218)
+  - [v0.2.19](#v0219)
     - [New Features](#new-features-3)
     - [Improvements](#improvements-5)
+  - [v0.2.18](#v0218)
+    - [New Features](#new-features-4)
+    - [Improvements](#improvements-6)
   - [v0.2.17](#v0217)
     - [Bug Fixes](#bug-fixes-1)
   - [v0.2.16](#v0216)
-    - [New Features](#new-features-4)
-    - [Bug Fixes](#bug-fixes-2)
-    - [Improvements](#improvements-6)
-  - [v0.2.15](#v0215)
     - [New Features](#new-features-5)
+    - [Bug Fixes](#bug-fixes-2)
     - [Improvements](#improvements-7)
-  - [v0.2.14](#v0214)
+  - [v0.2.15](#v0215)
+    - [New Features](#new-features-6)
     - [Improvements](#improvements-8)
-  - [v0.2.13](#v0213)
+  - [v0.2.14](#v0214)
     - [Improvements](#improvements-9)
+  - [v0.2.13](#v0213)
+    - [Improvements](#improvements-10)
   - [v0.2.12](#v0212)
     - [Bug Fixes](#bug-fixes-3)
-    - [New Features](#new-features-6)
-    - [Improvements](#improvements-10)
-  - [v0.2.11](#v0211)
     - [New Features](#new-features-7)
     - [Improvements](#improvements-11)
-  - [v0.2.10](#v0210)
+  - [v0.2.11](#v0211)
     - [New Features](#new-features-8)
+    - [Improvements](#improvements-12)
+  - [v0.2.10](#v0210)
+    - [New Features](#new-features-9)
     - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
     - [Bug Fixes](#bug-fixes-4)
-    - [Improvements](#improvements-12)
+    - [Improvements](#improvements-13)
     - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
   - [v0.2.9](#v029)
-    - [New Features](#new-features-9)
-    - [Improvements](#improvements-13)
+    - [New Features](#new-features-10)
+    - [Improvements](#improvements-14)
     - [Bug Fixes](#bug-fixes-5)
     - [Implementation Details](#implementation-details)
     - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
-    - [New Features](#new-features-10)
-    - [Improvements](#improvements-14)
-  - [v0.2.7](#v027)
     - [New Features](#new-features-11)
-    - [Bug Fixes](#bug-fixes-6)
     - [Improvements](#improvements-15)
+  - [v0.2.7](#v027)
+    - [New Features](#new-features-12)
+    - [Bug Fixes](#bug-fixes-6)
+    - [Improvements](#improvements-16)
     - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
     - [Bug Fixes](#bug-fixes-7)
-    - [New Features](#new-features-12)
-    - [Improvements](#improvements-16)
+    - [New Features](#new-features-13)
+    - [Improvements](#improvements-17)
     - [Code Quality & Performance](#code-quality--performance-1)
   - [v0.2.5](#v025)
-    - [Improvements](#improvements-17)
+    - [Improvements](#improvements-18)
     - [Code Quality & Performance](#code-quality--performance-2)
   - [v0.2.4](#v024)
-    - [Improvements](#improvements-18)
-  - [v0.2.3](#v023)
     - [Improvements](#improvements-19)
+  - [v0.2.3](#v023)
+    - [Improvements](#improvements-20)
   - [v0.2.2](#v022)
     - [Code Quality & Performance](#code-quality--performance-3)
   - [FBX Support](#fbx-support)
@@ -81,6 +84,25 @@
 # Changelog
 
 [日本語](CHANGELOG.md)
+
+## v0.2.24
+
+### New Features
+
+- **DirectX .x file loading** — Added support for DirectX text format (.x) files. Static meshes such as MMD accessories and stages can be viewed and converted to PMX. Custom text parser fully supports Mesh / MeshNormals / MeshTextureCoords / MeshMaterialList / Frame hierarchy transforms
+- **DDS texture support** — Added DDS (DirectDraw Surface) texture decoding and display. Enabled `dds` feature in the `image` crate. DDS files are also selectable in viewer D&D and manual texture assignment dialogs
+
+### Improvements
+
+- **Frame hierarchy transforms** — Correctly applies `FrameTransformMatrix` to vertex positions and normals. Dynamically determines face winding based on world transform determinant for mirrored frames
+- **Material reference resolution** — Supports `{ MaterialName }` shared material references. Materials from top-level, Frame scope, and MeshMaterialList are registered in a unified lookup table. Forward references resolved via 2-pass re-binding
+- **Hard-edge normals** — Face-vertex normals from `MeshNormals` use `(position_index, normal_index)` keys to split vertices, correctly preserving hard edges
+- **Binary/compressed .x detection** — Detects `xof ... bin` / `xof ... cmp` headers and returns clear error messages
+- **SkinWeights detection** — Rejects .x files containing skinning data with an early error, preventing silent rig loss
+- **Archive .x support** — Auto-detects and extracts .x files from ZIP/7z archives. Texture collection scope expanded to parent directory
+- **Dot-separated names** — Correctly parses Blender-style sequential names like `Cube.001` / `Material.002`
+- **Texture path normalization** — Improved robustness with `./` removal, `..` resolution, and case-insensitive matching
+- **UV normalization fix** — Fixed `fract_uv(1.0)` incorrectly rounding to `0.0`. UV=1.0 is now preserved correctly, with UV map rendering edge clamping added
 
 ## v0.2.23
 

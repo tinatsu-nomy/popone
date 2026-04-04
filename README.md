@@ -2,19 +2,16 @@
 
 [English](README.en.md)
 
-VRM / FBX / PMX / PMD / OBJ / STL / UnityPackage / ZIP / 7z を 3D 表示します。
+VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x を 3D 表示します。
 
 ## ダウンロード
 
-最新リリース: **[popone-v0.2.23.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.23/popone-v0.2.23.exe)**
+最新リリース: **[popone-v0.2.24.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.24/popone-v0.2.24.exe)**
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
 ## 注意事項
 
-- 出力 PMX は PmxEditor 等での後段調整を想定しています。
-- GPU の最大テクスチャサイズ（通常 8192px）を超えるテクスチャはビューア表示時に自動縮小されます（PMX 出力には影響しません）。
-- アーカイブ（ZIP / 7z）および `.unitypackage` の展開サイズは合計 2GB が上限です。
 - 本ツールの使用により発生したいかなる問題についても、作者は一切の責任を負いません。
 
 ## ライセンス

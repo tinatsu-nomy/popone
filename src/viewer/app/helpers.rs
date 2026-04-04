@@ -130,7 +130,7 @@ pub fn collect_image_files_recursive(
 }
 
 /// D&D 対応画像拡張子
-pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tga", "bmp", "psd"];
+pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tga", "bmp", "psd", "dds"];
 
 /// D&D 対応モデル/アニメーション拡張子
 pub const MODEL_EXTENSIONS: &[&str] = &[
@@ -140,6 +140,7 @@ pub const MODEL_EXTENSIONS: &[&str] = &[
     "pmd",
     "obj",
     "stl",
+    "x",
     "unitypackage",
     "vrma",
     "glb",

@@ -1,5 +1,6 @@
 pub mod archive;
 pub mod convert;
+pub mod directx;
 pub mod error;
 pub mod fbx;
 pub mod intermediate;
@@ -146,6 +147,22 @@ pub fn convert_stl_to_pmx(
     convert_ir_to_pmx(&ir, output_path, &build_options)
 }
 
+/// DirectX .x → PMX 変換
+pub fn convert_x_to_pmx(
+    input_path: &Path,
+    output_path: &Path,
+    options: &VrmConvertOptions,
+) -> Result<ConvertStats> {
+    let ir = directx::extract::load_x(input_path)?;
+    let build_options = PmxBuildOptions {
+        align_rigid_rotation: options.align_rigid_rotation,
+        no_physics: options.no_physics,
+        raw_structure: options.raw_structure,
+        scale: options.scale,
+    };
+    convert_ir_to_pmx(&ir, output_path, &build_options)
+}
+
 /// IrModel から直接 PMX 変換（ビューアで編集済みの IrModel を使用）
 pub fn convert_ir_to_pmx(
     ir: &intermediate::types::IrModel,
@@ -272,6 +289,7 @@ pub fn convert_to_pmx(
         Some("fbx") => convert_fbx_to_pmx(input_path, output_path, options),
         Some("obj") => convert_obj_to_pmx(input_path, output_path, options),
         Some("stl") => convert_stl_to_pmx(input_path, output_path, options),
+        Some("x") => convert_x_to_pmx(input_path, output_path, options),
         _ => convert_vrm_to_pmx(input_path, output_path, options),
     }
 }

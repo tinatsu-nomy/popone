@@ -21,6 +21,7 @@ pub const MODEL_EXTENSIONS: &[&str] = &[
     "pmd",
     "obj",
     "stl",
+    "x",
     "unitypackage",
 ];
 
@@ -59,6 +60,7 @@ pub enum ArchiveModelKind {
     Pmd,
     Obj,
     Stl,
+    DirectX,
     UnityPackage,
 }
 
@@ -72,6 +74,7 @@ impl ArchiveModelKind {
             "pmd" => Some(Self::Pmd),
             "obj" => Some(Self::Obj),
             "stl" => Some(Self::Stl),
+            "x" => Some(Self::DirectX),
             "unitypackage" => Some(Self::UnityPackage),
             _ => None,
         }
@@ -87,6 +90,7 @@ impl ArchiveModelKind {
             Self::Pmd => "PMD",
             Self::Obj => "OBJ",
             Self::Stl => "STL",
+            Self::DirectX => "DirectX",
             Self::UnityPackage => "UnityPackage",
         }
     }
@@ -313,6 +317,11 @@ fn extract_bundle_from_zip(
                 for meta in metas {
                     if is_texture_in_scope(&meta.path, model_dir) {
                         paths_to_extract.push(meta.path.clone());
+                    } else if (kind == ArchiveModelKind::DirectX || kind == ArchiveModelKind::Obj)
+                        && is_texture_near_model(&meta.path, model_dir)
+                    {
+                        // モデルディレクトリ外のテクスチャも収集（"../textures/foo.png" 等）
+                        paths_to_extract.push(meta.path.clone());
                     }
                     // OBJ: .mtl sidecar も収集
                     if kind == ArchiveModelKind::Obj
@@ -332,13 +341,15 @@ fn extract_bundle_from_zip(
             for entry in entries {
                 if entry.path == model_path {
                     model_entry = Some(entry);
-                } else if kind == ArchiveModelKind::Obj {
-                    // OBJ: 相対パスを保持して aux_files に格納（MTL/テクスチャ解決用）
-                    let rel = entry
-                        .path
-                        .strip_prefix(model_dir)
-                        .unwrap_or(&entry.path)
-                        .to_path_buf();
+                } else if kind == ArchiveModelKind::Obj || kind == ArchiveModelKind::DirectX {
+                    // OBJ/DirectX: model_dir からの相対パスを正規化して格納
+                    // resolve_texture 側の normalize_rel_path と同じ正規化を適用し、キーを一致させる
+                    let rel = if let Ok(r) = entry.path.strip_prefix(model_dir) {
+                        r.to_path_buf()
+                    } else {
+                        // model_dir 外のファイル: 相対パスを計算して正規化
+                        relative_from_model_dir(model_dir, &entry.path)
+                    };
                     aux_files.insert(rel, Arc::from(entry.data.into_boxed_slice()));
                 } else {
                     let filename = entry
@@ -414,18 +425,21 @@ fn extract_bundle_from_entries(
                     is_texture_in_scope(&e.path, model_dir)
                         || (kind == ArchiveModelKind::Obj
                             && is_sidecar_in_scope(&e.path, model_dir, "mtl"))
+                        || ((kind == ArchiveModelKind::DirectX || kind == ArchiveModelKind::Obj)
+                            && is_texture_near_model(&e.path, model_dir))
                 })
                 .collect();
 
-            if kind == ArchiveModelKind::Obj {
-                // OBJ: 相対パスを保持して aux_files に格納
+            if kind == ArchiveModelKind::Obj || kind == ArchiveModelKind::DirectX {
+                // OBJ/DirectX: model_dir からの相対パスを正規化して格納
                 let mut aux_files: HashMap<PathBuf, Arc<[u8]>> = HashMap::new();
                 for e in relevant {
-                    let rel = e
-                        .path
-                        .strip_prefix(model_dir)
-                        .unwrap_or(&e.path)
-                        .to_path_buf();
+                    let rel = if let Ok(r) = e.path.strip_prefix(model_dir) {
+                        r.to_path_buf()
+                    } else {
+                        // model_dir 外のファイル: 相対パスを計算して正規化
+                        relative_from_model_dir(model_dir, &e.path)
+                    };
                     aux_files.insert(rel, Arc::from(e.data.into_boxed_slice()));
                 }
                 Ok(ModelBundle {
@@ -624,8 +638,8 @@ fn build_aux_from_entries_pmx(
     aux
 }
 
-/// テクスチャがモデルと同ディレクトリ + サブディレクトリ内かどうか
 /// 指定拡張子のサイドカーファイルがスコープ内にあるか
+/// model_dir の親ディレクトリまで許容（"../shared/materials.mtl" 等の参照用）
 fn is_sidecar_in_scope(path: &Path, model_dir: &Path, ext: &str) -> bool {
     let file_ext = path
         .extension()
@@ -635,7 +649,24 @@ fn is_sidecar_in_scope(path: &Path, model_dir: &Path, ext: &str) -> bool {
     if file_ext != ext {
         return false;
     }
-    model_dir == Path::new("") || path.starts_with(model_dir)
+    let parent = model_dir.parent().unwrap_or(Path::new(""));
+    parent == Path::new("") || path.starts_with(parent)
+}
+
+/// テクスチャ拡張子かつモデルの親ディレクトリ以下にあるか判定
+/// model_dir の1段上まで許容し、アーカイブ全体の無関係テクスチャを除外する
+fn is_texture_near_model(path: &Path, model_dir: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    if !TEXTURE_EXTENSIONS.contains(&ext.as_str()) {
+        return false;
+    }
+    // model_dir の親ディレクトリ以下であれば収集対象
+    let parent = model_dir.parent().unwrap_or(Path::new(""));
+    parent == Path::new("") || path.starts_with(parent)
 }
 
 fn is_texture_in_scope(path: &Path, model_dir: &Path) -> bool {
@@ -664,6 +695,27 @@ fn normalize_relative_path(path: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// model_dir から target への相対パスを計算する（正規化なし、".." を保持）
+/// 例: source_dir="assets/models", target="assets/shared/body.png" → "../shared/body.png"
+fn relative_from_model_dir(source_dir: &Path, target: &Path) -> PathBuf {
+    let source_components: Vec<_> = source_dir.components().collect();
+    let target_components: Vec<_> = target.components().collect();
+    let common_len = source_components
+        .iter()
+        .zip(target_components.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut rel = PathBuf::new();
+    for _ in common_len..source_components.len() {
+        rel.push("..");
+    }
+    for comp in &target_components[common_len..] {
+        rel.push(comp);
+    }
+    // バックスラッシュをスラッシュに統一
+    PathBuf::from(rel.to_string_lossy().replace('\\', "/"))
 }
 
 /// Case-insensitive パス比較
@@ -780,6 +832,27 @@ mod tests {
             "UnityPackage 抽出時にテクスチャを巻き込んではならない"
         );
         assert!(bundle.aux_files.is_empty());
+    }
+
+    #[test]
+    fn test_relative_from_model_dir() {
+        // model_dir 外のファイル: ".." が保持される
+        let rel = relative_from_model_dir(
+            Path::new("assets/models"),
+            Path::new("assets/shared/body.png"),
+        );
+        assert_eq!(rel, PathBuf::from("../shared/body.png"));
+
+        // model_dir 内のファイル: ".." なし
+        let rel2 = relative_from_model_dir(
+            Path::new("assets/models"),
+            Path::new("assets/models/tex/body.png"),
+        );
+        assert_eq!(rel2, PathBuf::from("tex/body.png"));
+
+        // ルート外に2段上がるケース: ".." が2つ保持される
+        let rel3 = relative_from_model_dir(Path::new("a/b/c"), Path::new("a/other/body.png"));
+        assert_eq!(rel3, PathBuf::from("../../other/body.png"));
     }
 
     #[test]
