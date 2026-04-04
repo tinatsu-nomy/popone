@@ -2,717 +2,728 @@
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
-- [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
+- [Changelog](#changelog)
+  - [v0.2.25](#v0225)
+    - [New Features](#new-features)
+    - [Improvements](#improvements)
   - [v0.2.24](#v0224)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
-    - [改善](#%E6%94%B9%E5%96%84)
+    - [New Features](#new-features-1)
+    - [Improvements](#improvements-1)
   - [v0.2.23](#v0223)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
-    - [改善](#%E6%94%B9%E5%96%84-1)
+    - [New Features](#new-features-2)
+    - [Improvements](#improvements-2)
   - [v0.2.22](#v0222)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
-    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3)
-    - [改善](#%E6%94%B9%E5%96%84-2)
+    - [New Features](#new-features-3)
+    - [Bug Fixes](#bug-fixes)
+    - [Improvements](#improvements-3)
   - [v0.2.21](#v0221)
-    - [改善](#%E6%94%B9%E5%96%84-3)
+    - [Improvements](#improvements-4)
   - [v0.2.20](#v0220)
-    - [改善](#%E6%94%B9%E5%96%84-4)
+    - [Improvements](#improvements-5)
   - [v0.2.19](#v0219)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
-    - [改善](#%E6%94%B9%E5%96%84-5)
+    - [New Features](#new-features-4)
+    - [Improvements](#improvements-6)
   - [v0.2.18](#v0218)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-4)
-    - [改善](#%E6%94%B9%E5%96%84-6)
+    - [New Features](#new-features-5)
+    - [Improvements](#improvements-7)
   - [v0.2.17](#v0217)
-    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-1)
+    - [Bug Fixes](#bug-fixes-1)
   - [v0.2.16](#v0216)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-5)
-    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-2)
-    - [改善](#%E6%94%B9%E5%96%84-7)
+    - [New Features](#new-features-6)
+    - [Bug Fixes](#bug-fixes-2)
+    - [Improvements](#improvements-8)
   - [v0.2.15](#v0215)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-6)
-    - [改善](#%E6%94%B9%E5%96%84-8)
+    - [New Features](#new-features-7)
+    - [Improvements](#improvements-9)
   - [v0.2.14](#v0214)
-    - [改善](#%E6%94%B9%E5%96%84-9)
+    - [Improvements](#improvements-10)
   - [v0.2.13](#v0213)
-    - [改善](#%E6%94%B9%E5%96%84-10)
+    - [Improvements](#improvements-11)
   - [v0.2.12](#v0212)
-    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-3)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-7)
-    - [改善](#%E6%94%B9%E5%96%84-11)
+    - [Bug Fixes](#bug-fixes-3)
+    - [New Features](#new-features-8)
+    - [Improvements](#improvements-12)
   - [v0.2.11](#v0211)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-8)
-    - [改善](#%E6%94%B9%E5%96%84-12)
+    - [New Features](#new-features-9)
+    - [Improvements](#improvements-13)
   - [v0.2.10](#v0210)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-9)
-    - [UTS2 対応パラメータ](#uts2-%E5%AF%BE%E5%BF%9C%E3%83%91%E3%83%A9%E3%83%A1%E3%83%BC%E3%82%BF)
-    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-4)
-    - [改善](#%E6%94%B9%E5%96%84-13)
-    - [v0.2.10 未対応（将来対応）](#v0210-%E6%9C%AA%E5%AF%BE%E5%BF%9C%E5%B0%86%E6%9D%A5%E5%AF%BE%E5%BF%9C)
+    - [New Features](#new-features-10)
+    - [UTS2 Mapped Parameters](#uts2-mapped-parameters)
+    - [Bug Fixes](#bug-fixes-4)
+    - [Improvements](#improvements-14)
+    - [v0.2.10 Not Yet Supported (Future)](#v0210-not-yet-supported-future)
   - [v0.2.9](#v029)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-10)
-    - [改善](#%E6%94%B9%E5%96%84-14)
-    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-5)
-    - [実装詳細](#%E5%AE%9F%E8%A3%85%E8%A9%B3%E7%B4%B0)
-    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84)
+    - [New Features](#new-features-11)
+    - [Improvements](#improvements-15)
+    - [Bug Fixes](#bug-fixes-5)
+    - [Implementation Details](#implementation-details)
+    - [Code Quality & Performance](#code-quality--performance)
   - [v0.2.8](#v028)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-11)
-    - [改善](#%E6%94%B9%E5%96%84-15)
+    - [New Features](#new-features-12)
+    - [Improvements](#improvements-16)
   - [v0.2.7](#v027)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-12)
-    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-6)
-    - [改善](#%E6%94%B9%E5%96%84-16)
-    - [コード品質改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E6%94%B9%E5%96%84)
+    - [New Features](#new-features-13)
+    - [Bug Fixes](#bug-fixes-6)
+    - [Improvements](#improvements-17)
+    - [Code Quality](#code-quality)
   - [v0.2.6](#v026)
-    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-7)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-13)
-    - [改善](#%E6%94%B9%E5%96%84-17)
-    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-1)
+    - [Bug Fixes](#bug-fixes-7)
+    - [New Features](#new-features-14)
+    - [Improvements](#improvements-18)
+    - [Code Quality & Performance](#code-quality--performance-1)
   - [v0.2.5](#v025)
-    - [改善](#%E6%94%B9%E5%96%84-18)
-    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-2)
+    - [Improvements](#improvements-19)
+    - [Code Quality & Performance](#code-quality--performance-2)
   - [v0.2.4](#v024)
-    - [改善](#%E6%94%B9%E5%96%84-19)
+    - [Improvements](#improvements-20)
   - [v0.2.3](#v023)
-    - [改善](#%E6%94%B9%E5%96%84-20)
+    - [Improvements](#improvements-21)
   - [v0.2.2](#v022)
-    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-3)
-  - [FBX 対応](#fbx-%E5%AF%BE%E5%BF%9C)
+    - [Code Quality & Performance](#code-quality--performance-3)
+  - [FBX Support](#fbx-support)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
-# 更新履歴
+# Changelog
 
-[English](CHANGELOG.en.md)
+[日本語](CHANGELOG.jp.md)
+
+## v0.2.25
+
+### New Features
+
+- **Session settings persistence** — Window size/position and last-opened model/texture directories are saved to `popone.toml` and restored on next launch. Supports multi-display setups (including sub-displays with negative coordinates). Position stored as `outer_rect`, size as `inner_rect` to prevent drift. Graceful fallback on corrupted config with auto-recovery from `.bak` files
+- **Texture assignment history** — Manually assigned textures for FBX/OBJ models can be saved to `popone_history.json` and recalled later. Material matching uses index+name exact match with name-only unique fallback. Missing texture files are auto-skipped with result notification. Overwrite confirmation dialog displayed when history already exists
+- **FBX animation confirmation on first load** — When an FBX file contains both mesh and animation, the selection dialog now appears even on first load (no model loaded yet). "Load model" checkbox is required (disabled) on first load. Content detection unified via `inspect_fbx()` helper
+
+### Improvements
+
+- **FBX PSD texture decoding** — PSD files in FBX auto-texture loading are now decoded using the built-in PSD decoder (`psd::decode_psd`). Previously all PSD textures failed to decode since the `image` crate does not support PSD format
+- **FBX animation auto-load pre-check** — Auto animation loading after FBX model load now uses `inspect_fbx()` pre-check. Eliminates unnecessary WARN for FBX files without animations
+- **Safe file writing** — Settings and history files use backup-based atomic write. Original file preserved on rename failure with auto-recovery from `.bak` files
+- **Texture history recall accuracy** — `link_same_name` temporarily disabled during recall batch; assignment failures detected via `ConvertResult::Failure` and counted as skipped
+- **Empty FBX animation no-op** — Suppresses unnecessary success messages for FBX files with empty animation channels
+- **Window title** — Changed from "Model Viewer" to "POPONE Model Viewer"
+- **Documentation restructure** — English docs are now the primary files (`.md`), Japanese docs renamed to `.jp.md`
 
 ## v0.2.24
 
-### 新機能
+### New Features
 
-- **DirectX .x ファイルロード** — DirectX テキスト形式 (.x) の読み込みに対応。MMD アクセサリ・ステージ等の静的メッシュを表示・PMX 変換可能。自前テキストパーサーにより Mesh / MeshNormals / MeshTextureCoords / MeshMaterialList / Frame 階層変換を完全サポート
-- **DDS テクスチャ対応** — DDS (DirectDraw Surface) テクスチャのデコード・表示に対応。`image` crate の DDS feature を有効化。ビューアの D&D・手動テクスチャ割当ダイアログでも DDS を選択可能
+- **DirectX .x file loading** — Added support for DirectX text format (.x) files. Static meshes such as MMD accessories and stages can be viewed and converted to PMX. Custom text parser fully supports Mesh / MeshNormals / MeshTextureCoords / MeshMaterialList / Frame hierarchy transforms
+- **DDS texture support** — Added DDS (DirectDraw Surface) texture decoding and display. Enabled `dds` feature in the `image` crate. DDS files are also selectable in viewer D&D and manual texture assignment dialogs
 
-### 改善
+### Improvements
 
-- **Frame 階層変換** — `.x` の `FrameTransformMatrix` を頂点位置・法線に正しく適用。ワールド変換行列の行列式が負の場合（鏡像フレーム）は面の巻き順を動的に判定
-- **材質参照解決** — `{ MaterialName }` 形式の共有材質参照に対応。トップレベル・Frame 内・MeshMaterialList 内の Material を統一テーブルに登録。前方参照は 2-pass で再束縛
-- **ハードエッジ法線** — `MeshNormals` の face-vertex 法線を `(position_index, normal_index)` キーで頂点を分離。角を立てるべきメッシュの陰影を正しく再現
-- **バイナリ/圧縮 .x 検出** — `xof ... bin` / `xof ... cmp` ヘッダを検出し、明確な日本語エラーメッセージを返却
-- **SkinWeights 検出** — スキニング情報を含む .x を早期エラーで拒否。未対応のリグ消失を防止
-- **アーカイブ内 .x 対応** — ZIP / 7z アーカイブ内の .x ファイルを自動検出・展開。テクスチャは親ディレクトリまで収集対象に拡大
-- **ドット付き名前** — `Cube.001` / `Material.002` 等の Blender 連番ノード名を正しくパース
-- **テクスチャパス正規化** — `./` 除去・`..` 解決・case-insensitive 照合でテクスチャ参照の堅牢性を向上
-- **UV 正規化修正** — `fract_uv(1.0)` が `0.0` に丸まるバグを修正。UV=1.0 を正しく保持し、UVマップ描画の右端・上端クランプも追加
+- **Frame hierarchy transforms** — Correctly applies `FrameTransformMatrix` to vertex positions and normals. Dynamically determines face winding based on world transform determinant for mirrored frames
+- **Material reference resolution** — Supports `{ MaterialName }` shared material references. Materials from top-level, Frame scope, and MeshMaterialList are registered in a unified lookup table. Forward references resolved via 2-pass re-binding
+- **Hard-edge normals** — Face-vertex normals from `MeshNormals` use `(position_index, normal_index)` keys to split vertices, correctly preserving hard edges
+- **Binary/compressed .x detection** — Detects `xof ... bin` / `xof ... cmp` headers and returns clear error messages
+- **SkinWeights detection** — Rejects .x files containing skinning data with an early error, preventing silent rig loss
+- **Archive .x support** — Auto-detects and extracts .x files from ZIP/7z archives. Texture collection scope expanded to parent directory
+- **Dot-separated names** — Correctly parses Blender-style sequential names like `Cube.001` / `Material.002`
+- **Texture path normalization** — Improved robustness with `./` removal, `..` resolution, and case-insensitive matching
+- **UV normalization fix** — Fixed `fract_uv(1.0)` incorrectly rounding to `0.0`. UV=1.0 is now preserved correctly, with UV map rendering edge clamping added
 
 ## v0.2.23
 
-### 新機能
+### New Features
 
-- **OBJ ファイルロード** — Wavefront OBJ (.obj) の読み込みに対応。MTL 材質ファイルによるテクスチャ・材質の自動読み込み、MTL が見つからない場合はデフォルト白材質で続行。座標は cm 単位と仮定し、FBX と同じスケールで表示。tobj クレートを使用
-- **STL ファイルロード** — STL (.stl) の読み込みに対応。ASCII / バイナリ両形式に対応。座標は mm 単位・Z-Up と仮定し、Y-Up に変換して表示。ゼロ法線の三角形は面法線を自動再計算
-- **動的グリッド** — モデルのバウンディングボックスに合わせてグリッド床のサイズと間隔を自動調整。デフォルト（±100 PMX 単位、間隔 5）を下限とし、巨大モデルの場合のみ拡大。モデル追加（append）時にも再計算
+- **OBJ file loading** — Added support for Wavefront OBJ (.obj) files. Automatic MTL material/texture loading; falls back to default white material if MTL is missing. Coordinates assumed as cm units, displayed at the same scale as FBX. Uses the tobj crate
+- **STL file loading** — Added support for STL (.stl) files. Both ASCII and binary formats supported. Coordinates assumed as mm units with Z-Up, automatically converted to Y-Up. Zero-normal triangles have face normals recalculated
+- **Dynamic grid** — Grid floor size and spacing automatically adjust to the model's bounding box. Default (±100 PMX units, spacing 5) is the minimum; only enlarged for large models. Also recalculated on model append
 
-### 改善
+### Improvements
 
-- **アーカイブ内 OBJ/STL 対応** — ZIP / 7z アーカイブ内の OBJ / STL を自動検出・展開。OBJ は MTL やテクスチャのサイドカーファイルも収集。STL は本体のみ展開（テクスチャ不要）
-- **OBJ 法線自動生成** — 法線データを持たない OBJ ファイルを読み込んだ際、面法線からスムーズシェーディング用の頂点法線を自動計算
-- **OBJ サイドカー解決の堅牢化** — archive/snapshot 経由の OBJ で case-insensitive パス解決、相対パス正規化（`./` 除去・`..` 解決）を実装。archive 由来の場合はディスクフォールバックを禁止し、環境依存の誤読み込みを防止
+- **OBJ/STL in archives** — OBJ/STL files inside ZIP/7z archives are automatically detected and extracted. OBJ sidecar files (MTL, textures) are collected; STL extracts model only
+- **OBJ normal generation** — OBJ files without normal data automatically compute smooth shading vertex normals from face normals
+- **Robust OBJ sidecar resolution** — Case-insensitive path resolution and relative path normalization (`./` removal, `..` resolution) for archive/snapshot OBJ loading. Disk fallback disabled for archive sources to prevent environment-dependent misreads
 
 ## v0.2.22
 
-### 新機能
+### New Features
 
-- **PMX 出力倍率** — PMX 変換時にモデルの倍率を指定可能。CLI では `--scale 2.0`、ビューアではエクスポートタブの「倍率」DragValue で設定。ボーン位置・頂点位置・モーフ頂点オフセット・剛体位置/サイズ・ジョイント位置/移動制限に適用される。法線・回転・UV には影響しない。デフォルト 1.0
-- **ボーンなしモデルのダミーボーン自動作成** — ボーンを持たないモデル（FBX の静的メッシュ等）を PMX に変換する際、原点 `(0,0,0)` にモデル名のボーンを 1 本自動作成し、全頂点ウェイトをそのボーンに割り当てる。標準ボーン挿入（IK 等）はスキップされ、最小構成の PMX として出力される
+- **PMX export scale** — Allows specifying a scale multiplier when converting to PMX. Use `--scale 2.0` in CLI, or the "Scale" DragValue in the viewer's export tab. Applied to bone positions, vertex positions, morph vertex offsets, rigid body positions/sizes, and joint positions/move limits. Does not affect normals, rotations, or UVs. Default: 1.0
+- **Auto-create dummy bone for boneless models** — When converting a model with no bones (e.g., static FBX meshes) to PMX, a single bone named after the model is automatically created at the origin `(0,0,0)`, with all vertex weights assigned to it. Standard bone insertion (IK, etc.) is skipped, producing a minimal valid PMX
 
-### バグ修正
+### Bug Fixes
 
-- **ボーンなしモデルの PMX 変換** — ボーンなし FBX を PMX 変換した際、存在しない足ボーンへの IK 参照が生成され、他ビューアで読み込みエラーが発生する問題を修正
-- **TGA テクスチャのデコード失敗** — FBX 埋め込み・外部ファイルの TGA テクスチャが `image::load_from_memory` のフォーマット自動判別で失敗する問題を修正。拡張子からフォーマットを推定するフォールバックを追加。テクスチャファイルが存在するがデコードに失敗した場合のログメッセージも「見つかりません」から正確なメッセージに修正
+- **Boneless model PMX conversion** — Fixed an issue where converting a boneless FBX to PMX generated invalid IK references to non-existent leg bones, causing load errors in other PMX viewers
+- **TGA texture decode failure** — Fixed FBX embedded and external TGA textures failing with `image::load_from_memory` format auto-detection. Added extension-based format fallback. Also corrected misleading "not found" log messages when the file exists but decode fails
 
-### 改善
+### Improvements
 
-- **ログレベル最適化** — FBX アニメーション読み込み失敗を ERROR → WARN に変更（静的 FBX のアニメーションロード試行は正常動作）。標準ボーン挿入時の腕・肩ボーン不在を WARN → DEBUG に変更（非ヒューマノイドモデルでは正常）
+- **Log level optimization** — Changed FBX animation load failure from ERROR to WARN (animation load attempt on static FBX is normal behavior). Changed missing arm/shoulder bone warnings during standard bone insertion from WARN to DEBUG (expected for non-humanoid models)
 
 ## v0.2.21
 
-### 改善
+### Improvements
 
-- **材質名ツールチップ** — 材質表示パネルで材質名にマウスオーバーすると、その材質が参照しているテクスチャファイル名をツールチップで表示。ベーステクスチャ・スフィアマップ・トゥーン・法線マップ・エミッシブの5種類を表示
-- **UVマップ出力デフォルトディレクトリ** — UVマップ出力ダイアログのデフォルトディレクトリを、読み込んだモデルファイルのディレクトリに変更。PMX 出力パスが設定済みの場合はそちらを優先
-- **Auto モード時のエッジ描画 UI** — シェーダーが Auto で MMD レンダリングパスが自動適用されている場合（PMX/PMD ロード時）に、エッジ描画の ON/OFF スイッチとエッジ太さスライダーを表示。従来は明示的に MMD モードを選択した場合のみ表示されていた
+- **Material name tooltip** — Hovering over a material name in the material display panel shows a tooltip listing the texture files referenced by that material. Displays up to 5 types: base texture, sphere map, toon, normal map, and emissive
+- **UV map export default directory** — The UV map export dialog now defaults to the directory of the loaded model file. If a PMX output path is already set, that directory takes priority
+- **Edge drawing UI in Auto mode** — When the shader is set to Auto and the MMD rendering path is automatically applied (e.g., when loading PMX/PMD), the edge drawing ON/OFF toggle and edge thickness slider are now shown. Previously, these controls were only visible when MMD mode was explicitly selected
 
 ## v0.2.20
 
-### 改善
+### Improvements
 
-- **表情モーフの絞り込みフィルタ** — 操作タブの表情モーフセクションにテキスト入力による絞り込み機能を追加。日本語名・英語名の部分一致で検索可能（大文字小文字不問）。フィルタは表示のみに影響し、非表示モーフのウェイト値は保持される
-- **アニメーション解除時のポーズリセット** — アニメーション解除ボタンおよびアニメーション削除（✕ボタン）時に、ボーンポーズとアニメーション制御中の表情モーフウェイトをリセットするように修正。従来はボーン変形と表情ウェイトが最終フレームの状態で残留していた
-- **VRM パーミッション/ライセンスのカラーバッジ表示** — メタ情報パネルのパーミッション・ライセンスセクションで、値を色付きバッジで表示。許可(緑)/条件付き(黄)/禁止(赤)/中立(灰)の4段階で視覚的に識別可能。バッジとラベルの両方にマウスオーバーでツールチップを表示（値の意味・VRM仕様プロパティ名）。VRM 0.0/1.0 両対応、CC ライセンス全種類対応。セクション名・ラベルは日本語表示、PMX コメント欄は英語のまま保持
-- **スプラッシュ画像** — モデル未ロード時にビューポート中央にロゴ画像を角丸で表示。`include_bytes!` で exe に埋め込み、ビューポートサイズに合わせて自動スケーリング。モデルロード後は自動的に非表示
+- **Expression morph filter** — Added text-based filter to the expression morph section in the control tab. Supports partial match search by Japanese and English names (case-insensitive). Filtering only affects display; hidden morph weights are preserved
+- **Pose reset on animation clear** — Clearing animation (via the "Clear Animation" button or removing via ✕ button) now resets bone poses and animation-controlled expression morph weights. Previously, bone deformations and expression weights remained at their last-frame values
+- **VRM permission/license color badges** — Permission and license values in the meta info panel are now displayed as colored badges: allow (green) / conditional (yellow) / deny (red) / neutral (gray). Both badges and labels show tooltips on hover (value meaning + VRM spec property name). Supports VRM 0.0/1.0 and all CC license types. Section and label names are shown in Japanese in the UI while PMX comment field remains in English
+- **Splash image** — Displays a rounded-corner logo image centered in the viewport when no model is loaded. Embedded in the exe via `include_bytes!`, auto-scaled to fit the viewport. Automatically hidden once a model is loaded
 
 ## v0.2.19
 
-### 新機能
+### New Features
 
-- **材質ごとのノーマルマップトグル [N]** — 材質パネルに `[N]` ボタンを追加。ノーマルマップを持つ材質に対して、法線マップ適用の ON/OFF を個別に切り替えられる。OFF にすると `MaterialUniform.has_normal_tex` がゼロになり、シェーダーで法線マップサンプリングがスキップされる。グループヘッダの `[N]` で一括トグルも可能
-- **材質ごとの Bloom/Emissive トグル [B]** — 材質パネルに `[B]` ボタンを追加。emissive 成分を持つ材質に対して、Bloom/Emissive 適用の ON/OFF を切り替えられる。OFF にすると `emissive_factor` がゼロ化され、シェーダーの `lit += emissive` による加算と MRT Bloom 出力の両方が無効になる。PMX/PMD 材質では `bloom_emissive` もゼロ化される。グループヘッダの `[B]` で一括トグルも可能
-- **HDR Emissive 自動検出** — `emissive_factor` の任意成分が 1.0 を超える材質（HDR）は、`bloom_per_mat` をデフォルト OFF で初期化。トーンマッピング非搭載のビューアで `lit += emissive` の結果がクランプされて白飛びする問題を自動回避
+- **Per-material normal map toggle [N]** — Added `[N]` button to the material panel. Allows toggling normal map application ON/OFF for individual materials that have normal textures. When OFF, `MaterialUniform.has_normal_tex` is zeroed, skipping normal map sampling in the shader. Group header `[N]` enables batch toggling
+- **Per-material Bloom/Emissive toggle [B]** — Added `[B]` button to the material panel. Allows toggling Bloom/Emissive ON/OFF for materials with emissive components. When OFF, `emissive_factor` is zeroed, disabling both the shader's `lit += emissive` addition and MRT bloom output. For PMX/PMD materials, `bloom_emissive` is also zeroed. Group header `[B]` enables batch toggling
+- **HDR Emissive auto-detection** — Materials with any `emissive_factor` component exceeding 1.0 (HDR) are initialized with `bloom_per_mat` defaulting to OFF. Automatically prevents white-out caused by `lit += emissive` clamping in the viewer (which lacks tonemapping)
 
-### 改善
+### Improvements
 
-- **法線平滑化 [S] / カスタム法線クリア [C] のゲーティング撤廃** — 法線マップ付き材質でも `[S]` `[C]` が操作可能に。法線マップは TBN 行列（頂点法線 + 接線から構築）を基底として法線を摂動するため、基底法線を平滑化することでポリゴン境界の目立ちが改善される。`mesh.rs` の `mat.normal_texture.is_none()` ガードも撤廃
-- **グループヘッダ拡張** — `▶ [S] [C] [N] [B] [☑] グループ名` の 4+1 ボタン構成に拡張
+- **Removed [S]/[C] gating on normal-mapped materials** — Normal smoothing `[S]` and custom normal clear `[C]` are now always available, even for materials with normal maps. Since normal maps perturb normals via the TBN matrix (built from vertex normals + tangents), smoothing the base normals improves polygon edge visibility. The `mat.normal_texture.is_none()` guard in `mesh.rs` has been removed
+- **Extended group header** — Now uses `▶ [S] [C] [N] [B] [☑] GroupName` layout with 4+1 buttons
 
 ## v0.2.18
 
-### 新機能
+### New Features
 
-- **Prefab 経由ノーマルマップ適用** — `.unitypackage` 内の `.mat` ファイルからノーマルマップテクスチャ（`_BumpMap` / `_NormalMap`）を解決し、FBX モデルのビューア表示に適用。`.mat` の `m_Floats` セクションから `_BumpScale` も読み取り、法線マップの強度をモデルに反映。`_BumpMap`（Standard / lilToon / Poiyomi / AXCS / WF）を優先し、`_NormalMap`（UTS2）にフォールバック
-- **Bloom（グロー）ポストエフェクト** — Dual Kawase (Dual Filtering) 方式の Bloom を実装。MRT (Multiple Render Target) で emissive 成分のみを分離し、グリッドや非発光面は光らない。render pass をメッシュ描画（MRT 2ターゲット）とオーバーレイ（1ターゲット）に分割。Bloom 中間バッファは Rgba8Unorm (linear) で sRGB 演算アーティファクトを回避。UI パラメータ: ON/OFF、強度 (0.0–4.0, デフォルト 0.8)、閾値 (0.0–1.0, デフォルト 0.0)、半径 (3–6 段ダウンサンプル, デフォルト 4)。無効時は Bloom パス実行スキップ（MRT 2ターゲット描画は常時有効、追加帯域コストのみ）
-- **PMX/PMD 自己発光材質の Bloom 対応** — specular=(0,0,0) かつ specular_power≥100 の材質を自己発光として判定。Bloom 強度 = (specular_power − 100) / 10（sp=110 で VRM emissive=1.0 相当）。bloom_emissive は MRT の @location(1) にのみ出力し、シーンカラーには加算しない
-- **Prefab Emission テクスチャ/色の自動適用** — `.mat` ファイルの `m_Colors` セクション・`m_ShaderKeywords` / `m_ValidKeywords` パースを追加。`_EmissionColor` / `_EmissionMap` の自動割り当て。有効判定は `_Emission` float → `_EMISSION` キーワード → `_EmissionMap` 有無 → `_EmissionColor` 非黒非白の優先順。`_EmissionMap` ありで `_EmissionColor` が黒の場合は白に補正
+- **Prefab-based normal map application** — Resolves normal map textures (`_BumpMap` / `_NormalMap`) from `.mat` files within `.unitypackage` and applies them to FBX model viewer display. Also reads `_BumpScale` from the `.mat` `m_Floats` section to reflect normal map intensity. Prioritizes `_BumpMap` (Standard / lilToon / Poiyomi / AXCS / WF) with fallback to `_NormalMap` (UTS2)
+- **Bloom (glow) post-effect** — Dual Kawase (Dual Filtering) bloom implementation. MRT (Multiple Render Target) separates emissive components only — grids and non-emissive surfaces do not glow. Render pass split into mesh drawing (MRT 2 targets) and overlay (1 target). Bloom intermediate buffers use Rgba8Unorm (linear) to avoid sRGB arithmetic artifacts. UI parameters: ON/OFF, intensity (0.0–4.0, default 0.8), threshold (0.0–1.0, default 0.0), radius (3–6 downsample stages, default 4). Bloom pass skipped when disabled (MRT 2-target rendering remains active; only additional bandwidth cost)
+- **PMX/PMD self-emissive material bloom** — Materials with specular=(0,0,0) and specular_power≥100 are detected as self-emissive. Bloom intensity = (specular_power − 100) / 10 (sp=110 equals VRM emissive=1.0). bloom_emissive is output only to MRT @location(1), not added to scene color
+- **Prefab Emission texture/color auto-application** — Added `m_Colors` section and `m_ShaderKeywords` / `m_ValidKeywords` parsing in `.mat` files. Auto-assigns `_EmissionColor` / `_EmissionMap`. Emission enabled by priority: `_Emission` float → `_EMISSION` keyword → `_EmissionMap` presence → `_EmissionColor` non-black non-white. When `_EmissionMap` is present but `_EmissionColor` is black, color is corrected to white
 
-### 改善
+### Improvements
 
-- **`.mat` パーサの MatSection enum リファクタリング** — `m_TexEnvs`・`m_Floats`・`m_Colors`・`m_ShaderKeywords` のセクション遷移を `MatSection` enum で安全に管理。YAML 複数行リスト形式（`- _EMISSION`）にも対応
-- **テクスチャ割当ログの改善** — `embed_textures_with_prefab()` のログをベースカラーとノーマルマップで分離表示（`base=X/Y, normal=Z/Y`）。未割当判定はベースカラー基準を維持し、手動割当ダイアログの動作に影響なし
-- **PMX 出力の決定性向上** — `build_morphs()` の HashMap マージ後に `vertex_index` でソート。同一入力からの PMX バイナリ出力が実行ごとに安定
+- **`.mat` parser MatSection enum refactoring** — Section transitions between `m_TexEnvs`, `m_Floats`, `m_Colors`, and `m_ShaderKeywords` are now safely managed via a `MatSection` enum. Supports YAML multi-line list format (`- _EMISSION`)
+- **Texture assignment log improvements** — `embed_textures_with_prefab()` logs now separate base color and normal map counts (`base=X/Y, normal=Z/Y`). Unmatched detection remains base-color-only, preserving manual assignment dialog behavior
+- **PMX output determinism** — `build_morphs()` now sorts by `vertex_index` after HashMap merge, ensuring stable PMX binary output across runs
 
 ## v0.2.17
 
-### バグ修正
+### Bug Fixes
 
-- **VRM 0.0 モーフ変換のゼロウェイトバインドフィルタ追加** — VRM 0.0 の BlendShapeGroup で `weight=0` のバインドがフィルタされておらず、全 morph target のゼロオフセットが IrMorph に混入していた。Expression あたり数万件の不要エントリが生成され、PMX ファイルの肥大化を招いていた。VRM 1.0 と同様に `weight == 0.0` のバインドをスキップするよう修正
-- **ビューアのモーフオフセット合算バグ修正** — GPU モーフデータ構築時に `HashMap::collect()` で同一頂点のオフセットが上書きされていた（最後のエントリのみ残存）。複数の morph target bind が同じ頂点に影響する Expression（例: mouth_a + mouth_small が口周辺の頂点を共有）で、先に処理されたオフセットが消失していた。`entry().or_insert() += off` による加算合成に修正
-- **PMX 出力のモーフ頂点重複排除** — PMX 書き出し時に同一頂点への複数オフセットを合算し、結果がゼロのエントリを除去するよう改善。PMXEditor での互換性が向上
+- **Zero-weight bind filtering for VRM 0.0 morph conversion** — VRM 0.0 BlendShapeGroup processing did not filter `weight=0` binds, causing zero-offset entries from all morph targets to leak into IrMorph. This generated tens of thousands of unnecessary entries per Expression, bloating PMX files. Fixed by skipping `weight == 0.0` binds, matching VRM 1.0 behavior
+- **Viewer morph offset accumulation bug fix** — GPU morph data construction used `HashMap::collect()`, which overwrote duplicate vertex offsets (only the last entry survived). For Expressions where multiple morph target binds affect the same vertex (e.g., mouth_a + mouth_small sharing lip vertices), earlier offsets were silently lost. Fixed by using `entry().or_insert() += off` for proper additive blending
+- **PMX morph vertex deduplication** — PMX export now merges multiple offsets for the same vertex by summing, and removes zero-result entries. Improves compatibility with PMXEditor
 
 ## v0.2.16
 
-### 新機能
+### New Features
 
-- **Prefab 経由テクスチャマッピング** — `.unitypackage` 内の `.prefab` からモデルを選択可能に。Unity の GUID 参照チェーン（`.prefab` → FBX `.meta` → `.mat` → テクスチャ）を辿ることで、ファイル名に依存しない正確なテクスチャ割り当てを実現
-- **複数 Prefab 形式対応** — 新形式（Unity 2018.3+）、旧形式、Unpacked、Mixed（Old + New 混在）の 4 形式に対応。Prefab Variant の再帰的解決（循環検出・深度制限付き）にも対応
-- **Prefab 内複数 FBX マージ** — 1 つの Prefab が複数の FBX を参照する場合（Nested PrefabInstance / m_Mesh 混在等）、全 FBX を展開・マージして表示
-- **モデル選択ダイアログ統合** — `.unitypackage` 読み込み時に Prefab / FBX / VRM を統一的に選択可能。Prefab エントリには `[Prefab]` ラベルを表示
+- **Prefab-based texture mapping** — Select `.prefab` entries from `.unitypackage` files. Resolves textures by following Unity's GUID reference chain (`.prefab` → FBX `.meta` → `.mat` → texture), enabling accurate texture assignment independent of file names
+- **Multiple Prefab format support** — Supports New (Unity 2018.3+), Old, Unpacked, and Mixed (Old + New coexisting) formats. Recursive Prefab Variant resolution with cycle detection and depth limiting
+- **Multi-FBX merge from Prefab** — When a single Prefab references multiple FBX files (via Nested PrefabInstance / m_Mesh mix, etc.), all FBX are extracted and merged for display
+- **Unified model selection dialog** — Prefab / FBX / VRM entries shown in a single selection dialog when loading `.unitypackage`. Prefab entries labeled with `[Prefab]`
 
-- **ファイル構成ツリー** — 表示タブの材質表示の下に、ロードチェーン（開いたファイル → 経由ファイル → 最終モデル）を階層表示。Prefab の場合は `.unitypackage` → `.prefab` → 各 FBX のツリー構造で表示。テクスチャ・アニメーション・パッケージテクスチャも確認可能
-- **材質表示の常時グループ化** — 単一モデルでも材質をモデル名で折り畳みグループ表示。複数モデル追加時と同じ UI 体験に統一
-- **Prefab 複数 FBX のグループ分割** — Prefab 内の複数 FBX を材質グループとして個別表示。各 FBX の材質を独立した折り畳みヘッダーで管理可能に
-- **グループ単位の一括操作** — 材質グループヘッダーに `[S]`（法線平滑化）`[C]`（カスタム法線クリア）`[☑]`（表示/非表示）ボタンを追加。グループ内全材質を一括トグル可能。ヘッダー行ホバーでグループ内全メッシュをハイライト表示
+- **File hierarchy tree** — Below the material display in the Display tab, shows the load chain (opened file → intermediate files → final model) as a tree. For Prefab loads, displays `.unitypackage` → `.prefab` → individual FBX tree structure. Textures, animations, and package textures are also visible
+- **Always-on material grouping** — Materials are always grouped by model name with collapsible headers, even for single models. Unified UI experience with multi-model append
+- **Per-FBX material group splitting** — Multiple FBX files within a Prefab are shown as separate material groups. Each FBX's materials are managed under independent collapsible headers
+- **Per-group batch controls** — Group headers now include `[S]` (normal smoothing), `[C]` (custom normal clear), and `[☑]` (visibility) buttons for batch toggling all materials in the group. Hovering over the header row highlights all meshes in the group
 
-### バグ修正
+### Bug Fixes
 
-- **Prefab モデルの A/T スタンス変換時テクスチャリセット修正** — Prefab 経由でロードしたモデルの A スタンス/T スタンス変換チェックボックスを切り替えると、テクスチャ割り当てがリセットされる問題を修正。原因は `reload_unitypackage` が Prefab の複数 FBX マージ構造を認識せず、単一 FBX として再読み込みしていたこと。`LoadedModel` に `prefab_entry_path` を保持し、リロード時に `UnityPackageIndex` を再構築して Prefab パスで再読み込みする `reload_as_prefab` メソッドを追加
-- **lilToon テクスチャスロット優先順修正** — lilToon シェーダーの `.mat` ファイルで `_BaseColorMap` が `_MainTex` と異なるテクスチャを参照する場合に、誤ったテクスチャが割り当てられる問題を修正。テクスチャスロット優先順を `_MainTex` > `_BaseMap` > `_BaseColorMap` に明示化
-- **アーカイブ内 Prefab リロード失敗修正** — ZIP / 7z 内の `.unitypackage` から Prefab 経由でロードしたモデルのリロード（Aスタンス変換等）が「GLBファイルの読み込みに失敗」エラーで失敗する問題を修正。`reload_as_prefab` が `Archive` ソースを引き継がず `File(zip_path)` にフォールバックしていたことが原因
-- **FBX ロード時の A/T スタンス変換テクスチャリセット修正** — `.unitypackage` 内の FBX を直接選択してロードした場合、A スタンス/T スタンス変換を切り替えるとテクスチャ割り当てが全てリセットされる問題を修正。`reload_unitypackage` が Prefab 対応テクスチャマッピング（`embed_textures_with_prefab`）を使わず単純名前マッチング（`embed_textures_into_ir`）にフォールバックしていたことが原因。`pkg_material_keys` の有無で Prefab 対応ロードを判定し、`prepare_pkg_fbx` + `embed_textures_with_prefab` で再マッピングするパスを追加
+- **Prefab model texture reset on A/T stance conversion** — Fixed an issue where toggling A-stance / T-stance conversion on a Prefab-loaded model would reset all texture assignments. The root cause was `reload_unitypackage` not recognizing the Prefab's multi-FBX merge structure and reloading as a single FBX instead. Added `prefab_entry_path` to `LoadedModel` and a `reload_as_prefab` method that rebuilds `UnityPackageIndex` and reloads via the Prefab path
+- **lilToon texture slot priority fix** — Fixed incorrect texture assignment when lilToon shader's `.mat` file has `_BaseColorMap` referencing a different texture than `_MainTex`. Texture slot priority is now explicitly `_MainTex` > `_BaseMap` > `_BaseColorMap`
+- **Archive Prefab reload failure fix** — Fixed "Failed to load GLB file" error when reloading (e.g., A-stance conversion) a model loaded via Prefab from a `.unitypackage` inside a ZIP / 7z archive. The cause was `reload_as_prefab` not preserving the `Archive` source and falling back to `File(zip_path)`
+- **FBX texture reset on A/T stance conversion fix** — Fixed an issue where toggling A-stance / T-stance conversion on an FBX directly selected from a `.unitypackage` would reset all texture assignments. The cause was `reload_unitypackage` falling back to simple name matching (`embed_textures_into_ir`) instead of Prefab-aware texture mapping (`embed_textures_with_prefab`). Added a branch that detects Prefab-aware loading via `pkg_material_keys` and uses `prepare_pkg_fbx` + `embed_textures_with_prefab` for re-mapping
 
-### 改善
+### Improvements
 
-- **新規モデルロード時の状態リセット** — 別のモデルを開いた際に、シェーダー設定（Auto に戻る）・A スタンス / T スタンス変換フラグを初期値にリセットするように変更。前のモデルの設定が意図せず引き継がれる問題を解消
-- **FBX パーサー入力バリデーション強化** — 悪意のある FBX ファイルへの耐性を向上: プロパティ数上限（100万）、ノード再帰深さ制限（64）、配列サイズ上限（512MB）、`end_offset` 範囲検証、`checked_mul` によるオーバーフロー防止、`compressed_len` の残りバイト数検証
-- **unitypackage 展開サイズ計上改善** — `pathname` と `asset.meta` の読み込みバイト数を `total_bytes` に加算し、2GB 上限の迂回を防止
-- **モーフ適用パフォーマンス改善** — weights 差分判定による不要な全頂点コピー・GPU 転送のスキップ、`morph_visited` バッファの再利用化（毎フレーム alloc 排除）
-- **unitypackage メモリ使用量削減** — `ExtractedAsset.data` を `Vec<u8>` から `Arc<[u8]>` に変更し、`AssetEntry` とのデータ二重保持を解消
-- **FBX アニメーション二重読み込み統合** — FBX モデル読み込み後のアニメーション存在確認と適用を 1 回の読み込みに統合
-- **ボーンマージ `to_lowercase()` キャッシュ** — `IrModel::merge()` のボーン名比較で `to_lowercase()` を事前キャッシュし、一時 `String` の大量生成を回避
-- **スプリングボーンチェーン深さ制限** — `build_spring_chain_v0` に `MAX_SPRING_CHAIN_DEPTH = 64` の深さ制限を追加
-- **Win32 コンソールハンドル改善** — stdout と stderr に別々の `CONOUT$` ハンドルを割り当て
+- **State reset on new model load** — When opening a different model, shader settings (reset to Auto) and A-stance / T-stance conversion flags are now reset to defaults. Prevents unintended carry-over of previous model's settings
+- **FBX parser input validation hardening** — Improved resilience against malicious FBX files: property count limit (1M), node recursion depth limit (64), array size limit (512MB), `end_offset` range validation, `checked_mul` for overflow prevention, `compressed_len` vs remaining bytes validation
+- **unitypackage extraction size accounting** — `pathname` and `asset.meta` read bytes are now counted toward `total_bytes`, preventing bypass of the 2GB limit
+- **Morph application performance** — Weights diff check skips unnecessary full vertex copy + GPU upload; `morph_visited` buffer reuse eliminates per-frame allocation
+- **unitypackage memory reduction** — Changed `ExtractedAsset.data` from `Vec<u8>` to `Arc<[u8]>` to eliminate data duplication with `AssetEntry`
+- **FBX animation double-read elimination** — Merged animation existence check and application into a single read after FBX model loading
+- **Bone merge `to_lowercase()` caching** — Pre-cache `to_lowercase()` results in `IrModel::merge()` to avoid mass temporary `String` allocation
+- **Spring bone chain depth limit** — Added `MAX_SPRING_CHAIN_DEPTH = 64` to `build_spring_chain_v0`
+- **Win32 console handle fix** — Assign separate `CONOUT$` handles for stdout and stderr
 
-- **UnityPackageIndex** — GUID ベースのインデックス構造で Prefab 解決・テクスチャ参照を効率化。アーカイブ（ZIP / 7z）経由の `.unitypackage` でもインデックスを構築
-- **FBX マテリアル名照合改善** — FBX `.meta` の `externalObjects` から FBX 内部マテリアル名（`fbx_material_name`）を取得し、`.mat` ファイル名と FBX 内部名が異なる場合でもテクスチャをマッチング
-- **Unity YAML エスケープ対応** — `\uXXXX` エスケープシーケンス・YAML 引用符付き文字列の自動デコード。日本語マテリアル名を正確に処理
-- **三段階テクスチャ照合** — `source_material`（renderer_path + slot）→ `material_name` / `fbx_material_name` → `source_texture_name`（ファイル名マッチ）の 3 段フォールバックで最大マッチ率を実現
+- **UnityPackageIndex** — GUID-based index structure for efficient Prefab resolution and texture references. Index is also built for `.unitypackage` files loaded via archives (ZIP / 7z)
+- **FBX material name matching improvement** — Extracts FBX internal material names (`fbx_material_name`) from FBX `.meta` `externalObjects`, enabling texture matching even when `.mat` file names differ from FBX internal names
+- **Unity YAML escape support** — Auto-decode `\uXXXX` escape sequences and YAML quoted strings. Japanese material names are processed accurately
+- **Three-stage texture matching** — `source_material` (renderer_path + slot) → `material_name` / `fbx_material_name` → `source_texture_name` (filename match) — 3-level fallback for maximum match rate
 
 ## v0.2.15
 
-### 新機能
+### New Features
 
-- **ダークテーマ（Blender/Substance Painter 風）** — パネル背景 `#1D1D1D`、ウィジェット背景 `#252525`、アクセントカラー `#4A90D9`。全ボタンのホバー時にアクセントブルーを適用。ツールチップ・ポップアップ・ComboBox も統一
-- **ステータスバー分離** — キーボードショートカットヒントとファイル情報を独立した 2 段バーに分離。ビューポート内のショートカットテキスト表示を廃止
+- **Dark theme (Blender/Substance Painter style)** — Panel background `#1D1D1D`, widget background `#252525`, accent color `#4A90D9`. All buttons show accent blue on hover. Tooltips, popups, and ComboBoxes are unified
+- **Status bar separation** — Keyboard shortcut hints and file info split into two independent bars. Viewport overlay shortcut text removed
 
-### 改善
+### Improvements
 
-- **サイドパネル固定幅化** — 280px 固定（リサイズ無効）。フラットスタイルの均等幅タブバー（アクティブタブ = アクセントブルー背景）
-- **情報タブコンパクト化** — 4 列 Grid でボーン/頂点、面/材質、テクスチャ/モーフをペア表示。数値はカンマ区切りフォーマット
-- **出力タブ 2 列チェックボックス** — PMX 変換オプション（剛体回転揃え / 物理なし / 元ボーン構造 / 表示材質のみ / ログ出力）を 2 列グリッド配置
-- **トップバー改善** — フィット/リセットボタンをビューポートオーバーレイからトップバー右端に移動。全ボタン白文字・透明背景・ホバー時ブルー統一
-- **アニメーションリスト改善** — `[▶][×] ファイル名` レイアウト。▶ クリックで切替、× は常に表示
-- **全パネル白文字統一** — サイドパネル・ステータスバー・ショートカットバーのテキストを白に統一
+- **Fixed side panel width** — 280px fixed (no resize). Flat-style equal-width tab bar (active tab = accent blue background)
+- **Compact info tab** — 4-column Grid pairs: bone/vertex, face/material, texture/morph. Numbers formatted with comma separators
+- **Export tab 2-column checkboxes** — PMX conversion options (rigid body alignment / no physics / original bone structure / visible materials only / log output) in 2-column grid layout
+- **Top bar improvements** — Fit/Reset buttons moved from viewport overlay to top bar right side. All buttons: white text, transparent background, blue on hover
+- **Animation list improvement** — `[▶][×] filename` layout. ▶ click to switch, × always visible
+- **White text unification** — Side panel, status bar, and shortcut bar text unified to white
 
 ## v0.2.14
 
-### 改善
+### Improvements
 
-- **FBX 外部テクスチャ近傍検索** — FBX の `RelativeFilename` / `FileName` パスが実際のディレクトリ構造と一致しない場合（Unity/Blender プロジェクトからのエクスポートで頻発）、FBX 親ディレクトリ以下を再帰検索するフォールバックを追加。`TextureSearchCache` によりディレクトリ走査は 1 回のみ
-- **FBX テクスチャ名改善** — FBX オブジェクト名（`file3` 等）ではなく、実際のファイル名（`LL_Skin` 等）をテクスチャ名として使用するように修正
-- **日英混合 FBX ボーンマッピング** — Blender エクスポート FBX で日本語ボーン名（下半身/上半身/頭 等）と英語ボーン名（RightArm/LeftForeArm 等）が混在するモデルに対応。リグ検出に日本語ボーン名を追加し、`BLENDER_MAP` に Mixamo 風英語名と日本語ボーン名を追加
+- **FBX external texture nearby search** — When FBX `RelativeFilename` / `FileName` paths don't match the actual directory structure (common with Unity/Blender project exports), added a fallback that recursively searches directories near the FBX file. `TextureSearchCache` ensures directory scanning happens only once
+- **FBX texture name improvement** — Uses the actual filename (`LL_Skin`, etc.) instead of the FBX object name (`file3`, etc.) as the texture name
+- **Mixed Japanese/English FBX bone mapping** — Added support for Blender-exported FBX files with mixed Japanese bone names (下半身/上半身/頭, etc.) and English bone names (RightArm/LeftForeArm, etc.). Added Japanese bone names to rig detection and extended `BLENDER_MAP` with Mixamo-style English names and Japanese bone names
 
 ## v0.2.13
 
-### 改善
+### Improvements
 
-- **ボーンマージアルゴリズム改善** — 追加読み込み時のボーン統合を 3 段フォールバック方式に拡張。異なるボーン命名規則（日本語名 vs 英語名）のモデル間でも正しく統合される
-  - **Pass 1a**: `vrm_bone_name`（ヒューマノイドボーン名）同士で照合。VRM 名は全身で一意のため親チェック不要
-  - **Pass 1b**: `original_name`（FBX ノード名）を小文字正規化して照合。親の整合性チェック付き
-  - **Pass 1c**: `bone.name`（PMX 名）+ 同親名チェック（従来動作、後方互換）
-- **Blender リグ判定の緩和** — `detect_rig_type` の Blender 判定条件を `hips && head` から `hips && (head || spine)` に変更。Head ボーンのない衣装 FBX 等の部分スケルトンも Blender リグとして検出される
-- **マージ前ヒューマノイド補完** — 追加モデルにヒューマノイド情報がない場合、マージ前に `detect_humanoid` を `original_name` で再検出して `vrm_bone_name` を補完
-- **vrm 確定フラグ** — `vrm_bone_name` で照合されたボーンは親伝播取り消し（パス 2）の対象外とし、意味的に正しい統合を保証
+- **Bone merge algorithm improvement** — Extended bone merging during append loading to a 3-level fallback method. Models with different bone naming conventions (Japanese vs English names) are now correctly merged
+  - **Pass 1a**: Match by `vrm_bone_name` (humanoid bone name). VRM names are unique per skeleton, no parent check needed
+  - **Pass 1b**: Match by `original_name` (FBX node name) with lowercase normalization. Parent consistency check included
+  - **Pass 1c**: Match by `bone.name` (PMX name) + same parent name check (existing behavior, backward compatible)
+- **Relaxed Blender rig detection** — Changed `detect_rig_type` Blender condition from `hips && head` to `hips && (head || spine)`. Partial skeletons such as costume FBX without Head bone are now detected as Blender rig
+- **Pre-merge humanoid completion** — When appended model lacks humanoid information, `detect_humanoid` is re-run against `original_name` before merge to fill in `vrm_bone_name`
+- **VRM confirmed flag** — Bones matched by `vrm_bone_name` are exempted from parent propagation cancellation (pass 2), ensuring semantically correct merging
 
 ## v0.2.12
 
-### バグ修正
+### Bug Fixes
 
-- **PMX 変換時の PSD テクスチャ未変換** — PSD 形式のテクスチャファイルを PNG に変換して出力するように修正。PSD デコード関数を `src/psd.rs` に共通化し、CLI ビルドでも利用可能に
+- **PSD textures not converted during PMX export** — PSD format textures are now decoded and saved as PNG during PMX conversion. PSD decode functions extracted to `src/psd.rs` shared module, available in CLI builds
 
-### 新機能
+### New Features
 
-- **材質ホバーハイライト** — 材質リストの行にマウスを乗せると、3D ビュー上で該当メッシュを半透明オレンジで強調表示。テクスチャ手動割当ダイアログ・D&D テクスチャダイアログでも同様に機能。インジケータアイコン・チェックボックス・ドロップダウン操作中すべてに対応
-- **テクスチャ手動割当リアルタイムプレビュー** — アーカイブ読み込み時の手動割当ダイアログでテクスチャを選択すると、「適用」を押す前に 3D ビューへ即座に反映。遅延 GPU アップロードで VRAM 効率化
-- **PMX 出力先の自動整理** — 変換ごとに `converted_model01/`, `converted_model02/`... と連番ディレクトリを自動作成し、PMX + textures をその中に格納。出力先ベースディレクトリは UI で変更可能
-- **PMX 変換のワンクリック出力** — ファイルダイアログを廃止し、「PMX 変換」ボタンで即座に出力。変換完了後に出力フォルダをエクスプローラーで自動オープン
-- **パニックログ保存** — パニック発生時にログファイルを `panic_yyyymmdd_hhmmss.log` として自動コピー。ログローテーションの削除対象外
+- **Material hover highlight** — Hovering over a material row in the material list highlights the corresponding mesh in the 3D view with semi-transparent orange overlay. Works across texture match dialog, D&D texture dialog, and side panel material list. Responds to indicator icons, checkboxes, and dropdown interactions
+- **Real-time texture preview in manual assignment** — Selecting a texture in the archive texture match dialog immediately reflects it in the 3D view before pressing "Apply". Uses lazy GPU upload for VRAM efficiency
+- **Auto-organized PMX output** — Each conversion creates an auto-numbered `converted_model01/`, `converted_model02/`... directory containing PMX + textures. Base output directory is configurable via UI
+- **One-click PMX export** — Removed the file save dialog; "PMX Convert" button exports immediately. Output folder opens automatically in Explorer after conversion
+- **Panic log preservation** — On panic, the log file is automatically copied to `panic_yyyymmdd_hhmmss.log`, excluded from log rotation cleanup
 
-### 改善
+### Improvements
 
-- **ダイアログ配置改善** — テクスチャ手動割当・D&D テクスチャダイアログの初期位置を画面左上に変更し、ドラッグ移動・折り畳み・リサイズ可能に。3D ビューのモデルが隠れにくくなった
-- **状態保持の改善** — A/T スタンス切り替え・法線平滑化・カスタム法線クリア時に、材質表示 ON/OFF と「表示材質のみ出力」設定をリセットせず保持
+- **Dialog placement** — Texture match and D&D texture dialogs now open at the top-left corner, are draggable, collapsible, and resizable. Model visibility improved
+- **State preservation** — Material visibility ON/OFF and "export visible only" settings are now preserved across A/T-stance toggle, normal smoothing, and custom normal clear operations
 
 ## v0.2.11
 
-### 新機能
+### New Features
 
-- **シェーダーオーバーライド** — ビューアに 6 種のシェーダーモードを追加。▲ ComboBox ▼ で切替
-  - **Auto** — モデル形式に応じて Standard（MToon/Lambert）/ MMD を自動選択（従来動作）
-  - **MToon/Lambert** — Standard パスを強制。PMX/PMD でも MToon/Lambert シェーダーで表示
-  - **Unlit** — ライティングなし、テクスチャ色のみ表示。テクスチャ確認用
-  - **GGX Preview** — 簡易 Cook-Torrance スペキュラ（metallic=0, roughness=0.8 固定）。Schlick Fresnel + GGX NDF + Smith geometry + 半球アンビエント
-  - **法線** — 法線方向を RGB カラーで可視化
-  - **MMD** — PMX/PMD 用 MMD 専用レンダーパス（従来の MMD レンダリングチェックボックスを統合）
+- **Shader Override** — Added 6 shader modes to the viewer, switchable via ▲ ComboBox ▼
+  - **Auto** — Automatically selects Standard (MToon/Lambert) or MMD based on model format (existing behavior)
+  - **MToon/Lambert** — Forces Standard path. Displays PMX/PMD with MToon/Lambert shader
+  - **Unlit** — No lighting, texture color only. Useful for texture inspection
+  - **GGX Preview** — Simplified Cook-Torrance specular (metallic=0, roughness=0.8 fixed). Schlick Fresnel + GGX NDF + Smith geometry + hemisphere ambient
+  - **Normal** — Visualizes normal direction as RGB color
+  - **MMD** — MMD dedicated render path for PMX/PMD (consolidates the former MMD rendering checkbox)
 
-### 改善
+### Improvements
 
-- **シェーダー状態の 2 軸分離** — `shader_override`（GPU シェーダー分岐）と `use_mmd_path`（CPU レンダーパス選択）を独立管理。UI は 6 択の統合ドロップダウン
-- **アルファ処理共通化** — `apply_alpha_mode()` WGSL ヘルパー関数を導入。全シェーダーモードで統一的なアルファ処理（OPAQUE / MASK+A2C / BLEND）
-- **OPAQUE 材質のテクスチャ alpha 反映** — OPAQUE モードでもテクスチャ alpha をそのまま返すように変更。PMX/PMD モデルのテクスチャ透過が全シェーダーモードで正しく表示
-- **CameraUniform の shader_mode を u32 に変更** — 従来の `show_normal_map: f32` を `shader_mode: u32` に置換。WGSL 側で整数比較による分岐
-- **モード別 UI 無効化** — Unlit / 法線モードではライト・環境光スライダを disabled 表示。MMD モードでは環境光を disabled（従来動作維持）
-- **シェーダー選択の維持** — Unlit / GGX / 法線 / MToon / MMD を明示選択した場合、別モデル読み込み時もシェーダー選択を維持。Auto のみモデル形式に応じて自動判定
-- **`show_normal_map` / `mmd_mode` の統合** — 従来の個別チェックボックスをシェーダー選択ドロップダウンに統合
+- **2-axis shader state separation** — `shader_override` (GPU shader branching) and `use_mmd_path` (CPU render path selection) are managed independently. UI presents a unified 6-choice dropdown
+- **Unified alpha processing** — Introduced `apply_alpha_mode()` WGSL helper function. Consistent alpha handling (OPAQUE / MASK+A2C / BLEND) across all shader modes
+- **Texture alpha in OPAQUE materials** — OPAQUE mode now passes through texture alpha instead of forcing 1.0. PMX/PMD texture transparency displays correctly in all shader modes
+- **CameraUniform shader_mode changed to u32** — Replaced `show_normal_map: f32` with `shader_mode: u32`. Integer comparison branching in WGSL
+- **Mode-specific UI disabling** — Light/ambient sliders disabled in Unlit/Normal modes. Ambient disabled in MMD mode (existing behavior preserved)
+- **Shader selection persistence** — Explicit selections (Unlit / GGX / Normal / MToon / MMD) are preserved across model loads. Only Auto mode auto-detects based on model format
+- **Consolidated `show_normal_map` / `mmd_mode`** — Former individual checkboxes merged into shader selection dropdown
 
 ## v0.2.10
 
-### 新機能
+### New Features
 
-- **UTS2（Unity-Chan Toon Shader Ver.2）サポート** — VRM 0.0 モデルで使用される UTS2 シェーダーを自動検出し、既存の MToon 描画パイプラインに近似変換して表示・PMX 変換に対応
-  - `ShaderFamily` enum 導入（`Other` / `Mtoon` / `Uts2`）による複数シェーダー分類基盤
-  - 3重判定による UTS2 検出: シェーダー名（`UnityChanToonShader/*`, `Toon/Toon`）+ UTS2 固有プロパティ（`_utsVersion`, `_BaseColor_Step`）
-  - VRM 0.0 / VRM 1.0 の MToon 材質にも `ShaderFamily::Mtoon` を明示設定
+- **UTS2 (Unity-Chan Toon Shader Ver.2) Support** — Auto-detect UTS2 shaders in VRM 0.0 models, approximate-map to existing MToon rendering pipeline for viewer display and PMX conversion
+  - `ShaderFamily` enum (`Other` / `Mtoon` / `Uts2`) for multi-shader classification
+  - Triple detection: shader name (`UnityChanToonShader/*`, `Toon/Toon`) + UTS2-specific properties (`_utsVersion`, `_BaseColor_Step`)
+  - Explicit `ShaderFamily::Mtoon` for VRM 0.0 / VRM 1.0 MToon materials
 
-### UTS2 対応パラメータ
+### UTS2 Mapped Parameters
 
-| UTS2 プロパティ | 変換先 |
+| UTS2 Property | Maps To |
 |---|---|
-| `_BaseColor` / `_MainTex` | ベースカラー / テクスチャ |
+| `_BaseColor` / `_MainTex` | Base color / texture |
 | `_1st_ShadeColor` / `_1st_ShadeMap` | MToon shade_color / shade_texture |
-| `_2nd_ShadeColor` | PMX ambient（`color * 0.5`） |
+| `_2nd_ShadeColor` | PMX ambient (`color * 0.5`) |
 | `_BaseColor_Step` / `_BaseShade_Feather` | shading_toony / shading_shift |
-| `_Outline_Width` / `_Outline_Color` | アウトライン（NML/POS → WorldCoordinates 近似） |
-| `_RimLight` / `_RimLightColor` / `_RimLight_Power` | リムライティング |
-| `_MatCap` / `_MatCap_Sampler` / `_MatCapColor` | MatCap テクスチャ |
-| `_Emissive_Tex` / `_Emissive_Color` | エミッシブ（HDR: linear 維持） |
-| `_NormalMap` / `_BumpScale` | 法線マップ |
-| `_HighColor` / `_HighColor_Power` | PMX specular（PMX 出力のみ） |
-| `_GI_Intensity` | GI（安全デフォルト 0.0 固定） |
-| `_CullMode` | カリングモード |
+| `_Outline_Width` / `_Outline_Color` | Outline (NML/POS → WorldCoordinates approx.) |
+| `_RimLight` / `_RimLightColor` / `_RimLight_Power` | Rim lighting |
+| `_MatCap` / `_MatCap_Sampler` / `_MatCapColor` | MatCap texture |
+| `_Emissive_Tex` / `_Emissive_Color` | Emissive (HDR: kept linear) |
+| `_NormalMap` / `_BumpScale` | Normal map |
+| `_HighColor` / `_HighColor_Power` | PMX specular (PMX output only) |
+| `_GI_Intensity` | GI (safe default 0.0) |
+| `_CullMode` | Culling mode |
 
-### バグ修正
+### Bug Fixes
 
-- **PMX/PMD モーフが正しく動作しない問題を修正** — v0.2.9 で追加した `generate_tangents`（MikkTSpace 接線生成）が tangent w 不一致時に頂点を分割するが、モーフパイプラインと整合していなかった。3つのバグを修正:
-  1. `ir_vertex_offset` が分割前の頂点数で加算 → 後続メッシュのグローバルインデックスがずれる
-  2. `ir.morphs` が `pmx_to_ir_vertex` ベースで構築 → 分割頂点がモーフに含まれない
-  3. `distribute_vertex_morphs` の面巻き順が `extract_meshes` と不一致 → ローカルインデックスがずれる
-  - 修正: 処理順を `mesh構築 → morph_targets分配 → generate_tangents（分割+morph複製）` に変更し、`ir.morphs` を `mesh.morph_targets` から構築するよう変更。PMD にも同パターン適用
-- **Wire モードでアウトライン・MMDエッジが面として描画される問題を修正** — ワイヤーフレームモード時にアウトラインパイプライン（`PolygonMode::Fill`）と MMD エッジパイプラインがスキップされず、ソリッド面が表示されていた。Wire モード時はアウトライン描画をスキップし、MMD 材質もワイヤーフレームパイプラインに切り替えるよう修正
+- **Fixed PMX/PMD morphs not working correctly** — `generate_tangents` (MikkTSpace tangent generation) added in v0.2.9 splits vertices on tangent w mismatch, but the morph pipeline was not updated. Three bugs fixed:
+  1. `ir_vertex_offset` used pre-split vertex count → global indices for subsequent meshes were shifted
+  2. `ir.morphs` built from `pmx_to_ir_vertex` → split vertices not included in morph data
+  3. Face winding order in `distribute_vertex_morphs` differed from `extract_meshes` → local index mismatch
+  - Fix: Reordered to `mesh build → morph_targets distribution → generate_tangents (split + morph duplication)`, and `ir.morphs` now built from `mesh.morph_targets`. Same pattern applied to PMD
+- **Fixed outline/MMD edge rendering as solid faces in Wire mode** — In wireframe mode, outline pipelines (`PolygonMode::Fill`) and MMD edge pipelines were not skipped, causing solid faces to appear. Now skips outline drawing and switches MMD materials to wireframe pipeline in Wire mode
 
-### 改善
+### Improvements
 
-- **アウトラインチェックボックスのグレーアウト** — MToon アウトラインを持たないモデル（PMD/PMX 等）では「アウトライン描画」チェックボックスを無効化（`ui.add_enabled`）。効果のない UI 要素を操作不可にして分かりやすく
-- **ライト設定カラーボタン位置揃え** — ライト・環境光・Ground の HSV カラーホイールボタンを `egui::Grid` レイアウトで列揃え。従来はスライダーとラベルの幅差でボタン位置がずれていた
-- **UTS2 alpha モード判定** — シェーダーバリアント名ベースで判定（`_TransClipping` → Blend、`_Clipping` → Mask）。glTF core の `alpha_mode` をフォールバックとして保持
-- **UTS2 アウトライン POS モード** — UTS2 の POS outline は MToon の ScreenCoordinates とは異なるため WorldCoordinates 近似に統一し warning を出力
-- **UTS2 ClippingMask 警告** — `_ClippingMask` テクスチャ使用材質で未対応を warning 出力し base alpha でフォールバック
-- **ambient 上書き抑止** — UTS2 材質では `_2nd_ShadeColor` で設定した ambient が抽出末尾の `diffuse * 0.4` 再計算で上書きされないよう抑止
-- **PMX 変換 UTS2 分岐** — UTS2 材質では HighColor → specular、2nd_ShadeColor → ambient をそのまま PMX に出力（MToon の specular 抑制をスキップ）
-- **VRM 0.x ヘルパー共通化** — `get_float` / `get_color3` / `resolve_tex` / `main_tex_st` を MToon/UTS2 共通ヘルパーに整理。`adopt_main_tex` で `_MainTex` authoritative 処理を一箇所に集約
-- **MMD シェーダーにライト色・強度を反映** — MMD レンダリングモードの AmbientColor/SpecularColor 計算にライト色（`light_color`）と強度（`light_intensity`）を乗算。従来は固定スカラー（154/255 ≈ 0.604）のみで色・強度の変更が反映されなかった。デフォルト値（白・0.7）では従来と同一結果
-- **MToon 材質の PMX スペキュラー付与** — MToon 材質の PMX 出力で specular を完全ゼロから `diffuse × 0.2`（power=10）に変更。MMD でライト方向変更時にハイライトが反応するようになった
-- **MMD モードで環境光 UI をグレーアウト** — MMD の仕様上 LightAmbient がシーン環境光を兼ねるため、MMD モード時は環境光スライダー・Sky色・Ground色を操作不可にして混乱を防止
+- **Outline checkbox grayed out for non-MToon models** — "Outline drawing" checkbox is disabled (`ui.add_enabled`) for models without MToon outlines (PMD/PMX, etc.). Non-functional UI elements are now clearly non-interactive
+- **Light settings color button alignment** — HSV color wheel buttons for Light, Ambient, and Ground are now column-aligned using `egui::Grid` layout. Previously, width differences between sliders and labels caused button misalignment
+- **UTS2 alpha mode detection** — Shader variant name-based (`_TransClipping` → Blend, `_Clipping` → Mask). Falls back to glTF core `alpha_mode`
+- **UTS2 outline POS mode** — POS outline approximated as WorldCoordinates (differs from MToon ScreenCoordinates), with warning
+- **UTS2 ClippingMask warning** — Warning for unsupported `_ClippingMask` texture, falls back to base alpha
+- **Ambient overwrite prevention** — UTS2 `_2nd_ShadeColor` ambient preserved (not overwritten by `diffuse * 0.4` recalculation)
+- **PMX conversion UTS2 branch** — UTS2 materials preserve HighColor → specular, 2nd_ShadeColor → ambient (skips MToon specular suppression)
+- **VRM 0.x helper consolidation** — `get_float` / `get_color3` / `resolve_tex` / `main_tex_st` shared between MToon/UTS2. `adopt_main_tex` centralizes `_MainTex` authoritative handling
+- **MMD shader now reflects light color & intensity** — AmbientColor/SpecularColor in MMD rendering mode now multiply by light color (`light_color`) and intensity (`light_intensity`). Previously used a fixed scalar (154/255 ≈ 0.604) ignoring color/intensity changes. Default values (white, 0.7) produce identical results to before
+- **MToon specular for PMX output** — MToon material PMX specular changed from zero to `diffuse × 0.2` (power=10). Specular highlights now respond to light direction changes in MMD
+- **Ambient UI grayed out in MMD mode** — In MMD spec, LightAmbient serves as scene ambient, so ambient slider/Sky color/Ground color are disabled in MMD mode to prevent confusion
 
-### v0.2.10 未対応（将来対応）
+### v0.2.10 Not Yet Supported (Future)
 
-- ClippingMask 専用テクスチャ / HighColor ビューア描画 / ShadingGradeMap / 2nd_ShadeMap テクスチャ / AngelRing / Stencil 系バリアント
+- ClippingMask texture / HighColor viewer rendering / ShadingGradeMap / 2nd_ShadeMap texture / AngelRing / Stencil variants
 
 ## v0.2.9
 
-### 新機能
+### New Features
 
-- **MToon 2色トゥーンシェーディング** — VRM の MToon 材質をビューアで 2 色トゥーン（lit/shade）で表示。`shadingToonyFactor` で影境界の硬さ、`shadingShiftFactor` で影の閾値シフトを制御。VRM 1.0（`VRMC_materials_mtoon`）と VRM 0.0（`_ShadeToony` / `_ShadeShift`）の両方に対応。非 MToon 材質は従来通り Half-Lambert で描画
-  - `MaterialUniform` を 16→80 bytes に拡張し、`shade_color` / `is_mtoon` / `shading_toony` / `shading_shift` + アウトラインパラメータを格納
-  - フラグメントシェーダー内で仕様準拠の `linearstep` ベース lit/shade 補間を実装（`dot(N,L)` [-1,1] レンジ）
-  - `IrMaterial` に `shading_toony_factor` / `shading_shift_factor` フィールドを追加
-- **MToon アウトライン描画** — inverted hull 法によるアウトライン（輪郭線）描画。`outlineWidthFactor`（世界座標/スクリーン座標）と `outlineColorFactor` に対応。`outlineLightingMixFactor` でライティング混合率を制御。UI チェックボックスで ON/OFF 切替可能
-  - `PipelineSet` に `pipeline_outline`（Front cull パイプライン）を追加（sRGB / Unorm 各版）
-  - `IrMaterial` に `OutlineWidthMode` enum、`outline_width_factor`、`outline_lighting_mix` を追加
-  - VRM 1.0（`outlineWidthMode` / `outlineWidthFactor` / `outlineLightingMixFactor`）と VRM 0.0（`_OutlineWidthMode` / `_OutlineWidth` / `_OutlineLightingMix`）の両方から読み取り
-  - `DrawCall` に `has_outline` フラグを追加し、全 alphaMode 材質でアウトライン描画（BLEND は ZWrite OFF）
-- **MToon リムライティング + MatCap** — VRM 1.0 MToon のパラメトリックリムライティングと MatCap テクスチャに対応
-  - パラメトリックリム: `parametricRimColorFactor`（色）、`parametricRimFresnelPowerFactor`（フレネル指数）、`parametricRimLiftFactor`（リフト量）で形状を制御。フレネル効果で輪郭が発光する表現を実現
-  - MatCap: `matcapTexture` / `matcapFactor` に対応。ビュー空間法線から直交基底を構築して UV を算出し、MatCap テクスチャをサンプリング
-  - `rimLightingMixFactor` で周囲光との混合率を制御（0.0=放射, 1.0=完全混合）
-  - `MaterialUniform` を 80→112 bytes に拡張、パイプラインレイアウトに MatCap テクスチャ用 bind group(3) を追加
-  - 頂点シェーダーにワールド座標出力を追加し、フラグメントシェーダーで視線方向ベースのリム計算を実装
-- **MToon 追加テクスチャ対応** — VRM 1.0 MToon の補助テクスチャ 3 種に対応し、描画品質を向上
-  - `shadeMultiplyTexture`: 影色テクスチャ乗算（RGB）。ピクセルごとに影色を変化させ、より細かい影表現を実現
-  - `shadingShiftTexture`: ピクセルごとのシェーディングシフト（R チャネル × scale）。部位によって影の付き方を制御
-  - `rimMultiplyTexture`: リムライティング乗算テクスチャ（RGB）。リム効果の適用範囲をテクスチャで制御
-  - bind group(3) を MToon 補助テクスチャパック（テクスチャごとにサンプラーを持つ 16 bindings 構成）に再構成。`MaterialUniform` を 112→144 bytes に拡張
-  - テクスチャ未使用材質にはデフォルトテクスチャ（白 or 黒）を自動バインドし、パイプライン切り替え不要
-- **MToon UV アニメーション** — VRM 1.0 MToon の UV スクロール・回転アニメーションに対応
-  - `uvAnimationScrollXSpeedFactor` / `uvAnimationScrollYSpeedFactor`: UV 水平・垂直スクロール
-  - `uvAnimationRotationSpeedFactor`: UV 中心回転
-  - `uvAnimationMaskTexture`: B チャネルでアニメーション適用範囲を制御
-  - `CameraUniform` に累積時間 `time` フィールドを追加し、毎フレーム更新
+- **MToon 2-Color Toon Shading** — VRM MToon materials are now displayed with 2-color toon (lit/shade) shading in the viewer. `shadingToonyFactor` controls shadow boundary sharpness, `shadingShiftFactor` controls shadow threshold shift. Supports both VRM 1.0 (`VRMC_materials_mtoon`) and VRM 0.0 (`_ShadeToony` / `_ShadeShift`). Non-MToon materials continue to use Half-Lambert
+  - Extended `MaterialUniform` from 16 to 80 bytes, adding `shade_color` / `is_mtoon` / `shading_toony` / `shading_shift` + outline parameters
+  - Implemented spec-compliant `linearstep`-based lit/shade interpolation in the fragment shader (`dot(N,L)` [-1,1] range)
+  - Added `shading_toony_factor` / `shading_shift_factor` fields to `IrMaterial`
+- **MToon Outline Rendering** — Outline (contour) rendering using inverted hull method. Supports `outlineWidthFactor` (world coordinates / screen coordinates) and `outlineColorFactor`. `outlineLightingMixFactor` controls lighting mix ratio. Togglable via UI checkbox
+  - Added `pipeline_outline` (front-cull pipeline) to `PipelineSet` (sRGB / Unorm variants)
+  - Added `OutlineWidthMode` enum, `outline_width_factor`, `outline_lighting_mix` to `IrMaterial`
+  - Reads from both VRM 1.0 (`outlineWidthMode` / `outlineWidthFactor` / `outlineLightingMixFactor`) and VRM 0.0 (`_OutlineWidthMode` / `_OutlineWidth` / `_OutlineLightingMix`)
+  - Added `has_outline` flag to `DrawCall`, rendering outlines for all alphaMode materials (BLEND uses ZWrite OFF)
+- **MToon Rim Lighting + MatCap** — Supports VRM 1.0 MToon parametric rim lighting and MatCap texture
+  - Parametric rim: controlled by `parametricRimColorFactor` (color), `parametricRimFresnelPowerFactor` (Fresnel exponent), `parametricRimLiftFactor` (lift). Creates glowing silhouette edges via Fresnel effect
+  - MatCap: supports `matcapTexture` / `matcapFactor`. Constructs orthonormal basis from view-space normal for UV calculation and samples the MatCap texture
+  - `rimLightingMixFactor` controls ambient light mix ratio (0.0 = emission, 1.0 = fully mixed)
+  - Extended `MaterialUniform` from 80 to 112 bytes, added MatCap texture bind group(3) to pipeline layout
+  - Added world position output to vertex shader, implemented view-direction-based rim calculation in fragment shader
+- **MToon Auxiliary Textures** — Support for 3 VRM 1.0 MToon auxiliary texture types, improving rendering quality
+  - `shadeMultiplyTexture`: Shade color texture multiply (RGB). Enables per-pixel shade color variation for finer shadow expression
+  - `shadingShiftTexture`: Per-pixel shading shift (R channel × scale). Controls shadow behavior per body region
+  - `rimMultiplyTexture`: Rim lighting multiply texture (RGB). Controls rim effect application area via texture
+  - Restructured bind group(3) as MToon auxiliary texture pack (per-texture samplers, 16 bindings). Extended `MaterialUniform` from 112 to 144 bytes
+  - Materials without textures automatically bind default textures (white or black), eliminating pipeline switching
+- **MToon UV Animation** — Support for VRM 1.0 MToon UV scroll and rotation animation
+  - `uvAnimationScrollXSpeedFactor` / `uvAnimationScrollYSpeedFactor`: Horizontal/vertical UV scrolling
+  - `uvAnimationRotationSpeedFactor`: UV center rotation
+  - `uvAnimationMaskTexture`: B channel controls animation application area
+  - Added cumulative `time` field to `CameraUniform`, updated every frame
 
-### 改善
+### Improvements
 
-- **MToon アウトラインに `outlineWidthMultiplyTexture` 反映** — `outlineWidthMultiplyTexture` の G チャネルをアウトライン頂点シェーダーで `textureSampleLevel` によりサンプリングし、頂点ごとにアウトライン幅を制御。mtoon_aux bind group (binding 6) に追加し、材質固有の bind group をアウトライン描画にも適用。顔や髪で輪郭線を弱める VRM が正しく表示される
-- **`outlineWidthMultiplyTexture` への UV アニメーション適用（MToon 仕様準拠）** — UV Animation 計算を `apply_uv_animation()` 共通関数に抽出し、頂点シェーダー `vs_outline` でも UV Animation 適用済み座標で `outlineWidthMultiplyTexture` をサンプリングするよう変更。MToon 仕様の UV Animation 対象テクスチャ 5 種（shadeMultiply / shadingShift / rimMultiply / outlineWidthMultiply + glTF コア 3 種）すべてに UV Animation が反映される。`uvAnimationMaskTexture` の bind group visibility に `VERTEX` を追加
-- **MToon screenCoordinates アウトライン改善** — UniVRM 準拠の clip 空間法線変換・アスペクト比補正（`height/width` による X 方向縮小）・カメラ正面法線抑制を実装。画角やアスペクト比による輪郭線の太さのぶれを解消
-- **MToon 補助テクスチャの色空間修正** — `shadingShiftTexture` と `uvAnimationMaskTexture` を仕様通りリニア色空間（Unorm ビュー）で読み込むよう修正。sRGB ビュー使用時の二重ガンマ変換による値の歪みを解消
-- **`shadingShiftTexture` 計算式を仕様準拠に修正** — `(tex * 2.0 - 1.0) * scale` を VRM 1.0 仕様通り `tex * scale` に修正
-- **`shadingToony/shadingShift` の shading 式を仕様準拠に修正** — `half_lambert` [0,1] + `smoothstep` から仕様通りの `dot(N,L)` [-1,1] + `linearstep(-1+toony, 1-toony, shading+shift)` に変更。UniVRM と同じ影境界の硬さ・位置になる
-- **`shadeColorFactor` デフォルト値を仕様準拠に修正** — VRM 1.0 MToon で `shadeColorFactor` 未指定時のデフォルトを `Vec3::ZERO`（黒）に修正（仕様のデフォルト `[0,0,0]`）。抽出時に常に `Some(...)` を格納するよう変更し、ビューア表示と PMX 変換で `None`（shade_color 無し）と「デフォルトとしての黒」が区別されるようになった
-- **VRM 0.x `_Color` / `_MainTex` lit 色・テクスチャ正規化** — VRM 0.x MToon 正規化ブロックで `materialProperties` の `_Color` → `ir_mat.diffuse`、`_MainTex` → `ir_mat.texture_index` / `base_color_tex_info` に反映するよう追加。glTF core の `baseColorFactor` / `baseColorTexture` は VRM 0.x では近似値の場合があるため、MToon と判定した後は `materialProperties` 側を優先する（UniVRM `MigrationMToonMaterial.cs:148-164` 準拠）
-- **VRM 0.x `_MainTex` ST の Y オフセット変換追加** — VRM 0.x の `_MainTex` ST（Scale/Translation）を glTF `KHR_texture_transform` に変換する際、Y オフセットに `offset.y = 1.0 - unityOffset.y - scale.y` を適用するよう修正。Unity のテクスチャ座標系（左上原点）と glTF（左下原点）の Y 軸解釈の違いを吸収する（UniVRM `Vrm10MaterialExportUtils.ExportTextureTransform` 準拠）
-- **`renderQueueOffsetNumber` の範囲制限を仕様準拠に追加** — Opaque/Mask は常に 0、BlendWithZWrite は clamp(0,+9)、Blend は clamp(-9,0) を強制。UniVRM MToonValidator と同等の制限
-- **VRM 0.x `renderQueue` 範囲外チェック追加** — UniVRM `GetRenderQueueRequirement` 準拠の範囲検証を追加。`renderQueue` が許容範囲外（Blend: 2951~3000、BlendWithZWrite: 2501~2550）の場合は offset=0 を返す。壊れた/手編集された VRM 0.x 入力で描画順が端値に張り付く問題を解消
-- **`rimLightingMixFactor` の光量係数を N·L 非依存に修正** — UniVRM 準拠で `light_factor` から `dot(N,L) * 0.5 + 0.5`（Half-Lambert）を除去し、`light_intensity + ambient` の直接合成に変更。リムライティングは視線フレネル効果であり、背面側でも N·L 非依存で光量係数が一定になるべき。逆光・輪郭寄りのポーズでリムが過度に暗くなる問題を解消
-- **glTF sampler 情報のテクスチャ別反映** — `IrTextureInfo` に `IrSamplerInfo`（wrap_u / wrap_v / mag_filter / min_filter）を追加し、glTF の `sampler` オブジェクトからテクスチャごとの wrapS / wrapT / magFilter / minFilter を読み取り。ビューア GPU 側は `HashMap<IrSamplerInfo, wgpu::Sampler>` キャッシュで同一設定のサンプラーを共有。CPU 側の `sample_image_g_channel` も wrap mode に応じた UV 座標変換を実施。`outlineWidthMultiplyTexture` / `uvAnimationMaskTexture` 等の `CLAMP_TO_EDGE` 指定が正しく再現されるようになった
-- **MToon 補助テクスチャのサンプラー個別化** — bind group(3) のサンプラーを全テクスチャ共有（1 sampler + 8 textures）からテクスチャごとに分離（8 samplers + 8 textures = 16 bindings）に変更。glTF の texture 単位 sampler モデルに完全準拠し、補助テクスチャごとに異なる wrap / filter 設定が正しく反映されるようになった。WGSL 側も `s_mtoon_aux` 共有サンプラーを廃止し、`s_matcap` / `s_shade_multiply` / `s_normal` 等テクスチャ固有のサンプラーに分離
-- **glTF minFilter の mipmap 情報保持** — `IrFilterMode`（2 値: Nearest / Linear）を `IrMagFilter` + `IrMinFilter`（6 値: Nearest / Linear / NearestMipmapNearest / LinearMipmapNearest / NearestMipmapLinear / LinearMipmapLinear）に分離。glTF の `minFilter` が持つ mipmap 選択方式をそのまま保持し、`ensure_sampler()` で wgpu の `min_filter` と `mipmap_filter` を正しく分離して設定するようになった
-- **`CameraUniform` に `aspect` フィールド追加** — MToon screenCoordinates アウトラインのアスペクト比補正に使用
-- **MToon 透明描画順制御** — glTF `alphaMode`（OPAQUE / MASK / BLEND）と MToon 拡張の `transparentWithZWrite` / `renderQueueOffsetNumber` に対応。描画を仕様準拠の 4 段階に分離し、半透明の前髪・アクセサリの前後関係を正しく再現
-  - `IrMaterial` に `AlphaMode` enum（Opaque / Mask / BlendWithZWrite / Blend）、`alpha_cutoff`、`render_queue_offset` を追加
-  - `DrawCall` に `RenderQueue` enum を追加し、`renderQueueOffsetNumber` で BLEND カテゴリ内を安定ソート
-  - MASK モード: フラグメントシェーダーに `alphaCutoff` による `discard` を実装
-  - BlendWithZWrite: 半透明＋デプス書込ありパイプライン（`pipeline_alpha_zwrite_cull` / `pipeline_alpha_zwrite_no_cull`）を新設
-  - 描画順: OPAQUE → MASK → BlendZWrite → Blend。OPAQUE/MASK はフェーズ後にまとめてアウトライン描画、BLEND/BlendZWrite はサーフェスとアウトラインをインターリーブ描画
-- **MToon 補助テクスチャの `texCoord` / `KHR_texture_transform` 保持** — `IrTextureInfo` 構造体を導入し、MToon 補助テクスチャ 6 種（shade / matcap / shadingShift / rimMultiply / uvAnimationMask / outlineWidth）の `texCoord`・`KHR_texture_transform`（offset / scale / rotation）を IR 層で保持するよう拡張。メッシュの `TEXCOORD_1` も `IrMesh.uvs1` に読み取り。GPU シェーダー側で `resolve_mtoon_uv()` により texCoord 選択 + KHR_texture_transform を適用
-- **テクスチャ pruning の全 MToon テクスチャ対応** — エクスポートフィルタのテクスチャ pruning を `IrTextureInfo` ベースに書き換え、matcap / shadingShift / rimMultiply / uvAnimationMask テクスチャも収集・リマップ対象に追加
-- **MToon ScreenCoordinates アウトライン計算式を UniVRM 完全準拠に修正** — (1) 法線の正規化順序を UniVRM と一致（normalize → aspect 乗算）に修正。(2) `CameraUniform` に射影行列の `proj_11`（= 1/tan(fov/2)）を追加し、UniVRM の `MToon_GetOutlineVertex_ScreenCoordinatesWidthMultiplier` と同等の距離クランプ（`min(clip.w, maxDistance)`）を実装。広角カメラ・遠距離での太すぎを抑制
-- **MToon 補助テクスチャの `texCoord` / `KHR_texture_transform` をシェーダーに接続** — `MaterialUniform` に 5 補助テクスチャ分の UV パラメータ（texCoord・offset・scale・rotation）を追加（144→304 bytes）。`Vertex` に `uv1`（TEXCOORD_1）を追加。WGSL に `resolve_mtoon_uv()` / `apply_texture_transform()` / `apply_uv_anim_core()` ヘルパ関数を追加し、各補助テクスチャで texCoord 選択 + KHR_texture_transform 適用を実行。UV Animation 対象（shade / shift / rim / outline_width）と非対象（uv_mask / matcap）を UniVRM 準拠で区別
-- **`baseColorTexture` の `texCoord` / `KHR_texture_transform` 対応** — `IrMaterial` に `base_color_tex_info: Option<IrTextureInfo>` を追加し、ベースカラーテクスチャの `texCoord` / `KHR_texture_transform`（offset / scale / rotation）を保持。`MaterialUniform` に `base_uv_a` / `base_uv_b` を追加（304→336 bytes）し、フラグメントシェーダーで `resolve_mtoon_uv()` によりベースカラーテクスチャにも texCoord 選択 + KHR_texture_transform を適用。補助テクスチャと同一の UV パイプラインに統一
-- **アウトライン頂点シェーダーの UV1 対応** — `apply_uv_animation()` を `apply_uv_animation_pair(uv0, uv1)` に変更し、`vec4` で UV0/UV1 ペアを返す形に統一。アウトライン頂点シェーダーで `uv1_in` が無視されていた問題を修正し、`outlineWidthMultiplyTexture` と `uvAnimationMaskTexture` の `texCoord=1` が正しく機能するようになった
-- **BLEND 材質のカメラ距離ソート** — `DrawCall` に重心位置 `center` を追加し、同一 `renderQueueOffsetNumber` 内の `RenderQueue::Blend` 材質をカメラ距離（`distance_squared`）で back-to-front ソート。半透明メッシュ同士の前後関係が改善
-- **BLEND/BlendZWrite アウトライン描画順のインターリーブ化** — 透明フェーズ（BLEND / BlendZWrite）ではサーフェスとアウトラインを各 draw ごとに連続発行するよう変更。ZWrite OFF の透明アウトラインが手前サーフェスの上に浮く問題を解消（UniVRM のマルチパス描画と同等の合成順）。OPAQUE / MASK は従来通り深度バッファで保護されるため 2 パス構造を維持
-- **透明ソート距離キーの動的更新** — アニメーション再生中に BLEND / BlendZWrite draw の重心を `current_vertices()` から毎フレーム再計算。rest pose 固定の重心では動的シーンで back-to-front ソートが破綻する問題を解消。不透明 draw はビルド時の固定重心を維持（再計算不要）
-- **glTF emissive（発光）対応** — `emissiveFactor` + `emissiveTexture` を glTF 標準プロパティとして全形式（VRM / FBX / PMX / PMD）に対応。MToon シェーダーでは UniVRM 準拠の `baseCol = lighting + emissive + rim` で加算。非 MToon でも `lit += emissive` で発光表現を反映。アウトラインの `compute_mtoon_surface_lighting()` にも emissive を含め、`outlineLightingMixFactor` 経由でアウトライン色に反映。`IrMaterial` に `emissive_factor` / `emissive_texture` / `normal_texture` / `normal_texture_scale` フィールドを追加。法線マップは screen-space derivative による tangent 構築で適用
-- **VRM 0.x MToon 全プロパティ正規化** — VRM 0.x の `materialProperties` から未実装だった主要プロパティを VRM 1.0 系 `IrMaterial` に正規化。UniVRM `MigrationMToonMaterial.cs` / `MToon10Migrator.cs` の変換式に準拠。対象:
-  - 描画モード: `_BlendMode` → `AlphaMode`、`_Cutoff` → `alpha_cutoff`、`_CullMode` → `is_double_sided`
-  - テクスチャ: `_ShadeTexture`（未設定時は `_MainTex` を使用: UniVRM 破壊的マイグレーション準拠）、`_RimTexture`、`_EmissionMap`、`_UvAnimMaskTexture`、`_SphereAdd`（→ matcapTexture）、`_BumpMap`（→ normalTexture）
-  - リム: `_RimColor`、`_RimFresnelPower`、`_RimLift`、`rimLightingMixFactor` = 1.0（UniVRM 破壊的マイグレーション準拠）
-  - エミッション: `_EmissionColor`
-  - UV アニメーション: `_UvAnimScrollX`、`_UvAnimScrollY`（Y 反転 × -1）、`_UvAnimRotation`（× 2π rad/s 変換）
-  - Shading: `_ShadeToony` / `_ShadeShift` → UniVRM `GetShadingRange0X` + `MigrateToShadingToony/Shift` 変換式
-  - アウトライン: `_OutlineColorMode` → `outlineLightingMixFactor`（FixedColor = 0.0、MixedLighting = 元値）
-- **`KHR_texture_transform.texCoord` override 対応** — `read_texture_info()` で `extensions.KHR_texture_transform.texCoord` が存在する場合、TextureInfo 本体の `texCoord` より優先するよう修正。glTF 仕様準拠
-- **VRM 0.x `renderQueue` → `render_queue_offset` 移行** — UniVRM `MigrationMToonMaterial.cs` 準拠の順位圧縮（rank compression）を実装。透明材質の source offset（`renderQueue - DefaultValue`）を `BTreeSet` に集約し、Blend は降順・BlendWithZWrite は昇順で連番を振ることで、相対順序を保持したまま VRM 1.0 仕様範囲（Blend: -9..0, BlendWithZWrite: 0..+9）に圧縮。単純な clamp では値が同一に潰れて相対順序が失われる問題を解消。範囲外の `renderQueue` は offset=0 を返す
-- **VRM 0.x `_MainTex` ST（Scale/Translation）を MToon テクスチャに伝播** — VRM 0.x の `vectorProperties._MainTex`（`[offsetX, offsetY, scaleX, scaleY]` 順）を MToon テクスチャの `IrTextureInfo.offset` / `.scale` に反映（UniVRM `Vrm0XMToonValue.cs` 準拠）。`baseColorTexture` にも同一 ST を適用。MatCap（`_SphereAdd`）は例外として ST 非適用（UniVRM `MigrationMToonMaterial.cs:255-260` 準拠: "Texture transform is not required"）。identity transform（scale=1, offset=0）の場合はスキップ
-- **VRM 0.x `ScreenCoordinates` アウトライン幅を UniVRM 準拠に正規化** — `outline_width_factor` を `w * 0.01 * 0.5` に修正（旧: 縦半分の%値 → 新: 縦全体の比率、1/200 換算）。VRM 0.x の ScreenCoordinates アウトラインが Unity と一致するようになった
-- **VRM 0.x 色プロパティの sRGB→Linear 変換** — VRM 0.x MToon の `_ShadeColor`・`_RimColor`・`_OutlineColor` を抽出時に sRGB→Linear 変換するよう修正。UniVRM `MigrationMToonMaterial.cs` の `.ToFloat3(ColorSpace.sRGB, ColorSpace.Linear)` と同等。`_EmissionColor` は UniVRM 準拠で Linear→Linear のため変換対象外
-- **MASK 材質の alpha_to_coverage 有効化** — `RenderQueue::Mask` 材質に専用パイプライン（`pipeline_mask_cull` / `pipeline_mask_no_cull`）を追加し、MSAA 有効時（sample_count > 1）に `alpha_to_coverage_enabled = true` を設定。UniVRM `MToonValidator.cs` の `UnityAlphaToMask = On` と同等。まつ毛・髪カード等の cutout 材質で MSAA によるジャギーが軽減される
-- **`giEqualizationFactor` GI 実装（UniVRM 準拠）** — VRM 仕様準拠の `lerp(passthroughGi, uniformedGi, giEqualizationFactor)` を実装。SH/IBL 非搭載のため `passthroughGi` = `uniformedGi` = ambient とし、direct light を GI に混入させない（UniVRM の `indirectLight` / `indirectLightEqualized` と同等の分離構造）。VRM 1.0 `giEqualizationFactor`、VRM 0.x `_IndirectLightIntensity`（`1.0 - value` で変換）の両方に対応
-- **アウトラインパイプラインに depth bias 追加** — MToon アウトラインの `pipeline_outline` / `pipeline_outline_blend` に UniVRM `Offset 1, 1` 相当の `DepthBiasState`（`constant: 1, slope_scale: 1.0`）を設定。inverted hull 法で本体とアウトラインの深度が近接することによる Z-fighting（輪郭の欠け・ちらつき）を防止。髪や薄い板ポリ、視線に平行な面で特に効果がある
-- **MASK 材質アウトラインの AlphaToCoverage 有効化** — `pipeline_outline_mask`（MASK 材質専用アウトラインパイプライン）を新設し、MSAA 有効時に `alpha_to_coverage_enabled = true` を設定。本体パスだけでなくアウトラインパスでも cutout 境界が滑らかになり、髪カード・まつ毛等でサーフェスとアウトラインのエッジ品質が一致するようになった。UniVRM の `AlphaToMask = On` と同等
-- **`shadingShiftTexture` に UV Animation を適用（UniVRM 準拠）** — `shadingShiftTexture` のサンプリング UV が生 UV（`in.uv`）を使用していたのをアニメーション済み UV（`anim_uv`）に修正。UniVRM では `GetMToonGeometry_Uv()` で一括変換した UV を全テクスチャに適用しており、`shadingShiftTexture` も例外ではない。UV スクロール・回転を使うマテリアルで影境界が正しく追従するようになった。フォワードパスとアウトラインパスの両方を修正
-- **モーフターゲットの法線・接線デルタ追従** — `IrMorphTarget` に `normal_offsets` / `tangent_offsets` を追加し、glTF モーフターゲットの法線・接線デルタを疎表現（閾値 1e-7 フィルタ）で保持するよう拡張。ビューアの GPU モーフ適用（`apply_gpu_morph_recursive`）で位置だけでなく法線・接線にも weight × delta を加算。表情変形時に MToon の陰影境界・アウトライン押し出し方向・法線マップが変形後の面方向に追従するようになった。Aスタンス変換・頂点分割・エクスポートフィルタでも法線・接線デルタを正しく伝搬
-- **NORMAL/TANGENT のみモーフの end-to-end 対応** — POSITION デルタを持たず NORMAL/TANGENT デルタのみのモーフターゲットが、抽出→エクスポートフィルタ→GPU 反映の全段で脱落していた問題を修正。(1) `extract.rs`: `IrMorph` 生成条件を `positions` のみから `positions || normals || tangents` の OR に拡張。(2) `export_filter.rs`: モーフ生存判定を 3 系統の和集合に変更。(3) `mesh.rs`: GPU モーフの影響頂点を `BTreeSet` で positions/normals/tangents の和集合から収集し、各属性を `HashMap` lookup（glTF 2.0 仕様で POSITION なしの morph target は合法）
-- **モーフ適用時の CPU 側頂点キャッシュ同期** — `apply_morphs()` が GPU バッファのみ更新し `animated_vertices`（CPU 側キャッシュ）を更新していなかったため、モーフのみ変更されたフレームで `current_vertices()` がレスト形状を返し、MToon 半透明（Blend / BlendZWrite）の距離ソートがレスト形状基準になっていた問題を修正。`apply_morphs()` の末尾で `morph_work` を `animated_vertices` にも反映し、CPU 側と GPU 側の頂点データを常に同期
+- **MToon outline `outlineWidthMultiplyTexture` support** — Sample `outlineWidthMultiplyTexture` G channel in outline vertex shader via `textureSampleLevel`, added to mtoon_aux bind group (binding 6) with material-specific bind group used in outline draw calls. VRM models that suppress outlines on face/hair now display correctly
+- **UV Animation for `outlineWidthMultiplyTexture` (MToon spec compliance)** — Extracted UV Animation calculation into shared `apply_uv_animation()` function, now also applied in outline vertex shader `vs_outline` before sampling `outlineWidthMultiplyTexture`. All 5 MToon UV Animation target textures (shadeMultiply / shadingShift / rimMultiply / outlineWidthMultiply + 3 glTF core) now have UV Animation applied. Added `VERTEX` to `uvAnimationMaskTexture` bind group visibility
+- **MToon screenCoordinates outline improvement** — Implemented UniVRM-compliant clip-space normal transformation, aspect ratio correction (`height/width` for X-axis shrink), and camera-facing normal suppression. Eliminates outline thickness variation across different FOV and aspect ratios
+- **MToon auxiliary texture color space fix** — `shadingShiftTexture` and `uvAnimationMaskTexture` now use linear color space (Unorm view) per spec. Fixes value distortion from double gamma conversion when using sRGB view
+- **`shadingShiftTexture` formula spec compliance** — Changed from `(tex * 2.0 - 1.0) * scale` to VRM 1.0 spec-compliant `tex * scale`
+- **`shadingToony/shadingShift` shading formula spec compliance** — Changed from `half_lambert` [0,1] + `smoothstep` to spec-compliant `dot(N,L)` [-1,1] + `linearstep(-1+toony, 1-toony, shading+shift)`. Shadow boundary sharpness and position now match UniVRM
+- **`shadeColorFactor` default value spec compliance** — Fixed VRM 1.0 MToon `shadeColorFactor` default to `Vec3::ZERO` (black) per spec default `[0,0,0]`. Now always stores `Some(...)` during extraction so that the viewer and PMX conversion correctly distinguish between `None` (no shade_color) and "default black"
+- **VRM 0.x `_Color` / `_MainTex` lit color/texture normalization** — Added normalization of VRM 0.x MToon `_Color` → `ir_mat.diffuse` and `_MainTex` → `ir_mat.texture_index` / `base_color_tex_info` from `materialProperties`. For VRM 0.x, the glTF core `baseColorFactor` / `baseColorTexture` may be approximate values, so `materialProperties` takes priority after MToon detection (per UniVRM `MigrationMToonMaterial.cs:148-164`)
+- **VRM 0.x `_MainTex` ST Y offset conversion** — Added `offset.y = 1.0 - unityOffset.y - scale.y` conversion when transforming VRM 0.x `_MainTex` ST (Scale/Translation) to glTF `KHR_texture_transform`. Accounts for the Y-axis interpretation difference between Unity's texture coordinate system (top-left origin) and glTF (bottom-left origin) (per UniVRM `Vrm10MaterialExportUtils.ExportTextureTransform`)
+- **`renderQueueOffsetNumber` range clamping** — Opaque/Mask forced to 0, BlendWithZWrite clamped to [0,+9], Blend clamped to [-9,0]. Matches UniVRM MToonValidator behavior
+- **VRM 0.x `renderQueue` out-of-range validation** — Added UniVRM `GetRenderQueueRequirement`-compliant range check. Returns offset=0 when `renderQueue` falls outside the permitted range (Blend: 2951–3000, BlendWithZWrite: 2501–2550). Fixes draw order pinned to extreme values on broken/hand-edited VRM 0.x inputs
+- **Fix `rimLightingMixFactor` light factor to be N·L independent** — Removed `dot(N,L) * 0.5 + 0.5` (Half-Lambert) from `light_factor` per UniVRM, now uses direct `light_intensity + ambient` composition. Rim lighting is a view-angle Fresnel effect and the light factor should remain constant regardless of N·L. Fixes rim appearing excessively dark at backlit/silhouette poses
+- **Per-texture glTF sampler support** — Added `IrSamplerInfo` (wrap_u / wrap_v / mag_filter / min_filter) to `IrTextureInfo`, reading per-texture wrapS / wrapT / magFilter / minFilter from glTF `sampler` objects. Viewer GPU side uses `HashMap<IrSamplerInfo, wgpu::Sampler>` cache to share samplers with identical settings. CPU-side `sample_image_g_channel` also applies wrap mode-aware UV coordinate transformation. `CLAMP_TO_EDGE` specifications on `outlineWidthMultiplyTexture` / `uvAnimationMaskTexture` etc. are now correctly honored
+- **Per-texture sampler in MToon auxiliary bind group** — Changed bind group(3) from a single shared sampler (1 sampler + 8 textures) to per-texture samplers (8 samplers + 8 textures = 16 bindings). Fully compliant with glTF's per-texture sampler model, ensuring different wrap/filter settings on auxiliary textures are correctly honored. WGSL replaced the shared `s_mtoon_aux` sampler with texture-specific samplers (`s_matcap` / `s_shade_multiply` / `s_normal`, etc.)
+- **Preserve glTF minFilter mipmap information** — Split `IrFilterMode` (2 values: Nearest / Linear) into `IrMagFilter` + `IrMinFilter` (6 values: Nearest / Linear / NearestMipmapNearest / LinearMipmapNearest / NearestMipmapLinear / LinearMipmapLinear). Preserves the glTF `minFilter` mipmap selection mode as-is, with `ensure_sampler()` correctly separating wgpu's `min_filter` and `mipmap_filter`
+- **Added `aspect` field to `CameraUniform`** — Used for MToon screenCoordinates outline aspect ratio correction
+- **MToon transparent draw order control** — Support for glTF `alphaMode` (OPAQUE / MASK / BLEND) and MToon extensions `transparentWithZWrite` / `renderQueueOffsetNumber`. Rendering separated into spec-compliant 4 phases, correctly reproducing depth ordering for transparent bangs and accessories
+  - Added `AlphaMode` enum (Opaque / Mask / BlendWithZWrite / Blend), `alpha_cutoff`, `render_queue_offset` to `IrMaterial`
+  - Added `RenderQueue` enum to `DrawCall` with stable sort by `renderQueueOffsetNumber` within BLEND categories
+  - MASK mode: implemented `alphaCutoff`-based `discard` in fragment shader
+  - BlendWithZWrite: new transparent + depth-write pipelines (`pipeline_alpha_zwrite_cull` / `pipeline_alpha_zwrite_no_cull`)
+  - Draw order: OPAQUE → MASK → BlendZWrite → Blend. OPAQUE/MASK outlines drawn after each phase, BLEND/BlendZWrite outlines interleaved per draw call
+- **MToon auxiliary texture `texCoord` / `KHR_texture_transform` preservation** — Introduced `IrTextureInfo` struct to hold `texCoord` and `KHR_texture_transform` (offset / scale / rotation) for all 6 MToon auxiliary textures (shade / matcap / shadingShift / rimMultiply / uvAnimationMask / outlineWidth) at the IR layer. Mesh `TEXCOORD_1` is also read into `IrMesh.uvs1`. GPU shader applies `resolve_mtoon_uv()` for texCoord selection + KHR_texture_transform
+- **Texture pruning for all MToon textures** — Rewrote export filter texture pruning to `IrTextureInfo`-based approach, adding matcap / shadingShift / rimMultiply / uvAnimationMask textures to the collection and remapping targets
+- **MToon ScreenCoordinates outline formula to full UniVRM compliance** — (1) Fixed normal normalization order to match UniVRM (normalize → aspect multiply). (2) Added projection matrix `proj_11` (= 1/tan(fov/2)) to `CameraUniform` and implemented UniVRM's `MToon_GetOutlineVertex_ScreenCoordinatesWidthMultiplier` equivalent distance clamp (`min(clip.w, maxDistance)`). Suppresses overly thick outlines at wide FOV and long distances
+- **Connect MToon auxiliary texture `texCoord` / `KHR_texture_transform` to shader** — Added UV parameters (texCoord, offset, scale, rotation) for 5 auxiliary textures to `MaterialUniform` (144→304 bytes). Added `uv1` (TEXCOORD_1) to `Vertex`. Added `resolve_mtoon_uv()` / `apply_texture_transform()` / `apply_uv_anim_core()` WGSL helper functions for per-texture texCoord selection + KHR_texture_transform application. UV Animation targets (shade / shift / rim / outline_width) and non-targets (uv_mask / matcap) are distinguished per UniVRM
+- **`baseColorTexture` `texCoord` / `KHR_texture_transform` support** — Added `base_color_tex_info: Option<IrTextureInfo>` to `IrMaterial` to hold `texCoord` / `KHR_texture_transform` (offset / scale / rotation) for the base color texture. Added `base_uv_a` / `base_uv_b` to `MaterialUniform` (304→336 bytes), applying `resolve_mtoon_uv()` to base color texture sampling in the fragment shader. Unified with the same UV pipeline used for auxiliary textures
+- **Outline vertex shader UV1 support** — Changed `apply_uv_animation()` to `apply_uv_animation_pair(uv0, uv1)`, returning UV0/UV1 pair as `vec4`. Fixes `uv1_in` being ignored in the outline vertex shader, enabling `texCoord=1` to work correctly for `outlineWidthMultiplyTexture` and `uvAnimationMaskTexture`
+- **Camera distance sorting for BLEND materials** — Added `center` (centroid position) to `DrawCall`. BLEND materials within the same `renderQueueOffsetNumber` are now sorted back-to-front by camera distance (`distance_squared`). Improves depth ordering for overlapping transparent meshes
+- **Interleaved BLEND/BlendZWrite outline draw order** — Transparent phases (BLEND / BlendZWrite) now issue surface and outline draws consecutively per draw call. Fixes ZWrite-OFF transparent outlines floating above foreground surfaces (equivalent to UniVRM's multi-pass draw order). OPAQUE / MASK retains 2-pass structure as depth buffer protection is sufficient
+- **Dynamic transparent sort distance key update** — BLEND / BlendZWrite draw centroids are now recalculated from `current_vertices()` every frame during animation playback. Fixes back-to-front sort breakdown when rest-pose fixed centroids diverge from actual animated positions. Opaque draws retain build-time fixed centroids (no recalculation needed)
+- **glTF emissive (emission) support** — `emissiveFactor` + `emissiveTexture` supported as glTF standard properties across all formats (VRM / FBX / PMX / PMD). MToon shader adds emissive per UniVRM: `baseCol = lighting + emissive + rim`. Non-MToon materials also apply `lit += emissive`. Outline `compute_mtoon_surface_lighting()` includes emissive, affecting outline color via `outlineLightingMixFactor`. Added `emissive_factor` / `emissive_texture` / `normal_texture` / `normal_texture_scale` to `IrMaterial`. Normal mapping applied via screen-space derivative tangent construction
+- **VRM 0.x MToon full property normalization** — Normalizes previously unimplemented VRM 0.x `materialProperties` into VRM 1.0 `IrMaterial`. Follows UniVRM `MigrationMToonMaterial.cs` / `MToon10Migrator.cs` conversion formulas. Covers:
+  - Render mode: `_BlendMode` → `AlphaMode`, `_Cutoff` → `alpha_cutoff`, `_CullMode` → `is_double_sided`
+  - Textures: `_ShadeTexture` (falls back to `_MainTex` when absent: UniVRM destructive migration), `_RimTexture`, `_EmissionMap`, `_UvAnimMaskTexture`, `_SphereAdd` (→ matcapTexture), `_BumpMap` (→ normalTexture)
+  - Rim: `_RimColor`, `_RimFresnelPower`, `_RimLift`, `rimLightingMixFactor` = 1.0 (UniVRM destructive migration)
+  - Emission: `_EmissionColor`
+  - UV animation: `_UvAnimScrollX`, `_UvAnimScrollY` (Y inverted × -1), `_UvAnimRotation` (× 2π rad/s conversion)
+  - Shading: `_ShadeToony` / `_ShadeShift` → UniVRM `GetShadingRange0X` + `MigrateToShadingToony/Shift` formula
+  - Outline: `_OutlineColorMode` → `outlineLightingMixFactor` (FixedColor = 0.0, MixedLighting = original value)
+- **`KHR_texture_transform.texCoord` override support** — `read_texture_info()` now prioritizes `extensions.KHR_texture_transform.texCoord` over the TextureInfo-level `texCoord` when present. glTF spec compliant
+- **VRM 0.x `renderQueue` → `render_queue_offset` migration** — Implements UniVRM `MigrationMToonMaterial.cs`-compliant rank compression. Collects transparent material source offsets (`renderQueue - DefaultValue`) into a `BTreeSet`, assigns sequential ranks (Blend: descending 0, -1, -2, ...; BlendWithZWrite: ascending 0, 1, 2, ...) to compress into VRM 1.0 spec range (Blend: -9..0, BlendWithZWrite: 0..+9) while preserving relative order. Simple clamping would collapse values to the same offset, losing relative ordering. Out-of-range `renderQueue` values return offset=0
+- **VRM 0.x `_MainTex` ST (Scale/Translation) propagation to MToon textures** — Applies VRM 0.x `vectorProperties._MainTex` (`[offsetX, offsetY, scaleX, scaleY]` order) to MToon textures' `IrTextureInfo.offset` / `.scale` (per UniVRM `Vrm0XMToonValue.cs`). Also applies to `baseColorTexture`. MatCap (`_SphereAdd`) is excluded from ST propagation (per UniVRM `MigrationMToonMaterial.cs:255-260`: "Texture transform is not required"). Identity transforms (scale=1, offset=0) are skipped
+- **Normalize VRM 0.x `ScreenCoordinates` outline width to UniVRM-compliant** — Fixed `outline_width_factor` to `w * 0.01 * 0.5` (old: percent of half-height → new: ratio of full height, 1/200 conversion). VRM 0.x ScreenCoordinates outlines now match Unity
+- **VRM 0.x color property sRGB→Linear conversion** — VRM 0.x MToon `_ShadeColor`, `_RimColor`, and `_OutlineColor` are now converted from sRGB to linear color space during extraction. Equivalent to UniVRM `MigrationMToonMaterial.cs` `.ToFloat3(ColorSpace.sRGB, ColorSpace.Linear)`. `_EmissionColor` is excluded as it is Linear→Linear per UniVRM
+- **MASK material alpha_to_coverage** — Added dedicated pipelines (`pipeline_mask_cull` / `pipeline_mask_no_cull`) for `RenderQueue::Mask` materials with `alpha_to_coverage_enabled = true` when MSAA is active (sample_count > 1). Equivalent to UniVRM `MToonValidator.cs` `UnityAlphaToMask = On`. Reduces MSAA jaggies on cutout materials like eyelashes and hair cards
+- **`giEqualizationFactor` GI implementation (UniVRM-compliant)** — Implements VRM spec-compliant `lerp(passthroughGi, uniformedGi, giEqualizationFactor)`. Without SH/IBL, `passthroughGi` = `uniformedGi` = ambient, ensuring direct light is not mixed into GI (same separation structure as UniVRM's `indirectLight` / `indirectLightEqualized`). Supports both VRM 1.0 `giEqualizationFactor` and VRM 0.x `_IndirectLightIntensity` (converted via `1.0 - value`)
+- **Outline pipeline depth bias** — Added UniVRM `Offset 1, 1` equivalent `DepthBiasState` (`constant: 1, slope_scale: 1.0`) to `pipeline_outline` / `pipeline_outline_blend`. Prevents Z-fighting (outline gaps, flickering) caused by near-identical depth values between the main surface and inverted hull outline. Particularly effective on hair, thin polygons, and surfaces parallel to the view direction
+- **MASK material outline AlphaToCoverage** — Added `pipeline_outline_mask` (MASK material-specific outline pipeline) with `alpha_to_coverage_enabled = true` when MSAA is active. Cutout boundaries are now smooth on both the main pass and outline pass, ensuring consistent edge quality between surface and outline on hair cards, eyelashes, etc. Equivalent to UniVRM `AlphaToMask = On`
+- **Apply UV Animation to `shadingShiftTexture` (UniVRM-compliant)** — Fixed `shadingShiftTexture` sampling to use animated UV (`anim_uv`) instead of raw UV (`in.uv`). In UniVRM, `GetMToonGeometry_Uv()` transforms the base UV once and all textures use the animated result — `shadingShiftTexture` is no exception. Shadow boundaries now correctly follow UV scroll/rotation animations. Both forward and outline passes fixed
+- **Morph target normal/tangent delta tracking** — Extended `IrMorphTarget` with `normal_offsets` / `tangent_offsets` to retain glTF morph target normal and tangent deltas in sparse representation (threshold 1e-7 filter). Viewer GPU morph application (`apply_gpu_morph_recursive`) now adds weight × delta to normals and tangents alongside positions. MToon shading boundaries, outline extrusion direction, and normal maps now follow the deformed surface direction during expression morphing. Normal and tangent deltas are correctly propagated through A-stance conversion, vertex splitting, and export filtering
+- **NORMAL/TANGENT-only morph end-to-end support** — Fixed morph targets with only NORMAL/TANGENT deltas (no POSITION) being dropped at all stages: extraction → export filter → GPU application. (1) `extract.rs`: Extended `IrMorph` generation condition from `positions` only to `positions || normals || tangents` OR. (2) `export_filter.rs`: Changed morph liveness check to union of all 3 attribute sets. (3) `mesh.rs`: GPU morph affected vertices now collected via `BTreeSet` union of positions/normals/tangents, with per-attribute `HashMap` lookup (POSITION-less morph targets are legal per glTF 2.0 spec)
+- **Morph-only CPU vertex cache sync** — `apply_morphs()` only updated the GPU vertex buffer without updating `animated_vertices` (CPU-side cache), causing `current_vertices()` to return rest-pose vertices on morph-only frames. This resulted in MToon transparent (Blend / BlendZWrite) distance sorting using rest-pose centroids instead of morphed positions. Fixed by syncing `morph_work` to `animated_vertices` at the end of `apply_morphs()`, keeping CPU and GPU vertex data consistent
 
-- **法線マップの接線空間を MikkTSpace で構築（UniVRM 準拠）** — screen-space derivative（`dpdxCoarse`/`dpdyCoarse`）による近似 TBN を廃止し、`mikktspace` crate による MikkTSpace アルゴリズムで頂点接線を生成。glTF に `TANGENT` 属性がある場合はスキニング変換して使用し、ない場合（VRM 仕様: TANGENT はエクスポートしない）は MikkTSpace で自動生成。`IrVertex` に `tangent: Vec4`（xyz=方向, w=handedness）を追加し、GPU 頂点にも `tangent: [f32; 4]` を追加。シェーダーは UniVRM `MToon_GetTangentToWorld()` 準拠の TBN 構築に変更し、`tangent.w` を二値化（NaN 回避）。ミラー UV・tangent seam での法線マップ破綻を解消
-- **`CullMode` enum 導入（VRM 0.x Front cull 対応）** — `is_double_sided: bool` を `CullMode` enum（`Back` / `None` / `Front`）に置換。VRM 0.x `_CullMode=1`（Front cull）を `doubleSided` にフォールバックせず、`wgpu::Face::Front` パイプラインで正確に再現。全レンダーキュー（Opaque / Mask / BlendZWrite / Blend）に Front cull パイプラインを追加。PMX エクスポートでは `Front` も `None` と同様に両面描画フラグ（0x01）を設定（PMX に Front cull 概念がないため）
-- **`texCoord >= 2` の graceful degradation** — `read_texture_info()` で `texCoord > 1` の場合、テクスチャ無効化（`None`）ではなく `texCoord=0` へフォールバックし `warn` ログを出力するよう変更。テクスチャ UV は不正確になるが描画自体は維持される。設計根拠をソース・ドキュメントに記載（UniVRM 実装確認含む）
+- **MikkTSpace tangent generation for normal maps (UniVRM-compliant)** — Replaced screen-space derivative (`dpdxCoarse`/`dpdyCoarse`) approximate TBN with MikkTSpace algorithm (`mikktspace` crate) for vertex tangent generation. When glTF provides `TANGENT` attributes, they are skinning-transformed and used directly; otherwise (VRM spec: TANGENT is not exported), MikkTSpace tangents are auto-generated. Added `tangent: Vec4` (xyz=direction, w=handedness) to `IrVertex` and `tangent: [f32; 4]` to GPU vertex. Shader now uses UniVRM `MToon_GetTangentToWorld()`-compliant TBN construction with binarized `tangent.w` (NaN prevention). Fixes normal map breakage on mirrored UVs and tangent seams
+- **`CullMode` enum (VRM 0.x Front cull support)** — Replaced `is_double_sided: bool` with `CullMode` enum (`Back` / `None` / `Front`). VRM 0.x `_CullMode=1` (Front cull) is now accurately reproduced via `wgpu::Face::Front` pipeline instead of falling back to `doubleSided`. Front cull pipelines added for all render queues (Opaque / Mask / BlendZWrite / Blend). PMX export sets double-sided flag (0x01) for both `Front` and `None` (PMX has no Front cull concept)
+- **`texCoord >= 2` graceful degradation** — Changed `read_texture_info()` behavior for `texCoord > 1` from disabling the texture (`None`) to falling back to `texCoord=0` with a `warn` log. Texture UV will be inaccurate but rendering is preserved. Design rationale documented in source and docs (confirmed against UniVRM implementation)
 
-### バグ修正
+### Bug Fixes
 
-- **GI 計算から direct light を分離（UniVRM 準拠）** — `passthrough_gi` に `light_intensity * max(dot(N, light_dir), 0)` が含まれており、direct light が direct 項と GI 項で二重加算されていた問題を修正。UniVRM では `indirectLight` は SH サンプリング結果（環境光のみ）であり、direct light は別系統で処理される。SH/IBL 非搭載のビューアでは `passthrough_gi = ambient` のみが正しい近似。`gi_equalized` の CPU 側計算（`CameraUniform`）も同様に ambient のみに修正。正面を向いた面の過剰な白飛びと `giEqualizationFactor` / `rimLightingMixFactor` の光量係数異常を解消。本体シェーダーとアウトライン共有関数の両方を修正
-- **MASK 材質の AlphaToCoverage 後に alpha=1.0 を復帰（UniVRM 準拠）** — MASK 分岐で `fwidth` ベース A2C 計算後、`out_alpha = a2c_alpha` としていたため discard を通過したピクセルが半透明の中間値を持ち、egui オフスクリーン合成で cutout 材質の縁がにじむ問題を修正。UniVRM `vrmc_materials_mtoon_geometry_alpha.hlsl` は `clip()` 後に `return 1.0` で不透明に戻す。A2C はカバレッジ制御にのみ使い、最終 alpha は不透明に固定するよう修正。本体シェーダーとアウトライン共有関数の両方を修正
-- **接線 `tangent.w` のミラー座標変換反転修正** — ビューアの座標変換（VRM 1.0: Z反転、VRM 0.0: X反転）は行列式 -1 のミラー変換であり、`cross(M*N, M*T) = -M*cross(N,T)` となるため bitangent の向きが反転する。`tangent.w` を反転して接空間の handedness を維持するよう修正。法線マップの凹凸方向が左右反転する問題を解消
-- **MikkTSpace 接線生成の `normalTexture.texCoord` 対応** — `generate_tangents()` に `normal_tex_coord` 引数を追加し、`normalTexture.texCoord=1` の場合は UV1 で接線を生成するよう修正。VRM 材質からは `normalTexture` の `texCoord` を渡し、FBX/PMX/PMD は texCoord=0 を使用。法線マップが UV1 を参照するモデルで接線と法線マップの UV セットが不一致になる問題を解消
-- **glTF sampler デフォルト `min_filter` を `LinearMipmapLinear` に修正** — `IrSamplerInfo::default()` の `min_filter` を `Linear`（mipmap なし）から `LinearMipmapLinear` に変更。UniVRM の `SamplerParam.Default`（Bilinear + EnableMipMap=true）および `TextureSamplerUtil` の `glFilter.NONE` → mipmap 有効のデフォルト挙動に準拠。sampler 未指定テクスチャの遠景・斜め視点でのチラつきを軽減
-- **MToon ScreenCoordinates アウトラインのアスペクト補正修正** — `projected.x *= camera.aspect`（`width/height`）を `projected.x /= camera.aspect` に修正。UniVRM は `height/width` を乗算しており、従来の実装では横長ウィンドウでアウトラインの X 方向が過剰に膨張していた
-- **MToon sRGB アウトラインの二重ガンマ補正除去** — sRGB 版 `fs_outline` の `pow(2.2)` を除去。MToon は線形空間で計算するため、sRGB レンダーターゲットの自動変換に任せるのが正しい。`pow(2.2)` が必要なのは MMD（ガンマ空間計算）のシェーダーのみ。アウトラインだけ暗く表示される問題を解消
-- **UV1 不在時のフォールバック値修正** — GPU 側（`viewer/mesh.rs`）の UV1 不在時フォールバックを UV0 コピーからゼロ（`[0.0, 0.0]`）に変更。CPU 側（`resolve_cpu_uv`）と挙動を一致させ、UniVRM `MeshData.cs` 準拠のゼロフォールバックに統一した
-- **VRM 0.x `outlineWidthTexture` の参照チャネル修正** — VRM 0.x の `_OutlineWidthTexture` は R チャネルを参照する（UniVRM `MToonCore.cginc:86` 準拠）が、VRM 1.0 の G チャネルで読み込んでいた。`IrMaterial` に `ColorChannel` enum を追加し、VRM 0.x=R / VRM 1.0=G を CPU 側（`sample_image_channel`）と GPU 側（WGSL `select_channel`）で動的に切り替えるよう修正
-- **VRM 0.x `uvAnimationMaskTexture` の参照チャネル修正** — VRM 0.x の `_UvAnimMaskTexture` は R チャネルを参照する（UniVRM `MToonCore.cginc:129` 準拠）が、VRM 1.0 の B チャネルで読み込んでいた。同様に `ColorChannel` でバージョン別チャネル選択を実装
-- **`texCoord=1` 共有材質の書き換え廃止** — UV1 を持たないメッシュが参照する材質の `texCoord=1` を一括で `texCoord=0` に書き換える処理を削除。同じ材質を共有する UV1 付きメッシュが巻き込まれる問題を解消。tangent 生成側のフォールバックを UV0 から zero UV に変更し、描画側（`mesh.rs`）と一致させた
-- **MToon 本体パスの GI 半球補間が元の頂点法線を参照していた問題を修正** — GI の半球補間で `in.normal.y`（頂点法線）を使用していたため、normalMap 適用後の凹凸・`doubleSided` 背面反転が indirect lighting に反映されなかった。アウトラインパスは既に最終法線 `n.y` を使用しており、本体とアウトラインでシェーディングが不一致になっていた。本体パスも `n.y` に統一し、UniVRM の `MToon_SampleSH(normalWS)` 準拠に修正
-- **`rimLightingMixFactor` が GI 均一化済みの値を使用していた問題を修正（UniVRM 準拠）** — リムライティングの光量係数 `light_factor` に `giEqualizationFactor` 適用後の `gi` が含まれていたため、GI 均一化を強くした材質ほどリムの光量まで平坦化されていた。UniVRM では `rimLightingMixFactor` に `unityLight.indirectLight`（未均一化 raw indirect）を使用する。`raw_indirect` と `gi`（equalized）を分離し、リムには `rim_light_factor = direct_light + raw_indirect` を使用するよう修正。本体パス・アウトラインパス両方を修正
-- **テクスチャ差し替え時に `base_color_tex_info.index` が未同期だった問題を修正** — `assign_texture_to_material` / `assign_texture_data_to_material` で `texture_index` のみ更新し `base_color_tex_info.index` を同期していなかったため、GPU 描画は正しいが IR ベースの後続処理（エクスポートフィルタ・再読み込み）で古いテクスチャ参照が残るリスクがあった。同名材質連動割り当てパスも含め全4箇所を修正。`base_color_tex_info` が `None` の場合は `IrTextureInfo::from_index()` で新規作成
-- **MikkTSpace 接線の handedness (w) 不一致による頂点分割** — `set_tangent_encoded()` の出力をコーナー単位（`face * 3 + vert`）で保持するよう変更。同一頂点を共有するコーナー間で `tangent.w`（handedness ±1）が異なる場合、少数派コーナーの頂点を自動分割し indices / morph targets / UV1 を連動更新。mirrored UV 境界で法線マップの凹凸方向がねじれる問題を解消。Seed-san.vrm では hair(70)/head(88)/wear(44) 計 202 頂点が分割される
-- **Gram-Schmidt 再直交化後の退化 tangent 検出** — `extract.rs` のスキニング・非スキンメッシュ両経路で、Gram-Schmidt 後に `t_ortho` の長さが閾値未満または非有限値の場合は `Vec4::ZERO` にフォールバックし、MikkTSpace 再生成ルートへ流すよう修正。tangent が normal とほぼ平行なケース（非一様スケールや bad tangent）で退化 tangent `[0,0,0,w]` が有効と誤判定される問題を解消
-- **tangent 有効判定を `length_squared` ベースに変更** — `generate_tangents()` の「既に有効な tangent を持つか」の判定を `v.tangent == Vec4::ZERO`（完全一致）から `v.tangent.truncate().length_squared() < 1e-8`（xyz 長さベース）に変更。w 成分が非ゼロの退化 tangent（`[0,0,0,1]` 等）も再生成対象になるよう修正
-- **シェーダーのゼロ tangent ガード** — `apply_normal_map()` の冒頭で `dot(tangent.xyz, tangent.xyz) < 1e-6` をチェックし、退化 tangent では法線マップをスキップして基底法線を返す二重防御を追加。`normalize(vec3(0))` の WGSL 未定義動作を回避。本体・アウトライン両シェーダーに適用
-- **GI 間接光の乗算先を `litColor` に修正（VRM 仕様準拠）** — GI（間接光）項が `base_color.rgb * gi` と baseColor を使用していたため、間接光下でトゥーン境界が崩れていた。VRM 1.0 仕様では `giLighting = gi(n) * litColor` と定義されており、UniVRM も `input.litColor * lerp(indirectLight, indirectLightEqualized, _GiEqualization)` で litColor を使用する。`lit * gi`（本体）/ `toon_color * gi`（アウトライン）に修正し、日陰・逆光・弱照明でも陰色のトゥーン境界が維持されるようになった
+- **Separate direct light from GI calculation (UniVRM-compliant)** — `passthrough_gi` included `light_intensity * max(dot(N, light_dir), 0)`, causing direct light to be double-counted in both the direct and GI terms. In UniVRM, `indirectLight` is SH sampling result (ambient only), with direct light processed separately. For the viewer without SH/IBL, `passthrough_gi = ambient` is the correct approximation. CPU-side `gi_equalized` computation (`CameraUniform`) also fixed to ambient-only. Resolves excessive brightness on front-facing surfaces and incorrect light factor in `giEqualizationFactor` / `rimLightingMixFactor`. Fixed in both main shader and outline shared function
+- **Restore alpha=1.0 after MASK AlphaToCoverage (UniVRM-compliant)** — After `fwidth`-based A2C calculation in MASK branch, `out_alpha = a2c_alpha` left surviving pixels with semi-transparent intermediate values, causing cutout material edges to bleed during egui offscreen compositing. UniVRM `vrmc_materials_mtoon_geometry_alpha.hlsl` returns `1.0` after `clip()` to restore full opacity. A2C is used for coverage control only; final alpha is now fixed to opaque. Fixed in both main shader and outline shared function
+- **Fix `tangent.w` mirror coordinate transform flip** — The viewer's coordinate transform (VRM 1.0: Z-flip, VRM 0.0: X-flip) is a mirror transform with determinant -1, causing `cross(M*N, M*T) = -M*cross(N,T)` which flips the bitangent direction. Fixed by negating `tangent.w` to preserve tangent space handedness. Resolves left-right inversion of normal map bump direction
+- **MikkTSpace tangent generation `normalTexture.texCoord` support** — Added `normal_tex_coord` parameter to `generate_tangents()`, generating tangents from UV1 when `normalTexture.texCoord=1`. VRM materials pass the `texCoord` from `normalTexture`, while FBX/PMX/PMD use texCoord=0. Fixes tangent/normal map UV set mismatch on models where the normal map references UV1
+- **Fix glTF sampler default `min_filter` to `LinearMipmapLinear`** — Changed `IrSamplerInfo::default()` `min_filter` from `Linear` (no mipmap) to `LinearMipmapLinear`. Aligns with UniVRM's `SamplerParam.Default` (Bilinear + EnableMipMap=true) and `TextureSamplerUtil`'s `glFilter.NONE` → mipmap-enabled default behavior. Reduces flickering on textures without explicit sampler at oblique/distant views
+- **Fix MToon ScreenCoordinates outline aspect correction** — Changed `projected.x *= camera.aspect` (`width/height`) to `projected.x /= camera.aspect`. UniVRM multiplies by `height/width`; the previous implementation caused X-direction outline bloat on wide windows
+- **Remove double gamma correction from MToon sRGB outline** — Removed `pow(2.2)` from sRGB `fs_outline`. MToon computes in linear space, so the sRGB render target's automatic conversion should be trusted. `pow(2.2)` is only needed for MMD (gamma-space computation) shaders. Fixes outlines appearing darker than the surface
+- **Fix UV1 absent fallback value** — Changed GPU-side (`viewer/mesh.rs`) UV1 absent fallback from UV0 copy to zero (`[0.0, 0.0]`). Unified with CPU-side (`resolve_cpu_uv`) behavior, matching UniVRM `MeshData.cs` zero fallback convention
+- **Skinning/normal recalculation TBN sync** — Fixed tangent not being updated during animation skinning (only normals were transformed). Tangent.xyz is now transformed by the skinning matrix followed by Gram-Schmidt re-orthogonalization to maintain orthogonality with the normal. Same re-orthogonalization applied after `smooth_normals` / `clear_custom_normals`. Fixes incorrect shading, rim, and highlight direction on normal-mapped materials during animation or after normal recalculation
+- **Fix VRM 0.x `_MainTex` overwritten by raw JSON `baseColorTexture`** — After setting `materialProperties._MainTex` as the authoritative source for VRM 0.x MToon, the glTF core `pbrMetallicRoughness.baseColorTexture` was unconditionally reapplied, overwriting the `_MainTex` setting. Introduced `v0_main_tex_resolved` flag to skip raw JSON application when VRM 0.x MToon `_MainTex` is already resolved
+- **Add warning for smooth normals + normal map combination** — Emit `warn` log when `smooth_normals` is enabled and normal-mapped materials are present. Normal smoothing welds vertices by `PosUvKey` (position + UV) only, which can cause inaccurate tangent basis at UV seam boundaries (MikkTSpace regeneration would be ideal but is too costly for real-time toggling)
+- **Fix shade color composition to match VRM spec and UniVRM** — Changed `shade = base_color.rgb * shade_color * shade_mul` to `shade = shade_color * shade_mul`. Per VRM 1.0 spec pseudocode, `shadeColorTerm = shadeColorFactor * texture(shadeMultiplyTexture)` — `baseColorFactor * baseColorTexture` applies only to the lit side. Previously, shade color was double-dependent on `baseColor`, making shadows excessively dark. Fixed in both main and outline shaders
+- **Fix orthographic view direction to match UniVRM** — Changed view direction in orthographic projection from `normalize(camera_pos - world_pos)` to `normalize(camera_forward)`. Added `is_perspective` and `camera_forward` to `CameraUniform`. Perspective projection unchanged. Fixed in MToon rim lighting, MatCap, and MMD specular. Per UniVRM `MToon_GetWorldSpaceNormalizedViewDir()`
+- **Build-layer forced disable of normal smoothing / custom normal clear** — `build_gpu_model` / `build_gpu_model_from_ir` now check for normal-mapped materials at entry and force `smooth_normals` / `clear_custom_normals` to `false`. Provides defense-in-depth alongside the UI-level disable, ensuring the invariant holds for non-UI call paths (CLI, tests, benchmarks)
+- **Disable normal smoothing UI for normal-mapped materials** — Gray out normal smoothing checkbox when materials with `normal_texture` are present, preventing tangent basis corruption at UV seam boundaries. Hover text shows the reason
+- **Fix MatCap UV basis X-axis inversion (UniVRM-compliant)** — Fixed MatCap UV calculation where `world_view_x` had opposite sign from UniVRM (`(v.z, 0, -v.x)` → `(-v.z, 0, v.x)`) and `world_view_y` cross product order was inconsistent. Unified to `right = cross(viewDir, worldUp)`, `up = cross(right, viewDir)` (per UniVRM `vrmc_materials_mtoon_lighting_mtoon.hlsl`). Fixes left-right mirroring of asymmetric MatCap textures. Both main and outline shaders fixed
+- **Disable custom normal clear UI for normal-mapped materials** — Gray out custom normal clear checkbox (in addition to normal smoothing) when materials with `normal_texture` are present. `recalculate_normals_from_geometry` followed by Gram-Schmidt re-orthogonalization has the same UV seam tangent basis inaccuracy as `smooth_normals`
+- **Add Gram-Schmidt re-orthogonalization to initial glTF tangent load** — Added `t_ortho = (t - n * dot(n, t)).normalize()` re-orthogonalization after tangent transformation in both skinned and non-skinned mesh paths in `extract.rs`. Already implemented in `animation.rs` skinning update path but was missing from the initial load path. Fixes normal/tangent orthogonality loss with non-uniform scale skin matrices
+- **Unify `texCoord=1` fallback when TEXCOORD_1 is absent** — Added a post-extraction step that checks all meshes for UV1 presence and normalizes `tex_coord=1` to `tex_coord=0` on all material textures when no mesh has UV1. Eliminates the root cause of UV set divergence between tangent generation (UV0 fallback) and rendering (zero fallback)
+- **Per-mesh `texCoord=1` fallback granularity** — Changed UV1 fallback check from model-wide (`any_mesh_has_uv1`) to per-mesh granularity. Only materials referenced by meshes without UV1 have their `texCoord=1` normalized to `texCoord=0`. Correctly handles models where only some meshes have UV1. Also added `base_color_tex_info` to the fallback target list
+- **Preserve per-texture sampler on texture replacement** — Texture replacement via UI now uses the material's `IrSamplerInfo` to recreate the sampler instead of falling back to `default_sampler` (Linear + Repeat). `ClampToEdge` / `MirroredRepeat` / `Nearest` and other per-texture sampler settings are now preserved after replacement. Fixed in both same-name material linking and package texture assignment paths
+- **Sync `source_texture_name` on VRM 0.x `_MainTex` adoption** — When VRM 0.x MToon `_MainTex` overwrites `texture_index` / `base_color_tex_info` as the authoritative source, `source_texture_name` is now also re-read from the same texture source. Fixes UnityPackage automatic texture matching (`embed_textures_into_ir`) using stale glTF core texture names instead of the `_MainTex` source
+- **Fix VRM 0.x `outlineWidthTexture` channel reference** — VRM 0.x `_OutlineWidthTexture` references the R channel (per UniVRM `MToonCore.cginc:86`), but was being read as G channel (VRM 1.0). Added `ColorChannel` enum to `IrMaterial` and dynamic channel selection (VRM 0.x=R, VRM 1.0=G) in both CPU (`sample_image_channel`) and GPU (WGSL `select_channel`)
+- **Fix VRM 0.x `uvAnimationMaskTexture` channel reference** — VRM 0.x `_UvAnimMaskTexture` references the R channel (per UniVRM `MToonCore.cginc:129`), but was being read as B channel (VRM 1.0). Same `ColorChannel` version-based channel selection applied
+- **Remove shared material `texCoord=1` rewrite** — Removed the post-extraction step that rewrites `texCoord=1` to `texCoord=0` on materials referenced by meshes without UV1. This was breaking UV1-bearing meshes sharing the same material. Tangent generation fallback changed from UV0 to zero UV to match the rendering side (`mesh.rs`)
+- **Fix MToon `dot(N,L)` light direction sign** — `camera.light_dir` (light travel direction: light→surface) was used directly in MToon / non-MToon `dot(N,L)` calculations. Changed to `dot(n, -camera.light_dir)` to match the spec's "surface→light" convention. MMD shader already correctly used `-camera.light_dir`. Fixes toon shading lit/shade boundary and Half-Lambert lighting direction, resolving front-facing surfaces appearing in shadow. Fixed in main, outline, and non-MToon shaders
+- **Apply `KHR_texture_transform` to `matcapTexture`** — `matcapTexture` had `texCoord` / `offset` / `scale` / `rotation` extracted via `read_texture_info()` but the shader used raw matcap UV without transform. Added `matcap_uv_a` / `matcap_uv_b` to `MaterialUniform` and applied `apply_texture_transform()`. Fixed in both main and outline shaders
+- **`KHR_materials_emissive_strength` support** — glTF `emissiveFactor` is limited to [0,1] range; HDR emissive uses `KHR_materials_emissive_strength` extension's `emissiveStrength` multiplier. UniVRM exports this extension when `maxComponent > 1.0`, but the reader did not support it. Added `emissiveStrength` reading in `extract.rs` and multiply into `emissive_factor`
+- **Light color support** — Added `light_color: vec3<f32>` to `CameraUniform`, computing direct light as `light_intensity * light_color`. Added color picker to UI. Enables warm/cool lighting expressions
+- **Hemisphere ambient (Sky/Ground 2-color interpolation)** — Replaced uniform gray ambient with Sky/Ground 2-color interpolation using the normal Y component (`mix(ground, sky, normal.y * 0.5 + 0.5)`). Approximates SH9 L1 component (vertical brightness gradient), closely matching VRoidHub / UniVRM's `SampleSH(normal)`. `gi_equalized` updated to `(sky + ground) / 2` (per UniVRM `(SH(up) + SH(down)) / 2`). Added Sky/Ground color pickers to UI
+- **Default light mode changed to Fixed** — Changed from `LightMode::CameraFollow` to `LightMode::Fixed`. Matches VRoidHub's fixed directional light environment by default
+- **Fix MToon main pass GI hemisphere interpolation using vertex normal instead of final normal** — GI hemisphere interpolation used `in.normal.y` (vertex normal) instead of the final normal `n.y` (after normal map application), so normal map bumps and `doubleSided` back-face flipping were not reflected in indirect lighting. The outline pass already used `n.y`, causing a shading mismatch between main and outline passes. Unified main pass to use `n.y`, matching UniVRM's `MToon_SampleSH(normalWS)`
+- **Fix `rimLightingMixFactor` using equalized GI instead of raw indirect (UniVRM-compliant)** — The rim lighting factor `light_factor` included `gi` after `giEqualizationFactor` application, causing rim light intensity to flatten on materials with high GI equalization. UniVRM uses `unityLight.indirectLight` (raw, non-equalized indirect) for `rimLightingMixFactor`. Separated `raw_indirect` from `gi` (equalized), and changed rim to use `rim_light_factor = direct_light + raw_indirect`. Fixed in both main and outline passes
+- **Fix `base_color_tex_info.index` not synced on texture replacement** — `assign_texture_to_material` / `assign_texture_data_to_material` updated only `texture_index` without syncing `base_color_tex_info.index`, causing GPU rendering to be correct but IR-based downstream processing (export filter, reload) to retain stale texture references. Fixed all 4 code paths including same-name material linking. Creates `IrTextureInfo::from_index()` when `base_color_tex_info` is `None`
+- **MikkTSpace tangent handedness (w) mismatch vertex splitting** — Changed `set_tangent_encoded()` output to be stored per-corner (`face * 3 + vert`) instead of accumulated per-vertex. When corners sharing the same vertex have differing `tangent.w` (handedness ±1), minority corners are automatically split into new vertices with indices / morph targets / UV1 updated accordingly. Fixes normal map bump twisting at mirrored UV boundaries. Seed-san.vrm splits 202 vertices (hair: 70, head: 88, wear: 44)
+- **Degenerate tangent detection after Gram-Schmidt re-orthogonalization** — In both skinned and non-skinned mesh paths in `extract.rs`, when `t_ortho` length falls below threshold or is non-finite after Gram-Schmidt, fall back to `Vec4::ZERO` to route through MikkTSpace regeneration. Fixes degenerate tangent `[0,0,0,w]` being incorrectly treated as valid when tangent is nearly parallel to normal (non-uniform scale or bad tangent data)
+- **Change tangent validity check to `length_squared`-based** — Changed `generate_tangents()` validity check from `v.tangent == Vec4::ZERO` (exact match) to `v.tangent.truncate().length_squared() < 1e-8` (xyz length-based). Degenerate tangents with non-zero w component (e.g., `[0,0,0,1]`) are now correctly identified for regeneration
+- **Shader zero tangent guard** — Added `dot(tangent.xyz, tangent.xyz) < 1e-6` check at the start of `apply_normal_map()`, returning base normal when tangent is degenerate. Defense-in-depth against WGSL undefined behavior from `normalize(vec3(0))`. Applied to both main and outline shaders
+- **Fix GI indirect light to multiply `litColor` per VRM spec** — GI (indirect lighting) term used `base_color.rgb * gi` instead of the toon-interpolated lit color, causing toon boundaries to break under indirect lighting. VRM 1.0 spec defines `giLighting = gi(n) * litColor`, and UniVRM uses `input.litColor * lerp(indirectLight, indirectLightEqualized, _GiEqualization)`. Changed to `lit * gi` (main) / `toon_color * gi` (outline), preserving toon shade boundaries under shadow, backlight, and low-light conditions
 
-### 実装詳細
+### Implementation Details
 
-- **法線マップ（ノーマルマップ）対応** — glTF `normalTexture` をシェーディングに反映。頂点接線（`tangent: Vec4`）から TBN 行列を構築し、tangent-space 法線をワールド空間に変換（UniVRM `MToon_GetTangentToWorld()` 準拠）。glTF `TANGENT` 属性がなければ `mikktspace` crate で MikkTSpace 接線を自動生成（VRM 仕様準拠）。MToon・非 MToon 両方で適用。`normalTexture.scale` による強度制御、`texCoord` / `KHR_texture_transform` / UV Animation にも対応。法線マップなしの材質にはフラット法線テクスチャ（RGB=(0.5, 0.5, 1.0)）を自動バインド
-- **`alphaMode` シェーダー処理** — `alpha_cutoff` フィールドに alphaMode を sentinel 値でエンコード（`-1.0`=OPAQUE, `-0.5`=BLEND, `>=0.0`=MASK cutoff）。OPAQUE は出力アルファ 1.0 固定、MASK は UniVRM 準拠の `fwidth` ベース AlphaToCoverage 計算で cutoff 境界を平滑化（パイプラインは blend なし）、BLEND は完全透明ピクセル `discard`。アウトラインパスにも同一のアルファ処理を適用
-- **`outlineLightingMixFactor` UniVRM 完全準拠** — 本体と同等の MToon ライティング計算を `compute_mtoon_surface_lighting()` 関数として共有。アウトライン色は UniVRM と同一の `outlineColor * lerp(1, baseCol, mix)` で合成
-- **glTF テクスチャ index の image index 正規化** — `read_texture_info()` で glTF texture index を `document.textures().nth(i).source().index()` により image index に変換。`textures[]` と `images[]` の並びが異なる glTF/VRM で正しい画像を参照
-- **`outlineWidthMultiplyTexture` GPU 専用サンプリング** — アウトライン頂点シェーダーで GPU サンプリング結果のみ使用（CPU 側 `edge_scale` は PMX エクスポート用に維持）。CPU 側 `resolve_cpu_uv()` で GPU と同一の texCoord 選択 + KHR_texture_transform を適用
-- **`doubleSided` 背面法線反転（UniVRM 準拠）** — `@builtin(front_facing)` で背面法線を反転し、法線マップ適用前に処理。UniVRM の `MTOON_IS_FRONT_VFACE` と同等。全シェーダーバリアントに適用
-- **UV アニメーション回転角精度** — UniVRM 準拠で `fract(turns) * 2π` による角度ラップを実装し、長時間再生時の浮動小数点精度低下を防止
-- **制限事項: テクスチャ UV セットは `TEXCOORD_0` / `TEXCOORD_1` のみ対応** — glTF 仕様では任意数の UV セットを許容するが、VRM/MToon で使用する UV は UV0/UV1 の 2 系統のみ（UniVRM 実装確認済み）。`texCoord >= 2` のテクスチャは `texCoord=0` にフォールバックされる（`warn` ログ出力）
-- **VRM 0.x MatCap（`_SphereAdd`）への `_MainTex` ST 非適用修正** — `resolve_tex()` ヘルパーが全テクスチャに一律 `_MainTex` ST を適用していた問題を修正。MatCap は `inherit_st=false` で ST 伝播を除外するよう変更（UniVRM `MigrationMToonMaterial.cs:255-260` 準拠: "Texture transform is not required"）。将来 MatCap の UV パラメータを使用した際に VRM 0.x で MatCap が誤変換される潜在バグを解消
-- **`base_color_tex_info` の merge / export_filter 同期漏れ修正** — `IrModel::merge()` と `build_filtered_ir()` で `base_color_tex_info` のテクスチャ index がオフセット・リマップされていなかった問題を修正。merge 時の `offset_index()` と export_filter 時の `remap_index()` を追加し、`texture_index` との不整合を解消
-- **export_filter の `sphere_texture_index` / `toon_texture_index` pruning 漏れ修正** — `used_tex_indices` の収集とリマップに `sphere_texture_index` / `toon_texture_index` が含まれていなかったため、エクスポートフィルタ適用後にこれらのテクスチャ参照が壊れる可能性があった問題を修正
-- **`doubleSided` MToon 材質の背面法線反転（UniVRM 準拠）** — `fs_main` / `fs_outline`（sRGB / Unorm 両版）に `@builtin(front_facing)` を追加し、背面フラグメントの法線を法線マップ適用前に反転。UniVRM の `MTOON_IS_FRONT_VFACE(facing, normalWS, -normalWS)` と同等。髪カード・まつげ・薄い布等の `doubleSided` 材質で陰影・リム・MatCap・法線マップの方向が Unity と一致するようになった
-- **法線マップ TBN 構築の退化 UV フォールバック** — `apply_normal_map()` で `det ≈ 0`（ゼロ面積 UV / 同一点 UV / 極端に細い三角形）や tangent/bitangent がゼロベクトル近傍の場合に基底法線にフォールバックするよう修正。`normalize(vec3(0))` の WGSL 未定義動作を回避し、法線マップ由来のちらつき・色飛びを防止。本体・アウトライン両シェーダーに適用
-- **`read_texture_info()` の `None` 時先行設定クリア** — `read_texture_info()` が `None` を返した場合（テクスチャ未参照等）、core glTF API で先に設定された `texture_index` / `emissive_texture` / `normal_texture` がクリアされず UV0 で誤描画される問題を修正。raw JSON の判定結果を authoritative とし、`None` 時は先行設定を明示的にクリアするよう変更
-- **法線マップ TBN 構築の bitangent 符号二重反転修正** — `apply_normal_map()` の screen-space derivative TBN 構築で、`inv_det = 1.0 / det` に既に含まれる handedness 符号に対し、さらに `sign(det)` を bitangent に乗算していた問題を修正。mirrored UV アイランドで法線マップの陰影方向が崩れる問題を解消。本体・アウトライン両シェーダーを修正
-- **UV アニメーション回転角の長時間稼働時精度劣化防止** — `apply_uv_anim_core()` で `camera.time * rotation_speed` をそのまま `sin/cos` に渡していたため、長時間稼働時に float 精度が低下し UV 回転がジッターする問題を修正。UniVRM 準拠で `fract(turns) * 2π` により角度を周期内に折り返すよう変更。本体・アウトライン両シェーダーを修正
-- **VRM 0.x `_OutlineWidthTexture` への `_MainTex` ST 伝播漏れ修正** — `_OutlineWidthTexture` が `resolve_tex()` ヘルパー定義前に `IrTextureInfo::from_index()` で直接設定されていたため、`_MainTex` の tiling/offset（ST）が伝播されていなかった問題を修正。`resolve_tex()` 経由に統一し、他の MToon テクスチャと同様に ST を適用（UniVRM `MigrationMToonMaterial.cs` 準拠）。CPU 側 `edge_scale` 計算にも影響するため、PMX 出力のエッジ倍率も修正される
-- **UV1 不在時のゼロフォールバック** — `texCoord=1` を要求するテクスチャに対し、メッシュに `TEXCOORD_1` が存在しないとき `[0.0, 0.0]` をフォールバック値として使用（UniVRM `MeshData.cs` 準拠）。GPU 側・CPU 側で統一
-- **スキニング/法線再計算後の TBN 同期** — アニメーション再生時のスキニング処理で法線のみ変換し接線（tangent）が未更新だった問題を修正。スキニング行列で tangent.xyz を変換後、Gram-Schmidt 再直交化で法線に対する直交性を維持。法線平滑化（`smooth_normals`）/カスタム法線クリア（`clear_custom_normals`）後も同様に tangent を再直交化。法線マップ付き材質でアニメーション中や法線再計算時に陰影・リム・ハイライトの方向がずれる問題を解消
-- **VRM 0.x `_MainTex` が raw JSON `baseColorTexture` で上書きされる問題を修正** — VRM 0.x MToon で `materialProperties._MainTex` を authoritative source として設定した後、glTF core の `pbrMetallicRoughness.baseColorTexture` が無条件に再適用されて `_MainTex` の設定を上書きしていた問題を修正。`_MainTex` 解決済みフラグ（`v0_main_tex_resolved`）を導入し、VRM 0.x MToon で `_MainTex` が設定済みの場合は raw JSON 反映をスキップするよう変更
-- **法線平滑化 + 法線マップ併用時の警告追加** — `smooth_normals` ON かつ法線マップ付き材質が含まれる場合に `warn` ログを出力するよう追加。法線平滑化は `PosUvKey`（位置+UV）のみで頂点を統合するため、UV seam 境界で tangent basis が不正確になる可能性がある（MikkTSpace 再生成が理想だがリアルタイム操作にはコスト大）
-- **shade 色合成式を仕様・UniVRM 準拠に修正** — `shade = base_color.rgb * shade_color * shade_mul` を `shade = shade_color * shade_mul` に修正。VRM 1.0 仕様の擬似コードでは `shadeColorTerm = shadeColorFactor * texture(shadeMultiplyTexture)` であり、`baseColorFactor * baseColorTexture` は lit 側にのみ適用される。従来は陰色が `baseColor` に二重従属し、影が過剰に暗くなっていた。本体シェーダーとアウトラインシェーダーの両方を修正
-- **正射影時の view direction を UniVRM 準拠に修正** — 正射影カメラ時の view direction を `normalize(camera_pos - world_pos)` から `normalize(camera_forward)` に変更。`CameraUniform` に `is_perspective` と `camera_forward` を追加。透視投影時は従来通り。MToon リムライティング・MatCap・MMD スペキュラの3箇所を修正。UniVRM `MToon_GetWorldSpaceNormalizedViewDir()` 準拠
-- **法線平滑化・カスタム法線クリアのビルド層強制無効化** — `build_gpu_model` / `build_gpu_model_from_ir` の入口で法線マップ付き材質の有無を判定し、`smooth_normals` / `clear_custom_normals` を強制 `false` にフォールバック。UI 側の無効化に加えてビルド層でも二重に防御し、CLI・テスト・ベンチ等の UI 非経由呼び出し経路でも不変条件を保証
-- **法線平滑化を法線マップ付き材質で UI 無効化** — `normal_texture` を持つ材質が含まれる場合、法線平滑化チェックボックスをグレーアウトし、UV seam 境界での tangent basis 破綻を防止。ホバーテキストで理由を表示
-- **MatCap UV 基底の X 軸反転修正（UniVRM 準拠）** — MatCap UV 算出の `world_view_x` が UniVRM と符号逆（`(v.z, 0, -v.x)` → `(-v.z, 0, v.x)`）で、`world_view_y` の cross 積順も不一致だった問題を修正。`right = cross(viewDir, worldUp)`, `up = cross(right, viewDir)` に統一（UniVRM `vrmc_materials_mtoon_lighting_mtoon.hlsl` 準拠）。非対称 MatCap テクスチャの左右ミラーを解消。本体シェーダーとアウトラインシェーダーの両方を修正
-- **カスタム法線クリアを法線マップ付き材質で UI 無効化** — `normal_texture` を持つ材質が含まれる場合、法線平滑化に加えカスタム法線クリアのチェックボックスもグレーアウトするよう修正。`recalculate_normals_from_geometry` 後の Gram-Schmidt 再直交化では UV seam 境界で tangent basis が不正確になる問題は `smooth_normals` と同一
-- **glTF tangent 初期ロード時の Gram-Schmidt 再直交化追加** — `extract.rs` のスキニング・非スキンメッシュ両経路で、tangent 変換後に `t_ortho = (t - n * dot(n, t)).normalize()` による再直交化を追加。`animation.rs` のスキニング更新パスでは既に実装済みだったが、初期ロード経路では未実施だった。非一様スケールを含むスキン行列で法線と接線の直交性が崩れる問題を解消
-- **`texCoord=1` かつ TEXCOORD_1 不在時のフォールバック統一** — extract 完了後に全メッシュの UV1 有無を確認し、UV1 が存在しない場合は全材質テクスチャの `tex_coord=1` を `tex_coord=0` に正規化するステップを追加。tangent 生成（UV0 フォールバック）と描画（zero フォールバック）で UV セットが乖離する問題を根本解消
-- **`texCoord=1` フォールバックをメッシュ単位判定に変更** — UV1 フォールバックの判定をモデル全体（`any_mesh_has_uv1`）からメッシュ単位に変更。UV1 を持たないメッシュが参照する材質のみ `texCoord=1` → `texCoord=0` に正規化し、一部メッシュだけ UV1 を持つモデルでも正しく動作するよう改善。`base_color_tex_info` もフォールバック対象に追加
-- **テクスチャ差し替え時の per-texture sampler 維持** — UI からテクスチャを差し替える際、`default_sampler`（Linear + Repeat 固定）ではなく材質の `IrSamplerInfo` を使用してサンプラーを再生成するよう修正。`ClampToEdge` / `MirroredRepeat` / `Nearest` 等のテクスチャ固有サンプラー設定が差し替え後も維持される。同名材質連動・パッケージテクスチャ割り当ての両経路で修正
-- **VRM 0.x `_MainTex` 採用時の `source_texture_name` 同期** — VRM 0.x MToon の `_MainTex` を authoritative source として `texture_index` / `base_color_tex_info` を上書きする際、`source_texture_name` も同一テクスチャ元から再取得するよう修正。UnityPackage テクスチャ自動割り当て（`embed_textures_into_ir`）で glTF core 側のテクスチャ名が残り、`_MainTex` 側と一致しない問題を解消
-- **MToon `dot(N,L)` の光方向符号修正** — `camera.light_dir`（光の進行方向: 光源→表面）を MToon / 非MToon の `dot(N,L)` でそのまま使用していた問題を修正。`dot(n, -camera.light_dir)` に変更し、仕様の「表面→光源方向」に統一。MMD シェーダーは既に `-camera.light_dir` で正しく反転していた。toon shading の lit/shade 境界と Half-Lambert ライティングの方向が正しくなり、正面が影になる問題を解消。本体・アウトライン・非 MToon の3箇所を修正
-- **`matcapTexture` の `KHR_texture_transform` 適用** — `matcapTexture` は `read_texture_info()` で `texCoord` / `offset` / `scale` / `rotation` を抽出済みだが、シェーダーでは生の matcap UV をそのまま使用していた問題を修正。`MaterialUniform` に `matcap_uv_a` / `matcap_uv_b` を追加し、`apply_texture_transform()` を適用。本体・アウトライン両シェーダーを修正
-- **ライトカラー対応** — `CameraUniform` に `light_color: vec3<f32>` を追加し、direct light を `light_intensity * light_color` で計算するよう変更。UI にカラーピッカーを追加。暖色・冷色の照明表現が可能に
-- **半球 ambient（Sky/Ground 2色補間）** — 一様な灰色 ambient を法線Y成分による Sky/Ground 2色補間に変更（`mix(ground, sky, normal.y * 0.5 + 0.5)`）。SH9 の L1 成分（上下明暗差）を近似し、VRoidHub / UniVRM の `SampleSH(normal)` に近い環境光を実現。`gi_equalized` も `(sky + ground) / 2` に更新（UniVRM `(SH(up) + SH(down)) / 2` 準拠）。UI に Sky/Ground 各色のカラーピッカーを追加
-- **デフォルトライトモードを固定に変更** — `LightMode::CameraFollow` から `LightMode::Fixed` に変更。VRoidHub と同じ固定ディレクショナルライト環境がデフォルトに
-- **`KHR_materials_emissive_strength` 対応** — glTF の `emissiveFactor` は [0,1] 範囲に制限されるため、HDR emissive は `KHR_materials_emissive_strength` 拡張の `emissiveStrength` で倍率を指定する。UniVRM は `maxComponent > 1.0` 時にこの拡張を書き出すが、読み取り側で未対応だった。`extract.rs` で `emissiveStrength` を読み取り `emissive_factor` に乗算するよう修正
+- **Normal mapping (normal map) support** — Apply glTF `normalTexture` to shading. Builds TBN matrix from vertex tangent (`tangent: Vec4`) per UniVRM `MToon_GetTangentToWorld()`. When glTF lacks `TANGENT` attributes, generates MikkTSpace tangents via `mikktspace` crate (VRM spec-compliant). Applied to both MToon and non-MToon materials. Supports `normalTexture.scale` intensity control, `texCoord` / `KHR_texture_transform` / UV Animation. Materials without normal maps automatically bind a flat normal texture (RGB=(0.5, 0.5, 1.0))
+- **`alphaMode` shader processing** — `alpha_cutoff` field encodes alphaMode using sentinel values (`-1.0`=OPAQUE, `-0.5`=BLEND, `>=0.0`=MASK cutoff). OPAQUE output alpha fixed to 1.0, MASK uses UniVRM-compliant `fwidth`-based AlphaToCoverage calculation for smooth cutoff edge transition (pipeline uses blend: None), BLEND discards fully transparent pixels. Same alpha handling applied to outline pass
+- **`outlineLightingMixFactor` full UniVRM compliance** — Full MToon lighting computation shared via `compute_mtoon_surface_lighting()` function. Outline color composited using UniVRM's exact formula: `outlineColor * lerp(1, baseCol, mix)`
+- **glTF texture index to image index normalization** — `read_texture_info()` resolves glTF texture index to image index via `document.textures().nth(i).source().index()`. Correctly references images when `textures[]` and `images[]` ordering diverges
+- **`outlineWidthMultiplyTexture` GPU-only sampling** — Outline vertex shader uses GPU sampling result only (`edge_scale` retained for PMX export). CPU-side `resolve_cpu_uv()` applies the same texCoord selection + KHR_texture_transform as GPU
+- **`doubleSided` back-face normal flipping (UniVRM-compliant)** — `@builtin(front_facing)` flips back-face normals before normal map application, matching UniVRM's `MTOON_IS_FRONT_VFACE`. Applied to all shader variants
+- **UV animation rotation precision** — Wraps angle within one period via `fract(turns) * 2π` per UniVRM, preventing float precision loss during long sessions
+- **Limitation: Only `TEXCOORD_0` / `TEXCOORD_1` UV sets are supported** — While the glTF spec allows arbitrary UV sets, VRM/MToon only uses UV0/UV1 (confirmed against UniVRM implementation). Textures with `texCoord >= 2` fall back to `texCoord=0` (`warn` log emitted)
 
-### コード品質・パフォーマンス改善
+### Code Quality & Performance
 
-- **半透明ソート用作業バッファ再利用** — `render_to_texture` 内で毎フレーム `Vec<Vec3>`（重心）と `Vec<usize>`（ソート済みインデックス）をアロケーションしていた問題を修正。`GpuRenderer` に `work_draw_centers` / `work_sorted_indices` を作業バッファとして追加し、`std::mem::take` + 返却パターンで容量を維持しつつ借用衝突を回避
-- **半透明 DrawCall 重心の均等サンプリング** — 半透明ソート用の重心計算を全インデックス走査から均等間隔サンプリング（最大30点）に変更。30 index 以下は全走査、それ以上は `total / 30` ステップで均等にサンプリング。髪・スカート等の広がったメッシュでも空間的に代表性の高い重心を算出しつつ計算量を O(k) に抑制
-- **モーフ循環検出バッファ再利用** — `apply_gpu_morph_to` がモーフごとに `vec![false; N]` をアロケーションしていた問題を修正。`GpuModel` に `morph_visited: Vec<bool>` を追加し、`clear()` + `resize()` で再利用。`apply_gpu_morph_to` 関数を廃止し、呼び出し元が直接 `apply_gpu_morph_recursive` を使用
-- **`morph_work` / `animated_vertices` の swap 統合** — `apply_morphs` 内で `morph_work` → `animated_vertices` への `extend_from_slice` / `clone`（~1.9MB/フレーム）を `std::mem::swap` に置き換え。GPU 書き込みも swap 後の `animated_vertices` を参照するよう変更し、頂点バッファの冗長コピーを回避
-- **テクスチャ書き出しの clone 回避** — `convert/texture.rs` の `ImageBuffer::from_raw(w, h, tex.data.clone())` を `image::save_buffer(&out_path, &tex.data, ...)` に変更し、最大 64MB（4K RGBA）のデータクローンを完全に回避。`ImageBuffer` import を除去
-- **`convert_fbx_to_pmx` の `normalize_pose` 修正** — 公開 API `convert_fbx_to_pmx` が `options.normalize_pose` を `extract_ir_model_from_fbx` に渡していなかった問題を修正。`extract_ir_model_from_fbx_with_options` に切り替え
-- **`unsafe` ブロックの SAFETY コメント追加** — `main.rs`（`attach_parent_console` / `detach_console`）と `viewer/single_instance.rs`（全 Win32 API 呼び出し）の `unsafe` ブロック全箇所に `// SAFETY:` コメントを追加
-- **`IrMaterial` の MToon フィールド分離** — `IrMaterial` の 25 個の MToon 固有フィールドを新しい `MtoonParams` 構造体に移動し、`mtoon: Option<MtoonParams>` で保持。フィールド数を 35+ → 約 18 に削減。`is_mtoon()` / `mtoon()` / `mtoon_mut()` ヘルパーメソッドを追加（非 MToon 時は静的デフォルト値 `MTOON_DEFAULT` を返却）
-- **`viewer/app.rs` サブモジュール分割** — `app.rs` を責務ごとに 5 サブモジュールに分割: `mod.rs`（構造体定義・初期化・eframe::App impl）、`file_io.rs`（ファイル読み込み・D&D・リロード）、`texture_mgmt.rs`（テクスチャ割り当て・プレビュー）、`pending.rs`（遅延タスク処理）、`helpers.rs`（ユーティリティ型・関数）。外部 API は `pub use` で互換性維持
-- **`anyhow` → `PoponeError` 統一** — ライブラリ内部モジュール 19 ファイルで `anyhow::Result` → `crate::error::Result` に移行。`PoponeError` に 7 新バリアント（`FbxParse` / `PmxParse` / `PmdParse` / `Build` / `Archive` / `UnityPackage` / `Other`）を追加。`ResultExt` トレイト（`.context()` / `.with_context()` 互換）を追加。`main.rs` / `viewer/` は `anyhow` のまま維持
-- **非 MToon 材質の `render_queue_offset` 誤設定防止** — VRM 0.x `remap_vrm0_render_queue_offsets` で `mat.mtoon_mut()` を全材質に呼んでいたため、非 MToon 材質に `mtoon: Some(Default)` が生成され `is_mtoon()` が `true` になる問題を修正。`if let Some(ref mut mtoon) = mat.mtoon` に変更し MToon 材質のみに制限
+- **Reuse work buffers for translucent sorting** — Fixed per-frame allocation of `Vec<Vec3>` (centroids) and `Vec<usize>` (sorted indices) inside `render_to_texture`. Added `work_draw_centers` / `work_sorted_indices` work buffers to `GpuRenderer`, using a `std::mem::take` + return pattern to retain capacity while avoiding borrow conflicts
+- **Uniform sampling for translucent DrawCall centroids** — Changed centroid computation for translucent sorting from full index traversal to uniform interval sampling (max 30 points). Meshes with 30 or fewer indices use full traversal; larger meshes sample at `total / 30` step intervals. Produces spatially representative centroids even for spread-out meshes (hair, skirts, etc.) while keeping computation O(k)
+- **Reuse morph cycle-detection buffer** — Fixed `apply_gpu_morph_to` allocating `vec![false; N]` per morph. Added `morph_visited: Vec<bool>` to `GpuModel`, reused via `clear()` + `resize()`. Removed the `apply_gpu_morph_to` wrapper; callers now invoke `apply_gpu_morph_recursive` directly
+- **Swap-based `morph_work` / `animated_vertices` integration** — Replaced `extend_from_slice` / `clone` (~1.9 MB/frame) from `morph_work` to `animated_vertices` in `apply_morphs` with `std::mem::swap`. GPU writes now reference the swapped `animated_vertices`, eliminating redundant vertex buffer copies
+- **Eliminate clone in texture export** — Changed `convert/texture.rs` from `ImageBuffer::from_raw(w, h, tex.data.clone())` to `image::save_buffer(&out_path, &tex.data, ...)`, completely avoiding data clones up to 64 MB (4K RGBA). Removed `ImageBuffer` import
+- **Fix `convert_fbx_to_pmx` `normalize_pose` passthrough** — Fixed public API `convert_fbx_to_pmx` not passing `options.normalize_pose` to `extract_ir_model_from_fbx`. Switched to `extract_ir_model_from_fbx_with_options`
+- **Add SAFETY comments to `unsafe` blocks** — Added `// SAFETY:` comments to all `unsafe` blocks in `main.rs` (`attach_parent_console` / `detach_console`) and `viewer/single_instance.rs` (all Win32 API calls)
+- **Extract MToon fields from `IrMaterial`** — Moved 25 MToon-specific fields from `IrMaterial` into a new `MtoonParams` struct, held as `mtoon: Option<MtoonParams>`. Reduced field count from 35+ to ~18. Added `is_mtoon()` / `mtoon()` / `mtoon_mut()` helper methods (returns static default `MTOON_DEFAULT` for non-MToon materials)
+- **Split `viewer/app.rs` into submodules** — Split `app.rs` into 5 responsibility-based submodules: `mod.rs` (struct definitions, initialization, eframe::App impl), `file_io.rs` (file loading, D&D, reload), `texture_mgmt.rs` (texture assignment & preview), `pending.rs` (deferred task processing), `helpers.rs` (utility types & functions). External API preserved via `pub use`
+- **Unify `anyhow` → `PoponeError`** — Migrated 19 internal library files from `anyhow::Result` to `crate::error::Result`. Added 7 new variants to `PoponeError` (`FbxParse` / `PmxParse` / `PmdParse` / `Build` / `Archive` / `UnityPackage` / `Other`). Added `ResultExt` trait (`.context()` / `.with_context()` compatible). `main.rs` / `viewer/` retain `anyhow`
+- **Prevent `render_queue_offset` mis-assignment on non-MToon materials** — VRM 0.x `remap_vrm0_render_queue_offsets` called `mat.mtoon_mut()` on all materials, causing non-MToon materials to acquire `mtoon: Some(Default)` and report `is_mtoon() == true`. Fixed by using `if let Some(ref mut mtoon) = mat.mtoon` to restrict to MToon materials only
 
 ## v0.2.8
 
-### 新機能
+### New Features
 
-- **シングルインスタンス** — ビューアが既に起動している状態で再度起動すると、ファイルパスを既存ウィンドウに転送して自動終了する（Windows Named Mutex + Named Pipe IPC）。最小化状態からも復帰する
-- **FPS 精度改善** — 指数移動平均（EMA）からフレームカウント方式（直近1秒の実フレーム数）に変更。平均フレームタイム（ms）も併せて表示
+- **Single Instance** — When the viewer is already running and launched again, the file path is forwarded to the existing window and the new process exits automatically (Windows Named Mutex + Named Pipe IPC). Restores from minimized state
+- **FPS Accuracy** — Changed from exponential moving average (EMA) to frame counting method (actual frame count over the last 1 second). Also displays average frame time (ms)
 
-### 改善
+### Improvements
 
-- **ログ保全** — シングルインスタンス判定をログ初期化前に実行し、2番目のプロセスによる不要なログファイル生成・ローテーションを防止。IPC 失敗時のフォールバック起動でもログローテーションをスキップ
-- **IPC エラーハンドリング** — WriteFile 失敗・短書き込み時は FallbackStart に切り替え（ファイルオープン要求のサイレント消失防止）。ReadFile エラー（ERROR_MORE_DATA 等）と空メッセージを区別して処理
+- **Log Preservation** — Single instance check runs before log initialization, preventing unnecessary log file creation and rotation by second processes. Log rotation is also skipped on fallback startup when IPC fails
+- **IPC Error Handling** — WriteFile failure or short writes now trigger FallbackStart (prevents silent loss of file-open requests). ReadFile errors (ERROR_MORE_DATA, etc.) are distinguished from intentional empty messages
 
 ## v0.2.7
 
-### 新機能
+### New Features
 
-- **PMX 出力オプション追加** — ビューアの出力タブと CLI に以下のオプションを追加。`PmxBuildOptions` 構造体を導入し、ビルド時オプションを統合管理
-  - **物理なしで出力** (`--no-physics`): 剛体・ジョイントを出力から除外。ビューアでは物理可視化を維持したままエクスポート時のみスキップ
-  - **元のボーン構造で出力** (`--raw-structure`): MMD 標準ボーン（全ての親・センター・グルーブ・腰・IK・捩り等）の挿入をスキップし、VRM/FBX の元のボーン名をそのまま PMX に出力。`IrBone` に `original_name` フィールドを追加し、FBX の元ノード名（humanoid 検出による PMX 名変換前の名前）を保持
-- **アプリアイコン** — ウィンドウタイトルバーと exe ファイルの両方にアイコンを表示
-- **グリッド Y 軸線** — グリッド床に Y 軸（上方向）の緑色ガイドラインを追加
+- **PMX Export Options** — Added the following options to the viewer export tab and CLI. Introduced `PmxBuildOptions` struct to unify build-time options
+  - **No-physics export** (`--no-physics`): Exclude rigid bodies and joints from output. In the viewer, physics visualization is preserved while only skipping at export time
+  - **Raw structure export** (`--raw-structure`): Skip MMD standard bone insertion (master, center, groove, waist, IK, twist, etc.) and output original VRM/FBX bone names as-is in PMX. Added `original_name` field to `IrBone` to preserve FBX original node names (before humanoid detection renames to PMX names)
+- **App Icon** — Display icon in both the window title bar and the exe file
+- **Grid Y-Axis Line** — Added green Y-axis (up direction) guide line to the grid floor
 
-### バグ修正
+### Bug Fixes
 
-- **PMD 頂点 edge_flag 修正** — PMD 頂点の `edge_flag` 解釈を修正
-- **PMX グループモーフのインデックスずれ修正** — PMX ロード時にボーン/材質/UV モーフをスキップすると、グループモーフ内のサブモーフ参照インデックスがずれて不正な変形になっていたバグを修正。PMX → IrModel 変換時にインデックスリマッピングテーブルを構築し、スキップされたモーフを正しく除外するようになった
-- **ビューア スタックオーバーフロー修正** — Windows のデフォルトスタックサイズ（1MB）では eframe/winit/wgpu のコールバックチェーンが深くスタックが溢れる場合があった問題を修正。`build.rs` で viewer feature 有効時にスタックサイズを 8MB に拡大（`/STACK:8388608`）。また、グループモーフの再帰展開に深度制限（最大 16）を追加し、循環参照による無限再帰を防止
+- **PMD Vertex edge_flag Fix** — Fixed PMD vertex `edge_flag` interpretation
+- **PMX Group Morph Index Remapping Fix** — Fixed incorrect deformation when PMX group morphs referenced sub-morphs whose indices shifted due to bone/material/UV morphs being skipped during PMX → IrModel conversion. Now builds an index remapping table and correctly excludes skipped morphs from group morph references
+- **Viewer Stack Overflow Fix** — Fixed stack overflow on Windows where the default 1MB stack was insufficient for the deep eframe/winit/wgpu callback chain. Stack size is now set to 8MB via `/STACK:8388608` linker flag in `build.rs` when the viewer feature is enabled. Also added recursion depth limit (max 16) to group morph expansion to prevent infinite recursion from circular references
 
-### 改善
+### Improvements
 
-- **テクスチャ手動割当の検索フィルタ移動** — アーカイブ（UnityPackage / ZIP 等）からのテクスチャ手動割当ダイアログで、検索フィルタをダイアログ上部から各テクスチャプルダウン内に移動。プルダウンを開くと「(なし)」→ 検索フィルタ → テクスチャ一覧の順で表示される。素材パネルのテクスチャ割当ポップアップと同じ操作感に統一
+- **Texture Manual Assignment Search Filter Relocation** — Moved the search filter in the texture manual assignment dialog (for archives like UnityPackage / ZIP) from the top of the dialog into each texture dropdown. Opening a dropdown now shows "(none)" → search filter → texture list, matching the behavior of the material panel texture assignment popup
 
-### コード品質改善
+### Code Quality
 
-- **公開 API 統合** — `convert_vrm_to_pmx` の 3 段ラッパー関数チェーンを `VrmConvertOptions` 構造体 + 1 関数に統合。新オプション追加時の関数増殖を防止
-- **`no_physics` 適用箇所統一** — `main.rs` での `ir.physics` 直接クリアを削除し、`PmxBuildOptions` 経由の制御に一本化
-- **グループモーフ循環参照対策** — 深度制限のみのガードを visited ビットセット（バックトラック方式）によるサイクル検出に改善。循環参照を O(N) で検出
-- **`raw_structure` 時の付与データ保持** — 元のボーン構造で出力する際に、PMX の付与親（grant）・移動可能・軸固定・表示フラグを IrBone から正しく復元するよう改善。PMX → PMX ラウンドトリップでのデータ損失を防止
-- **build.rs クロスコンパイル対応** — `winres` を `[target.'cfg(windows)'.build-dependencies]` に限定。スタックサイズ設定を MSVC (`/STACK`) / GNU (`-Wl,--stack`) で分岐
-- **座標変換関数の重複解消** — `pmx_pos_to_gltf` / `pmx_normal_to_gltf` を `convert/coord.rs` に統合し、`pmd/extract.rs` と `pmx/extract.rs` の重複定義を解消
-- **アイコン PNG 最適化** — ウィンドウアイコン用 PNG を 512×512 (99KB) → 64×64 (4KB) に縮小
-- **エラーハンドリング改善** — アイコン読み込みの `expect` パニックを `?` 演算子によるエラー伝播に変更
-- **グループモーフ警告ログ** — PMX ロード時のサブモーフスキップ、およびビューアでの範囲外サブインデックスを `log::warn` で報告
-- **収束ループ安全化** — エクスポートフィルタのグループモーフ有効性判定ループにモーフ数上限ガードを追加
+- **Public API Consolidation** — Merged the 3-level `convert_vrm_to_pmx` wrapper chain into a single function with `VrmConvertOptions` struct. Prevents function proliferation when adding new options
+- **Unified `no_physics` Application** — Removed direct `ir.physics` clearing in `main.rs`, consolidated control through `PmxBuildOptions`
+- **Group Morph Cycle Detection** — Replaced depth-only guard with visited bitset (backtracking) for O(N) cycle detection in recursive group morph expansion
+- **Grant Data Preservation in `raw_structure`** — When exporting with raw bone structure, PMX grant (rotation/move grant), translatable, axis-fixed, and visibility flags are now correctly restored from IrBone. Prevents data loss in PMX → PMX round-trips
+- **Cross-compilation Support in build.rs** — Restricted `winres` to `[target.'cfg(windows)'.build-dependencies]`. Stack size linker flags now branch between MSVC (`/STACK`) and GNU (`-Wl,--stack`)
+- **Coordinate Function Deduplication** — Consolidated `pmx_pos_to_gltf` / `pmx_normal_to_gltf` into `convert/coord.rs`, eliminating duplicate definitions in `pmd/extract.rs` and `pmx/extract.rs`
+- **Icon PNG Optimization** — Reduced window icon PNG from 512×512 (99KB) to 64×64 (4KB)
+- **Error Handling Improvement** — Changed icon loading from `expect` (panic) to `?` operator (error propagation)
+- **Group Morph Warning Logs** — Report skipped sub-morphs during PMX loading and out-of-range sub-indices in viewer via `log::warn`
+- **Convergence Loop Safety** — Added morph count upper bound guard to the group morph liveness loop in export filter
 
 ## v0.2.6
 
-### バグ修正
+### Bug Fixes
 
-- **剛体・ジョイント Euler 回転順序修正** — 剛体・ジョイントの Euler 分解・再構成を `ZXY`（内的 ZXY = 外的 YXZ）から `YXZ`（内的 YXZ = 外的 ZXY）に修正。D3DX 行優先規約 `v * Ry * Rx * Rz` に準拠（glam 列優先では `Rz * Rx * Ry`）。球体・カプセルでは目立たないが、ボックス剛体で回転の不一致が顕著だった。変換出力（`convert/physics.rs`）とビューア描画（`gpu.rs`）の両方を修正
-- **PMD/PMX 剛体 bone_index フォールバック** — PMD の `bone_index=0xFFFF`（関連ボーンなし）および PMX の `bone_index=-1` の剛体をボーン 0（センター）に追従させるよう修正。従来は `None` となり位置計算の基点がなかった
-- **ジョイント接続線の表示分離** — `generate_spring_bone_vertices`（物理表示(P)トグル）に含まれていたジョイント接続線（黄色い線）を削除。ジョイント接続線は既に `generate_joint_vertices` で独立描画されており、ジョイント表示トグルで制御される
-- **MMD 描画順序修正** — 不透明/半透明で分離していた描画ループを材質インデックス順の単一ループに統合。PMX/PMD の材質順序（モデル作者が意図した前後関係）を正しく維持するようになった。エッジも各不透明材質の直後に描画
-- **MMD 半透明デプス書き込み有効化** — MMD 半透明パイプラインのデプス書き込みを有効化（MMD 準拠）。材質順描画との組み合わせで、alpha=0.99 等の「実質不透明」材質が後続材質を正しく遮蔽
-- **PMD カスタムトゥーンテクスチャ修正** — `build_tex_map()` がカスタムトゥーンテクスチャのインデックスを登録していなかったバグを修正。`extract_textures()` の結果からマッピングを構築するよう変更し、モデル同梱のトゥーンテクスチャが正しく参照されるようになった（共有トゥーンへの誤フォールバックを解消）
-- **PMX/PMD 剛体アニメーション追従修正** — VRMA アニメーション再生時に PMX/PMD モデルの剛体・ジョイントがボーンに正しく追従しなかったバグを修正。原因は `bone.position`（glTF 空間に変換済み）と `rb.position`（PMX 空間のまま）の座標空間不整合。PMX/PMD の `pmx_pos_to_gltf` は VRM 1.0 と同じ Z 反転変換のため、剛体追従のデルタ計算で VRM 1.0 と同じ `gltf_pos_to_pmx` 変換と回転デルタの Z-flip を適用するよう修正
-- **FBX ヒューマノイドボーン検出改善** — Blender リグの CamelCase ボーン名（`UpperLeg.L` → `upperleg_l`）が `upper_leg_l` パターンにマッチしなかった問題を修正。アンダースコアなしの代替パターン（`upperleg_l` / `lowerleg_l` / `upperarm_l` / `lowerarm_l`）、つま先の単数形（`toe_l` / `toe_r`）、指ボーン逆順パターン（`index_proximal_l` 等）、pinky エイリアスを追加。Unity FBX エクスポートの名前空間プレフィックス（`Model::Hips` 等）を `strip_namespace_lower()` で除去し、リグ検出・パターンマッチに反映
-- **UnityPackage テクスチャ MIME タイプ修正** — UnityPackage 経由で読み込んだ FBX モデルのテクスチャが全てマゼンタ（1x1 ピンク）になるバグを修正。`embed_textures_into_ir` で IrTexture を作成する際に `mime_type` が空文字列になっており、TGA 等マジックナンバーのないフォーマットで `image::load_from_memory` の自動判定が失敗していた。ファイル拡張子から MIME タイプを設定するよう修正。併せて `decode_image_to_rgba_with_hint` の TGA MIME マッチに `"image/x-tga"` を追加（`mime_for_ext` が返す値との不一致を解消）
+- **Rigid Body / Joint Euler Rotation Order Fix** — Changed Euler decomposition/reconstruction for rigid bodies and joints from `ZXY` (intrinsic ZXY = extrinsic YXZ) to `YXZ` (intrinsic YXZ = extrinsic ZXY). Now conforms to D3DX row-major convention `v * Ry * Rx * Rz` (in glam column-major: `Rz * Rx * Ry`). The mismatch was inconspicuous for spheres/capsules but clearly visible for box rigid bodies. Both conversion output (`convert/physics.rs`) and viewer rendering (`gpu.rs`) are fixed
+- **PMD/PMX Rigid Body bone_index Fallback** — Rigid bodies with PMD `bone_index=0xFFFF` (no associated bone) and PMX `bone_index=-1` now fall back to bone 0 (center). Previously these were `None`, leaving no base point for position calculation
+- **Joint Connection Line Display Separation** — Removed joint connection lines (yellow lines) from `generate_spring_bone_vertices` (physics display (P) toggle). Joint lines are already independently drawn by `generate_joint_vertices` and controlled by the joint display toggle
+- **MMD Draw Order Fix** — Merged separate opaque/transparent draw loops into a single material-index-order loop. Now correctly preserves PMX/PMD material order (the front-to-back order intended by the model author). Edges are drawn immediately after each opaque material
+- **MMD Transparent Depth Write Enabled** — Enabled depth write for MMD transparent pipelines (MMD-compliant). Combined with material-order drawing, materials with alpha=0.99 (effectively opaque) now correctly occlude subsequent materials
+- **PMD Custom Toon Texture Fix** — Fixed `build_tex_map()` not registering custom toon texture indices. Now builds the mapping from `extract_textures()` results, ensuring model-bundled toon textures are correctly referenced (eliminates incorrect fallback to shared toon)
+- **PMX/PMD Rigid Body Animation Tracking Fix** — Fixed rigid bodies and joints not correctly following bones during VRMA animation playback on PMX/PMD models. Root cause was coordinate space mismatch between `bone.position` (converted to glTF space) and `rb.position` (kept in PMX space). Since PMX/PMD's `pmx_pos_to_gltf` uses the same Z-flip as VRM 1.0, the rigid body tracking delta computation now applies the same `gltf_pos_to_pmx` conversion and rotation delta Z-flip as VRM 1.0
+- **FBX Humanoid Bone Detection Improvement** — Fixed Blender rig CamelCase bone names (e.g., `UpperLeg.L` → `upperleg_l`) failing to match `upper_leg_l` patterns. Added underscore-free alternative patterns (`upperleg_l` / `lowerleg_l` / `upperarm_l` / `lowerarm_l`), singular toe (`toe_l` / `toe_r`), reversed finger patterns (`index_proximal_l`, etc.), and pinky aliases. Also strips Unity FBX export namespace prefixes (`Model::Hips`, etc.) via `strip_namespace_lower()` for rig detection and pattern matching
+- **UnityPackage Texture MIME Type Fix** — Fixed all textures appearing as magenta (1x1 pink) when loading FBX models from UnityPackage files. `embed_textures_into_ir` was creating IrTexture with an empty `mime_type`, causing `image::load_from_memory` auto-detection to fail for formats without magic numbers (e.g., TGA). Now derives MIME type from the file extension. Also added `"image/x-tga"` to the TGA MIME match in `decode_image_to_rgba_with_hint` to fix mismatch with the value returned by `mime_for_ext`
 
-### 新機能
+### New Features
 
-- **PMX 付与（grant）アニメーション対応** — PMX ボーンの回転付与・移動付与をアニメーション再生時に処理するようになった。Tda 式初音ミク等の D-bones（足D・ひざD 等）は FK ボーンの回転を付与でコピーする仕組みだが、この処理が未実装だったため VRMA アニメーション時に足が追従しなかった。`IrBone` に `IrGrant`（付与親・付与率・回転/移動/ローカルフラグ）を追加し、PMX 読み込み時に付与データを抽出。アニメーション計算後、ボーンインデックス順に付与デルタを適用しグローバル行列を再計算する 2 フェーズ方式で実装。ローカル付与（`is_local`）は子ボーンのレスト姿勢を基準にデルタを適用。付与処理順序はトポロジカルソート（カーン法 BFS）で事前計算し、不正な PMX ファイルでも正しい依存順序を保証
-- **ボーン表示改善** — PMX/PMD のボーンをフラグに基づき形状別に描画。通常=◎（二重円＋中心塗り）、移動=◻（正方形＋中心塗り）、軸制限=⊗（円＋✕）、IKコントローラ=◻（青枠＋オレンジ塗り＋青中心）。IK影響下ボーン（Link）はオレンジ表示。テイルベース描画（self→tail）により PMXEditor と同様のボーン方向を表示。TriangleList による完全塗りつぶし、3段階パイプライン（テール→塗り面→外枠線）、4パス優先描画（通常→IK影響下→軸制限→IKコントローラ）
+- **PMX Grant (付与) Animation Support** — Rotation/move grants on PMX bones are now processed during animation playback. D-bones (leg D, knee D, etc.) in models like Tda Miku copy FK bone rotations via grants, but this mechanism was unimplemented, causing legs to not follow VRMA animations. Added `IrGrant` (parent index, ratio, rotation/move/local flags) to `IrBone` and extracts grant data during PMX loading. Implemented as a 2-phase post-process after animation computation: apply grant deltas in topological order, then recompute global matrices linearly. Local grants (`is_local`) apply deltas relative to the child bone's rest pose. Grant processing order is pre-computed via topological sort (Kahn's BFS algorithm), ensuring correct dependency order even for malformed PMX files
+- **Bone Display Improvements** — Draws PMX/PMD bones with flag-based shapes. Normal = ◎ (double circle + filled center), Move = ◻ (square + filled center), Axis-fixed = ⊗ (circle + ✕), IK Controller = ◻ (blue outline + orange fill + blue center). IK-affected bones (Link) displayed in orange. Tail-based drawing (self→tail) shows bone direction like PMXEditor. Full solid fills via TriangleList, 3-stage pipeline (tail → fill → outline), 4-pass priority rendering (normal → IK-affected → axis-fixed → IK controller)
 
-- **FBX Tスタンス変換** — FBX モデルの A→T スタンス変換に対応。ビューアでは FBX 読み込み時に「Tスタンス変換」チェックボックスが表示される（Aスタンス変換と排他）。CLI では `--normalize-to-tstance` オプションで使用可能
-- **MMD レンダリングモード** — PMX/PMD ロード時に自動 ON。MMD 固有のトゥーンシェーディング、Blinn-Phong スペキュラ、スフィアマップ（乗算/加算）で表示
-- **エッジ（輪郭線）描画** — inverted hull 法による輪郭線。材質ごとのエッジ色・太さ、距離減衰、UI からの ON/OFF・太さスライダー（0.1〜3.0）
-- **共有トゥーンテクスチャ** — MMD 標準 toon01〜toon10 のグラデーションを CPU で生成。個別トゥーンテクスチャにも対応
-- **スフィアマップ** — PMX の sphere_mode（乗算/加算）、PMD の .sph/.spa ファイルに対応。ビュー空間法線からスフィア UV を算出
-- **色空間再現** — MMD のガンマ空間レンダリングを再現。PMX/PMD 専用フレームでは `Rgba8Unorm` レンダーターゲットに切り替え、ガンマ空間での正確なアルファブレンドを実現。VRM 混在時は `Rgba8UnormSrgb` にフォールバック
-- **PMD スフィア/トゥーン抽出** — `parse_pmd_texture_slots` で `*` 区切りのメイン/スフィアテクスチャを分離。トゥーンテクスチャのファイル存在確認付き登録
+- **FBX T-Stance Conversion** — Added A-to-T stance conversion for FBX models. In the viewer, a "T-Stance Conversion" checkbox appears when an FBX model is loaded (mutually exclusive with A-stance conversion). Available via `--normalize-to-tstance` CLI option
+- **MMD Rendering Mode** — Auto-enabled on PMX/PMD load. Displays with MMD-specific toon shading, Blinn-Phong specular, and sphere maps (multiply/add)
+- **Edge (Outline) Drawing** — Inverted hull method outlines. Per-material edge color/size, distance attenuation, UI toggle and thickness slider (0.1–3.0)
+- **Shared Toon Textures** — CPU-generated MMD standard toon01–toon10 gradients. Individual toon textures also supported
+- **Sphere Maps** — PMX sphere_mode (multiply/add), PMD .sph/.spa file support. Sphere UV computed from view-space normals
+- **Color Space Reproduction** — Reproduces MMD's gamma-space rendering. PMX/PMD-only frames switch to `Rgba8Unorm` render target for correct gamma-space alpha blending. Falls back to `Rgba8UnormSrgb` when VRM is mixed
+- **PMD Sphere/Toon Extraction** — `parse_pmd_texture_slots` separates main/sphere textures via `*` delimiter. Toon texture registration with file existence check
 
-### 改善
+### Improvements
 
-- **剛体表示修正** — PMD/PMX の剛体回転から不要な X 反転補正（`adjust_pmd_rigid_rotation` / `adjust_pmx_rigid_rotation`）を削除。PMX/PMD モデルの座標は既に PMX 空間にあるため、ビューア描画時の glTF→PMX 座標変換をスキップ。Box 剛体のサイズを half-extent として正しく扱うよう修正（従来の `* 0.5` による二重除算を解消）。カプセル剛体に半球ワイヤーフレーム（4 経線 + 3 緯線 × 上下）を追加し PMXEditor 準拠の表示に改善
-- **剛体 physics_mode 色分け** — PMX/PMD モデルの剛体表示を `physics_mode` で色分け（0:ボーン追従=グリーン、1:物理演算=レッド、2:物理+ボーン=ブルー）。VRM は従来通り group ベース（コライダー=レッド、スプリング=グリーン）
-- **オーバーレイ描画順序変更** — 可視化オーバーレイの描画順を「法線 → ボーン → 剛体 → ジョイント」に変更（ジョイントが最前面）。メッシュ表面の法線は最背面に、接続関係を示すジョイントを最前面に配置し視認性を改善
-- **MMD ライティング見直し** — トゥーン乗算方式に移行（lit/shadow lerp 廃止）。`base_color = saturate(diffuse × LightAmbient + ambient)` で D3D ambient/emissive マッピングを修正。スペキュラはトゥーン適用後に独立加算（影領域でもハイライト維持）。LightAmbient = 154/255 ≈ 0.604、LightSpecular も同値に統一
-- **トゥーンサンプリング NdotL 依存化** — 固定 UV `(0.5, 0.85)` から `(0, 0.5 − NdotL × 0.5)` に変更し、法線とライト方向に応じた陰影グラデーションを再現
-- **共有トゥーンテクスチャ実データ化** — 推定グラデーション（256×16）を MMD 標準 toon01-10 の実ピクセルデータ（1×32、32行RGB値）に置換。toon01-04: 2色ステップ、toon05: 暖ピンクグラデーション、toon06: 黄色+ハイライトバンド、toon07-10: 全白
-- **スフィア UV X 反転** — X 反転座標系に対応し `vn_x × -0.5 + 0.5` に修正。スフィアマップ反映は RGB のみ（アルファ不正対策）
-- **PMD エッジフラグ修正** — `edge_flag` の解釈を `0=有効` から `1=エッジあり` に修正
-- **PMX トゥーン未設定対応** — `PmxToonRef::Texture(-1)` を `(None, None)` として処理し、トゥーンなしを正しく扱うように修正
-- **カメラ・ライティング MMD 準拠** — FOV 45° → 30°（MMD 標準）、ライト方向を MMD 準拠に変更（固定: (-0.5,-1.0,0.5) の反転、カメラ追従: MMD 風左上寄り）。ライト強度 0.6、環境光 0.5 に調整
-- **視点依存フィット** — バウンディングボックスのフィット計算を視点依存に改善。bbox 8 頂点をカメラ軸に投影し、幅・高さ・奥行きの全方向で frustum に収まる距離を算出。アスペクト比・透視/正射影の両方に対応
-- **Shift 精密操作** — Shift キーを押しながらのカメラ操作で 1/3 速度の精密モード（回転・パン・ズーム全対応）
-- **ダブルクリックフィット** — ビューポートのダブルクリックでモデルにフィット
-- **MMD ambient 分離** — MMD レンダリング時の環境光を標準パスから分離。CameraUniform の `mmd_ambient_scale` で制御し、MMD モード切替が標準材質の明るさに影響しなくなった
-- **IrMaterial 拡張** — `source_format`、`sphere_texture_index`、`sphere_mode`、`toon_texture_index`、`toon_shared_index` フィールド追加。merge 時の index remap 対応
-- **テクスチャデュアルビュー** — GPU テクスチャを `Rgba8UnormSrgb`（標準）と `Rgba8Unorm`（MMD）の 2 ビューで管理。メモリ増加なし
-- **ワイヤーフレーム共存** — MMD モード ON でも Wire / S+W / 法線マップ表示時は既存パイプラインにフォールバック
+- **Rigid Body Display Fix** — Removed unnecessary X flip correction (`adjust_pmd_rigid_rotation` / `adjust_pmx_rigid_rotation`) from PMD/PMX rigid body rotation. PMX/PMD model coordinates are already in PMX space, so glTF→PMX coordinate conversion is now skipped during viewer rendering. Fixed Box rigid body size to correctly treat values as half-extents (removed erroneous `* 0.5` double-halving). Added hemisphere wireframes (4 meridians + 3 parallels × top/bottom) to capsule rigid bodies for PMXEditor-compliant display
+- **Rigid Body physics_mode Coloring** — PMX/PMD rigid bodies now colored by `physics_mode` (0: bone-follow = green, 1: physics = red, 2: physics+bone = blue). VRM retains group-based coloring (collider = red, spring = green)
+- **Overlay Draw Order Change** — Changed visualization overlay draw order to "Normals → Bones → Rigid Bodies → Joints" (joints are frontmost). Normals are drawn farthest back as they relate to mesh surfaces, while joints are frontmost for better visibility of connection relationships
+- **MMD Lighting Overhaul** — Switched to toon multiply method (removed lit/shadow lerp). Fixed D3D ambient/emissive mapping with `base_color = saturate(diffuse × LightAmbient + ambient)`. Specular now added independently after toon (highlights preserved in shadow regions). LightAmbient = 154/255 ≈ 0.604, LightSpecular unified to same value
+- **NdotL-Dependent Toon Sampling** — Changed from fixed UV `(0.5, 0.85)` to `(0, 0.5 − NdotL × 0.5)`, reproducing shade gradients based on normal-light angle
+- **Real Shared Toon Texture Data** — Replaced estimated gradients (256×16) with actual MMD standard toon01-10 pixel data (1×32, 32-row RGB values). toon01-04: 2-color step, toon05: warm pink gradient, toon06: yellow + highlight band, toon07-10: all white
+- **Sphere UV X Inversion** — Fixed for X-inverted coordinate system with `vn_x × -0.5 + 0.5`. Sphere map applies RGB only (alpha safety for BMP etc.)
+- **PMD Edge Flag Fix** — Changed `edge_flag` interpretation from `0=enabled` to `1=edge present`
+- **PMX Toon Unset Handling** — `PmxToonRef::Texture(-1)` now treated as `(None, None)`, correctly handling no-toon materials
+- **MMD-Compliant Camera & Lighting** — FOV 45° → 30° (MMD standard), light direction changed to MMD-compliant (fixed: inversion of (-0.5,-1.0,0.5), camera-follow: MMD-style upper-left bias). Light intensity 0.6, ambient 0.5
+- **View-Dependent Fit** — Improved bounding box fit calculation to be view-dependent. Projects bbox 8 corners onto camera axes, computing distance that fits width, height, and depth within the frustum. Supports both aspect ratio and perspective/orthographic modes
+- **Shift Precision Mode** — Hold Shift for 1/3 speed precision camera control (rotation, pan, and zoom)
+- **Double-Click Fit** — Double-click viewport to fit model
+- **MMD Ambient Separation** — Separated MMD rendering ambient from the standard path. Controlled via `mmd_ambient_scale` in CameraUniform, so MMD mode toggle no longer affects standard material brightness
+- **IrMaterial Extension** — Added `source_format`, `sphere_texture_index`, `sphere_mode`, `toon_texture_index`, `toon_shared_index` fields. Index remap on merge supported
+- **Texture Dual Views** — GPU textures managed with both `Rgba8UnormSrgb` (standard) and `Rgba8Unorm` (MMD) views. Zero memory overhead
+- **Wireframe Coexistence** — Wire / S+W / normal map display falls back to standard pipeline even with MMD mode ON
 
-### コード品質・パフォーマンス改善
+### Code Quality & Performance
 
-- **アニメーション逆行列キャッシュ** — レストポーズのボーングローバル逆行列を `SkinningData` 構築時にキャッシュ。毎フレーム175ボーン分の `Mat4::inverse()` 計算を排除
-- **WGSL シェーダー共通化** — `CameraUniform`（8重複）・`MmdMaterialUniform`（4重複）の struct 定義を `macro_rules!` + `concat!` で一元管理。sRGB/Unorm 版の MMD メインシェーダーを `compute_mmd_lighting` 関数で共通化し、差分をフラグメントシェーダー1関数に局所化
-- **重複コード関数化** — `build_pkg_model_list`（unitypackageモデルリスト構築×3）、`load_animation_file`（アニメーション読込ルーティング×2）、`mime_for_ext`（MIMEタイプ判定×4）を共通関数に抽出
-- **`to_string_lossy()` 改善** — 7ファイル18箇所の `.to_string_lossy().to_string()` を `.to_string_lossy().into_owned()` に変更。UTF-8 互換パスでの不要なアロケーションを回避
-- **`is_psd_filename` 最適化** — `to_lowercase()` による String アロケーションを `eq_ignore_ascii_case` に置換
-- **`update_mat_cache` 簡素化** — NLL で不要な二重 `if let` 借用を除去
-- **PMX リーダー安全性強化** — 全14箇所の `i32 as usize` カウントキャストに負値チェックを追加（`checked_count` ヘルパー）。破損ファイルでの OOM パニックを防止。`Cursor` に不要な `BufReader` ラッピングを除去（PMX/PMD 両方）
-- **`sort_bones_topological` 最適化** — ボーン並び替えの子探索を O(n²) 線形走査から O(n) 隣接リストに変更。並び替え後の `clone()` を `Option::take()` パターンに変更し全ボーンのディープコピーを排除
-- **PSD 出力 I/O 最適化** — UVマップ PSD のチャンネルデータ書き出しを 1バイト単位 `write_all` からチャンネルバッファ一括書き出しに変更（4096×4096 で最大 64M 回→4回に削減）。レイヤーデータにも `reserve` を追加
-- **テクスチャアップロード最適化** — `upload_rgba_to_gpu` で縮小不要時の `rgba.to_vec()` コピーを排除（参照渡しに変更）。RGBA8 形式テクスチャの `img.pixels.clone()` も排除し直接アップロード
-- **GPU 描画軽微改善** — ジョイント立方体頂点を `Vec<Vec3>` から `[Vec3; 8]` 固定長配列に変更。法線キャッシュ更新を `to_vec()` から `clear()` + `extend_from_slice()` に変更しヒープ再利用
-- **PMX ライター最適化** — UTF-16LE エンコードを手動バイトプッシュから `to_le_bytes()` + `extend_from_slice()` に変更。UTF-8 パスは `Vec` コピーを経由せず直接書き出し
-- **カメラ行列再利用** — `view_proj()` 内で `look_at_lh` を直接呼ぶ代わりに `view_matrix()` を再利用
-- **デッドコード削除** — `pmx/extract.rs` の空ループ（何も処理しない for ループ）を除去
-- **`build_composite` 冗長ループ削除** — `vec![255u8; ...]` で全バイト 255 初期化後に不要なアルファ設定ループを除去
+- **Animation Inverse Matrix Cache** — Cache rest-pose bone global inverse matrices at `SkinningData` construction time. Eliminates per-frame `Mat4::inverse()` computation for 175 bones
+- **WGSL Shader Consolidation** — Unified `CameraUniform` (8 duplicates) and `MmdMaterialUniform` (4 duplicates) struct definitions via `macro_rules!` + `concat!`. Shared MMD main shader body via `compute_mmd_lighting` function, localizing sRGB/Unorm differences to a single fragment shader function
+- **Duplicate Code Extraction** — Extracted `build_pkg_model_list` (unitypackage model list ×3), `load_animation_file` (animation load routing ×2), `mime_for_ext` (MIME type detection ×4) into shared functions
+- **`to_string_lossy()` Improvement** — Changed `.to_string_lossy().to_string()` to `.to_string_lossy().into_owned()` across 7 files (18 occurrences). Avoids unnecessary allocation for UTF-8 compatible paths
+- **`is_psd_filename` Optimization** — Replaced `to_lowercase()` String allocation with `eq_ignore_ascii_case`
+- **`update_mat_cache` Simplification** — Removed unnecessary double `if let` borrow pattern using NLL
+- **PMX Reader Safety Hardening** — Added negative value checks to all 14 `i32 as usize` count casts via `checked_count` helper. Prevents OOM panic on corrupt files. Removed unnecessary `BufReader` wrapping around `Cursor` (both PMX and PMD)
+- **`sort_bones_topological` Optimization** — Changed child bone search from O(n²) linear scan to O(n) adjacency list. Replaced post-sort `clone()` with `Option::take()` pattern, eliminating deep copy of all bones
+- **PSD Output I/O Optimization** — Changed UV map PSD channel data writing from per-byte `write_all` to batch buffer writes (reduced from up to 64M calls to 4 for 4096×4096). Added `reserve` to layer data buffers
+- **Texture Upload Optimization** — Eliminated `rgba.to_vec()` copy in `upload_rgba_to_gpu` when no downscaling is needed (changed to pass-by-reference). Also eliminated `img.pixels.clone()` for RGBA8 format textures by uploading directly
+- **GPU Rendering Minor Improvements** — Changed joint cube vertices from `Vec<Vec3>` to `[Vec3; 8]` fixed-size array. Changed normal cache update from `to_vec()` to `clear()` + `extend_from_slice()` for heap reuse
+- **PMX Writer Optimization** — Changed UTF-16LE encoding from manual byte push to `to_le_bytes()` + `extend_from_slice()`. UTF-8 paths now written directly without intermediate `Vec` copy
+- **Camera Matrix Reuse** — `view_proj()` now reuses `view_matrix()` instead of calling `look_at_lh` directly
+- **Dead Code Removal** — Removed empty loop (no-op for loop) in `pmx/extract.rs`
+- **`build_composite` Redundant Loop Removal** — Removed unnecessary alpha-setting loop after `vec![255u8; ...]` initialization (all bytes already 255)
 
 ## v0.2.5
 
-### 改善
+### Improvements
 
-- **テクスチャ自動縮小** — GPU の最大テクスチャサイズ（通常 8192px）を超えるテクスチャを自動的にアスペクト比を保って縮小。巨大テクスチャを含むモデルでのクラッシュを防止
-- **アーカイブ直接ロード（ZIP / 7z）** — ZIP / 7z アーカイブを直接 D&D / ダイアログで開き、内部の VRM / FBX / PMX / PMD モデルを自動検出。複数モデル時は選択ダイアログを表示。PMX/PMD はテクスチャ参照パスを解析して関連ファイルを自動収集
-- **CLI アーカイブ対応** — `popone archive.zip output.pmx` で直接変換。`--list-models` でモデル一覧表示、`--model-name` で指定モデルを選択（完全一致→前方一致→部分一致、各段階で一意のみ採用）
-- **Shift_JIS ファイル名対応** — ZIP 内の日本語ファイル名を UTF-8 → Shift_JIS フォールバックで正しくデコード
-- **zip bomb 対策** — 総展開サイズ 2GB 上限、ZIP は `take()` でハード制限、7z はチャンク読み込みで実読込バイト数を検証
-- **パストラバーサル防御** — アーカイブ内の `..` を含むパスを拒否（ZipSlip 攻撃対策）
-- **リロード対応** — アーカイブから読み込んだモデルの Aスタンス切替等のリロードに対応。`ReloadableSource::Archive` で選択モデルパスを保持
-- **アーカイブ内 UnityPackage 対応** — ZIP / 7z 内の `.unitypackage` を自動検出し、二重展開で内部の VRM / FBX を読み込み。リロード・アペンド・テクスチャ復元にも対応
-- **展開サイズ上限** — `.unitypackage` (tar.gz) の展開にも 2GB サイズ上限を適用。外側アーカイブと内側パッケージの両方で防御
-- **スタンス変換警告の常時表示** — Aスタンス/Tスタンス変換をONにしたが変換が実行されなかった場合、ビューポート左下に常時警告を表示。腕ボーン未検出（赤文字）/ 既に目標姿勢に近い（黄文字）の2種を表示。PMX出力時の警告もA/Tスタンスに応じて文言を分岐
-- **UVマップ PSD レイヤーグループ化** — 複数モデルをマージした場合、UVマップ PSD 出力でモデル別にレイヤーをグループフォルダに格納。単一モデルでもグループ化される。PSD の lsct (Section Divider Setting) を使用し、Photoshop / CLIP STUDIO Paint と互換
-- **MaterialGroup 構造体** — ビューアの材質グループ管理を `(String, usize, usize)` タプルから `MaterialGroup` 構造体に変更。`material_range`（材質index範囲）と `draw_range`（DrawCall範囲）を分離し、UV出力とUI表示で適切な範囲を使用
+- **Automatic Texture Downscaling** — Textures exceeding the GPU's maximum texture size (typically 8192px) are automatically downscaled while preserving aspect ratio. Prevents crashes with models containing oversized textures
+- **Direct Archive Loading (ZIP / 7z)** — Open ZIP / 7z archives directly via D&D or dialog, auto-detecting VRM / FBX / PMX / PMD models inside. Shows selection dialog when multiple models are found. For PMX/PMD, analyzes texture reference paths to auto-collect related files
+- **CLI Archive Support** — `popone archive.zip output.pmx` for direct conversion. `--list-models` to list models, `--model-name` to select a specific model (exact → prefix → substring match, unique match only at each stage)
+- **Shift_JIS Filename Support** — Correctly decodes Japanese filenames in ZIP via UTF-8 → Shift_JIS fallback
+- **Zip Bomb Protection** — 2GB total extraction size limit. ZIP uses `take()` for hard limits, 7z uses chunked reading to verify actual bytes read
+- **Path Traversal Defense** — Rejects archive paths containing `..` (ZipSlip attack prevention)
+- **Reload Support** — Supports reload (e.g., A-stance toggle) for models loaded from archives. `ReloadableSource::Archive` preserves selected model path
+- **Nested UnityPackage in Archives** — Auto-detects `.unitypackage` files inside ZIP / 7z and double-extracts to load inner VRM / FBX models. Supports reload, append, and texture restoration
+- **Extraction Size Limit** — `.unitypackage` (tar.gz) extraction now enforces the same 2GB size limit. Both outer archive and inner package are protected
+- **Persistent Stance Conversion Warning** — When A-stance/T-stance conversion is enabled but not applied, a persistent warning is shown at the bottom-left of the viewport. Two warning types: arm bones not found (red) / already in target pose (yellow). PMX export warning messages also branch between A/T stance labels
+- **UV Map PSD Layer Grouping** — When multiple models are merged, UV map PSD output groups layers into folders by model name. Single models are also grouped. Uses PSD lsct (Section Divider Setting) for Photoshop / CLIP STUDIO Paint compatibility
+- **MaterialGroup Struct** — Changed viewer material group management from `(String, usize, usize)` tuple to `MaterialGroup` struct. Separates `material_range` (material index range) and `draw_range` (DrawCall range) for proper usage in UV export and UI display
 
-### コード品質・パフォーマンス改善
+### Code Quality & Performance
 
-- **構造化エラー型** — `thiserror` で `PoponeError` enum を定義し、公開 API を `error::Result` に移行。内部は `anyhow` を継続使用し `From<anyhow::Error>` ブリッジで互換性維持
-- **ViewerApp 構造体分割** — `PendingState`（遅延処理 10 フィールド）と `ExportState`（PMX エクスポート 4 フィールド）を分離。フィールド数 43 → 27 に削減
-- **毎フレーム GPU テクスチャ再登録回避** — ビューポートテクスチャの登録/解放を `update_egui_texture_from_wgpu_texture` に変更し、フレームレート改善
-- **ステータスバー format! キャッシュ** — モデル統計文字列をロード時に事前フォーマットし、毎フレームのヒープ割り当てを回避
-- **リロード時の clone → take** — `reload_current()` で `morph_weights`・`material_visibility` 等を `std::mem::take()` で所有権移動（ヒープ再割り当て回避）
-- **GLB 二重読み込み回避** — VRM 変換時に GLB を `(ir, glb_for_tex)` タプルで保持し、テクスチャ書き出し用の再読み込みを排除
-- **BindGroupLayout 共通関数化** — `gpu::create_material_bind_group_layout()` で材質用レイアウト定義を一元化
-- **dump コード重複解消** — `dump_ir()` 関数を抽出し、`run_main` と `run_archive_convert` の重複を除去
+- **Structured Error Type** — Defined `PoponeError` enum with `thiserror`, migrated public API to `error::Result`. Internal code continues using `anyhow` with `From<anyhow::Error>` bridge for compatibility
+- **ViewerApp Struct Split** — Extracted `PendingState` (10 deferred processing fields) and `ExportState` (4 PMX export fields). Reduced field count from 43 to 27
+- **Per-Frame GPU Texture Re-Registration Eliminated** — Switched viewport texture from register/free to `update_egui_texture_from_wgpu_texture`, improving frame rate
+- **Status Bar format! Cache** — Pre-format model statistics string at load time, eliminating per-frame heap allocation
+- **Reload clone → take** — Changed `reload_current()` to use `std::mem::take()` for `morph_weights`, `material_visibility`, etc. (avoids heap reallocation)
+- **GLB Double-Read Eliminated** — Hold GLB as `(ir, glb_for_tex)` tuple during VRM conversion, eliminating re-read for texture export
+- **BindGroupLayout Shared Function** — Centralized material layout definition in `gpu::create_material_bind_group_layout()`
+- **Dump Code Deduplication** — Extracted `dump_ir()` function, removing duplicate code in `run_main` and `run_archive_convert`
 
 <details>
-<summary>内部改善の詳細</summary>
+<summary>Internal Improvement Details</summary>
 
-#### 構造化エラー型（thiserror）
+#### Structured Error Type (thiserror)
 
-`error.rs` に `PoponeError` enum を定義し、`lib.rs` の公開 API を `error::Result` に移行。
+Defined `PoponeError` enum in `error.rs` and migrated public API in `lib.rs` to `error::Result`.
 
 ```rust
 #[derive(Debug, thiserror::Error)]
 pub enum PoponeError {
-    #[error("ファイル読み込み失敗: {0}")]
+    #[error("File read failed: {0}")]
     Io(#[from] std::io::Error),
-    #[error("GLB/VRM パース失敗: {0}")]
+    #[error("GLB/VRM parse failed: {0}")]
     GltfParse(#[from] gltf::Error),
-    #[error("FBX パース失敗: {0}")]
+    #[error("FBX parse failed: {0}")]
     FbxParse(String),
     // ... PmxParse, PmdParse, Extraction, Build, Texture, Image, UnityPackage, Archive, Other
 }
 
-/// anyhow::Error から PoponeError への変換（既存コードとの互換用）
+/// Convert anyhow::Error to PoponeError (compatibility with existing code)
 impl From<anyhow::Error> for PoponeError { ... }
 
 pub type Result<T> = std::result::Result<T, PoponeError>;
 ```
 
-- 公開 API: `error::Result<T>`（`PoponeError` で構造化）
-- 内部: `anyhow::Result` を継続使用（`bail!`、`context()` 等の利便性を維持）
-- ブリッジ: `From<anyhow::Error> for PoponeError` で `?` 演算子が自動変換
+- Public API: `error::Result<T>` (structured via `PoponeError`)
+- Internal: Continues using `anyhow::Result` (retaining `bail!`, `context()` convenience)
+- Bridge: `From<anyhow::Error> for PoponeError` enables automatic `?` operator conversion
 
-#### ViewerApp さらなる構造体分離
+#### Further ViewerApp Struct Split
 
-v0.2.2 の `TextureState` / `AnimLibrary` に加え、`PendingState` / `ExportState` を分離:
+In addition to v0.2.2's `TextureState` / `AnimLibrary`, extracted `PendingState` / `ExportState`:
 
-| サブ構造体 | フィールド | アクセス | 内容 |
-|-----------|----------|---------|------|
-| `TextureState` | `self.tex.*` | 9 フィールド | テクスチャ割り当て・パッケージテクスチャ・プレビュー・マッチング |
-| `AnimLibrary` | `self.anim.*` | 4 フィールド | アニメーション再生状態・ライブラリ・Muscle スケール |
-| `PendingState` | `self.pending.*` | 10 フィールド | 遅延処理（ファイル読み込み・GPU 再構築・PMX 変換等） |
-| `ExportState` | `self.export.*` | 4 フィールド | PMX エクスポート（出力パス・ログ・表示材質のみ・UV 解像度） |
+| Sub-struct | Field | Access | Contents |
+|------------|-------|--------|----------|
+| `TextureState` | `self.tex.*` | 9 fields | Texture assignment, package textures, preview, matching |
+| `AnimLibrary` | `self.anim.*` | 4 fields | Animation playback state, library, Muscle scale |
+| `PendingState` | `self.pending.*` | 10 fields | Deferred processing (file load, GPU rebuild, PMX conversion, etc.) |
+| `ExportState` | `self.export.*` | 4 fields | PMX export (output path, log, visible-only, UV resolution) |
 
-ViewerApp のフィールド数: 43（v0.2.1）→ 30（v0.2.2）→ 27（v0.2.5）。
+ViewerApp field count: 43 (v0.2.1) → 30 (v0.2.2) → 27 (v0.2.5).
 
-#### 毎フレーム GPU テクスチャ再登録回避
+#### Per-Frame GPU Texture Re-Registration Eliminated
 
-ビューポートのオフスクリーンテクスチャ登録を初回 `register` + 以降 `update` 方式に変更:
+Changed viewport offscreen texture registration from per-frame free + register to initial register + subsequent update:
 
 ```rust
-// 変更前: 毎フレーム free + register
+// Before: free + register every frame
 egui_renderer.free_texture(&old_id);
 let tex_id = egui_renderer.register_native_texture(device, &view, FilterMode::Linear);
 
-// 変更後: 初回 register、以降 update
+// After: register once, then update
 let tex_id = if let Some(existing_id) = *cached_id {
     egui_renderer.update_egui_texture_from_wgpu_texture(device, &view, FilterMode::Linear, existing_id);
     existing_id
@@ -723,21 +734,21 @@ let tex_id = if let Some(existing_id) = *cached_id {
 };
 ```
 
-#### ステータスバー format! キャッシュ
+#### Status Bar format! Cache
 
-モデル統計文字列を `CachedStats::new()` でロード時に事前フォーマット:
+Pre-format model statistics string at load time via `CachedStats::new()`:
 
 ```rust
 pub struct CachedStats {
     pub total_vertices: usize,
     pub total_faces: usize,
-    pub status_text: String,  // 事前フォーマット済み
+    pub status_text: String,  // Pre-formatted
 }
 
 impl CachedStats {
     fn new(ir: &IrModel) -> Self {
         let status_text = format!(
-            "頂点:{} 面:{} 材質:{} テクスチャ:{} ボーン:{} モーフ:{}",
+            "Vertices:{} Faces:{} Materials:{} Textures:{} Bones:{} Morphs:{}",
             ...
         );
         Self { total_vertices, total_faces, status_text }
@@ -745,14 +756,14 @@ impl CachedStats {
 }
 ```
 
-`CachedMaterialInfo` にも `tex_status_text` フィールドを追加し、テクスチャ設定状況の文字列もキャッシュ。
+Also added `tex_status_text` field to `CachedMaterialInfo` to cache the texture assignment status string.
 
-#### リロード時の clone → take
+#### Reload clone → take
 
-`reload_current()` で状態を退避する際、`clone()` を `std::mem::take()` に変更:
+Changed state saving in `reload_current()` from `clone()` to `std::mem::take()`:
 
-| 対象 | 変更前 | 変更後 |
-|------|--------|--------|
+| Target | Before | After |
+|--------|--------|-------|
 | `morph_weights` | `.clone()` | `std::mem::take()` |
 | `material_visibility` | `.clone()` | `std::mem::take()` |
 | `material_filter` | `.clone()` | `std::mem::take()` |
@@ -760,19 +771,19 @@ impl CachedStats {
 | `tex.assignments` | `.clone()` | `std::mem::take()` |
 | `tex.pkg_assignments` | `.clone()` | `std::mem::take()` |
 
-`take()` は所有権を移動するため、Vec / HashMap のヒープ再割り当てが発生しない。リロード成功後に同じデータを復元するため、移動元は空の状態で問題ない。
+`take()` moves ownership, avoiding Vec / HashMap heap reallocation. Since the same data is restored after successful reload, the source being empty is not a problem.
 
-#### GLB 二重読み込み回避
+#### GLB Double-Read Eliminated
 
-CLI 変換（`run_main`）で VRM → PMX 変換時、GLB を 2 回読み込んでいた問題を修正:
+Fixed CLI conversion (`run_main`) reading GLB twice during VRM → PMX conversion:
 
 ```rust
-// 変更前: extract + テクスチャ書き出しで2回読み込み
+// Before: 2 reads for extract + texture export
 let ir = vrm::extract::extract_ir_model(...)?;
-let glb = vrm::loader::load_glb(&input)?;  // 2回目
+let glb = vrm::loader::load_glb(&input)?;  // 2nd read
 convert::texture::write_all_textures(&ir.textures, &glb.images, &tex_dir)?;
 
-// 変更後: タプルで保持して再利用
+// After: hold as tuple and reuse
 let (mut ir, glb_for_tex) = match ext.as_str() {
     _ => {
         let glb = vrm::loader::load_glb(&input)?;
@@ -787,98 +798,98 @@ if let Some(ref glb) = glb_for_tex {
 
 #### aux_files clone → take
 
-`take_or_collect_aux()` で `preloaded.aux_files` を `clone()` から `take()` に変更し、HashMap バケットの再割り当てを回避。`preloaded` には空の HashMap を入れ直し、`main_bytes` は保持。
+Changed `take_or_collect_aux()` from `preloaded.aux_files.clone()` to `take()`, avoiding HashMap bucket reallocation. An empty HashMap is placed back in `preloaded`, while `main_bytes` is preserved.
 
-#### BindGroupLayout 共通関数化
+#### BindGroupLayout Shared Function
 
-材質用 `BindGroupLayout` の descriptor 定義を `gpu::create_material_bind_group_layout()` に一元化し、`gpu.rs` と `mesh.rs` のコード重複を解消。
+Centralized the material `BindGroupLayout` descriptor definition in `gpu::create_material_bind_group_layout()`, eliminating code duplication between `gpu.rs` and `mesh.rs`.
 
-#### dump コード重複解消
+#### Dump Code Deduplication
 
-`run_main` と `run_archive_convert` に重複していたダンプ出力コードを `dump_ir()` 関数に抽出。
+Extracted `dump_ir()` function from duplicate dump output code in `run_main` and `run_archive_convert`.
 
 </details>
 
 ## v0.2.4
 
-### 改善
+### Improvements
 
-- **アーカイブD&Dリロード対応** — zip/7z から D&D したファイルがOS一時ディレクトリに展開される問題に対応。モデル本体＋補助ファイル（テクスチャ・.txt）をオンメモリにスナップショット保持し、一時ファイル消失後もリロード可能に。VRM/FBX/PMX/PMD 全対応
-- **アーカイブD&D先読みキャッシュ** — D&D 検出時点でモデル本体＋隣接テクスチャのバイト列を `PreloadedData` に先読み。以降のロードチェーン全体でキャッシュを使用し、一時ファイル消失後も確実にロード。FBX 選択ダイアログ（`PendingFbxChoice`）を挟む経路でもデータを受け渡し。VRM/FBX/PMX/PMD/UnityPackage 全形式対応
-- **アーカイブD&D即座ロード** — zipアーカイブからの D&D 時、一時ファイルが2フレーム遅延の間に消失するエラーを修正。一時パスを検出した場合はプログレスオーバーレイを省略して即座にロード
-- **テクスチャD&Dキャッシュ** — ZIP 内テクスチャの D&D 時、プレビュー段階でバイトデータ・PSD 判定・一時パスフラグをキャッシュ。確定時のファイル再読み込みを排除し、一時ファイル消失後もテクスチャ割り当てが確実に記録される
-- **UnityPackage アーカイブスナップショット** — ZIP 内 .unitypackage の D&D 時、アーカイブデータを `Arc<[u8]>` でスナップショット保持。リロード・アペンド時に一時ファイルに依存せずメモリから復元可能に
-- **シェーダー対応PMX材質** — MToon の shade_color と diffuse の輝度比に基づくトゥーンテクスチャ自動選択（5段階）。MToon 材質の ambient を shade_color ベースに、specular をゼロに補正。非 MToon は従来動作を維持
-- **Aスタンス変換警告** — PMX 変換時、Aスタンス変換が有効だが腕ボーンが見つからない場合に赤文字オーバーレイで警告を表示。既にAスタンスに近い場合はスキップ通知を表示
-- **ConvertResult::Warning** — 変換成功だが注意事項がある場合の新しいメッセージ種別（赤文字表示、Failure とは区別）
-- **AStanceResult enum** — Aスタンス変換結果を型安全に管理（NotRequested / Applied / AlreadyAStance / NotFound）。IrModel::merge() での統合ロジック付き
-- **リロード時テクスチャ正規化** — UnityPackage リロード時の PSD→PNG 変換バイパスを修正。MIME タイプ設定も正規パスと統一
-- **IrTexture 重複排除** — テクスチャ割り当て時に filename + data で同一性を判定し、同一テクスチャの重複追加を防止
+- **Archive D&D Reload Support** — Handles files D&D'd from zip/7z that are extracted to OS temp directories. Model body + auxiliary files (textures, .txt) are snapshot-cached in memory, enabling reload even after temp files are deleted. Supports VRM/FBX/PMX/PMD
+- **Archive D&D Preload Cache** — At D&D detection time, model body + adjacent texture bytes are pre-read into `PreloadedData`. The entire load chain uses the cache, ensuring reliable loading even after temp file deletion. Data is passed through `PendingFbxChoice` for FBX selection dialog paths. Supports all formats: VRM/FBX/PMX/PMD/UnityPackage
+- **Archive D&D Immediate Load** — Fixed error where temp files from zip archives would be deleted during the 2-frame delay before loading. When a temp path is detected, the progress overlay is skipped and the file is loaded immediately
+- **Texture D&D Cache** — When D&D'ing textures from ZIP archives, byte data, PSD detection, and temp path flag are cached at preview stage. Eliminates file re-read on confirmation, ensuring texture assignments are reliably recorded even after temp file deletion
+- **UnityPackage Archive Snapshot** — When D&D'ing .unitypackage from ZIP archives, archive data is snapshot-cached as `Arc<[u8]>`. Enables reload/append from memory without depending on temp files
+- **Shader-Aware PMX Materials** — Automatic toon texture selection (5 levels) based on MToon shade_color/diffuse luminance ratio. MToon materials get shade_color-based ambient and zero specular. Non-MToon materials retain existing behavior
+- **A-Stance Conversion Warning** — Red text overlay warning when A-stance conversion is enabled but arm bones are not found during PMX conversion. Shows skip notification when already in A-stance
+- **ConvertResult::Warning** — New message type for successful conversions with caveats (red text, distinct from Failure)
+- **AStanceResult enum** — Type-safe management of A-stance conversion results (NotRequested / Applied / AlreadyAStance / NotFound). Includes merge logic for IrModel::merge()
+- **Reload Texture Normalization** — Fixed PSD→PNG conversion bypass during UnityPackage reload. MIME type settings now consistent with the normal assignment path
+- **IrTexture Deduplication** — Texture assignment now checks filename + data for identity, preventing duplicate IrTexture entries
 
 ## v0.2.3
 
-### 改善
+### Improvements
 
-- **表示材質のみ出力** — PMX 変換時に、表示タブで非表示にした材質を出力から除外するオプション（デフォルト OFF）。材質・メッシュ・テクスチャ・頂点モーフ・グループモーフを一貫してフィルタリング
-- **ボーンマージ 2パス方式** — 同名ボーン統合の親子判定を順序非依存の候補収集＋伝播ループに変更。異なる部分木の子孫が誤統合されるバグを修正
-- **pkg テクスチャ名前空間** — 複数 UnityPackage 追加時のテクスチャ名衝突を防止（`{パッケージ名}_pkg{連番}_{テクスチャ名}` 形式）。auto-matched テクスチャにも適用
-- **ASCII FBX Content 処理** — Content ブロックを文字列として保持し、パーサー層の完全性を維持
-- **テスト 61 件** — ボーンマージ・物理リマップ・モーフオフセット・エクスポートフィルタ等のテストを追加
+- **Visible-Only Material Export** — Option to exclude hidden materials from PMX output (default OFF). Consistently filters materials, meshes, textures, vertex morphs, and group morphs
+- **2-Pass Bone Merge** — Order-independent candidate collection + propagation loop for same-name bone unification. Fixes incorrect merge of descendants in different subtrees
+- **Pkg Texture Namespace** — Prevents texture name collisions when appending multiple UnityPackages (`{pkg_name}_pkg{seq}_{texture_name}` format). Also applied to auto-matched textures
+- **ASCII FBX Content Handling** — Content blocks preserved as strings, maintaining parser-layer completeness
+- **61 Tests** — Added bone merge, physics remap, morph vertex offset, export filter tests
 
 ## v0.2.2
 
-### コード品質・パフォーマンス改善
+### Code Quality & Performance
 
-- **パフォーマンス最適化** — アニメーション頂点バッファの毎フレーム alloc 除去、ボーン名探索の HashMap O(1) 化、GPU 可視化バッファの dirty flag 導入
-- **テスト拡充** — 10 テスト → 51 テスト。座標変換ラウンドトリップ、ボーン名マッピング、PMX 書き込み・読み込みラウンドトリップ、VRM→PMX E2E テスト
-- **Clippy 警告ゼロ** — `cargo clippy --all-targets --all-features -- -D warnings` 完全クリーン
-- **UX 改善** — D&D オーバーレイ 4 パターン化、操作ヒント 2 行分割、グレーアウト UI ツールチップ追加
+- **Performance** — Eliminated per-frame vertex buffer allocation, HashMap O(1) bone lookup, GPU visualization dirty flags
+- **Tests** — 10 → 51 tests. Coordinate roundtrip, bone name mapping, PMX write/read roundtrip, VRM→PMX E2E
+- **Zero Clippy warnings** — `cargo clippy --all-targets --all-features -- -D warnings` fully clean
+- **UX** — 4-pattern D&D overlay, 2-line operation hints, disabled UI tooltips
 
 <details>
-<summary>内部改善の詳細</summary>
+<summary>Internal Improvement Details</summary>
 
-#### ViewerApp サブ構造体化
+#### ViewerApp Sub-Struct Refactoring
 
-v0.2.2 で ViewerApp の 43 フィールドを 30 フィールドに削減:
+In v0.2.2, ViewerApp's 43 fields were reduced to 30:
 
-| サブ構造体 | フィールド | アクセス | 内容 |
-|-----------|----------|---------|------|
-| `TextureState` | `self.tex.*` | 9 フィールド | テクスチャ割り当て・パッケージテクスチャ・プレビュー・マッチング |
-| `AnimLibrary` | `self.anim.*` | 4 フィールド | アニメーション再生状態・ライブラリ・Muscle スケール |
+| Sub-struct | Field | Access | Contents |
+|------------|-------|--------|----------|
+| `TextureState` | `self.tex.*` | 9 fields | Texture assignment, package textures, preview, matching |
+| `AnimLibrary` | `self.anim.*` | 4 fields | Animation playback state, library, Muscle scale |
 
-Rust の部分借用により `&mut self.tex` と `&self.anim` を同時に借用可能。
+Rust's partial borrowing allows simultaneous borrowing of `&mut self.tex` and `&self.anim`.
 
-#### GPU 可視化バッファのキャッシュ戦略
+#### GPU Visualization Buffer Cache Strategy
 
-ボーン・物理・ジョイントの可視化頂点を dirty flag で管理:
+Bone, physics, and joint visualization vertices are managed with dirty flags:
 
-| 入力 | キャッシュキー | 再生成条件 |
-|------|-------------|----------|
-| ボーン頂点 | `camera.eye()`, `bone_opacity` | カメラ移動 / 不透明度変更 / アニメーション再生中 |
-| SpringBone 頂点 | `spring_bone_opacity`, `align_rigid_rotation` | 設定変更 / アニメーション再生中 |
-| ジョイント頂点 | `joint_opacity` | 設定変更 / アニメーション再生中 |
+| Input | Cache Key | Regeneration Condition |
+|-------|-----------|----------------------|
+| Bone vertices | `camera.eye()`, `bone_opacity` | Camera movement / opacity change / animation playing |
+| SpringBone vertices | `spring_bone_opacity`, `align_rigid_rotation` | Settings change / animation playing |
+| Joint vertices | `joint_opacity` | Settings change / animation playing |
 
-全バッファ共通:
-- `vertex_count == 0` → 強制再生成（非表示→表示トグル復帰）
-- `cache_had_anim && !has_anim` → アニメーション解除時に1フレーム強制再生成
+Common to all buffers:
+- `vertex_count == 0` → forced regeneration (recovery from hidden → visible toggle)
+- `cache_had_anim && !has_anim` → forced 1-frame regeneration when animation is released
 
-#### アニメーション頂点バッファ最適化
+#### Animation Vertex Buffer Optimization
 
-`apply_bone_animation()` のホットパス改善:
+Hot path improvement for `apply_bone_animation()`:
 
-| 項目 | Before | After |
+| Item | Before | After |
 |------|--------|-------|
-| 頂点バッファ | `base.to_vec()` 毎フレーム alloc | `reset_animated_to_base()` capacity 再利用 |
-| デルタ行列 | `Vec::with_capacity()` 毎フレーム | `work_deltas` フィールドで再利用 |
-| globals 計算 | `Vec` 新規生成 + clone | in-place 更新（`work_computed` フラグ再利用） |
-| モーフ適用 | `apply_morphs_to_buf(&self, &mut [Vertex])` | `apply_morphs_to_animated(&mut self)` 借用衝突回避 |
+| Vertex buffer | `base.to_vec()` per-frame alloc | `reset_animated_to_base()` capacity reuse |
+| Delta matrices | `Vec::with_capacity()` per-frame | Reuse `work_deltas` field |
+| Globals computation | New `Vec` + clone | In-place update (`work_computed` flag reuse) |
+| Morph application | `apply_morphs_to_buf(&self, &mut [Vertex])` | `apply_morphs_to_animated(&mut self)` borrow conflict avoidance |
 
-#### ボーン名探索 HashMap 化
+#### Bone Name Lookup HashMap Conversion
 
-`insert_standard_bones()` 内の O(n) 線形探索を HashMap O(1) に:
+O(n) linear search in `insert_standard_bones()` converted to HashMap O(1):
 
 ```rust
-// ボーン名 → インデックスの逆引き（重複名は最初の出現を保持）
+// Reverse lookup of bone name → index (keep first occurrence for duplicate names)
 fn build_bone_map(bones: &[PmxBone]) -> HashMap<String, usize> {
     let mut map = HashMap::with_capacity(bones.len());
     for (i, b) in bones.iter().enumerate() {
@@ -888,24 +899,24 @@ fn build_bone_map(bones: &[PmxBone]) -> HashMap<String, usize> {
 }
 ```
 
-ボーン配列の変更（挿入・移動）後に `bone_map = build_bone_map(&model.bones)` で再構築。
+Rebuild with `bone_map = build_bone_map(&model.bones)` after bone array changes (insertion/movement).
 
-#### テストデータパス解決
+#### Test Data Path Resolution
 
-統合テストのファイルパスは環境変数で設定可能:
+Integration test file paths can be configured via environment variables:
 
-| 優先度 | 解決元 | 例 |
-|--------|-------|-----|
-| 1 | ファイル個別環境変数 | `POPONE_TEST_VRM_SEED_SAN=/path/to/Seed-san.vrm` |
-| 2 | ルート環境変数 + 相対パス | `POPONE_TEST_DATA=/fixtures` → `/fixtures/vrm-spec/.../Seed-san.vrm` |
-| 3 | `CARGO_MANIFEST_DIR/..` | ローカル開発時のデフォルト |
+| Priority | Source | Example |
+|----------|--------|---------|
+| 1 | Per-file environment variable | `POPONE_TEST_VRM_SEED_SAN=/path/to/Seed-san.vrm` |
+| 2 | Root environment variable + relative path | `POPONE_TEST_DATA=/fixtures` → `/fixtures/vrm-spec/.../Seed-san.vrm` |
+| 3 | `CARGO_MANIFEST_DIR/..` | Default for local development |
 
 </details>
 
-## FBX 対応
+## FBX Support
 
-- バイナリ / ASCII FBX の自前パーサー（シーングラフ・座標系自動変換・PreRotation・UnitScaleFactor）
-- ASCII FBX: Content ブロック（埋め込みテクスチャ）は文字列として保持し、外部ファイルフォールバックで復元
-- スキンウェイト（最大 4 ボーン正規化）、ブレンドシェイプ、UV マッピング
-- ヒューマノイドリグ自動検出（Mixamo / 3ds Max Biped / Maya HumanIK / VRoid / Unreal / Blender）。CamelCase ボーン名・名前空間プレフィックス（`Model::` 等）対応
-- 零法線の自動補完、埋め込み/外部テクスチャ対応
+- Custom binary / ASCII FBX parser (scene graph, coordinate system conversion, PreRotation, UnitScaleFactor)
+- ASCII FBX: Content blocks (embedded textures) preserved as strings; external file fallback for texture recovery
+- Skin weights (up to 4 bones, normalized), blend shapes, UV mapping
+- Humanoid rig auto-detection (Mixamo / 3ds Max Biped / Maya HumanIK / VRoid / Unreal / Blender). CamelCase bone names and namespace prefixes (`Model::`, etc.) supported
+- Zero-normal auto-repair, embedded/external texture support

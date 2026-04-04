@@ -937,10 +937,23 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
         height: h,
     };
 
+    // セッション設定の読み込み
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let app_config = popone::viewer::app::persistence::load_config(&exe_dir);
+
+    // NativeOptions: 保存済み設定があればサイズを適用（位置は初回フレームで適用）
+    let inner_size = app_config
+        .as_ref()
+        .and_then(|c| c.window.as_ref())
+        .map(|w| [w.width, w.height])
+        .unwrap_or([1280.0, 720.0]);
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 720.0])
-            .with_title(format!("Model Viewer v{}", env!("CARGO_PKG_VERSION")))
+            .with_inner_size(inner_size)
+            .with_title(format!("POPONE Model Viewer v{}", env!("CARGO_PKG_VERSION")))
             .with_drag_and_drop(true)
             .with_icon(icon),
         renderer: eframe::Renderer::Wgpu,
@@ -972,7 +985,14 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
     #[cfg(target_os = "windows")]
     detach_console();
 
-    run_viewer_inner(options, logs_dir, log_path, initial_file)
+    run_viewer_inner(
+        options,
+        logs_dir,
+        log_path,
+        initial_file,
+        exe_dir,
+        app_config,
+    )
 }
 
 #[cfg(feature = "viewer")]
@@ -981,12 +1001,15 @@ fn run_viewer_inner(
     logs_dir: PathBuf,
     log_path: PathBuf,
     initial_file: Option<PathBuf>,
+    exe_dir: PathBuf,
+    app_config: Option<popone::viewer::app::persistence::AppConfig>,
 ) -> Result<()> {
     eframe::run_native(
         "Viewer",
         options,
         Box::new(move |cc| {
-            let mut app = popone::viewer::app::ViewerApp::new(cc, logs_dir, log_path);
+            let mut app =
+                popone::viewer::app::ViewerApp::new(cc, logs_dir, log_path, exe_dir, app_config);
             if let Some(path) = initial_file {
                 app.pending.load = Some((path, false));
             }

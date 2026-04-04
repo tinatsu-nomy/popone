@@ -24,6 +24,12 @@ use super::pending::{
 use super::texture_mgmt::PendingTexMatch;
 use super::{AppendedModel, CachedStats, ConvertMessage, ConvertResult, MaterialGroup, ViewerApp};
 
+/// FBX ファイルのメッシュ・アニメーション有無
+struct FbxContentInfo {
+    has_mesh: bool,
+    has_anim: bool,
+}
+
 impl ViewerApp {
     /// preloaded の aux_files があればそれを移動（clone回避）、なければディスクから再帰収集する
     pub(super) fn take_or_collect_aux(&mut self, path: &Path) -> HashMap<PathBuf, Arc<[u8]>> {
@@ -58,6 +64,24 @@ impl ViewerApp {
             }
         }
         Ok(std::fs::read(path)?.into())
+    }
+
+    /// FBX ファイルのメッシュ・アニメーション有無を判定
+    fn inspect_fbx(&self, path: &Path) -> FbxContentInfo {
+        let data = match self.read_or_preloaded(path) {
+            Ok(d) => d,
+            Err(_) => {
+                return FbxContentInfo {
+                    has_mesh: false,
+                    has_anim: false,
+                }
+            }
+        };
+        FbxContentInfo {
+            has_mesh: crate::fbx::extract::fbx_has_mesh(&data),
+            has_anim: crate::fbx::animation::load_fbx_animation_from_data(&data)
+                .is_ok_and(|a| !a.is_empty()),
+        }
     }
 
     pub(super) fn load_file(&mut self, path: PathBuf) {
@@ -96,21 +120,10 @@ impl ViewerApp {
             return;
         }
 
-        // FBX: モデル読み込み済みの場合、メッシュ+アニメーション両方含むなら選択ダイアログ
-        if ext == "fbx" && self.loaded.is_some() {
-            // ファイルを1回だけ読み込んで、メッシュとアニメーションの有無を判定
-            let data = match self.read_or_preloaded(&path) {
-                Ok(d) => d,
-                Err(_) => {
-                    self.load_file_as_model(path);
-                    return;
-                }
-            };
-            let has_mesh = crate::fbx::extract::fbx_has_mesh(&data);
-            let has_anim = crate::fbx::animation::load_fbx_animation_from_data(&data)
-                .is_ok_and(|a| !a.is_empty());
-
-            if has_mesh && has_anim {
+        // FBX: メッシュ+アニメーション両方含むなら選択ダイアログ（初回ロード時も対象）
+        if ext == "fbx" {
+            let info = self.inspect_fbx(&path);
+            if info.has_mesh && info.has_anim {
                 // 両方含む → 選択ダイアログを表示
                 self.pending.fbx_choice = Some(PendingFbxChoice {
                     path: path.clone(),
@@ -120,9 +133,15 @@ impl ViewerApp {
                     preloaded: self.preloaded.take(),
                 });
                 return;
-            } else if !has_mesh && has_anim {
+            } else if !info.has_mesh && info.has_anim {
                 // アニメーションのみ
-                self.try_load_fbx_animation(&path);
+                if self.loaded.is_some() {
+                    self.try_load_fbx_animation(&path);
+                } else {
+                    self.convert_message = Some(ConvertMessage::failure(String::from(
+                        "先にモデルを読み込んでください",
+                    )));
+                }
                 return;
             }
             // メッシュのみ or どちらもなし → モデルとして読み込み（下へ続行）
@@ -167,8 +186,7 @@ impl ViewerApp {
                 self.anim.active_index = None;
 
                 // FBXモデル読み込み後、同じファイルにアニメーションがあれば自動適用
-                // try_load_fbx_animation 内で読み込みと適用を一括実行（二重読込を回避）
-                if ext == "fbx" {
+                if ext == "fbx" && self.inspect_fbx(&path).has_anim {
                     self.try_load_fbx_animation(&path);
                 }
             }
@@ -1447,6 +1465,10 @@ impl ViewerApp {
             Err(_) => crate::fbx::animation::load_fbx_animation(path),
         };
         match anim_result {
+            Ok(anims) if anims.is_empty() => {
+                // 空配列 → no-op（成功メッセージも出さない）
+                log::debug!("FBXアニメーション: 空（スキップ）");
+            }
             Ok(anims) => {
                 let loaded = self.loaded.as_ref().expect("loaded は is_some 分岐内");
                 let path_buf = path.to_path_buf();

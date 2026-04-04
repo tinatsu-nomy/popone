@@ -1116,4 +1116,158 @@ impl ViewerApp {
             preview.previewed.iter_mut().for_each(|v| *v = false);
         }
     }
+
+    // -----------------------------------------------------------------------
+    // テクスチャ割り当て履歴 (popone_history.json)
+    // -----------------------------------------------------------------------
+
+    /// 現在のモデルが履歴対象かどうか判定し、キーを返す
+    pub fn texture_history_key(&self) -> Option<String> {
+        use super::helpers::ReloadableSource;
+        use crate::intermediate::types::SourceFormat;
+        let loaded = self.loaded.as_ref()?;
+        if !loaded.appended_models.is_empty() {
+            return None;
+        }
+        match &loaded.source {
+            ReloadableSource::File(path)
+                if matches!(
+                    loaded.ir.source_format,
+                    SourceFormat::Fbx | SourceFormat::Obj
+                ) =>
+            {
+                Some(super::persistence::normalize_path(path))
+            }
+            _ => None,
+        }
+    }
+
+    /// 現在のテクスチャ割り当てを履歴に保存
+    pub fn do_save_texture_history(&mut self) {
+        let Some(key) = self.texture_history_key() else {
+            return;
+        };
+        let Some(loaded) = self.loaded.as_ref() else {
+            return;
+        };
+
+        let entries: Vec<super::persistence::TextureHistoryEntry> = self
+            .tex
+            .assignments
+            .iter()
+            .filter_map(|(mat_idx, src)| {
+                if let TextureSource::File(path) = src {
+                    let mat_name = loaded
+                        .ir
+                        .materials
+                        .get(*mat_idx)
+                        .map(|m| m.name.clone())
+                        .unwrap_or_default();
+                    Some(super::persistence::TextureHistoryEntry {
+                        material_index: *mat_idx,
+                        material_name: mat_name,
+                        texture_path: path.to_string_lossy().into_owned(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if entries.is_empty() {
+            self.convert_message = Some(ConvertMessage::failure(String::from(
+                "保存対象のテクスチャ割り当てがありません",
+            )));
+            return;
+        }
+
+        let count = entries.len();
+        self.texture_history.history.insert(key, entries);
+        super::persistence::save_texture_history(&self.exe_dir, &self.texture_history);
+        self.convert_message = Some(ConvertMessage::success(format!(
+            "テクスチャ履歴を保存しました ({count}件)"
+        )));
+    }
+
+    /// 履歴からテクスチャ割り当てを呼び出し
+    pub fn do_recall_texture_history(&mut self) {
+        let Some(key) = self.texture_history_key() else {
+            return;
+        };
+        let entries = match self.texture_history.history.get(&key) {
+            Some(e) => e.clone(),
+            None => {
+                self.convert_message = Some(ConvertMessage::failure(String::from(
+                    "このモデルの履歴がありません",
+                )));
+                return;
+            }
+        };
+
+        // 照合結果を先に収集（loaded の不変借用を閉じるため）
+        let resolved: Vec<(usize, PathBuf)>;
+        let mut skipped = 0usize;
+        {
+            let Some(loaded) = self.loaded.as_ref() else {
+                return;
+            };
+            let mut seen = std::collections::HashSet::new();
+            let mut tmp = Vec::new();
+            for entry in &entries {
+                let Some(mat_idx) =
+                    super::persistence::resolve_material(&loaded.ir.materials, entry)
+                else {
+                    skipped += 1;
+                    continue;
+                };
+                if !seen.insert(mat_idx) {
+                    continue;
+                }
+                let tex_path = PathBuf::from(&entry.texture_path);
+                if !tex_path.is_file() {
+                    log::warn!(
+                        "テクスチャ履歴: ファイル不存在スキップ: {}",
+                        entry.texture_path
+                    );
+                    skipped += 1;
+                    continue;
+                }
+                tmp.push((mat_idx, tex_path));
+            }
+            resolved = tmp;
+        }
+
+        // link_same_name を一時的に無効化（reload_current と同じパターン）
+        let saved_link = self.tex.link_same_name;
+        self.tex.link_same_name = false;
+
+        let mut applied = 0usize;
+        for (mat_idx, tex_path) in &resolved {
+            self.convert_message = None;
+            self.assign_texture_to_material(*mat_idx, tex_path);
+            // assign_texture_to_material は失敗時に convert_message に Failure を設定する
+            let failed = self
+                .convert_message
+                .as_ref()
+                .is_some_and(|m| matches!(m.result, super::ConvertResult::Failure(_)));
+            if failed {
+                skipped += 1;
+            } else {
+                applied += 1;
+            }
+        }
+
+        self.tex.link_same_name = saved_link;
+
+        let msg = if skipped > 0 {
+            format!("テクスチャ履歴: {applied}件適用、{skipped}件スキップ")
+        } else {
+            format!("テクスチャ履歴: {applied}件適用")
+        };
+        self.convert_message = Some(if applied > 0 {
+            ConvertMessage::success(msg)
+        } else {
+            ConvertMessage::failure(msg)
+        });
+    }
 }

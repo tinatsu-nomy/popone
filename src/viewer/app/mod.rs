@@ -3,10 +3,12 @@
 pub mod file_io;
 pub mod helpers;
 pub mod pending;
+pub mod persistence;
 pub mod texture_mgmt;
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -422,10 +424,32 @@ pub struct ViewerApp {
     pub next_instance_id: u32,
     /// スプラッシュ画像テクスチャ（モデル未ロード時に表示）
     splash_texture: Option<egui::TextureHandle>,
+    /// exe ディレクトリ（設定・履歴ファイルの保存先）
+    pub exe_dir: PathBuf,
+    /// セッション設定
+    pub app_config: persistence::AppConfig,
+    /// 設定変更フラグ（on_exit で保存するか判定）
+    config_dirty: bool,
+    /// ウィンドウ位置の遅延復元状態
+    pending_window_restore: PendingWindowRestore,
+    /// テクスチャ割り当て履歴（メモリキャッシュ）
+    pub texture_history: persistence::TextureHistoryFile,
+}
+
+/// ウィンドウ位置の初回フレーム検証・適用用
+struct PendingWindowRestore {
+    saved_config: Option<persistence::WindowConfig>,
+    validated: bool,
 }
 
 impl ViewerApp {
-    pub fn new(cc: &eframe::CreationContext, logs_dir: PathBuf, log_path: PathBuf) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext,
+        logs_dir: PathBuf,
+        log_path: PathBuf,
+        exe_dir: PathBuf,
+        app_config: Option<persistence::AppConfig>,
+    ) -> Self {
         let render_state = cc
             .wgpu_render_state
             .clone()
@@ -447,6 +471,33 @@ impl ViewerApp {
             super::single_instance::start_pipe_listener(tx, cc.egui_ctx.clone());
             rx
         };
+
+        // config からディレクトリパスを復元
+        let last_model_dir = app_config
+            .as_ref()
+            .and_then(|c| c.directory.last_model.as_ref())
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir());
+        let last_texture_dir = app_config
+            .as_ref()
+            .and_then(|c| c.directory.last_texture.as_ref())
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir());
+
+        // ウィンドウ位置の遅延復元用（設定ファイルに [window] セクションがある場合のみ）
+        let saved_window = app_config.as_ref().and_then(|c| c.window.clone());
+        let pending_window_restore = PendingWindowRestore {
+            validated: saved_window.is_none(),
+            saved_config: saved_window,
+        };
+
+        let app_config = app_config.unwrap_or_default();
+
+        // テクスチャ履歴を読み込み
+        let texture_history = persistence::load_texture_history(&exe_dir);
+
+        let mut tex = TextureState::default();
+        tex.last_dir = last_texture_dir;
 
         Self {
             loaded: None,
@@ -471,7 +522,7 @@ impl ViewerApp {
             normalize_to_tstance: false,
             last_viewport_width: 1280.0,
             last_viewport_height: 720.0,
-            tex: TextureState::default(),
+            tex,
             pending: PendingState::default(),
             frame_times: VecDeque::with_capacity(120),
             frame_dt_ms: 0.0,
@@ -481,7 +532,7 @@ impl ViewerApp {
             ipc_receiver,
             logs_dir,
             log_path,
-            last_model_dir: None,
+            last_model_dir,
             selected_fbx_name: None,
             selected_pkg_model: None,
             anim: AnimLibrary::default(),
@@ -493,6 +544,11 @@ impl ViewerApp {
             start_time: Instant::now(),
             next_instance_id: 1,
             splash_texture,
+            exe_dir,
+            app_config,
+            config_dirty: false,
+            pending_window_restore,
+            texture_history,
         }
     }
 
@@ -786,7 +842,7 @@ impl ViewerApp {
 
         // ウィンドウタイトル更新
         self.window_title = Some(format!(
-            "Model Viewer v{} - {}",
+            "POPONE Model Viewer v{} - {}",
             env!("CARGO_PKG_VERSION"),
             format_name,
         ));
@@ -948,6 +1004,62 @@ impl ViewerApp {
         crate::psd::psd_to_png(psd_data)
     }
 
+    /// ViewportInfo からウィンドウ状態をキャッシュし、初回フレームで位置を検証・適用
+    fn update_viewport_config(&mut self, ctx: &egui::Context) {
+        let mut restore_pos: Option<egui::Pos2> = None;
+
+        ctx.input(|i| {
+            let vp = i.viewport();
+            let maximized = vp.maximized.unwrap_or(false);
+            let minimized = vp.minimized.unwrap_or(false);
+
+            // 初回フレーム: 保���された位置を無条件で復元
+            // egui の monitor_size は「今ウィンドウがいるモニター」のサイズしか返さないため、
+            // サブディスプレイへの復元判���には使えない。
+            // サイズが正の値であれば常に復元を試みる。
+            if !self.pending_window_restore.validated {
+                if let Some(ref saved) = self.pending_window_restore.saved_config {
+                    if saved.width >= 10.0 && saved.height >= 10.0 {
+                        restore_pos = Some(egui::pos2(saved.x, saved.y));
+                        log::info!("ウィンドウ位置復元: ({}, {})", saved.x, saved.y);
+                    }
+                }
+                self.pending_window_restore.validated = true;
+            }
+
+            // 最大化・最小化中は位置・サイズを更新しない
+            if maximized || minimized {
+                return;
+            }
+
+            // 位置: outer_rect（OuterPosition との座標系一致）
+            // サイズ: inner_rect（with_inner_size との座標系一致、ドリフト防止）
+            if let (Some(outer), Some(inner)) = (vp.outer_rect, vp.inner_rect) {
+                let win = self
+                    .app_config
+                    .window
+                    .get_or_insert_with(persistence::WindowConfig::default);
+                if win.is_significantly_different(
+                    outer.min.x,
+                    outer.min.y,
+                    inner.width(),
+                    inner.height(),
+                ) {
+                    win.x = outer.min.x;
+                    win.y = outer.min.y;
+                    win.width = inner.width();
+                    win.height = inner.height();
+                    self.config_dirty = true;
+                }
+            }
+        });
+
+        // ctx.input() の外で viewport コマンドを送信
+        if let Some(pos) = restore_pos {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+        }
+    }
+
     /// アニメーション状態の更新（ボーン適用 + モーフ適用）
     fn update_animation(&mut self, dt: f32, ctx: &egui::Context) {
         if let Some(ref mut anim) = self.anim.state {
@@ -981,6 +1093,9 @@ impl eframe::App for ViewerApp {
                 self.pending.load = Some((path, false));
             }
         }
+
+        // セッション設定: ViewportInfo キャッシュ + 初回位置検証
+        self.update_viewport_config(ctx);
 
         // ホバー状態リセット（UIフレーム中に再設定される）
         self.hovered_draw_indices.clear();
@@ -1537,5 +1652,19 @@ impl eframe::App for ViewerApp {
                     self.convert_message = None;
                 }
             });
+    }
+
+    fn on_exit(&mut self) {
+        // ディレクトリパスを config に反映
+        self.app_config.directory.last_model = self
+            .last_model_dir
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned());
+        self.app_config.directory.last_texture = self
+            .tex
+            .last_dir
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned());
+        persistence::save_config(&self.exe_dir, &self.app_config);
     }
 }

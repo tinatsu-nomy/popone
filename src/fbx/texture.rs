@@ -215,6 +215,28 @@ fn decode_image_data_with_ext(
     name: &str,
     ext_hint: Option<&str>,
 ) -> Option<TextureData> {
+    // PSD: image crate は PSD 未対応のため、自前デコーダーで先に処理
+    if crate::psd::is_psd_filename(name)
+        || ext_hint
+            .map(|e| e.eq_ignore_ascii_case("psd"))
+            .unwrap_or(false)
+    {
+        match crate::psd::decode_psd(data) {
+            Ok((rgba, width, height)) => {
+                return Some(TextureData {
+                    name: name.to_string(),
+                    rgba,
+                    width,
+                    height,
+                });
+            }
+            Err(e) => {
+                log::warn!("PSD デコード失敗 '{}': {}", name, e);
+                return None;
+            }
+        }
+    }
+
     // まず自動判別を試行
     match image::load_from_memory(data) {
         Ok(img) => {

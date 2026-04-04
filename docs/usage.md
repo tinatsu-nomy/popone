@@ -2,134 +2,136 @@
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
-- [使い方](#%E4%BD%BF%E3%81%84%E6%96%B9)
-  - [対応形式](#%E5%AF%BE%E5%BF%9C%E5%BD%A2%E5%BC%8F)
-  - [クイックスタート](#%E3%82%AF%E3%82%A4%E3%83%83%E3%82%AF%E3%82%B9%E3%82%BF%E3%83%BC%E3%83%88)
-  - [機能一覧](#%E6%A9%9F%E8%83%BD%E4%B8%80%E8%A6%A7)
-    - [ビューア](#%E3%83%93%E3%83%A5%E3%83%BC%E3%82%A2)
-    - [PMX / PMD ロード](#pmx--pmd-%E3%83%AD%E3%83%BC%E3%83%89)
-    - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
-  - [おまけ](#%E3%81%8A%E3%81%BE%E3%81%91)
-    - [アニメーション再生](#%E3%82%A2%E3%83%8B%E3%83%A1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E5%86%8D%E7%94%9F)
-    - [PMX（MikuMikuDance）形式に変換](#pmxmikumikudance%E5%BD%A2%E5%BC%8F%E3%81%AB%E5%A4%89%E6%8F%9B)
-  - [注意事項・制限事項](#%E6%B3%A8%E6%84%8F%E4%BA%8B%E9%A0%85%E3%83%BB%E5%88%B6%E9%99%90%E4%BA%8B%E9%A0%85)
-  - [ビルド](#%E3%83%93%E3%83%AB%E3%83%89)
-  - [CLI オプション](#cli-%E3%82%AA%E3%83%97%E3%82%B7%E3%83%A7%E3%83%B3)
-  - [出力ファイル](#%E5%87%BA%E5%8A%9B%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB)
-  - [変換例](#%E5%A4%89%E6%8F%9B%E4%BE%8B)
+- [Usage](#usage)
+  - [Supported Formats](#supported-formats)
+  - [Quick Start](#quick-start)
+  - [Features](#features)
+    - [Viewer](#viewer)
+    - [PMX / PMD Loading](#pmx--pmd-loading)
+    - [Changelog](#changelog)
+  - [Extras](#extras)
+    - [Animation Playback](#animation-playback)
+    - [PMX (MikuMikuDance) Conversion](#pmx-mikumikudance-conversion)
+  - [Notes & Limitations](#notes--limitations)
+  - [Build](#build)
+  - [CLI Options](#cli-options)
+  - [Output Files](#output-files)
+  - [Conversion Example](#conversion-example)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
-# 使い方
+# Usage
 
-[English](usage.en.md)
+[日本語](usage.jp.md)
 
-## 対応形式
+## Supported Formats
 
-| 入力 | 説明 |
-|------|------|
-| VRM 0.0 / 1.0 (`.vrm`) | glTF 2.0 ベースの VR アバター形式 |
-| FBX バイナリ (`.fbx`) | 自前パーサーによる解析。Mixamo / Blender / VRoid / Unreal 等のリグを自動検出。名前空間プレフィックス（`Model::` 等）対応 |
-| PMX 2.0 / 2.1 (`.pmx`) | MikuMikuDance モデル形式。ビューア表示 + UVマップ出力 |
-| PMD (`.pmd`) | MikuMikuDance モデル形式。Shift_JIS 対応 |
-| OBJ (`.obj`) | Wavefront OBJ 形式。MTL 材質ファイル・テクスチャ自動読み込み。座標は cm 単位と仮定 |
-| STL (`.stl`) | STL 形式（ASCII / バイナリ両対応）。座標は mm 単位・Z-Up と仮定し、Y-Up に自動変換 |
-| DirectX text (`.x`) | DirectX テキスト形式。MMD アクセサリ・ステージ等の静的メッシュ対応。Frame 階層変換・材質参照・DDS テクスチャ対応 |
-| UnityPackage (`.unitypackage`) | tar.gz アーカイブから Prefab / VRM / FBX + テクスチャを自動抽出。Prefab 経由のテクスチャ・ノーマルマップ自動マッピング対応 |
-| ZIP (`.zip`) | アーカイブ内の VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage を自動検出・展開 |
-| 7z (`.7z`) | アーカイブ内の VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage を自動検出・展開 |
+| Input | Description |
+|-------|-------------|
+| VRM 0.0 / 1.0 (`.vrm`) | glTF 2.0-based VR avatar format |
+| FBX Binary (`.fbx`) | Custom parser. Auto-detects Mixamo / Blender / VRoid / Unreal rigs. Namespace prefixes (`Model::`, etc.) supported |
+| PMX 2.0 / 2.1 (`.pmx`) | MikuMikuDance model format. Viewer display + UV map export |
+| PMD (`.pmd`) | MikuMikuDance model format. Shift_JIS support |
+| OBJ (`.obj`) | Wavefront OBJ format. Auto-loads MTL material files and textures. Coordinates assumed as cm units |
+| STL (`.stl`) | STL format (ASCII and binary). Coordinates assumed as mm units with Z-Up, auto-converted to Y-Up |
+| DirectX text (`.x`) | DirectX text format. Supports static meshes for MMD accessories and stages. Frame hierarchy transforms, material references, and DDS textures |
+| UnityPackage (`.unitypackage`) | Extracts Prefab / VRM / FBX + textures from tar.gz archive. Prefab-based texture and normal map auto-mapping supported |
+| ZIP (`.zip`) | Auto-detects and extracts VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage from archive |
+| 7z (`.7z`) | Auto-detects and extracts VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage from archive |
 
-## クイックスタート
+## Quick Start
 
 ```bash
-# ビューア起動（ダブルクリックでも可）
+# Launch viewer (or double-click the exe)
 popone.exe
 
-# ビューアでファイルを開く
+# Open file in viewer
 popone.exe input.vrm
 popone.exe input.fbx
 ```
 
-ビューアではファイルをドラッグ＆ドロップするか「開く」ボタンで読み込む。
-既にビューアが起動している場合、2回目以降の起動はファイルパスを既存ウィンドウに渡して自動的に終了する（シングルインスタンス）。
+In the viewer, drag & drop files or use the "Open" button to load models.
+If the viewer is already running, subsequent launches pass the file path to the existing window and exit automatically (single instance).
 
-## 機能一覧
+## Features
 
-### ビューア
+### Viewer
 
-- **ダークテーマ** — Blender / Substance Painter 風のダークテーマ。パネル・ボタン・ツールチップを統一配色。サイドパネル 280px 固定幅、フラットタブバー。モデル未ロード時はビューポート中央にスプラッシュ画像を角丸表示
-- **3D 表示** — egui + wgpu によるリアルタイムレンダリング。テクスチャ付き Lambert シェーディング、両面描画、アルファブレンド。VRM の MToon 材質は 2 色トゥーンシェーディング（lit/shade smoothstep 補間）+ アウトライン描画（inverted hull 法）+ リムライティング（パラメトリックリム + MatCap テクスチャ）+ 補助テクスチャ（shadeMultiply / shadingShift / rimMultiply、texCoord / KHR_texture_transform 対応）+ UV アニメーション（スクロール・回転）+ emissive（発光）+ 法線マップ（MikkTSpace 接線生成による TBN 構築、doubleSided 背面法線反転対応）+ MToon 仕様準拠 4 段階描画順制御（OPAQUE → MASK → BlendZWrite → Blend、`transparentWithZWrite` / `renderQueueOffsetNumber` + BLEND 内カメラ距離動的ソート対応）で表示。VRM 0.x MToon の全プロパティを VRM 1.0 に正規化（UniVRM マイグレーション準拠）。ベースカラーテクスチャを含む全テクスチャで `texCoord` / `KHR_texture_transform` に対応。glTF sampler のアドレスモード（Repeat / ClampToEdge / MirroredRepeat）・フィルタモード（minFilter の mipmap 選択方式を含む 6 値保持）をテクスチャごとに個別のサンプラーで反映。UTS2（Unity-Chan Toon Shader）材質は自動検出し MToon 近似表示（1st shade / outline / rim / MatCap / emissive / normal 対応、HighColor は PMX 出力のみ）。PMX/PMD は MMD レンダリングモード（NdotL 依存トゥーンシェーディング・エッジ・スフィアマップ）で表示。ライティングはライトカラー + 半球 ambient（Sky/Ground 2色補間）で VRoidHub に近い環境光を再現
-- **カメラ操作** — 左ドラッグ:回転、右ドラッグ:パン、ホイール:ズーム。F:フィット、R:リセット、ダブルクリック:フィット、Shift:精密操作（1/3速度）。FOV 30°（MMD準拠）
-- **表情モーフ** — スライダで Expression を調整（0/1 ボタン・直接入力対応）。テキスト入力で名前の絞り込みが可能（日本語名・英語名の部分一致、大文字小文字不問）
-- **材質表示切替** — 材質ごとの ON/OFF、検索フィルタ。材質名にマウスオーバーすると参照テクスチャファイル名をツールチップ表示（ベース・スフィア・トゥーン・法線・エミッシブ）。材質行ホバーで 3D ビュー上の該当メッシュを半透明オレンジでハイライト。常にモデル名で折り畳みグループ化（Prefab 内の複数 FBX は個別グループ）。グループヘッダーに `[S]`（法線平滑化）`[C]`（カスタム法線クリア）`[N]`（ノーマルマップ ON/OFF）`[B]`（Bloom/Emissive ON/OFF）`[☑]`（表示/非表示）の一括操作ボタン付き。ヘッダー行ホバーでグループ内全メッシュをハイライト
-- **メタ情報パネル** — VRM のモデル情報・作者・パーミッション・ライセンスを日本語ラベルで表示。パーミッション/ライセンス値はカラーバッジ（許可=緑/条件付き=黄/禁止=赤/中立=灰）で視覚化。ラベル・値ともにホバーでツールチップ表示。VRM 0.0/1.0 両対応
-- **ファイル構成ツリー** — 開いたファイルから最終モデルまでのロードチェーンを階層表示。テクスチャ・アニメーション・パッケージテクスチャの一覧も確認可能
-- **テクスチャ割り当て** — 材質に外部テクスチャ（PNG/JPG/TGA/BMP/PSD）を D&D またはダイアログで割り当て。リアルタイムプレビュー付き。VRM 埋め込みテクスチャの差し替えにも対応（リセットボタンで復元可能）
-- **同名材質連動** — 同じ名前の材質に同時にテクスチャを割り当てる ON/OFF スイッチ
-- **UnityPackage 対応** — Prefab / VRM / FBX モデル選択ダイアログ。Prefab 選択時は Unity GUID 参照チェーン（`.prefab` → FBX `.meta` → `.mat` → テクスチャ）でテクスチャ・ノーマルマップを自動マッピング（`_BumpMap` / `_NormalMap` + `_BumpScale` 対応）。新形式・旧形式・Unpacked・Mixed・Variant に対応。複数 FBX を参照する Prefab はマージ表示。テクスチャ自動割当（サムネイルプレビュー・検索フィルタ付き手動割当も可能）
-- **ワイヤーフレーム** — 3 モード切替（Solid / Wire / S+W）。W キーで巡回。Wire モードではアウトライン・MMD エッジも含め全描画がワイヤーフレームに統一される
-- **ボーン表示** — フラグ別の形状描画。通常=◎（二重円＋中心塗り）、移動=◻（正方形＋中心塗り）、軸制限=⊗（円＋✕）、IKコントローラ=◻（青枠＋オレンジ塗り＋青中心）。IK影響下ボーン（Link）はオレンジ。テイルベース描画で PMXEditor 準拠の方向表示。カメラ距離に関わらず一定サイズ
-- **物理可視化** — 剛体（球体・カプセル・ボックス）を 1px ワイヤーフレームで表示。PMX/PMD は physics_mode 色分け（ボーン追従=グリーン、物理演算=レッド、物理+ボーン=ブルー）、VRM は group 色分け（コライダー=レッド、スプリング=グリーン）。カプセルは半球ワイヤーフレーム付き（PMX/PMD）
-- **ジョイント表示** — PMX/PMD のジョイントをイエロー立方体（回転反映・アニメ同期）で可視化。濃さ調整可能
-- **シェーダーオーバーライド** — 6 種のシェーダーモード切替（▲ ComboBox ▼）: Auto（モデル形式で自動選択）/ MToon/Lambert（Standard 強制）/ Unlit（テクスチャ色のみ）/ GGX Preview（簡易 Cook-Torrance スペキュラ）/ 法線（法線→RGB 可視化）/ MMD（MMD 専用パス）。新規モデルロード時は Auto にリセットされる
-- **法線ツール** — 法線平滑化 `[S]` ・カスタム法線クリア `[C]` （法線マップと併用可: TBN 基底法線の平滑化でポリゴン境界を改善）、ノーマルマップ ON/OFF `[N]`、法線方向の可視化
-- **MSAA** — 4x アンチエイリアシング（ON/OFF 切替可能）。MASK（cutout）材質ではサーフェスとアウトラインの両パスで alpha_to_coverage を有効化し、まつ毛・髪カード等のジャギーを軽減
-- **Bloom（グロー）** — Dual Kawase 方式のポストエフェクト。emissive 成分のみが光る（MRT で分離）。強度・閾値・半径を UI で調整可能。PMX/PMD では specular=(0,0,0) かつ specular_power≥100 の材質が自動的に Bloom 対象になる。Prefab Emission テクスチャ/色にも対応。無効時は GPU 負荷ゼロ。材質ごとの `[B]` トグルで Bloom/Emissive の ON/OFF を個別制御可能。HDR emissive（成分 > 1.0）の材質はデフォルト OFF で白飛びを自動回避
-- **UVマップ出力** — 材質レイヤー分けの PSD として出力（1024〜8192 解像度）。UV 境界をまたぐ三角形のラップ描画対応。複数モデルマージ時はモデル別にレイヤーグループフォルダに格納。保存ダイアログのデフォルトディレクトリは読み込んだモデルファイルの場所
-- **モデル追加読み込み** — 衣装 FBX 等を既存モデルにマージ。ボーンマッチングは 3 段フォールバック（VRM ヒューマノイド名 → FBX ノード名 → PMX 名）で異なる命名規則のモデル間でも正しく統合
+- **Dark Theme** — Blender / Substance Painter style dark theme. Unified color scheme for panels, buttons, and tooltips. Side panel fixed at 280px with flat tab bar. Displays a rounded-corner splash image centered in the viewport when no model is loaded
+- **3D Rendering** — Real-time rendering with egui + wgpu. Textured Lambert shading, double-sided, alpha blending. VRM MToon materials are displayed with 2-color toon shading (lit/shade smoothstep interpolation) + outline rendering (inverted hull method) + rim lighting (parametric rim + MatCap texture) + auxiliary textures (shadeMultiply / shadingShift / rimMultiply, with texCoord / KHR_texture_transform support) + UV animation (scroll/rotation) + emissive (emission) + normal mapping (MikkTSpace tangent generation for TBN construction, doubleSided back-face normal flipping) + MToon spec-compliant 4-phase draw order control (OPAQUE → MASK → BlendZWrite → Blend, with `transparentWithZWrite` / `renderQueueOffsetNumber` + dynamic camera distance sorting within BLEND). VRM 0.x MToon properties are fully normalized to VRM 1.0 (UniVRM migration compliant). All textures including base color support `texCoord` / `KHR_texture_transform`. Per-texture glTF sampler address modes (Repeat / ClampToEdge / MirroredRepeat) and filter modes (including all 6 minFilter mipmap selection values) are honored with individual samplers per texture. UTS2 (Unity-Chan Toon Shader) materials are auto-detected and displayed via MToon approximation (1st shade / outline / rim / MatCap / emissive / normal supported; HighColor is PMX output only). PMX/PMD displayed in MMD rendering mode (NdotL-dependent toon shading, edges, sphere maps). Lighting uses light color + hemisphere ambient (Sky/Ground 2-color interpolation) for VRoidHub-like ambient lighting
+- **Camera** — Left drag: rotate, Right drag: pan, Scroll: zoom. F: fit, R: reset, Double-click: fit, Shift: precision mode (1/3 speed). FOV 30° (MMD-compliant)
+- **Expression Morphs** — Adjust with sliders (0/1 buttons, direct input). Text filter for narrowing by name (partial match on Japanese/English names, case-insensitive)
+- **Material Visibility** — Per-material ON/OFF toggle with search filter. Hovering over a material name shows a tooltip listing referenced texture filenames (base, sphere, toon, normal, emissive). Hovering over a material row highlights the corresponding mesh in the 3D view with semi-transparent orange overlay. Materials are always grouped by model name with collapsible headers (multiple FBX from Prefab shown as separate groups). Group headers include `[S]` (normal smoothing), `[C]` (custom normal clear), `[N]` (normal map ON/OFF), `[B]` (Bloom/Emissive ON/OFF), and `[☑]` (visibility) batch buttons. Hovering over the header highlights all meshes in the group
+- **Meta Info Panel** — Displays VRM model info, author, permissions, and license with Japanese labels. Permission/license values shown as color badges (allow = green / conditional = yellow / deny = red / neutral = gray). Hover tooltips on both labels and values. Supports VRM 0.0/1.0
+- **File Hierarchy Tree** — Displays the load chain from opened file to final model in a tree view. Textures, animations, and package textures are also listed
+- **Texture Assignment** — Assign external textures (PNG/JPG/TGA/BMP/PSD) via drag & drop or dialog. Real-time preview. VRM embedded texture replacement supported (reset button to restore)
+- **Texture Assignment History** — Save/recall manually assigned textures for FBX/OBJ models to `popone_history.json` ("Save Textures" / "Recall Textures" buttons). Automatic name-based material matching even when order changes. Overwrite confirmation dialog
+- **Same-Name Material Linking** — ON/OFF toggle to assign textures to all materials sharing the same name simultaneously
+- **Session Settings Persistence** — Window size/position and last-opened directories saved to `popone.toml` and restored on next launch. Multi-display support
+- **UnityPackage Support** — Prefab / VRM / FBX model selection dialog. When selecting a Prefab, textures and normal maps are auto-mapped via Unity's GUID reference chain (`.prefab` → FBX `.meta` → `.mat` → texture/normal map, with `_BumpMap` / `_NormalMap` + `_BumpScale` support). Supports New, Old, Unpacked, Mixed, and Variant formats. Prefabs referencing multiple FBX files are merged for display. Auto texture matching (manual assignment with thumbnail preview and search filter)
+- **Wireframe** — 3 modes (Solid / Wire / S+W). W key to cycle. Wire mode unifies all rendering (including outlines and MMD edges) into wireframe
+- **Bone Display** — Flag-based shape rendering. Normal = ◎ (double circle + filled center), Move = ◻ (square + filled center), Axis-fixed = ⊗ (circle + ✕), IK Controller = ◻ (blue outline + orange fill + blue center). IK-affected bones (Link) in orange. Tail-based drawing for PMXEditor-compliant direction display. Constant screen-space size
+- **Physics Visualization** — Rigid bodies (sphere/capsule/box) in 1px wireframe. PMX/PMD colored by physics_mode (bone-follow = green, physics = red, physics+bone = blue), VRM colored by group (collider = red, spring = green). Capsules include hemisphere wireframes (PMX/PMD)
+- **Joint Display** — PMX/PMD joints visualized as yellow cubes (rotation-aware, animation-synced). Adjustable opacity
+- **Shader Override** — 6 shader modes switchable via ▲ ComboBox ▼: Auto (auto-selects based on model format) / MToon/Lambert (force Standard path) / Unlit (texture color only) / GGX Preview (simplified Cook-Torrance specular) / Normal (normal→RGB visualization) / MMD (MMD dedicated path). Resets to Auto when loading a new model
+- **Normal Tools** — Normal smoothing `[S]`, custom normal clear `[C]` (compatible with normal maps: smoothing TBN base normals improves polygon edge visibility), normal map ON/OFF `[N]`, normal direction visualization
+- **MSAA** — 4x anti-aliasing (toggleable). MASK (cutout) materials enable alpha_to_coverage on both surface and outline passes for reduced jaggies on eyelashes, hair cards, etc.
+- **Bloom (Glow)** — Dual Kawase post-effect. Only emissive components glow (separated via MRT). Intensity, threshold, and radius adjustable in the UI. PMX/PMD materials with specular=(0,0,0) and specular_power≥100 are automatically bloom targets. Also supports Prefab Emission textures/colors. Zero GPU cost when disabled. Per-material `[B]` toggle for individual Bloom/Emissive ON/OFF control. HDR emissive (component > 1.0) materials default to OFF to prevent white-out
+- **UV Map Export** — PSD output with per-material layers (1024–8192 resolution). UV boundary wrap handling for triangles crossing 0/1 edges. Groups layers into folders by model name when multiple models are merged. Save dialog defaults to the loaded model file's directory
+- **Model Append Loading** — Merge costume FBX etc. into existing model. Bone matching uses 3-level fallback (VRM humanoid name → FBX node name → PMX name) for correct merging across different naming conventions
 
 <details>
-<summary>キーボードショートカット</summary>
+<summary>Keyboard Shortcuts</summary>
 
-| キー | 機能 |
-|------|------|
-| Ctrl+O | ファイルを開く |
-| F | モデルにフィット |
-| R | カメラリセット |
-| 0 / 1 / 3 / 7 / 9 | ビュープリセット（正面 / 左面 / 右面 / 上面 / 背面） |
-| 2 / 8 | チルト（下 / 上に15°回り込み、360°可） |
-| 4 / 6 | パン（左 / 右に15°回り込み） |
-| 5 | パース／正射影 切替 |
-| . | モデルにフィット |
-| G | グリッド表示 |
-| B | ボーン表示 |
-| P | 物理表示 |
-| W | ワイヤーフレーム切替 |
-| N | 法線表示 |
-| L | ライトモード切替 |
-| Space | アニメーション再生/一時停止 |
-| ←/→ | フレーム送り（一時停止中） |
+| Key | Function |
+|-----|----------|
+| Ctrl+O | Open file |
+| F | Fit to model |
+| R | Reset camera |
+| 0 / 1 / 3 / 7 / 9 | View presets (Front / Left / Right / Top / Back) |
+| 2 / 8 | Tilt (orbit down / up by 15°, 360° capable) |
+| 4 / 6 | Pan (orbit left / right by 15°) |
+| 5 | Toggle perspective / orthographic |
+| . | Fit to model |
+| G | Toggle grid |
+| B | Toggle bones |
+| P | Toggle physics |
+| W | Cycle wireframe |
+| N | Toggle normals |
+| L | Cycle light mode |
+| Space | Play/pause animation |
+| Left/Right | Step frame (when paused) |
 
 </details>
 
-### PMX / PMD ロード
+### PMX / PMD Loading
 
-- **PMX 2.0 / 2.1** — 全データ構造の読み込み（頂点・面・材質・ボーン・モーフ・表示枠・剛体・ジョイント）。SoftBody (2.1) は読み飛ばし
-- **PMD** — Shift_JIS テキスト自動変換。IK・モーフ（base+offset 形式）対応。材質名テキストファイル（同名 `.txt`）読み込み
-- **テクスチャ** — PMX/PMD の相対パスから PNG/JPEG/BMP/TGA を自動読み込み。MIME ヒントによるフォーマット判定。スフィアマップ（.sph/.spa）対応
-- **MMD レンダリング** — トゥーンシェーディング（共有 toon01-10 + 個別トゥーン）、Blinn-Phong スペキュラ、スフィアマップ（乗算/加算）、エッジ描画（inverted hull 法、ON/OFF・太さ調整可）。ライト色・強度の変更が MMD 描画に反映される。MMD モード時は環境光 UI が無効化（LightAmbient がシーン環境光を兼ねるため）。Auto モードで PMX/PMD を読み込んだ場合もエッジ描画の UI が表示される
-- **Tスタンス変換** — A スタンスモデルを T スタンスに変換（ボーン・メッシュ・モーフ・剛体・ジョイント同期）
-- **VRMA アニメーション** — PMX 日本語ボーン名から VRM ヒューマノイド名への自動マッピングで VRMA アニメーション再生対応。回転付与・移動付与（grant）にも対応し、D-bones（足D 等）経由で足が正しく追従する
-- **UI 制限** — PMX/PMD ロード時は PMX 変換ボタン・法線平滑化・カスタム法線クリアをグレーアウト。MToon アウトラインを持たないモデルでは「アウトライン描画」チェックボックスもグレーアウト
-- **コメント表示** — PMX/PMD のコメントをモデル情報パネルに表示
+- **PMX 2.0 / 2.1** — Full data structure loading (vertices, faces, materials, bones, morphs, display frames, rigid bodies, joints). SoftBody (2.1) is skipped
+- **PMD** — Automatic Shift_JIS text conversion. IK and morph (base+offset) support. Material name text file (same-name `.txt`) loading
+- **Textures** — Auto-loads PNG/JPEG/BMP/TGA from PMX/PMD relative paths. MIME hint-based format detection. Sphere maps (.sph/.spa) supported
+- **MMD Rendering** — Toon shading (shared toon01-10 + individual toon), Blinn-Phong specular, sphere maps (multiply/add), edge drawing (inverted hull method, toggle/thickness adjustable). Light color and intensity changes are reflected in MMD rendering. Ambient UI is disabled in MMD mode (LightAmbient serves as scene ambient). Edge drawing UI is also shown in Auto mode when loading PMX/PMD
+- **T-Stance Conversion** — Convert A-stance models to T-stance (bones, mesh, morphs, rigid bodies, joints synced)
+- **VRMA Animation** — Auto-mapping from PMX Japanese bone names to VRM humanoid names enables VRMA animation playback. Supports rotation/move grants, so D-bones (leg D, etc.) correctly follow FK animations
+- **UI Restrictions** — PMX conversion button, normal smoothing, and custom normal clear are grayed out when PMX/PMD is loaded. "Outline drawing" checkbox is also grayed out for models without MToon outlines
+- **Comment Display** — PMX/PMD comments shown in model info panel
 
-### 更新履歴
+### Changelog
 
-バージョンごとの変更点は [更新履歴](CHANGELOG.md) を参照。
+See [Changelog](CHANGELOG.md) for version-by-version changes.
 
-## おまけ
+## Extras
 
-### アニメーション再生
+### Animation Playback
 
-- VRMA / glTF / FBX アニメーションの D&D またはダイアログ読み込み
-- ヒューマノイドリターゲティング対応（異なるモデルへの適用可能）
-- ループモード 4 種（なし / 通常 / A-B リピート / ピンポン往復）
-- 再生速度調整・フレーム送り・シークバー・表情キーフレーム同期
-- アニメーション解除・削除時にボーンポーズと表情モーフを自動リセット
+- Load VRMA / glTF / FBX animations via drag & drop or dialog
+- Humanoid retargeting support (apply across different models)
+- 4 loop modes (None / Normal / A-B repeat / Ping-pong)
+- Speed control, frame stepping, seek bar, expression keyframe sync
+- Automatic bone pose and expression morph reset on animation clear/removal
 
-### PMX（MikuMikuDance）形式に変換
+### PMX (MikuMikuDance) Conversion
 
-ビューア上から直接変換、または CLI で変換可能。
+Convert directly from the viewer, or via CLI.
 
 ```bash
 popone.exe input.vrm output.pmx
@@ -139,86 +141,86 @@ popone.exe archive.zip output.pmx
 popone.exe archive.7z output.pmx --model-name "model.pmx"
 ```
 
-| 出力 | 説明 |
-|------|------|
-| PMX 2.0 (`.pmx`) | MikuMikuDance / PmxEditor 用。MMD 標準ボーン・IK・物理を自動挿入 |
-| テクスチャ PNG | `textures/` フォルダに出力（PSD テクスチャは自動的に PNG に変換） |
-| UVマップ PSD | 材質ごとにレイヤー分け、モデル別グループフォルダ付き（ビューアから出力） |
+| Output | Description |
+|--------|-------------|
+| PMX 2.0 (`.pmx`) | For MikuMikuDance / PmxEditor. Auto-inserts MMD standard bones, IK, and physics |
+| Texture PNG | Output to `textures/` folder (PSD textures are automatically converted to PNG) |
+| UV Map PSD | Per-material layers with model-based group folders (from viewer) |
 
-- ビューアでは「PMX 変換」ボタンで即座に `converted_modelXX/` ディレクトリに出力。変換完了後にエクスプローラーで自動オープン。出力先ベースディレクトリは「出力」タブで変更可能
-- VRM 0.0 / 1.0 / FBX / UnityPackage / ZIP / 7z を自動判定
-- MMD 標準ボーン自動挿入（全ての親・センター・グルーブ・腰・足IK・つま先IK）
-- 準標準ボーン挿入（腰キャンセル・足D・足先EX・腕捩り・手捩り・肩キャンセル）
-- VRM Expression → PMX モーフ変換
-- VRM SpringBone → PMX 剛体・ジョイント変換（重力・回転/移動制限・コライダー衝突マスク）
-- Aスタンス変換 / Tスタンス変換（FBX用、変換失敗・スキップ時はビューポートに常時警告表示）、剛体回転をボーン方向に揃えるオプション
-- 物理なしで出力（剛体・ジョイント省略）、元のボーン構造で出力（標準ボーン挿入スキップ＋元のボーン名維持）、出力倍率指定（`--scale`）
-- ボーンなしモデル（静的 FBX 等）は原点にダミーボーンを 1 本自動作成し、全頂点ウェイトを割り当て
-- MToon アウトライン → PMX エッジ反映
-- 表示枠の自動分類（Root / 表情 / 体(上) / 腕 / 指 / 足 / その他）
-- UV 正規化（0..1 範囲に補正）
+- In the viewer, "PMX Convert" button exports immediately to `converted_modelXX/` directory. Output folder opens automatically in Explorer. Base output directory is configurable in the "Export" tab
+- Auto-detection of VRM 0.0 / 1.0 / FBX / UnityPackage / ZIP / 7z
+- MMD standard bone insertion (master, center, groove, waist, leg IK, toe IK)
+- Semi-standard bones (waist cancel, leg D, toe EX, arm twist, wrist twist, shoulder cancel)
+- VRM Expression to PMX morph conversion
+- VRM SpringBone to PMX rigid body / joint conversion (gravity, rotation/movement limits, collider masks)
+- A-stance conversion / T-stance conversion (for FBX, persistent viewport warning on failure/skip), rigid body rotation alignment options
+- No-physics export (skip rigid bodies/joints), raw structure export (skip standard bone insertion + keep original bone names), export scale multiplier (`--scale`)
+- Boneless models (static FBX, etc.) automatically get a single dummy bone at origin with all vertex weights assigned
+- MToon outline to PMX edge mapping
+- Auto-classified display frames (Root / Expression / Upper Body / Arms / Fingers / Legs / Other)
+- UV normalization (clamped to 0..1)
 
-## 注意事項・制限事項
+## Notes & Limitations
 
-- **出力 PMX** — PmxEditor 等での後段調整を想定しています
-- **PMX/PMD は閲覧専用** — PMX 変換（再出力）は非対応。ビューア表示と UVマップ出力のみ
-- **スフィアモード 3（サブテクスチャ）未対応** — 追加 UV が必要なため未実装。検出時は警告ログを出力し無効化
-- **テクスチャサイズ制限** — GPU の `max_texture_dimension_2d`（一般的に 8192px）を超えるテクスチャは自動的に縮小される。画質が若干低下する場合がある。PMX 変換出力には影響しない（ビューア表示のみ）
-- **展開サイズ上限** — アーカイブ（ZIP / 7z）および `.unitypackage` の展開サイズは合計 2GB が上限。これを超えるファイルはエラーとなる
-- **MMD 特化モデル** — MMD レンダリングに特化したモデルは一部サーフェイスが正しく表示されない場合がある
-- **PMX 2.1 SoftBody** — 読み飛ばし（未対応）
+- **PMX output** — Output PMX files are intended for further adjustment in tools like PmxEditor
+- **PMX/PMD is view-only** — PMX conversion (re-export) is not supported. Viewer display and UV map export only
+- **Sphere Mode 3 (sub-texture) unsupported** — Requires additional UVs, not implemented. Detected with warning log and disabled
+- **Texture size limit** — Textures exceeding the GPU's `max_texture_dimension_2d` (typically 8192px) are automatically downscaled. This may result in slight quality loss. Does not affect PMX conversion output (viewer display only)
+- **Extraction size limit** — Archive (ZIP / 7z) and `.unitypackage` extraction is capped at 2GB total. Files exceeding this limit will produce an error
+- **MMD-specialized models** — Models optimized for MMD-specific rendering may display some surfaces incorrectly
+- **PMX 2.1 SoftBody** — Skipped (not supported)
 
-## ビルド
+## Build
 
 ```bash
-# CLI のみ（変換専用）
+# CLI only (conversion only)
 cargo build --release
 
-# ビューア付き
+# With viewer
 cargo build --release --features viewer
 ```
 
-成果物: `target/release/popone.exe`
+Output: `target/release/popone.exe`
 
-> **Windows GUI サブシステム**: `--features viewer` でビルドした exe はコンソールウィンドウを表示しない。CLI 引数付きで実行すると親コンソールに自動接続し、ビューア起動時にはコンソールを切り離す。
+> **Windows GUI Subsystem**: Exe built with `--features viewer` won't show a console window. When run with CLI arguments, it auto-attaches to the parent console and detaches when launching the viewer.
 
-## CLI オプション
+## CLI Options
 
 ```bash
-popone <入力> [出力.pmx] [オプション]
+popone <input> [output.pmx] [options]
 
-出力を省略すると自動的にビューアモードで起動する（viewer feature ビルド時）。
+When output is omitted, the viewer opens automatically (viewer feature build only).
 
-オプション:
-  --dump                  ボーン・頂点数のみ出力（PMX 生成しない）
-  --no-physics            物理変換をスキップ
-  --normalize-pose        Aスタンス変換（Tポーズの腕を下げる）
-  --normalize-to-tstance  Tスタンス変換（Aスタンスの腕を水平にする、FBX用）
-  --align-rigid-rotation  剛体回転をボーン方向に揃える
-  --raw-structure         元のボーン構造で出力（標準ボーン挿入スキップ＋元のボーン名維持）
-  --scale <FLOAT>         PMX出力倍率（デフォルト: 1.0）
-  --model-name <NAME>     アーカイブ内のモデルファイル名を指定（ZIP/7z用）
-  --list-models           アーカイブ内のモデル一覧を表示して終了（ZIP/7z用）
-  --log-level <LEVEL>     ログレベル（error/warn/info/debug、デフォルト: info）
+Options:
+  --dump                  Print bone/vertex counts only (no PMX output)
+  --no-physics            Skip physics conversion
+  --normalize-pose        A-stance conversion (lower T-pose arms)
+  --normalize-to-tstance  T-stance conversion (raise A-stance arms to horizontal, for FBX)
+  --align-rigid-rotation  Align rigid body rotation to bone direction
+  --raw-structure         Export with original bone structure (skip standard bone insertion + keep original bone names)
+  --scale <FLOAT>         PMX export scale multiplier (default: 1.0)
+  --model-name <NAME>     Specify model filename inside archive (for ZIP/7z)
+  --list-models           List models inside archive and exit (for ZIP/7z)
+  --log-level <LEVEL>     Log level (error/warn/info/debug, default: info)
 ```
 
-## 出力ファイル
+## Output Files
 
-- **PMX** — 指定パスに出力
-- **テクスチャ** — PMX と同じディレクトリの `textures/` に PNG 出力
-- **ログ** — 同ディレクトリに `.log` ファイル（`--dump` 時は生成しない）
+- **PMX** — Written to the specified path
+- **Textures** — PNG files in `textures/` next to the PMX
+- **Log** — `.log` file in the same directory (not generated with `--dump`)
 
-## 変換例
+## Conversion Example
 
-Seed-san.vrm（VRM 1.0）:
+Seed-san.vrm (VRM 1.0):
 
-| 項目 | 数 |
-|------|-----|
-| ボーン | 175 |
-| 頂点 | 34,059 |
-| 材質 | 17 |
-| テクスチャ | 15 |
-| モーフ | 17 |
-| 剛体 | 36 |
-| ジョイント | 19 |
+| Item | Count |
+|------|-------|
+| Bones | 175 |
+| Vertices | 34,059 |
+| Materials | 17 |
+| Textures | 15 |
+| Morphs | 17 |
+| Rigid Bodies | 36 |
+| Joints | 19 |
 

@@ -126,6 +126,8 @@ pub struct PendingState {
     pub reload: Option<PendingOverlay>,
     /// ビューポートサイズ確定後の refit（初回ロード時）
     pub refit: bool,
+    /// テクスチャ履歴の上書き保存確認ダイアログ表示フラグ
+    pub confirm_save_tex_history: bool,
 }
 
 impl Default for PendingState {
@@ -142,6 +144,7 @@ impl Default for PendingState {
             rebuild: None,
             reload: None,
             refit: false,
+            confirm_save_tex_history: false,
         }
     }
 }

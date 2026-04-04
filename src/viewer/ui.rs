@@ -154,6 +154,41 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
     app.prepare_tex_match_views();
     show_tex_match_dialog(ctx, app);
     app.sync_tex_match_preview();
+
+    // テクスチャ履歴上書き確認ダイアログ
+    show_confirm_save_tex_history(ctx, app);
+}
+
+/// テクスチャ履歴の上書き保存確認ダイアログ
+fn show_confirm_save_tex_history(ctx: &egui::Context, app: &mut ViewerApp) {
+    if !app.pending.confirm_save_tex_history {
+        return;
+    }
+    let mut confirmed = false;
+    let mut cancelled = false;
+    egui::Window::new("テクスチャ履歴の上書き")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.label("このモデルのテクスチャ履歴が既に存在します。");
+            ui.label("上書き保存しますか？");
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("上書き保存").clicked() {
+                    confirmed = true;
+                }
+                if ui.button("キャンセル").clicked() {
+                    cancelled = true;
+                }
+            });
+        });
+    if confirmed {
+        app.pending.confirm_save_tex_history = false;
+        app.do_save_texture_history();
+    } else if cancelled {
+        app.pending.confirm_save_tex_history = false;
+    }
 }
 
 /// FBX読み込み方法選択ダイアログ（モデル+アニメーション両方含む場合）
@@ -182,7 +217,18 @@ fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             ui.label(format!("\"{}\"", file_name));
             ui.label("モデルとアニメーションの両方が含まれています。");
             ui.separator();
-            ui.checkbox(&mut pending.load_model, "モデルを読み込む");
+            let no_model_loaded = app.loaded.is_none();
+            if no_model_loaded {
+                // 初回ロード時はモデル必須（アニメーション単独は不可）
+                pending.load_model = true;
+                ui.add_enabled(
+                    false,
+                    egui::Checkbox::new(&mut pending.load_model, "モデルを読み込む"),
+                )
+                .on_disabled_hover_text("初回はモデルの読み込みが必要です");
+            } else {
+                ui.checkbox(&mut pending.load_model, "モデルを読み込む");
+            }
             ui.checkbox(&mut pending.load_animation, "アニメーションを読み込む");
             ui.separator();
             ui.horizontal(|ui| {
@@ -1526,6 +1572,17 @@ fn show_tab_display(
     ui.add_space(12.0);
 
     // 材質表示
+    // テクスチャ履歴キーを先に計算（借用衝突回避）
+    let tex_history_key = app.texture_history_key();
+    let tex_history_has_entry = tex_history_key
+        .as_ref()
+        .is_some_and(|k| app.texture_history.history.contains_key(k));
+    let has_file_assignments = app
+        .tex
+        .assignments
+        .values()
+        .any(|s| matches!(s, super::app::helpers::TextureSource::File(_)));
+
     let Some(ref loaded) = app.loaded else { return };
     if loaded.gpu_model.draws.is_empty() {
         return;
@@ -1539,6 +1596,7 @@ fn show_tab_display(
 
     ui.heading(egui::RichText::new("材質表示").color(egui::Color32::from_gray(0xD0)));
     ui.separator();
+    let small = egui::TextStyle::Small;
     ui.horizontal(|ui| {
         if ui.small_button("全表示").clicked() {
             app.material_visibility.iter_mut().for_each(|v| *v = true);
@@ -1548,11 +1606,43 @@ fn show_tab_display(
         }
         ui.checkbox(&mut app.tex.link_same_name, "同名連動")
             .on_hover_text("同じ名前の材質にテクスチャを同時に割り当て");
-        if !app.tex.assignments.is_empty() && ui.small_button("テクスチャリセット").clicked()
-        {
-            app.tex.assignments.clear();
-            app.tex.pkg_assignments.clear();
-            app.pending.reload = Some(PendingOverlay::WaitingOverlay);
+    });
+    // 2行目: テクスチャリセット + 履歴ボタン（小フォント）
+    let mut do_save_history = false;
+    let mut do_recall_history = false;
+    ui.horizontal(|ui| {
+        if !app.tex.assignments.is_empty() {
+            if ui
+                .button(egui::RichText::new("テクスチャリセット").text_style(small.clone()))
+                .clicked()
+            {
+                app.tex.assignments.clear();
+                app.tex.pkg_assignments.clear();
+                app.pending.reload = Some(PendingOverlay::WaitingOverlay);
+            }
+        }
+        if tex_history_key.is_some() {
+            if has_file_assignments {
+                if ui
+                    .button(egui::RichText::new("テクスチャ保存").text_style(small.clone()))
+                    .clicked()
+                {
+                    // 既に履歴がある場合は確認フラグ、なければ即保存
+                    if tex_history_has_entry {
+                        app.pending.confirm_save_tex_history = true;
+                    } else {
+                        do_save_history = true;
+                    }
+                }
+            }
+            if tex_history_has_entry {
+                if ui
+                    .button(egui::RichText::new("テクスチャ呼出").text_style(small.clone()))
+                    .clicked()
+                {
+                    do_recall_history = true;
+                }
+            }
         }
     });
     // フィルター（材質数が多い場合に便利）
@@ -2022,6 +2112,14 @@ fn show_tab_display(
 
     // ── ファイル構成 ──
     show_file_tree(ui, app);
+
+    // テクスチャ履歴の遅延実行（loaded の借用が解放された後）
+    if do_save_history {
+        app.do_save_texture_history();
+    }
+    if do_recall_history {
+        app.do_recall_texture_history();
+    }
 }
 
 /// ファイル構成ツリー: ロードチェーン（開いたファイル → 経由 → 最終モデル）を階層表示
