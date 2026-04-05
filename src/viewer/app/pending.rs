@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use eframe::egui;
@@ -120,6 +121,17 @@ pub struct BgLoadResult {
     pub source: ReloadableSource,
     pub kind: BgLoadKind,
     pub path: PathBuf,
+    /// 発行元 dispatch の世代番号。現世代の `BgLoadHandle.request_id` と一致しない結果は
+    /// 「古いロードが完了したがユーザーは既に次のロードに進んでいる」状態として破棄する。
+    pub request_id: u64,
+}
+
+/// バックグラウンド CPU パースのハンドル（受信チャネル + キャンセルトークン + 世代番号）
+pub struct BgLoadHandle {
+    pub rx: std::sync::mpsc::Receiver<anyhow::Result<BgLoadResult>>,
+    /// 別スレッドのパース処理へのキャンセル通知。新規ロード投入時に `true` に設定する。
+    pub cancel: Arc<AtomicBool>,
+    pub request_id: u64,
 }
 
 /// ロード種別（後処理の分岐に使用）
@@ -142,6 +154,63 @@ pub enum FileDialogKind {
     Append,
 }
 
+/// バックグラウンドロードの状態マシン。
+///
+/// 従来は `load_dispatch: Option<PendingLoadDispatch>` と `bg_load: Option<BgLoadHandle>` の
+/// 2 フィールド併存で表現していたが、「両方 Some」「両方 None のはずが片方だけ取り残される」などの
+/// 不正状態を型レベルで排除するため enum に統合した。
+///
+/// 状態遷移:
+/// - `Idle` → `PendingDispatch`: ファイルダイアログ結果・D&D・IPC・コマンドライン引数
+/// - `PendingDispatch` → `Idle` or `Loading`: `route_load_dispatch` が即時実行 / spawn_bg_load を選ぶ
+/// - `Loading` → `Idle`: BG スレッドからの結果受信
+/// - `Loading` → `PendingDispatch { prior_loading: Some(..) }`: Loading 中に次の dispatch が投入された場合、
+///   先行 handle を `prior_loading` として引き継ぎ、`route_load_dispatch` が intent に応じて
+///   キャンセル（モデル要求）か保護（アニメ単体要求）を判断する
+pub enum BackgroundLoadState {
+    /// 何も走っていない
+    Idle,
+    /// dispatch 予約あり。次フレームで `route_load_dispatch` が呼ばれる。
+    /// `prior_loading` は Loading 中に新 dispatch が投入された場合の先行 handle。
+    PendingDispatch {
+        dispatch: PendingLoadDispatch,
+        prior_loading: Option<BgLoadHandle>,
+    },
+    /// BG スレッドがパース中。結果受信待ち。
+    Loading(BgLoadHandle),
+}
+
+impl BackgroundLoadState {
+    pub fn is_idle(&self) -> bool {
+        matches!(self, BackgroundLoadState::Idle)
+    }
+
+    pub fn is_loading(&self) -> bool {
+        matches!(self, BackgroundLoadState::Loading(_))
+    }
+
+    /// 何らかのロード処理が進行中（dispatch 予約 or BG パース中）
+    pub fn is_active(&self) -> bool {
+        !self.is_idle()
+    }
+
+    /// 新しい dispatch を投入する。
+    /// 先行 Loading がある場合は `prior_loading` として引き継ぎ、`route_load_dispatch` の
+    /// intent 判定（モデル要求 vs アニメ単体要求）でキャンセル可否を決定する。
+    /// 既に `PendingDispatch` 状態なら古い dispatch は破棄し、その `prior_loading` のみ引き継ぐ。
+    pub fn submit_dispatch(&mut self, dispatch: PendingLoadDispatch) {
+        let prior_loading = match std::mem::replace(self, BackgroundLoadState::Idle) {
+            BackgroundLoadState::Idle => None,
+            BackgroundLoadState::Loading(h) => Some(h),
+            BackgroundLoadState::PendingDispatch { prior_loading, .. } => prior_loading,
+        };
+        *self = BackgroundLoadState::PendingDispatch {
+            dispatch,
+            prior_loading,
+        };
+    }
+}
+
 /// 遅延処理（ペンディング）の集約状態
 pub struct PendingState {
     /// FBX読み込み方法選択待ち（モデル+アニメ両方含む場合）
@@ -154,10 +223,9 @@ pub struct PendingState {
     pub archive: Option<PendingArchive>,
     /// アーカイブモデル遅延読み���み
     pub archive_load: Option<PendingArchiveLoad>,
-    /// ロード予約（preloaded 含む、全入口統一）
-    pub load_dispatch: Option<PendingLoadDispatch>,
-    /// バックグラウンド CPU パース結果の受信チャネル
-    pub bg_load: Option<std::sync::mpsc::Receiver<anyhow::Result<BgLoadResult>>>,
+    /// バックグラウンドロードの状態マシン
+    /// （dispatch 予約 + BG パース中のハンドルを型レベルで統合）
+    pub bg_state: BackgroundLoadState,
     /// PMX変換遅延実行
     pub convert: Option<PendingOverlay>,
     /// GPU再構築遅延実行
@@ -180,8 +248,7 @@ impl Default for PendingState {
             pkg_load: None,
             archive: None,
             archive_load: None,
-            load_dispatch: None,
-            bg_load: None,
+            bg_state: BackgroundLoadState::Idle,
             convert: None,
             rebuild: None,
             reload: None,
@@ -235,8 +302,7 @@ impl ViewerApp {
         rect: egui::Rect,
         ctx: &egui::Context,
     ) {
-        let msg = if self.pending.load_dispatch.is_some()
-            || self.pending.bg_load.is_some()
+        let msg = if self.pending.bg_state.is_active()
             || self.pending.pkg_load.is_some()
             || self.pending.archive_load.is_some()
         {
@@ -276,9 +342,12 @@ impl ViewerApp {
 
     /// プログレスフラグ更新（次フレームで処理を実行するためのトリガー）
     pub(super) fn update_progress_flags(&mut self, ctx: &egui::Context) {
-        if let Some(ref mut d) = self.pending.load_dispatch {
-            if d.overlay == PendingOverlay::WaitingOverlay {
-                d.overlay = PendingOverlay::Ready;
+        if let BackgroundLoadState::PendingDispatch {
+            ref mut dispatch, ..
+        } = self.pending.bg_state
+        {
+            if dispatch.overlay == PendingOverlay::WaitingOverlay {
+                dispatch.overlay = PendingOverlay::Ready;
                 ctx.request_repaint();
             }
         }
@@ -318,7 +387,7 @@ impl ViewerApp {
                         self.last_model_dir = Some(dir.to_path_buf());
                     }
                     let append = kind == FileDialogKind::Append;
-                    self.pending.load_dispatch = Some(PendingLoadDispatch {
+                    self.pending.bg_state.submit_dispatch(PendingLoadDispatch {
                         path,
                         append,
                         overlay: PendingOverlay::WaitingOverlay,
@@ -339,38 +408,59 @@ impl ViewerApp {
             }
         }
 
-        // load_dispatch が Ready → メインスレッドルーティング
-        if self
-            .pending
-            .load_dispatch
-            .as_ref()
-            .is_some_and(|d| d.overlay == PendingOverlay::Ready)
-        {
-            let dispatch = self
-                .pending
-                .load_dispatch
-                .take()
-                .expect("load_dispatch は Ready 確認済み");
-            self.route_load_dispatch(dispatch);
+        // PendingDispatch が Ready → メインスレッドルーティング
+        let dispatch_ready = matches!(
+            &self.pending.bg_state,
+            BackgroundLoadState::PendingDispatch { dispatch, .. }
+                if dispatch.overlay == PendingOverlay::Ready
+        );
+        if dispatch_ready {
+            let (dispatch, prior_loading) =
+                match std::mem::replace(&mut self.pending.bg_state, BackgroundLoadState::Idle) {
+                    BackgroundLoadState::PendingDispatch {
+                        dispatch,
+                        prior_loading,
+                    } => (dispatch, prior_loading),
+                    _ => unreachable!("dispatch_ready で PendingDispatch 確認済み"),
+                };
+            self.route_load_dispatch(dispatch, prior_loading);
         }
         // バックグラウンド CPU パース結果をポーリング
-        if let Some(ref rx) = self.pending.bg_load {
-            match rx.try_recv() {
+        if let BackgroundLoadState::Loading(ref handle) = self.pending.bg_state {
+            let current_id = handle.request_id;
+            match handle.rx.try_recv() {
                 Ok(Ok(result)) => {
-                    self.pending.bg_load = None;
-                    if let Err(e) = self.apply_bg_load_result(result) {
-                        self.convert_message = Some(ConvertMessage::failure(format!("{:#}", e)));
+                    if result.request_id != current_id {
+                        // 古い世代の結果が後から届いたケース。ハンドル自体は現世代のものなので保持し、
+                        // 次の try_recv で現世代の結果を待つ。
+                        log::info!(
+                            "Discarding stale bg load result (req={}, current={})",
+                            result.request_id,
+                            current_id
+                        );
+                    } else {
+                        self.pending.bg_state = BackgroundLoadState::Idle;
+                        if let Err(e) = self.apply_bg_load_result(result) {
+                            self.convert_message =
+                                Some(ConvertMessage::failure(format!("{:#}", e)));
+                        }
                     }
                 }
                 Ok(Err(e)) => {
-                    self.pending.bg_load = None;
-                    self.convert_message = Some(ConvertMessage::failure(format!("{:#}", e)));
+                    self.pending.bg_state = BackgroundLoadState::Idle;
+                    // キャンセル由来のエラーはユーザーが意図した中断なので UI に出さない
+                    let msg = format!("{:#}", e);
+                    if msg.contains("bg load cancelled") {
+                        log::info!("Bg load cancelled (req={})", current_id);
+                    } else {
+                        self.convert_message = Some(ConvertMessage::failure(msg));
+                    }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     // まだパース中
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.pending.bg_load = None;
+                    self.pending.bg_state = BackgroundLoadState::Idle;
                     self.convert_message = Some(ConvertMessage::failure(
                         "Background load thread panicked".to_string(),
                     ));

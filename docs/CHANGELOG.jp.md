@@ -3,20 +3,37 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
-  - [v0.2.27](#v0227)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
+  - [v0.2.28](#v0228)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84)
-  - [v0.2.26](#v0226)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
+  - [v0.2.27](#v0227)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-1)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-1)
+  - [v0.2.26](#v0226)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
+    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-2)
+    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-2)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.2.28
+
+### バグ修正
+
+- **アニメーションロードによるモデルロードの誤キャンセル** — `route_load_dispatch` がキャンセルを最優先で実行してから vrma/.anim/gltf アニメ/FBX アニメ単体などの intent を判定していたため、モデルロード進行中にアニメファイルを開くと先行モデルロードを潰した上でアニメ側も `self.loaded.is_none()` で失敗し両方失われていた問題を修正。intent 判定を先に行い、アニメーション単体要求と判定されたときは `bg_load` 進行中なら拒否メッセージを返して現行モデルロードを保護するように変更
+- **キャンセル粒度の改善** — `cpu_parse_model` 内のキャンセルチェックが関数冒頭 1 回だけで、既にパースに入ったスレッドは最後まで CPU/I/O を使い切っていた問題を修正。各フォーマット分岐の冒頭、`read_data` / `load_glb` / `read_pmx` 等の重い I/O の後、`extract` 呼び出しの前後にチェック点を追加し、旧リクエストのキャンセルフラグが立った時点でディスパッチ境界で段階的に打ち切られるようにした
+
+### コード品質・パフォーマンス改善
+
+- **`BackgroundLoadState` enum 化** — `PendingState` の `load_dispatch: Option<PendingLoadDispatch>` と `bg_load: Option<BgLoadHandle>` の 2 フィールド併存を `bg_state: BackgroundLoadState` に統合。`Idle` / `PendingDispatch { dispatch, prior_loading }` / `Loading(BgLoadHandle)` の 3 バリアントで状態マシンを型レベル表現し、「両方 Some」「片方だけ取り残される」などの不正状態を排除。`PendingDispatch.prior_loading: Option<BgLoadHandle>` は Loading 中に新 dispatch が投入された場合の先行ハンドルを保持し、`route_load_dispatch` が intent（モデル要求 vs アニメ単体要求）に応じてキャンセル/保護を判断する。`BackgroundLoadState::submit_dispatch` ヘルパーで 4 つの dispatch 入口（ファイルダイアログ結果・D&D・IPC・コマンドライン引数）を統一した
+- **バックグラウンドロードのキャンセル機構** — 新規ロード要求が来た時点で進行中の先行ロードをキャンセルできるよう、`Arc<AtomicBool>` ベースのキャンセルトークンを導入。v0.2.27 初期実装では先行ロード中の新規要求を**拒否**してエラーを出していたが、v0.2.28 からは先行ロードを**キャンセルして新規を受け付ける**形に変更（ただしアニメ単体要求など「先行ロード完了後のモデルに依存する」場合は拒否側に残す）。`cpu_parse_model` 内の複数箇所でキャンセルフラグをチェックし、セットされていれば `"bg load cancelled"` で即座に中断する。キャンセル由来エラーは UI に出さず `log::info!` のみで記録
+- **バックグラウンドロードの世代管理（request_id）** — `BgLoadHandle { rx, cancel, request_id }` 構造体を新設し、`spawn_bg_load` 呼び出しごとに `ViewerApp.next_request_id` をインクリメントして発番。`BgLoadResult.request_id` と現世代のハンドルの `request_id` を受信時に突き合わせ、不一致なら古い世代の結果として破棄する。これにより「先行ロードがキャンセル直前にギリギリ完了して結果を送信していた」場合でも現世代のモデルが上書きされない
+- **FBX reload 一時ディレクトリの競合回避** — Snapshot リロード時の FBX 外部テクスチャ展開先として使っていた固定名 `%TEMP%\popone_fbx_reload` を `tempfile::TempDir` に置換。毎回ユニーク名 (`popone_fbx_reload_XXXXXX`) を生成するため並行リロード時の競合が解消され、`Drop` で自動削除されるので明示的な `remove_dir_all` 呼び出しも不要になった
 
 ## v0.2.27
 

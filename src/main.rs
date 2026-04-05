@@ -1055,13 +1055,14 @@ fn run_viewer_inner(
             let mut app =
                 popone::viewer::app::ViewerApp::new(cc, logs_dir, log_path, exe_dir, app_config);
             if let Some(path) = initial_file {
-                app.pending.load_dispatch =
-                    Some(popone::viewer::app::pending::PendingLoadDispatch {
+                app.pending.bg_state.submit_dispatch(
+                    popone::viewer::app::pending::PendingLoadDispatch {
                         path,
                         append: false,
                         overlay: popone::viewer::app::pending::PendingOverlay::WaitingOverlay,
                         preloaded: None,
-                    });
+                    },
+                );
             }
             Ok(Box::new(app))
         }),

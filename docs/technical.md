@@ -38,7 +38,7 @@
     - [Rigid Body Rotation](#rigid-body-rotation)
     - [Texture Loading](#texture-loading)
     - [Mipmap Generation (v0.2.26, optimized in v0.2.27)](#mipmap-generation-v0226-optimized-in-v0227)
-  - [Asynchronous Model Loading (v0.2.27)](#asynchronous-model-loading-v0227)
+  - [Asynchronous Model Loading (v0.2.27, cancellation/generation tracking added in v0.2.28)](#asynchronous-model-loading-v0227-cancellationgeneration-tracking-added-in-v0228)
     - [Data Flow](#data-flow)
     - [Key Types (pending.rs)](#key-types-pendingrs)
     - [`cpu_parse_model` Free Function (file_io.rs)](#cpu_parse_model-free-function-file_iors)
@@ -536,7 +536,7 @@ GPU textures are uploaded with a full mipmap chain. The number of mip levels is 
 - **Sampler** — `mipmap_filter: Linear` was already set, now effective with multiple mip levels
 - **Background pre-generation (v0.2.27)** — For VRM/GLB, the mip chain is pre-generated on a background thread via `vrm::extract::generate_mip_chain()` and stored in `IrTexture.mip_chain: Option<Vec<(u32, u32, Vec<u8>)>>`. The main thread's `upload_rgba_to_gpu_with_mips` simply transfers each level via `queue.write_texture`. For KizunaAI_KAMATTE.vrm (26 × 4K textures), `upload_textures_from_ir` execution time drops from 7.3s to 197ms
 
-## Asynchronous Model Loading (v0.2.27)
+## Asynchronous Model Loading (v0.2.27, cancellation/generation tracking added in v0.2.28)
 
 Model parsing and GPU resource construction are split into a CPU phase (background thread) and GPU phase (main thread), eliminating UI freezes.
 
@@ -553,16 +553,17 @@ Model parsing and GPU resource construction are split into a CPU phase (backgrou
    → paint_progress_overlay shows "Loading..."
 
 3. Frame N+1: process_pending_tasks()
-   → load_dispatch.take() → route_load_dispatch()
+   → Extracts PendingDispatch { dispatch, prior_loading } from bg_state
+   → route_load_dispatch(dispatch, prior_loading)
      - Format detection
-     - .vrma / .glb/.gltf animation / .anim → immediate (no BG)
+     - .vrma / .glb/.gltf animation / .anim → immediate (no BG, preserves prior_loading)
      - FBX (mesh+anim) → PendingFbxChoice dialog
      - UnityPackage / zip / 7z → sync fallback
      - Otherwise → spawn_bg_load()
-   → pending.bg_load = Some(mpsc::Receiver<anyhow::Result<BgLoadResult>>)
+   → pending.bg_state = BackgroundLoadState::Loading(BgLoadHandle { rx, cancel, request_id })
 
 4. Frame N+2 onward: process_pending_tasks()
-   → bg_load.try_recv() polling
+   → Polls via handle.rx.try_recv() from BackgroundLoadState::Loading(handle)
    → Ok(Ok(result)) → apply_bg_load_result()
    → Ok(Err(e)) → error display
    → Err(Empty) → continue waiting
@@ -573,14 +574,16 @@ Model parsing and GPU resource construction are split into a CPU phase (backgrou
 
 | Type | Description |
 |---|---|
+| `BackgroundLoadState` (v0.2.28) | BG load state machine with 3 variants: `Idle` / `PendingDispatch { dispatch, prior_loading }` / `Loading(BgLoadHandle)`. Replaces the prior two-field `load_dispatch` + `bg_load` combination to express exclusivity at the type level |
 | `PendingLoadDispatch` | Load reservation. Contains `path` / `append` / `overlay` / `preloaded` |
-| `BgLoadResult` | BG parse result. `ir: IrModel` / `source: ReloadableSource` / `kind: BgLoadKind` / `path` |
+| `BgLoadHandle` (v0.2.28) | BG load handle. `rx: mpsc::Receiver<Result<BgLoadResult>>` / `cancel: Arc<AtomicBool>` / `request_id: u64` |
+| `BgLoadResult` | BG parse result. `ir: IrModel` / `source: ReloadableSource` / `kind: BgLoadKind` / `path` / `request_id: u64` (v0.2.28) |
 | `BgLoadKind::Initial { format, auto_fbx_anim }` | Regular load |
 | `BgLoadKind::Append` | Append load |
 
 ### `cpu_parse_model` Free Function (file_io.rs)
 
-A pure function that doesn't take `&self`, safe to call from background threads. Provides unified parsing logic for each format (VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x), returning `(IrModel, ReloadableSource)`. Takes `preloaded: Option<PreloadedData>` parameter to use D&D prefetch data.
+A pure function that doesn't take `&self`, safe to call from background threads. Provides unified parsing logic for each format (VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x), returning `(IrModel, ReloadableSource)`. Takes `preloaded: Option<PreloadedData>` parameter to use D&D prefetch data. Since v0.2.28, also takes a `cancel: &Arc<AtomicBool>` argument and checks the cancel flag at the function entry, bailing out immediately with `anyhow::bail!("bg load cancelled")` if set. The check is performed only at the dispatch boundary, not inside the parser bodies (`vrm::extract` / `fbx::extract` etc.), to keep the implementation simple.
 
 ### `route_load_dispatch` Method
 
@@ -601,7 +604,10 @@ Post-processes BG results on the main thread:
 - **Send boundary**: `IrModel` / `ReloadableSource` / `PreloadedData` are all `Send` (POD + `Arc<[u8]>`)
 - **GPU access restriction**: `cpu_parse_model` is a free function that never references `wgpu::Device` / `Queue`. GPU operations only happen in `finish_load` on the main thread
 - **egui::Context thread safety**: egui 0.31's `Context` is implemented as `Arc<RwLock<ContextImpl>>` and is `Send + Sync`. `ctx.request_repaint()` is callable from BG threads
-- **Double load**: When a new `load_dispatch` is submitted, the old `bg_load` receiver is dropped. The thread runs to completion but `tx.send()` returns `Err` and the result is discarded
+- **Double load (v0.2.27)**: When a new `load_dispatch` is submitted, the old `bg_load` receiver is dropped. The thread runs to completion but `tx.send()` returns `Err` and the result is discarded. The initial v0.2.27 implementation used a stopgap "reject new dispatches while a prior load is in progress" rule
+- **Double load cancellation (v0.2.28)**: `route_load_dispatch` was switched from "reject" to "cancel and accept". It sets the old `BgLoadHandle.cancel: Arc<AtomicBool>` to `true` and then calls `spawn_bg_load` for the new request. The old thread bails out at its next cancel check point (currently the start of `cpu_parse_model`) with `"bg load cancelled"`, and the receive side logs it via `log::info!` only (not surfaced to the UI) since cancellation is intentional
+- **Generation tracking (v0.2.28)**: `ViewerApp.next_request_id: u64` is monotonically incremented (via `wrapping_add(1)`) by each `spawn_bg_load` call, and the id is embedded in both `BgLoadHandle.request_id` and `BgLoadResult.request_id`. The receiver verifies `handle.request_id == result.request_id`, discarding the result as stale if they differ (while keeping the handle so the current-generation result is still awaited). This prevents the race where an old thread manages to send its result just before cancellation takes effect, which would otherwise overwrite the current-generation model
+- **FBX reload temp directory (v0.2.28)**: The Snapshot-reload path that writes FBX external textures back to disk previously used a fixed name `%TEMP%\popone_fbx_reload`, which collided during concurrent reloads. v0.2.28 replaces it with `tempfile::Builder::new().prefix("popone_fbx_reload_").tempdir()?` so each invocation gets a unique name. `TempDir::Drop` handles automatic cleanup, eliminating the explicit `remove_dir_all` call
 
 ### Raw RGBA Texture Bypass
 

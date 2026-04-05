@@ -3,13 +3,16 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.27](#v0227)
-    - [New Features](#new-features)
+  - [v0.2.28](#v0228)
     - [Bug Fixes](#bug-fixes)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements)
+  - [v0.2.27](#v0227)
+    - [New Features](#new-features)
+    - [Bug Fixes](#bug-fixes-1)
+    - [Code Quality & Performance Improvements](#code-quality--performance-improvements-1)
   - [v0.2.26](#v0226)
     - [New Features](#new-features-1)
-    - [Bug Fixes](#bug-fixes-1)
+    - [Bug Fixes](#bug-fixes-2)
     - [Code Quality & Performance](#code-quality--performance)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -17,6 +20,20 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.2.28
+
+### Bug Fixes
+
+- **Animation load incorrectly cancelling in-progress model load** — Fixed a regression where `route_load_dispatch` performed cancellation *before* determining dispatch intent. Dropping a `.vrma` / `.anim` / glTF-animation / animation-only FBX onto the window while a model load was in progress would cancel the prior model load, and then the animation side would also fail because `self.loaded.is_none()` — losing both. The fix moves intent detection before cancellation: animation-only requests no longer cancel the prior `bg_load`. If a `bg_load` is in progress when an animation request arrives, the animation request is rejected with a message telling the user to retry after the model load finishes, preserving the current model load
+- **Cancellation granularity** — Fixed the issue where the cancel-flag check in `cpu_parse_model` existed only at the function entry, leaving threads that had already entered parsing to run to completion (wasting CPU/I/O). Added check points at the start of each format arm, after heavy I/O such as `read_data` / `load_glb` / `read_pmx`, and around the `extract` call, so cancellation propagates incrementally at dispatch boundaries
+
+### Code Quality & Performance Improvements
+
+- **`BackgroundLoadState` enum consolidation** — Merged `PendingState`'s `load_dispatch: Option<PendingLoadDispatch>` and `bg_load: Option<BgLoadHandle>` fields into a single `bg_state: BackgroundLoadState`. The 3-variant state machine (`Idle` / `PendingDispatch { dispatch, prior_loading }` / `Loading(BgLoadHandle)`) represents the load state at the type level, eliminating invalid combinations like "both Some" or "one left stale". The `PendingDispatch.prior_loading: Option<BgLoadHandle>` field carries the prior handle when a new dispatch arrives while a load is in progress, so `route_load_dispatch` can decide per intent (model request vs animation-only request) whether to cancel or preserve it. A new `BackgroundLoadState::submit_dispatch` helper unifies all 4 dispatch entry points (file dialog result, D&D, IPC, command-line argument)
+- **Background load cancellation** — Introduced an `Arc<AtomicBool>` cancel token so that a new load request can cancel an in-progress load. The initial v0.2.27 implementation **rejected** new requests with an error while a prior load was running; v0.2.28 instead **cancels the prior load and accepts the new request** (except for animation-only requests that depend on the in-progress model, which are still rejected). `cpu_parse_model` checks the cancel flag at multiple points and bails out immediately with `"bg load cancelled"`. Cancellation-origin errors are logged via `log::info!` only and are not surfaced to the UI
+- **Background load generation tracking (request_id)** — New `BgLoadHandle { rx, cancel, request_id }` struct issues a fresh id from `ViewerApp.next_request_id` on every `spawn_bg_load` call. On receive, `BgLoadResult.request_id` is matched against the current handle's `request_id`, and mismatches are discarded as stale. This prevents the case where a prior load just barely completes and sends its result after being cancelled, which would otherwise overwrite the current-generation model
+- **FBX reload temp directory collision fix** — The fixed-name `%TEMP%\popone_fbx_reload` directory used to stage external textures during Snapshot reload has been replaced with `tempfile::TempDir`. Each invocation now gets a unique `popone_fbx_reload_XXXXXX` directory, eliminating collisions during concurrent reloads, and `Drop` handles automatic cleanup so the explicit `remove_dir_all` call is no longer needed
 
 ## v0.2.27
 

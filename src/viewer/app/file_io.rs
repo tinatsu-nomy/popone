@@ -81,8 +81,20 @@ pub(super) fn cpu_parse_model(
     normalize_pose: bool,
     normalize_to_tstance: bool,
     preloaded: Option<super::helpers::PreloadedData>,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<(IrModel, super::helpers::ReloadableSource)> {
     use super::helpers::ReloadableSource;
+
+    // キャンセルチェック：関数冒頭、各フォーマット分岐の直前、重い I/O の後、extract 呼び出しの前後、
+    // そして関数末尾で粗く行う。パーサ本体（VRM/FBX/PMX extract）の内部までは潜らせず、
+    // ディスパッチ境界でチェックすることで旧スレッドの無駄な CPU/I/O を段階的に打ち切る。
+    let check_cancel = |cancel: &Arc<std::sync::atomic::AtomicBool>| -> anyhow::Result<()> {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            anyhow::bail!("bg load cancelled");
+        }
+        Ok(())
+    };
+    check_cancel(cancel)?;
 
     let is_temp = is_temp_path(path) || preloaded.as_ref().is_some_and(|pl| pl.path == *path);
 
@@ -123,6 +135,7 @@ pub(super) fn cpu_parse_model(
         }
     };
 
+    check_cancel(cancel)?;
     match format {
         FileFormat::Vrm => {
             let glb = if is_temp {
@@ -131,6 +144,7 @@ pub(super) fn cpu_parse_model(
             } else {
                 crate::vrm::loader::load_glb(path)?
             };
+            check_cancel(cancel)?;
             let version = crate::vrm::detect::detect_version(&glb.document);
             let all_extensions = crate::vrm::loader::get_raw_extensions(&glb.document);
             let ir = crate::vrm::extract::extract_ir_model_with_options(
@@ -142,6 +156,7 @@ pub(super) fn cpu_parse_model(
                 &all_extensions,
                 normalize_pose,
             )?;
+            check_cancel(cancel)?;
             // 生 RGBA のまま IrTexture に格納（vrm::extract で設定済み）。
             // PNG エンコードは GPU アップロード後に必要になった時点（PMX エクスポート等）で行う。
             let source = if is_temp {
@@ -158,12 +173,14 @@ pub(super) fn cpu_parse_model(
         }
         FileFormat::Fbx => {
             let data = read_data(path)?;
+            check_cancel(cancel)?;
             let ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
                 &data,
                 Some(path),
                 normalize_pose,
                 normalize_to_tstance,
             )?;
+            check_cancel(cancel)?;
             let aux = collect_aux(path);
             let source = make_source(data, aux);
             Ok((ir, source))
@@ -174,7 +191,9 @@ pub(super) fn cpu_parse_model(
             let pmx_dir = path.parent().unwrap_or(Path::new("."));
             let mut ir = if is_temp {
                 let data = read_data(path)?;
+                check_cancel(cancel)?;
                 let pmx_model = crate::pmx::reader::read_pmx_from_data(&data)?;
+                check_cancel(cancel)?;
                 let aux = preloaded
                     .as_ref()
                     .filter(|pl| pl.path == *path)
@@ -183,8 +202,10 @@ pub(super) fn cpu_parse_model(
                 crate::pmx::extract::pmx_to_ir_with_aux(&pmx_model, pmx_dir, Some(&aux))?
             } else {
                 let pmx_model = crate::pmx::reader::read_pmx(path)?;
+                check_cancel(cancel)?;
                 crate::pmx::extract::pmx_to_ir(&pmx_model, pmx_dir)?
             };
+            check_cancel(cancel)?;
             if normalize_pose {
                 ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
                     &mut ir.bones,
@@ -216,7 +237,9 @@ pub(super) fn cpu_parse_model(
             // temp: preloaded.aux_files を使って pmd_to_ir_with_aux
             let mut ir = if is_temp {
                 let data = read_data(path)?;
+                check_cancel(cancel)?;
                 let pmd_model = crate::pmd::reader::read_pmd_from_data(&data)?;
+                check_cancel(cancel)?;
                 let aux = preloaded
                     .as_ref()
                     .filter(|pl| pl.path == *path)
@@ -225,8 +248,10 @@ pub(super) fn cpu_parse_model(
                 crate::pmd::extract::pmd_to_ir_with_aux(&pmd_model, path, Some(&aux))?
             } else {
                 let pmd_model = crate::pmd::reader::read_pmd(path)?;
+                check_cancel(cancel)?;
                 crate::pmd::extract::pmd_to_ir(&pmd_model, path)?
             };
+            check_cancel(cancel)?;
             if normalize_pose {
                 ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
                     &mut ir.bones,
@@ -256,6 +281,7 @@ pub(super) fn cpu_parse_model(
         FileFormat::Obj => {
             let ir = if is_temp {
                 let data = read_data(path)?;
+                check_cancel(cancel)?;
                 let obj_dir = path.parent().unwrap_or(Path::new("."));
                 let aux = collect_aux(path);
                 let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
@@ -263,6 +289,7 @@ pub(super) fn cpu_parse_model(
             } else {
                 crate::obj::extract::load_obj(path)?
             };
+            check_cancel(cancel)?;
             let data = read_data(path).unwrap_or_default();
             let aux = collect_aux(path);
             let source = make_source(data, aux);
@@ -271,11 +298,13 @@ pub(super) fn cpu_parse_model(
         FileFormat::Stl => {
             let ir = if is_temp {
                 let data = read_data(path)?;
+                check_cancel(cancel)?;
                 let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
                 crate::stl::extract::load_stl_from_data(&data, name)?
             } else {
                 crate::stl::extract::load_stl(path)?
             };
+            check_cancel(cancel)?;
             let data = read_data(path).unwrap_or_default();
             let source = make_source(data, HashMap::new());
             Ok((ir, source))
@@ -283,6 +312,7 @@ pub(super) fn cpu_parse_model(
         FileFormat::DirectX => {
             let ir = if is_temp {
                 let data = read_data(path)?;
+                check_cancel(cancel)?;
                 let x_dir = path.parent().unwrap_or(Path::new("."));
                 let aux = collect_aux(path);
                 let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
@@ -290,6 +320,7 @@ pub(super) fn cpu_parse_model(
             } else {
                 crate::directx::extract::load_x(path)?
             };
+            check_cancel(cancel)?;
             let data = read_data(path).unwrap_or_default();
             let aux = collect_aux(path);
             let source = make_source(data, aux);
@@ -378,24 +409,12 @@ impl ViewerApp {
     /// ロード dispatch のメインスレッドルーティング。
     /// アニメーション判定、FBX choice、archive/pkg は既存の同期パスに振り分け、
     /// モデルパースのみバックグラウンドスレッドに送る。
-    pub(super) fn route_load_dispatch(&mut self, dispatch: super::pending::PendingLoadDispatch) {
-        use super::pending::BgLoadKind;
-
-        // 既にバックグラウンドロードが進行中なら新規 dispatch を拒否
-        // (先行スレッドの結果が黙って破棄される問題を防止)
-        if self.pending.bg_load.is_some() {
-            log::warn!(
-                "Load already in progress, ignoring new dispatch: {}",
-                dispatch.path.display()
-            );
-            self.convert_message = Some(ConvertMessage::failure(
-                "読み込み処理が実行中です。完了してから再試行してください。".to_string(),
-            ));
-            return;
-        }
-
-        // dispatch.preloaded を self.preloaded に一時セット（既存メソッドとの互換性）
-        self.preloaded = dispatch.preloaded;
+    pub(super) fn route_load_dispatch(
+        &mut self,
+        dispatch: super::pending::PendingLoadDispatch,
+        prior_loading: Option<super::pending::BgLoadHandle>,
+    ) {
+        use super::pending::{BackgroundLoadState, BgLoadKind};
 
         let path = dispatch.path;
         let append = dispatch.append;
@@ -405,6 +424,60 @@ impl ViewerApp {
             .unwrap_or("")
             .to_lowercase();
         let format = detect_format(&ext);
+
+        // 先に dispatch 種別を判定する。
+        // アニメーション単体の要求（既存モデルに適用する vrma/.anim/gltf-anim/anim-only FBX）は
+        // 進行中モデルロードに依存するため、ここでキャンセルしてはいけない。
+        // 代わりに bg_load 進行中なら拒否する（アニメ適用先モデルが未確定のため）。
+        let is_anim_only_request = !append
+            && match ext.as_str() {
+                "vrma" => true,
+                "anim" => self.loaded.is_some(),
+                "glb" | "gltf" if self.loaded.is_some() => {
+                    vrm::animation::load_gltf_animation(&path)
+                        .map(|a| !a.is_empty())
+                        .unwrap_or(false)
+                }
+                _ => {
+                    format == FileFormat::Fbx && self.loaded.is_some() && {
+                        let info = self.inspect_fbx(&path);
+                        !info.has_mesh && info.has_anim
+                    }
+                }
+            };
+
+        if is_anim_only_request {
+            if let Some(prior) = prior_loading {
+                // モデルロード進行中にアニメ要求が来た場合、キャンセルしてしまうと
+                // アニメ適用先のモデルが消えて両方失敗する。拒否して現行ロードを守る。
+                log::warn!(
+                    "Cannot load animation while model load is in progress: {}",
+                    path.display()
+                );
+                self.convert_message = Some(ConvertMessage::failure(
+                    "モデル読み込み中はアニメーションを開けません。完了してから再試行してください。"
+                        .to_string(),
+                ));
+                // prior Loading を bg_state に戻して現行ロードを保護
+                self.pending.bg_state = BackgroundLoadState::Loading(prior);
+                return;
+            }
+            // bg_load 非進行中: アニメ要求を既存モデルに適用する通常フローへ進む（キャンセル不要）
+        } else {
+            // モデルロード要求: 進行中の bg_load があればキャンセルして新規を受け入れる。
+            if let Some(old) = prior_loading {
+                old.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                log::info!(
+                    "Cancelling previous bg load (req={}) for new dispatch: {}",
+                    old.request_id,
+                    path.display()
+                );
+                // old はここで drop、受信チャネルもクローズされる
+            }
+        }
+
+        // dispatch.preloaded を self.preloaded に一時セット（既存メソッドとの互換性）
+        self.preloaded = dispatch.preloaded;
 
         // append モード
         if append {
@@ -509,17 +582,29 @@ impl ViewerApp {
         kind: super::pending::BgLoadKind,
         format: FileFormat,
     ) {
+        use super::pending::BackgroundLoadState;
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+
+        // 残存している旧 Loading があればここでもキャンセル（route_load_dispatch 以外の経路保険）
+        if let BackgroundLoadState::Loading(old) =
+            std::mem::replace(&mut self.pending.bg_state, BackgroundLoadState::Idle)
+        {
+            old.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        let request_id = self.fresh_request_id();
+        let cancel = Arc::new(AtomicBool::new(false));
         let normalize_pose = self.normalize_pose;
         let normalize_to_tstance = self.normalize_to_tstance;
         let preloaded = self.preloaded.take();
 
         let (tx, rx) = std::sync::mpsc::channel();
-        // egui::Context は Send+Sync（Arc<RwLock<ContextImpl>>）
-        // request_repaint をスレッド内で使うために clone は不要（完了通知は try_recv で十分）
-        // ただし即座にフレーム更新するために ctx clone を渡す
-        // Note: ctx は eframe::App::update 外ではアクセスできないため、
-        // repaint はスレッド側では行わず、毎フレームの try_recv で拾う
-        self.pending.bg_load = Some(rx);
+        self.pending.bg_state = BackgroundLoadState::Loading(super::pending::BgLoadHandle {
+            rx,
+            cancel: Arc::clone(&cancel),
+            request_id,
+        });
 
         let path_clone = path.clone();
         std::thread::spawn(move || {
@@ -529,12 +614,14 @@ impl ViewerApp {
                 normalize_pose,
                 normalize_to_tstance,
                 preloaded,
+                &cancel,
             );
             let result = result.map(|(ir, source)| super::pending::BgLoadResult {
                 ir,
                 source,
                 kind,
                 path: path_clone,
+                request_id,
             });
             let _ = tx.send(result);
         });
@@ -2709,37 +2796,37 @@ impl ViewerApp {
                         .to_lowercase();
                     match detect_format(&ext) {
                         FileFormat::Fbx => {
-                            // 外部テクスチャがある場合、一時ディレクトリに復元（サブディレクトリ構造を保持）
+                            // 外部テクスチャがある場合、ユニーク名の一時ディレクトリに復元（TempDir の Drop で自動削除）。
+                            // 固定名だと BG ロード並行時にディレクトリが衝突するため、tempfile で毎回ユニーク名を生成する。
                             let temp_dir = if !aux_files.is_empty() {
-                                let dir = std::env::temp_dir().join("popone_fbx_reload");
-                                let _ = std::fs::create_dir_all(&dir);
+                                let td = tempfile::Builder::new()
+                                    .prefix("popone_fbx_reload_")
+                                    .tempdir()?;
                                 for (rel_path, data) in aux_files {
-                                    let target = dir.join(rel_path);
+                                    let target = td.path().join(rel_path);
                                     if let Some(parent) = target.parent() {
-                                        let _ = std::fs::create_dir_all(parent);
+                                        std::fs::create_dir_all(parent)?;
                                     }
-                                    let _ = std::fs::write(&target, data.as_ref());
+                                    std::fs::write(&target, data.as_ref())?;
                                 }
-                                Some(dir)
+                                Some(td)
                             } else {
                                 None
                             };
                             let fbx_path = temp_dir
                                 .as_ref()
-                                .map(|d| d.join(original_path.file_name().unwrap_or_default()))
+                                .map(|d| {
+                                    d.path().join(original_path.file_name().unwrap_or_default())
+                                })
                                 .unwrap_or_else(|| original_path.clone());
-                            let result =
-                                crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-                                    main_bytes,
-                                    Some(&fbx_path),
-                                    self.normalize_pose,
-                                    self.normalize_to_tstance,
-                                );
-                            // 一時ファイルをクリーンアップ（成功・失敗問わず）
-                            if let Some(dir) = &temp_dir {
-                                let _ = std::fs::remove_dir_all(dir);
-                            }
-                            let ir = result?;
+                            let ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                                main_bytes,
+                                Some(&fbx_path),
+                                self.normalize_pose,
+                                self.normalize_to_tstance,
+                            )?;
+                            // temp_dir はここでスコープ終了 → TempDir::drop が自動削除する
+                            drop(temp_dir);
                             self.finish_load(ir, source_clone.clone())
                         }
                         FileFormat::Pmx => {
@@ -2969,35 +3056,35 @@ impl ViewerApp {
                         .to_lowercase();
                     match detect_format(&ext) {
                         FileFormat::Fbx => {
+                            // 固定名だと BG ロード並行時にディレクトリが衝突するため、tempfile で毎回ユニーク名を生成する。
                             let temp_dir = if !aux_files.is_empty() {
-                                let dir = std::env::temp_dir().join("popone_fbx_reload");
-                                let _ = std::fs::create_dir_all(&dir);
+                                let td = tempfile::Builder::new()
+                                    .prefix("popone_fbx_reload_")
+                                    .tempdir()?;
                                 for (rel_path, data) in aux_files {
-                                    let target = dir.join(rel_path);
+                                    let target = td.path().join(rel_path);
                                     if let Some(parent) = target.parent() {
-                                        let _ = std::fs::create_dir_all(parent);
+                                        std::fs::create_dir_all(parent)?;
                                     }
-                                    let _ = std::fs::write(&target, data.as_ref());
+                                    std::fs::write(&target, data.as_ref())?;
                                 }
-                                Some(dir)
+                                Some(td)
                             } else {
                                 None
                             };
                             let fbx_path = temp_dir
                                 .as_ref()
-                                .map(|d| d.join(original_path.file_name().unwrap_or_default()))
+                                .map(|d| {
+                                    d.path().join(original_path.file_name().unwrap_or_default())
+                                })
                                 .unwrap_or_else(|| original_path.clone());
-                            let result =
-                                crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-                                    main_bytes,
-                                    Some(&fbx_path),
-                                    self.normalize_pose,
-                                    self.normalize_to_tstance,
-                                );
-                            if let Some(dir) = &temp_dir {
-                                let _ = std::fs::remove_dir_all(dir);
-                            }
-                            let ir = result?;
+                            let ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                                main_bytes,
+                                Some(&fbx_path),
+                                self.normalize_pose,
+                                self.normalize_to_tstance,
+                            )?;
+                            drop(temp_dir); // TempDir::drop で自動削除
                             Ok(ir)
                         }
                         FileFormat::Pmx => {
@@ -4594,12 +4681,14 @@ impl ViewerApp {
                     None
                 };
                 let append = shift_held && has_loaded_model && is_appendable;
-                self.pending.load_dispatch = Some(super::pending::PendingLoadDispatch {
-                    path: model_path,
-                    append,
-                    overlay: super::pending::PendingOverlay::WaitingOverlay,
-                    preloaded,
-                });
+                self.pending
+                    .bg_state
+                    .submit_dispatch(super::pending::PendingLoadDispatch {
+                        path: model_path,
+                        append,
+                        overlay: super::pending::PendingOverlay::WaitingOverlay,
+                        preloaded,
+                    });
             }
 
             if !image_files.is_empty() && has_loaded_model {

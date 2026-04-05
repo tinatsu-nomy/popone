@@ -459,6 +459,17 @@ pub struct ViewerApp {
     pub texture_history: persistence::TextureHistoryFile,
     /// ダークテーマ適用済みフラグ（update初回で再適用、eframeのスタイルリセット対策）
     dark_theme_applied: bool,
+    /// バックグラウンドロードの世代番号カウンタ。`fresh_request_id` 呼び出しごとに +1。
+    /// 旧ロードの結果を識別して破棄するために使用する。
+    pub(crate) next_request_id: u64,
+}
+
+impl ViewerApp {
+    /// 新しい `request_id` を発行する（世代番号カウンタをインクリメント）。
+    pub(crate) fn fresh_request_id(&mut self) -> u64 {
+        self.next_request_id = self.next_request_id.wrapping_add(1);
+        self.next_request_id
+    }
 }
 
 /// ウィンドウ位置の初回フレーム検証・適用用
@@ -572,6 +583,7 @@ impl ViewerApp {
             pending_window_restore,
             texture_history,
             dark_theme_applied: false,
+            next_request_id: 0,
         }
     }
 
@@ -1130,12 +1142,14 @@ impl eframe::App for ViewerApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             if !path.as_os_str().is_empty() {
-                self.pending.load_dispatch = Some(pending::PendingLoadDispatch {
-                    path,
-                    append: false,
-                    overlay: pending::PendingOverlay::WaitingOverlay,
-                    preloaded: None,
-                });
+                self.pending
+                    .bg_state
+                    .submit_dispatch(pending::PendingLoadDispatch {
+                        path,
+                        append: false,
+                        overlay: pending::PendingOverlay::WaitingOverlay,
+                        preloaded: None,
+                    });
             }
         }
 

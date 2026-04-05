@@ -2483,8 +2483,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         .loaded
         .as_ref()
         .is_some_and(|l| l.ir.source_format.is_pmx_pmd());
-    let is_processing = app.pending.load_dispatch.is_some()
-        || app.pending.bg_load.is_some()
+    let is_processing = app.pending.bg_state.is_active()
         || app.pending.convert.is_some()
         || app.pending.rebuild.is_some()
         || app.pending.reload.is_some()

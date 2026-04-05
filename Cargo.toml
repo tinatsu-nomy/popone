@@ -1,6 +1,6 @@
 [package]
 name = "popone"
-version = "0.2.27"
+version = "0.2.28"
 edition = "2021"
 license = "0BSD"
 
@@ -35,6 +35,7 @@ sevenz-rust2 = "0.20"
 tobj         = "4"
 toml         = "0.8"
 dunce        = "1"
+tempfile     = "3"
 
 # ビューア用（feature gate で CLI ビルドには影響なし）
 eframe   = { version = "0.31", optional = true, default-features = false, features = ["wgpu", "default_fonts"] }
