@@ -89,36 +89,39 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
     // テクスチャ割り当て（借用解放後に処理）
     match tex_assign_request {
         Some(TexAssignRequest::FileDialog(mat_idx)) => {
-            // NOTE: rfd::FileDialog::pick_file() は同期ブロッキング呼び出しのため、
-            // ダイアログ表示中は UI が固まる。rfd::AsyncFileDialog + スレッド化で
-            // 非同期化すべきだが、影響箇所が多いため現時点ではブロッキングを許容する。
-            let mat_name = app
-                .loaded
-                .as_ref()
-                .and_then(|l| l.mat_cache.names.get(mat_idx))
-                .map(|s| s.as_str())
-                .unwrap_or("?");
-            let mut dialog = rfd::FileDialog::new()
-                .set_title(format!("テクスチャ画像を選択 - {}", mat_name))
-                .add_filter("Image", &["png", "jpg", "jpeg", "tga", "bmp", "psd", "dds"]);
-            if let Some(ref loaded) = app.loaded {
-                if let Some(src_name) = loaded
-                    .mat_cache
-                    .source_tex_names
-                    .get(mat_idx)
-                    .and_then(|s| s.as_deref())
-                {
-                    dialog = dialog.set_file_name(src_name);
-                }
-            }
-            if let Some(ref dir) = app.tex.last_dir {
-                dialog = dialog.set_directory(dir);
-            }
-            if let Some(path) = dialog.pick_file() {
-                if let Some(dir) = path.parent() {
-                    app.tex.last_dir = Some(dir.to_path_buf());
-                }
-                app.assign_texture_to_material(mat_idx, &path);
+            // ダイアログが既にオープン中なら無視
+            if app.tex.pending_file_dialog.is_none() {
+                let mat_name = app
+                    .loaded
+                    .as_ref()
+                    .and_then(|l| l.mat_cache.names.get(mat_idx))
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "?".to_string());
+                let file_name = app.loaded.as_ref().and_then(|l| {
+                    l.mat_cache
+                        .source_tex_names
+                        .get(mat_idx)
+                        .and_then(|s| s.clone())
+                });
+                let initial_dir = app.tex.last_dir.clone();
+
+                // ファイルダイアログを別スレッドで開く（UIをブロックしない）
+                let (tx, rx) = std::sync::mpsc::channel();
+                let repaint = ctx.clone();
+                std::thread::spawn(move || {
+                    let mut dialog = rfd::FileDialog::new()
+                        .set_title(format!("テクスチャ画像を選択 - {}", mat_name))
+                        .add_filter("Image", &["png", "jpg", "jpeg", "tga", "bmp", "psd", "dds"]);
+                    if let Some(ref name) = file_name {
+                        dialog = dialog.set_file_name(name);
+                    }
+                    if let Some(ref dir) = initial_dir {
+                        dialog = dialog.set_directory(dir);
+                    }
+                    let _ = tx.send(dialog.pick_file());
+                    repaint.request_repaint();
+                });
+                app.tex.pending_file_dialog = Some((mat_idx, rx));
             }
         }
         Some(TexAssignRequest::PkgTexture(mat_idx, tex_idx)) => {
@@ -144,6 +147,44 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
             }
         }
         None => {}
+    }
+
+    // 非同期テクスチャファイルダイアログの結果をポーリング
+    if let Some((mat_idx, ref rx)) = app.tex.pending_file_dialog {
+        match rx.try_recv() {
+            Ok(Some(path)) => {
+                if let Some(dir) = path.parent() {
+                    app.tex.last_dir = Some(dir.to_path_buf());
+                }
+                // モデルが切り替わっている場合に備えて material index の有効性を確認
+                // (ダイアログ表示中に別モデルがロードされると stale になる)
+                let valid = app
+                    .loaded
+                    .as_ref()
+                    .is_some_and(|l| mat_idx < l.ir.materials.len());
+                if valid {
+                    app.assign_texture_to_material(mat_idx, &path);
+                } else {
+                    log::warn!(
+                        "Texture dialog result discarded: material index {} out of range \
+                         (model changed during dialog)",
+                        mat_idx
+                    );
+                }
+                app.tex.pending_file_dialog = None;
+            }
+            Ok(None) => {
+                // ユーザーがキャンセル
+                app.tex.pending_file_dialog = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                // まだダイアログ表示中 — 何もしない
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // スレッドが異常終了
+                app.tex.pending_file_dialog = None;
+            }
+        }
     }
 
     // FBX読み込み方法選択ダイアログ
@@ -2442,8 +2483,8 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         .loaded
         .as_ref()
         .is_some_and(|l| l.ir.source_format.is_pmx_pmd());
-    let is_processing = app.pending.load.is_some()
-        || app.pending.append.is_some()
+    let is_processing = app.pending.load_dispatch.is_some()
+        || app.pending.bg_load.is_some()
         || app.pending.convert.is_some()
         || app.pending.rebuild.is_some()
         || app.pending.reload.is_some()

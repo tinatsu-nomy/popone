@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod color;
 pub mod convert;
 pub mod directx;
 pub mod error;

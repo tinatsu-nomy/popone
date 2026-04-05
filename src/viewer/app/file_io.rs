@@ -38,7 +38,7 @@ use super::OrbitCamera;
 /// ファイル拡張子から判定するファイル形式。
 /// 拡張子判定を1箇所に集約し、3箇所の分岐での漏れを防止する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FileFormat {
+pub enum FileFormat {
     Vrm,
     Fbx,
     Pmx,
@@ -55,7 +55,7 @@ enum FileFormat {
 }
 
 /// 拡張子文字列（小文字化済み）から `FileFormat` を判定する。
-fn detect_format(ext: &str) -> FileFormat {
+pub(super) fn detect_format(ext: &str) -> FileFormat {
     match ext {
         "vrm" | "glb" | "gltf" => FileFormat::Vrm,
         "fbx" => FileFormat::Fbx,
@@ -69,6 +69,233 @@ fn detect_format(ext: &str) -> FileFormat {
         "zip" => FileFormat::Zip,
         "vrma" | "anim" => FileFormat::Animation,
         _ => FileFormat::Unknown,
+    }
+}
+
+/// バックグラウンドスレッドで実行する CPU パース（`&self` 不要のフリー関数）。
+/// ファイル読込 + パース → `(IrModel, ReloadableSource)` を返す。
+/// GPU リソース構築は行わない。
+pub(super) fn cpu_parse_model(
+    path: &Path,
+    format: FileFormat,
+    normalize_pose: bool,
+    normalize_to_tstance: bool,
+    preloaded: Option<super::helpers::PreloadedData>,
+) -> anyhow::Result<(IrModel, super::helpers::ReloadableSource)> {
+    use super::helpers::ReloadableSource;
+
+    let is_temp = is_temp_path(path) || preloaded.as_ref().is_some_and(|pl| pl.path == *path);
+
+    // preloaded があればそこからバイト列を取得、なければディスクから読む
+    let read_data = |p: &Path| -> anyhow::Result<Arc<[u8]>> {
+        if let Some(ref pl) = preloaded {
+            if pl.path == *p {
+                return Ok(Arc::clone(&pl.main_bytes));
+            }
+            if let Some(data) = pl.aux_files.get(p) {
+                return Ok(Arc::clone(data));
+            }
+        }
+        Ok(std::fs::read(p)?.into())
+    };
+    let collect_aux = |p: &Path| -> HashMap<PathBuf, Arc<[u8]>> {
+        if let Some(ref pl) = preloaded {
+            if pl.path == *p {
+                return pl.aux_files.clone();
+            }
+        }
+        let mut aux = HashMap::new();
+        if let Some(dir) = p.parent() {
+            collect_image_files_recursive(dir, dir, &mut aux);
+        }
+        aux
+    };
+
+    let make_source = |data: Arc<[u8]>, aux: HashMap<PathBuf, Arc<[u8]>>| -> ReloadableSource {
+        if is_temp {
+            ReloadableSource::Snapshot {
+                original_path: path.to_path_buf(),
+                main_bytes: data,
+                aux_files: aux,
+            }
+        } else {
+            ReloadableSource::File(path.to_path_buf())
+        }
+    };
+
+    match format {
+        FileFormat::Vrm => {
+            let glb = if is_temp {
+                let data = read_data(path)?;
+                crate::vrm::loader::load_glb_from_data(&data)?
+            } else {
+                crate::vrm::loader::load_glb(path)?
+            };
+            let version = crate::vrm::detect::detect_version(&glb.document);
+            let all_extensions = crate::vrm::loader::get_raw_extensions(&glb.document);
+            let ir = crate::vrm::extract::extract_ir_model_with_options(
+                &glb.document,
+                &glb.buffers,
+                &glb.images,
+                &glb.vrm_extension,
+                &version,
+                &all_extensions,
+                normalize_pose,
+            )?;
+            // 生 RGBA のまま IrTexture に格納（vrm::extract で設定済み）。
+            // PNG エンコードは GPU アップロード後に必要になった時点（PMX エクスポート等）で行う。
+            let source = if is_temp {
+                let data = read_data(path)?;
+                ReloadableSource::Snapshot {
+                    original_path: path.to_path_buf(),
+                    main_bytes: data,
+                    aux_files: HashMap::new(),
+                }
+            } else {
+                ReloadableSource::File(path.to_path_buf())
+            };
+            Ok((ir, source))
+        }
+        FileFormat::Fbx => {
+            let data = read_data(path)?;
+            let ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                &data,
+                Some(path),
+                normalize_pose,
+                normalize_to_tstance,
+            )?;
+            let aux = collect_aux(path);
+            let source = make_source(data, aux);
+            Ok((ir, source))
+        }
+        FileFormat::Pmx => {
+            // 非 temp: ディスク直読み（pmx_to_ir が sph/spa 等も含め全拡張子を読める）
+            // temp: preloaded.aux_files を使って pmx_to_ir_with_aux
+            let pmx_dir = path.parent().unwrap_or(Path::new("."));
+            let mut ir = if is_temp {
+                let data = read_data(path)?;
+                let pmx_model = crate::pmx::reader::read_pmx_from_data(&data)?;
+                let aux = preloaded
+                    .as_ref()
+                    .filter(|pl| pl.path == *path)
+                    .map(|pl| pl.aux_files.clone())
+                    .unwrap_or_default();
+                crate::pmx::extract::pmx_to_ir_with_aux(&pmx_model, pmx_dir, Some(&aux))?
+            } else {
+                let pmx_model = crate::pmx::reader::read_pmx(path)?;
+                crate::pmx::extract::pmx_to_ir(&pmx_model, pmx_dir)?
+            };
+            if normalize_pose {
+                ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
+                    &mut ir.bones,
+                    &mut ir.meshes,
+                    &mut ir.morphs,
+                    &mut ir.physics,
+                    crate::convert::coord::gltf_pos_to_pmx,
+                );
+            }
+            let source = if is_temp {
+                let data = read_data(path).unwrap_or_default();
+                let aux = preloaded
+                    .as_ref()
+                    .filter(|pl| pl.path == *path)
+                    .map(|pl| pl.aux_files.clone())
+                    .unwrap_or_default();
+                ReloadableSource::Snapshot {
+                    original_path: path.to_path_buf(),
+                    main_bytes: data,
+                    aux_files: aux,
+                }
+            } else {
+                ReloadableSource::File(path.to_path_buf())
+            };
+            Ok((ir, source))
+        }
+        FileFormat::Pmd => {
+            // 非 temp: ディスク直読み（pmd_to_ir が sph/spa 等も含め全拡張子を読める）
+            // temp: preloaded.aux_files を使って pmd_to_ir_with_aux
+            let mut ir = if is_temp {
+                let data = read_data(path)?;
+                let pmd_model = crate::pmd::reader::read_pmd_from_data(&data)?;
+                let aux = preloaded
+                    .as_ref()
+                    .filter(|pl| pl.path == *path)
+                    .map(|pl| pl.aux_files.clone())
+                    .unwrap_or_default();
+                crate::pmd::extract::pmd_to_ir_with_aux(&pmd_model, path, Some(&aux))?
+            } else {
+                let pmd_model = crate::pmd::reader::read_pmd(path)?;
+                crate::pmd::extract::pmd_to_ir(&pmd_model, path)?
+            };
+            if normalize_pose {
+                ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
+                    &mut ir.bones,
+                    &mut ir.meshes,
+                    &mut ir.morphs,
+                    &mut ir.physics,
+                    crate::convert::coord::gltf_pos_to_pmx,
+                );
+            }
+            let source = if is_temp {
+                let data = read_data(path).unwrap_or_default();
+                let aux = preloaded
+                    .as_ref()
+                    .filter(|pl| pl.path == *path)
+                    .map(|pl| pl.aux_files.clone())
+                    .unwrap_or_default();
+                ReloadableSource::Snapshot {
+                    original_path: path.to_path_buf(),
+                    main_bytes: data,
+                    aux_files: aux,
+                }
+            } else {
+                ReloadableSource::File(path.to_path_buf())
+            };
+            Ok((ir, source))
+        }
+        FileFormat::Obj => {
+            let ir = if is_temp {
+                let data = read_data(path)?;
+                let obj_dir = path.parent().unwrap_or(Path::new("."));
+                let aux = collect_aux(path);
+                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
+                crate::obj::extract::load_obj_from_data(&data, name, obj_dir, Some(&aux))?
+            } else {
+                crate::obj::extract::load_obj(path)?
+            };
+            let data = read_data(path).unwrap_or_default();
+            let aux = collect_aux(path);
+            let source = make_source(data, aux);
+            Ok((ir, source))
+        }
+        FileFormat::Stl => {
+            let ir = if is_temp {
+                let data = read_data(path)?;
+                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
+                crate::stl::extract::load_stl_from_data(&data, name)?
+            } else {
+                crate::stl::extract::load_stl(path)?
+            };
+            let data = read_data(path).unwrap_or_default();
+            let source = make_source(data, HashMap::new());
+            Ok((ir, source))
+        }
+        FileFormat::DirectX => {
+            let ir = if is_temp {
+                let data = read_data(path)?;
+                let x_dir = path.parent().unwrap_or(Path::new("."));
+                let aux = collect_aux(path);
+                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
+                crate::directx::extract::load_x_from_data(&data, name, x_dir, Some(&aux))?
+            } else {
+                crate::directx::extract::load_x(path)?
+            };
+            let data = read_data(path).unwrap_or_default();
+            let aux = collect_aux(path);
+            let source = make_source(data, aux);
+            Ok((ir, source))
+        }
+        _ => anyhow::bail!("Unsupported format for background loading: {:?}", format),
     }
 }
 
@@ -148,6 +375,219 @@ impl ViewerApp {
         }
     }
 
+    /// ロード dispatch のメインスレッドルーティング。
+    /// アニメーション判定、FBX choice、archive/pkg は既存の同期パスに振り分け、
+    /// モデルパースのみバックグラウンドスレッドに送る。
+    pub(super) fn route_load_dispatch(&mut self, dispatch: super::pending::PendingLoadDispatch) {
+        use super::pending::BgLoadKind;
+
+        // 既にバックグラウンドロードが進行中なら新規 dispatch を拒否
+        // (先行スレッドの結果が黙って破棄される問題を防止)
+        if self.pending.bg_load.is_some() {
+            log::warn!(
+                "Load already in progress, ignoring new dispatch: {}",
+                dispatch.path.display()
+            );
+            self.convert_message = Some(ConvertMessage::failure(
+                "読み込み処理が実行中です。完了してから再試行してください。".to_string(),
+            ));
+            return;
+        }
+
+        // dispatch.preloaded を self.preloaded に一時セット（既存メソッドとの互換性）
+        self.preloaded = dispatch.preloaded;
+
+        let path = dispatch.path;
+        let append = dispatch.append;
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let format = detect_format(&ext);
+
+        // append モード
+        if append {
+            // unitypackage / archive は同期パスにフォールバック
+            if format == FileFormat::UnityPackage
+                || format == FileFormat::Zip
+                || format == FileFormat::SevenZ
+            {
+                self.append_model(path);
+                return;
+            }
+            // その他のフォーマットはバ��クグラウンドパース
+            self.spawn_bg_load(path, BgLoadKind::Append, format);
+            return;
+        }
+
+        // --- 以下、通常ロード ---
+
+        // 読み込み時はプレビュー中の bind group を復元してからクリア
+        self.cancel_tex_match_preview();
+        // unitypackage以外の読み込み時はパッケージテクスチャをクリア
+        if format != FileFormat::UnityPackage {
+            self.tex.pkg_textures = None;
+            self.clear_pkg_thumb_cache();
+        }
+
+        // アニメーションファイルの判定（即時実行、BG 不要）
+        if ext == "vrma" {
+            self.try_load_vrma(&path);
+            return;
+        }
+        if (ext == "glb" || ext == "gltf") && self.loaded.is_some() {
+            if let Ok(anims) = vrm::animation::load_gltf_animation(&path) {
+                if !anims.is_empty() {
+                    self.try_load_gltf_animation(&path);
+                    return;
+                }
+            }
+        }
+        if ext == "anim" && self.loaded.is_some() {
+            self.try_load_unity_animation(&path);
+            return;
+        }
+
+        // FBX: メッシュ+アニメーション両方含むなら選択ダイアログ
+        if format == FileFormat::Fbx {
+            let info = self.inspect_fbx(&path);
+            if info.has_mesh && info.has_anim {
+                self.pending.fbx_choice = Some(PendingFbxChoice {
+                    path: path.clone(),
+                    load_model: true,
+                    load_animation: true,
+                    pkg_context: None,
+                    preloaded: self.preloaded.take(),
+                });
+                return;
+            } else if !info.has_mesh && info.has_anim {
+                if self.loaded.is_some() {
+                    self.try_load_fbx_animation(&path);
+                } else {
+                    self.convert_message = Some(ConvertMessage::failure(String::from(
+                        "先にモデルを読み込んでください",
+                    )));
+                }
+                return;
+            }
+        }
+
+        // archive / unitypackage は同期パスにフォールバック
+        if matches!(
+            format,
+            FileFormat::UnityPackage | FileFormat::Zip | FileFormat::SevenZ
+        ) {
+            self.load_file_as_model(path);
+            return;
+        }
+
+        // FBX auto-animation 判定（BG 完了後に自動適用するかどうか）
+        let auto_fbx_anim = format == FileFormat::Fbx && self.inspect_fbx(&path).has_anim;
+
+        // 新規モデルロード時: スタンス・シェーダーを初期値にリセット
+        self.normalize_pose = false;
+        self.normalize_to_tstance = false;
+        self.display.shader_override = ShaderOverride::Default;
+        self.display.use_mmd_path = false;
+        self.display.auto_shader = true;
+
+        self.spawn_bg_load(
+            path,
+            BgLoadKind::Initial {
+                format,
+                auto_fbx_anim,
+            },
+            format,
+        );
+    }
+
+    /// バックグラウンドスレッドで CPU パースを実行する。
+    fn spawn_bg_load(
+        &mut self,
+        path: PathBuf,
+        kind: super::pending::BgLoadKind,
+        format: FileFormat,
+    ) {
+        let normalize_pose = self.normalize_pose;
+        let normalize_to_tstance = self.normalize_to_tstance;
+        let preloaded = self.preloaded.take();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        // egui::Context は Send+Sync（Arc<RwLock<ContextImpl>>）
+        // request_repaint をスレッド内で使うために clone は不要（完了通知は try_recv で十分）
+        // ただし即座にフレーム更新するために ctx clone を渡す
+        // Note: ctx は eframe::App::update 外ではアクセスできないため、
+        // repaint はスレッド側では行わず、毎フレームの try_recv で拾う
+        self.pending.bg_load = Some(rx);
+
+        let path_clone = path.clone();
+        std::thread::spawn(move || {
+            let result = cpu_parse_model(
+                &path_clone,
+                format,
+                normalize_pose,
+                normalize_to_tstance,
+                preloaded,
+            );
+            let result = result.map(|(ir, source)| super::pending::BgLoadResult {
+                ir,
+                source,
+                kind,
+                path: path_clone,
+            });
+            let _ = tx.send(result);
+        });
+    }
+
+    /// バックグラウンドパース結果の後処理（basic path: direct / append）。
+    pub(super) fn apply_bg_load_result(
+        &mut self,
+        result: super::pending::BgLoadResult,
+    ) -> anyhow::Result<()> {
+        use super::pending::BgLoadKind;
+        match result.kind {
+            BgLoadKind::Initial {
+                format: _,
+                auto_fbx_anim,
+            } => {
+                self.finish_load(result.ir, result.source)?;
+                log::info!("Model loaded (bg): {}", result.path.display());
+                self.convert_message = None;
+                self.anim.state = None;
+                self.anim.library.clear();
+                self.anim.active_index = None;
+                if auto_fbx_anim {
+                    self.try_load_fbx_animation(&result.path);
+                }
+            }
+            BgLoadKind::Append => {
+                // 座標系互換チェック
+                if let Some(ref loaded) = self.loaded {
+                    let host_fmt = loaded.ir.source_format;
+                    let other_fmt = result.ir.source_format;
+                    if host_fmt.is_vrm0() != other_fmt.is_vrm0() {
+                        log::warn!(
+                            "Appending model with different coordinate system: {} + {}",
+                            host_fmt.label(),
+                            other_fmt.label()
+                        );
+                        anyhow::bail!(
+                            "座標系が異なるモデルは追加できません。\nホスト: {}, 追加: {}",
+                            host_fmt.label(),
+                            other_fmt.label()
+                        );
+                    }
+                }
+                self.finish_append_with_source(result.ir, result.source, None);
+            }
+        }
+        Ok(())
+    }
+
+    /// 旧同期ロード経路（archive/reload 等の同期フォールバック用に残存）。
+    /// 新規 direct load は route_load_dispatch → spawn_bg_load を使用する。
+    #[allow(dead_code)]
     pub(super) fn load_file(&mut self, path: PathBuf) {
         log::info!("Open file: {}", path.display());
         let ext = path
@@ -2901,6 +3341,8 @@ impl ViewerApp {
                             data: ir_data,
                             mime_type: ir_mime,
                             source_path: format!("unitypackage: {}", tex_name),
+                            raw_dims: None,
+                            mip_chain: None,
                         });
                         name_to_ir.insert(tex_name.clone(), idx);
                         idx
@@ -3031,6 +3473,8 @@ impl ViewerApp {
                         data: ir_data,
                         mime_type: ir_mime,
                         source_path: format!("unitypackage: {}", tex_name),
+                        raw_dims: None,
+                        mip_chain: None,
                     });
                     name_to_ir.insert(tex_name.clone(), idx);
                     idx
@@ -3324,6 +3768,8 @@ impl ViewerApp {
                         data: ir_data,
                         mime_type: ir_mime,
                         source_path: format!("unitypackage: {}", tex_name),
+                        raw_dims: None,
+                        mip_chain: None,
                     });
                     name_to_ir.insert(tex_name.clone(), idx);
                     idx
@@ -3351,80 +3797,92 @@ impl ViewerApp {
         result
     }
 
-    pub(super) fn open_file_dialog(&mut self) {
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("3Dモデル / VRMAアニメーションを開く")
-            .add_filter(
-                "対応形式",
-                &[
-                    "vrm",
-                    "fbx",
-                    "pmx",
-                    "pmd",
-                    "obj",
-                    "stl",
-                    "x",
-                    "unitypackage",
-                    "vrma",
-                    "zip",
-                    "7z",
-                ],
-            )
-            .add_filter("VRM (.vrm)", &["vrm"])
-            .add_filter("FBX (.fbx)", &["fbx"])
-            .add_filter("PMX (.pmx)", &["pmx"])
-            .add_filter("PMD (.pmd)", &["pmd"])
-            .add_filter("OBJ (.obj)", &["obj"])
-            .add_filter("STL (.stl)", &["stl"])
-            .add_filter("DirectX text (.x)", &["x"])
-            .add_filter("UnityPackage (.unitypackage)", &["unitypackage"])
-            .add_filter("アーカイブ (.zip, .7z)", &["zip", "7z"])
-            .add_filter("VRMA (.vrma)", &["vrma"]);
-        if let Some(ref dir) = self.last_model_dir {
-            dialog = dialog.set_directory(dir);
+    pub(super) fn open_file_dialog(&mut self, ctx: &egui::Context) {
+        // ダイアログが既にオープン中なら無視
+        if self.pending.file_dialog.is_some() {
+            return;
         }
-        if let Some(path) = dialog.pick_file() {
-            if let Some(dir) = path.parent() {
-                self.last_model_dir = Some(dir.to_path_buf());
+        let initial_dir = self.last_model_dir.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let repaint = ctx.clone();
+        std::thread::spawn(move || {
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("3Dモデル / VRMAアニメーションを開く")
+                .add_filter(
+                    "対応形式",
+                    &[
+                        "vrm",
+                        "fbx",
+                        "pmx",
+                        "pmd",
+                        "obj",
+                        "stl",
+                        "x",
+                        "unitypackage",
+                        "vrma",
+                        "zip",
+                        "7z",
+                    ],
+                )
+                .add_filter("VRM (.vrm)", &["vrm"])
+                .add_filter("FBX (.fbx)", &["fbx"])
+                .add_filter("PMX (.pmx)", &["pmx"])
+                .add_filter("PMD (.pmd)", &["pmd"])
+                .add_filter("OBJ (.obj)", &["obj"])
+                .add_filter("STL (.stl)", &["stl"])
+                .add_filter("DirectX text (.x)", &["x"])
+                .add_filter("UnityPackage (.unitypackage)", &["unitypackage"])
+                .add_filter("アーカイブ (.zip, .7z)", &["zip", "7z"])
+                .add_filter("VRMA (.vrma)", &["vrma"]);
+            if let Some(ref dir) = initial_dir {
+                dialog = dialog.set_directory(dir);
             }
-            self.pending.load = Some((path, false));
-        }
+            let _ = tx.send(dialog.pick_file());
+            repaint.request_repaint();
+        });
+        self.pending.file_dialog = Some((super::pending::FileDialogKind::Open, rx));
     }
 
     /// モデル追加読み込みダイアログ
-    pub(super) fn open_append_dialog(&mut self) {
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("モデルを追加読み込み")
-            .add_filter(
-                "3Dモデル",
-                &[
-                    "vrm",
-                    "fbx",
-                    "pmx",
-                    "pmd",
-                    "obj",
-                    "stl",
-                    "x",
-                    "unitypackage",
-                    "zip",
-                    "7z",
-                ],
-            )
-            .add_filter("VRM (.vrm)", &["vrm"])
-            .add_filter("FBX (.fbx)", &["fbx"])
-            .add_filter("PMX (.pmx)", &["pmx"])
-            .add_filter("PMD (.pmd)", &["pmd"])
-            .add_filter("UnityPackage (.unitypackage)", &["unitypackage"])
-            .add_filter("アーカイブ (.zip, .7z)", &["zip", "7z"]);
-        if let Some(ref dir) = self.last_model_dir {
-            dialog = dialog.set_directory(dir);
+    pub(super) fn open_append_dialog(&mut self, ctx: &egui::Context) {
+        // ダイアログが既にオープン中なら無視
+        if self.pending.file_dialog.is_some() {
+            return;
         }
-        if let Some(path) = dialog.pick_file() {
-            if let Some(dir) = path.parent() {
-                self.last_model_dir = Some(dir.to_path_buf());
+        let initial_dir = self.last_model_dir.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let repaint = ctx.clone();
+        std::thread::spawn(move || {
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("モデルを追加読み込み")
+                .add_filter(
+                    "3Dモデル",
+                    &[
+                        "vrm",
+                        "fbx",
+                        "pmx",
+                        "pmd",
+                        "obj",
+                        "stl",
+                        "x",
+                        "unitypackage",
+                        "zip",
+                        "7z",
+                    ],
+                )
+                .add_filter("VRM (.vrm)", &["vrm"])
+                .add_filter("FBX (.fbx)", &["fbx"])
+                .add_filter("PMX (.pmx)", &["pmx"])
+                .add_filter("PMD (.pmd)", &["pmd"])
+                .add_filter("UnityPackage (.unitypackage)", &["unitypackage"])
+                .add_filter("アーカイブ (.zip, .7z)", &["zip", "7z"]);
+            if let Some(ref dir) = initial_dir {
+                dialog = dialog.set_directory(dir);
             }
-            self.pending.append = Some((path, false));
-        }
+            let _ = tx.send(dialog.pick_file());
+            repaint.request_repaint();
+        });
+        self.pending.file_dialog = Some((super::pending::FileDialogKind::Append, rx));
     }
 
     /// モデルを既存モデルに追加（マージ）
@@ -4113,38 +4571,35 @@ impl ViewerApp {
                         | "7z"
                 );
 
-                if is_temp_path(&model_path) {
+                // temp/非temp を統一して PendingLoadDispatch に投入
+                let preloaded = if is_temp_path(&model_path) {
                     match std::fs::read(&model_path) {
                         Ok(bytes) => {
                             let mut aux = HashMap::new();
                             if let Some(dir) = model_path.parent() {
                                 collect_image_files_recursive(dir, dir, &mut aux);
                             }
-                            self.preloaded = Some(PreloadedData {
+                            Some(PreloadedData {
                                 path: model_path.clone(),
                                 main_bytes: bytes.into(),
                                 aux_files: aux,
-                            });
+                            })
                         }
                         Err(e) => {
                             log::error!("Temp file prefetch failed: {e}");
+                            None
                         }
                     }
-                    if shift_held && has_loaded_model && is_appendable {
-                        self.append_model(model_path);
-                    } else {
-                        self.load_file(model_path);
-                    }
-                    if self.pending.fbx_choice.is_none() {
-                        self.preloaded = None;
-                    }
                 } else {
-                    if shift_held && has_loaded_model && is_appendable {
-                        self.pending.append = Some((model_path, false));
-                    } else {
-                        self.pending.load = Some((model_path, false));
-                    }
-                }
+                    None
+                };
+                let append = shift_held && has_loaded_model && is_appendable;
+                self.pending.load_dispatch = Some(super::pending::PendingLoadDispatch {
+                    path: model_path,
+                    append,
+                    overlay: super::pending::PendingOverlay::WaitingOverlay,
+                    preloaded,
+                });
             }
 
             if !image_files.is_empty() && has_loaded_model {
@@ -4166,7 +4621,7 @@ impl ViewerApp {
         let wants_kb = ctx.wants_keyboard_input();
         ctx.input(|i| {
             if i.modifiers.ctrl && i.key_pressed(egui::Key::O) {
-                self.open_file_dialog();
+                self.open_file_dialog(ctx);
             }
             if !wants_kb {
                 if !i.modifiers.ctrl && i.key_pressed(egui::Key::R) {

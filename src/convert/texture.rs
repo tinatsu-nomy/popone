@@ -164,7 +164,24 @@ pub fn write_all_textures_from_ir(
             }
             used_names.insert(out_name.to_lowercase());
             let out_path = output_dir.join(&out_name);
-            std::fs::write(&out_path, &tex.data)?;
+            if tex.is_raw_rgba() {
+                // 生 RGBA は PNG エンコードして書き出す
+                let (w, h) = tex.raw_dims.expect("is_raw_rgba で確認済み");
+                if let Some(img) = image::RgbaImage::from_raw(w, h, tex.data.clone()) {
+                    img.save(&out_path)?;
+                } else {
+                    log::warn!(
+                        "Raw RGBA texture size mismatch: {} ({}x{}, data={})",
+                        tex.filename,
+                        w,
+                        h,
+                        tex.data.len()
+                    );
+                    RgbaImage::new(1, 1).save(&out_path)?;
+                }
+            } else {
+                std::fs::write(&out_path, &tex.data)?;
+            }
             log::info!("Texture export: {}", out_path.display());
             filenames.push(out_name);
         }

@@ -319,6 +319,8 @@ fn extract_textures(
                 data,
                 mime_type: mime.to_string(),
                 source_path: normalized.clone(),
+                raw_dims: None,
+                mip_chain: None,
             }
         })
         .collect()

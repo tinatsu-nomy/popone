@@ -196,6 +196,8 @@ fn build_ir_model(
                     data,
                     mime_type: mime.to_string(),
                     source_path: tex_name.clone(),
+                    raw_dims: None,
+                    mip_chain: None,
                 });
                 texture_map.insert(tex_name.clone(), idx);
                 Some(idx)

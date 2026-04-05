@@ -563,6 +563,8 @@ fn texture_to_ir(tex: &texture::TextureData, ir_textures: &mut Vec<IrTexture>) -
         data: png_data,
         mime_type: "image/png".to_string(),
         source_path: "embedded (FBX)".to_string(),
+        raw_dims: None,
+        mip_chain: None,
     });
     Some(idx)
 }

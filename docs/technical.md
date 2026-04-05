@@ -37,7 +37,15 @@
     - [T-Stance Conversion](#t-stance-conversion)
     - [Rigid Body Rotation](#rigid-body-rotation)
     - [Texture Loading](#texture-loading)
-    - [Mipmap Generation (v0.2.26)](#mipmap-generation-v0226)
+    - [Mipmap Generation (v0.2.26, optimized in v0.2.27)](#mipmap-generation-v0226-optimized-in-v0227)
+  - [Asynchronous Model Loading (v0.2.27)](#asynchronous-model-loading-v0227)
+    - [Data Flow](#data-flow)
+    - [Key Types (pending.rs)](#key-types-pendingrs)
+    - [`cpu_parse_model` Free Function (file_io.rs)](#cpu_parse_model-free-function-file_iors)
+    - [`route_load_dispatch` Method](#route_load_dispatch-method)
+    - [`apply_bg_load_result` Method](#apply_bg_load_result-method)
+    - [Multi-thread Safety](#multi-thread-safety)
+    - [Raw RGBA Texture Bypass](#raw-rgba-texture-bypass)
   - [MMD Rendering](#mmd-rendering)
     - [Architecture](#architecture)
     - [MMD Shaders](#mmd-shaders)
@@ -105,7 +113,7 @@
   - [Archive D&D Reload Support](#archive-dd-reload-support)
     - [ReloadableSource enum](#reloadablesource-enum)
     - [Temp Path Detection](#temp-path-detection)
-    - [Immediate Load for Temp Paths](#immediate-load-for-temp-paths)
+    - [Temp Path Byte Prefetch](#temp-path-byte-prefetch)
     - [D&D Preload Cache (PreloadedData)](#dd-preload-cache-preloadeddata)
     - [Auxiliary File Cache](#auxiliary-file-cache)
     - [TextureSource enum](#texturesource-enum)
@@ -141,7 +149,7 @@
     - [Viewer Warning Display](#viewer-warning-display)
   - [UV Map PSD Layer Grouping](#uv-map-psd-layer-grouping)
     - [PSD Group Folder Mechanism](#psd-group-folder-mechanism)
-    - [Data Flow](#data-flow)
+    - [Data Flow](#data-flow-1)
     - [Input Validation (`validate_groups`)](#input-validation-validate_groups)
     - [Entry Construction (`build_entries`)](#entry-construction-build_entries)
     - [`MaterialGroup` Struct (`viewer/app/mod.rs`)](#materialgroup-struct-viewerappmodrs)
@@ -518,14 +526,91 @@ The viewer renders rigid bodies and joints in PMX space. `rb.position` and `join
 - MIME hint: Infer MIME type from extension and explicitly specify via `image::load_from_memory_with_format` (TGA has no magic number so auto-detection fails). `.sph/.spa` treated as `image/bmp`
 - UnityPackage textures: `embed_textures_into_ir` derives MIME type from file extension via `mime_for_ext`. Without MIME hints, TGA/BMP auto-detection fails and falls back to magenta
 
-### Mipmap Generation (v0.2.26)
+### Mipmap Generation (v0.2.26, optimized in v0.2.27)
 
 GPU textures are uploaded with a full mipmap chain. The number of mip levels is `floor(log2(max(w,h))) + 1`.
 
-- **sRGB-correct downsampling** — Source pixels are decoded from sRGB to linear (`IEC 61966-2-1`), resized using `image::imageops::resize` (Triangle filter) in linear f32 space, then re-encoded to sRGB for each mip level. Alpha channel is kept linear throughout
+- **u8 sRGB-space resize** — `image::imageops::resize` (Triangle filter) is applied directly to `RgbaImage` in sRGB space (v0.2.27). While linear-space resize is mathematically more correct, the visual difference is imperceptible compared to the overhead of f32 conversion (256MB allocations + `powf` calls), so speed takes priority
 - **NPOT support** — Each level dimension is `max(1, dim >> level)`, supporting non-power-of-two textures
 - **GPU max size** — Textures exceeding `max_texture_dimension_2d` are pre-downscaled using the same sRGB-correct resize before mip generation
 - **Sampler** — `mipmap_filter: Linear` was already set, now effective with multiple mip levels
+- **Background pre-generation (v0.2.27)** — For VRM/GLB, the mip chain is pre-generated on a background thread via `vrm::extract::generate_mip_chain()` and stored in `IrTexture.mip_chain: Option<Vec<(u32, u32, Vec<u8>)>>`. The main thread's `upload_rgba_to_gpu_with_mips` simply transfers each level via `queue.write_texture`. For KizunaAI_KAMATTE.vrm (26 × 4K textures), `upload_textures_from_ir` execution time drops from 7.3s to 197ms
+
+## Asynchronous Model Loading (v0.2.27)
+
+Model parsing and GPU resource construction are split into a CPU phase (background thread) and GPU phase (main thread), eliminating UI freezes.
+
+### Data Flow
+
+```
+1. Trigger (file dialog result / D&D / IPC / command-line arg)
+   → pending.load_dispatch = Some(PendingLoadDispatch {
+       path, append, overlay: WaitingOverlay, preloaded
+     })
+
+2. Frame N: update_progress_flags()
+   → overlay: WaitingOverlay → Ready
+   → paint_progress_overlay shows "Loading..."
+
+3. Frame N+1: process_pending_tasks()
+   → load_dispatch.take() → route_load_dispatch()
+     - Format detection
+     - .vrma / .glb/.gltf animation / .anim → immediate (no BG)
+     - FBX (mesh+anim) → PendingFbxChoice dialog
+     - UnityPackage / zip / 7z → sync fallback
+     - Otherwise → spawn_bg_load()
+   → pending.bg_load = Some(mpsc::Receiver<anyhow::Result<BgLoadResult>>)
+
+4. Frame N+2 onward: process_pending_tasks()
+   → bg_load.try_recv() polling
+   → Ok(Ok(result)) → apply_bg_load_result()
+   → Ok(Err(e)) → error display
+   → Err(Empty) → continue waiting
+   → Err(Disconnected) → thread panic error
+```
+
+### Key Types (pending.rs)
+
+| Type | Description |
+|---|---|
+| `PendingLoadDispatch` | Load reservation. Contains `path` / `append` / `overlay` / `preloaded` |
+| `BgLoadResult` | BG parse result. `ir: IrModel` / `source: ReloadableSource` / `kind: BgLoadKind` / `path` |
+| `BgLoadKind::Initial { format, auto_fbx_anim }` | Regular load |
+| `BgLoadKind::Append` | Append load |
+
+### `cpu_parse_model` Free Function (file_io.rs)
+
+A pure function that doesn't take `&self`, safe to call from background threads. Provides unified parsing logic for each format (VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x), returning `(IrModel, ReloadableSource)`. Takes `preloaded: Option<PreloadedData>` parameter to use D&D prefetch data.
+
+### `route_load_dispatch` Method
+
+Dispatches on the main thread:
+- **Immediate**: VRMA, GLB/glTF animation, .anim (no model load, no GPU resource ops)
+- **Interactive UI**: FBX choice dialog (keeps `self.preloaded = dispatch.preloaded` for existing method compatibility)
+- **Sync fallback**: UnityPackage / archive (multi-step UI flows, out of scope for v0.2.27 async)
+- **Background**: VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x
+
+### `apply_bg_load_result` Method
+
+Post-processes BG results on the main thread:
+- **Initial**: `finish_load(ir, source)` → animation state clear → FBX auto-animation
+- **Append**: Coordinate system compatibility check (rejects if `host_fmt.is_vrm0() != other_fmt.is_vrm0()`) → `finish_append_with_source`
+
+### Multi-thread Safety
+
+- **Send boundary**: `IrModel` / `ReloadableSource` / `PreloadedData` are all `Send` (POD + `Arc<[u8]>`)
+- **GPU access restriction**: `cpu_parse_model` is a free function that never references `wgpu::Device` / `Queue`. GPU operations only happen in `finish_load` on the main thread
+- **egui::Context thread safety**: egui 0.31's `Context` is implemented as `Arc<RwLock<ContextImpl>>` and is `Send + Sync`. `ctx.request_repaint()` is callable from BG threads
+- **Double load**: When a new `load_dispatch` is submitted, the old `bg_load` receiver is dropped. The thread runs to completion but `tx.send()` returns `Err` and the result is discarded
+
+### Raw RGBA Texture Bypass
+
+Optimization to avoid PNG encode/decode roundtrip during VRM/GLB load.
+
+- **`vrm::extract::extract_textures`**: Stores raw gltf pixels (with RGB → RGBA conversion) directly in `IrTexture.data`. Identified by `mime_type = "image/x-raw-rgba8"` and `raw_dims = Some((width, height))`
+- **`IrTexture::is_raw_rgba()`**: Helper that checks both mime_type and raw_dims
+- **`upload_textures_from_ir`**: If `tex.is_raw_rgba()` is true, skips PNG decoding and uploads `tex.data` directly as RGBA to GPU
+- **`write_all_textures_from_ir` (PMX export)**: If `is_raw_rgba()` is true, encodes to PNG via `image::RgbaImage::save` before writing
 
 ## MMD Rendering
 
@@ -1313,7 +1398,7 @@ When the viewer is already running and launched again, the file path is forwarde
 
 - **Detection**: `Local\popone_viewer_single_instance` Named Mutex detects existing process
 - **Communication**: `\\.\pipe\popone_viewer_ipc` Named Pipe (MESSAGE mode) sends file path as UTF-8
-- **Reception**: Background thread listens → `mpsc::channel` → `update()` feeds into `pending.load`
+- **Reception**: Background thread listens → `mpsc::channel` → `update()` pushes a `PendingLoadDispatch` onto `pending.load_dispatch`
 - **Focus**: `ViewportCommand::Minimized(false)` + `Focus` (restores from minimized state)
 - **Path normalization**: `std::fs::canonicalize()` before sending (CWD difference mitigation)
 - **Log preservation**: `InstanceCheck` tri-state (`Primary` / `Forwarded` / `FallbackStart`) skips log rotation when existing instance detected
@@ -1620,9 +1705,9 @@ An enum that tracks the model's loading source. Solves the temp file reload prob
 
 The fallback is necessary to handle cases where temp files from zip archive D&D are immediately deleted.
 
-### Immediate Load for Temp Paths
+### Temp Path Byte Prefetch
 
-When `is_temp_path()` returns true in `process_drag_and_drop()`, `load_file()`/`append_model()` is called directly instead of going through `pending_load`/`pending_append`. This avoids the `os error 3` caused by temp files being deleted during the normal 2-frame delay (used for progress overlay display).
+When `is_temp_path()` returns true in `process_drag_and_drop()`, the path is submitted through the normal `PendingLoadDispatch` path (v0.2.27+), but before submission the main thread runs `std::fs::read()` + `collect_image_files_recursive()` to cache the model body and aux files into `PreloadedData`. The cache is embedded in `PendingLoadDispatch.preloaded` and passed to the BG thread, making it safe even if the temp file is deleted before the BG thread starts parsing. Non-temp D&D uses the same path with `preloaded: None`.
 
 ### D&D Preload Cache (PreloadedData)
 
@@ -1650,15 +1735,25 @@ pub struct PreloadedData {
 process_drag_and_drop:
   1. std::fs::read(&model_path) → PreloadedData.main_bytes
   2. collect_image_files_recursive() → PreloadedData.aux_files
-  3. self.preloaded = Some(PreloadedData { ... })
-  4. Call load_file() / append_model()
-  5. Clear self.preloaded = None if PendingFbxChoice is not set
+  3. self.pending.load_dispatch = Some(PendingLoadDispatch {
+       path, append, overlay: WaitingOverlay,
+       preloaded: Some(PreloadedData { ... })
+     })
+  4. Frame N: update_progress_flags → overlay: Ready
+  5. Frame N+1: process_pending_tasks → route_load_dispatch
+     - self.preloaded = dispatch.preloaded (maintains compatibility with existing methods)
+     - Format detection, FBX choice, spawn_bg_load routing
 
 FBX selection dialog path:
-  load_file() → PendingFbxChoice { preloaded: self.preloaded.take() }
+  route_load_dispatch() → PendingFbxChoice { preloaded: self.preloaded.take() }
   → execute_fbx_choice() → self.preloaded = choice.preloaded (restore)
   → try_load_fbx() → read_or_preloaded() uses cache
   → self.preloaded = None (clear)
+
+Background load path:
+  route_load_dispatch() → spawn_bg_load(dispatch, format)
+  → std::thread::spawn runs cpu_parse_model(path, format, ..., preloaded)
+  → PreloadedData ownership is moved to the thread (main_bytes is Arc<[u8]>, shared cheaply)
 ```
 
 #### Usage by Format

@@ -773,6 +773,11 @@ impl ViewerApp {
         // テクスチャ割り当て履歴クリア（別モデル読み込み時）
         self.tex.assignments.clear();
         self.tex.pkg_assignments.clear();
+        // 非同期テクスチャダイアログが開いていれば結果を破棄
+        // (前モデルの material index が stale になるのを防ぐ)
+        if self.tex.pending_file_dialog.is_some() {
+            self.tex.pending_file_dialog = None;
+        }
         // L3: pending_tex_preview の egui TextureId を正しく解放してから破棄
         if let Some(preview) = self.tex.pending_preview.take() {
             self.cancel_tex_preview_inner(preview);
@@ -1015,6 +1020,7 @@ impl ViewerApp {
                             }
                         }
                         tex.mime_type = "image/png".to_string();
+                        tex.raw_dims = None;
                     }
                 }
             }
@@ -1124,7 +1130,12 @@ impl eframe::App for ViewerApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             if !path.as_os_str().is_empty() {
-                self.pending.load = Some((path, false));
+                self.pending.load_dispatch = Some(pending::PendingLoadDispatch {
+                    path,
+                    append: false,
+                    overlay: pending::PendingOverlay::WaitingOverlay,
+                    preloaded: None,
+                });
             }
         }
 
@@ -1205,7 +1216,7 @@ impl eframe::App for ViewerApp {
                     };
 
                     if menu_btn(ui, "開く").clicked() {
-                        self.open_file_dialog();
+                        self.open_file_dialog(ctx);
                     }
 
                     if self.loaded.is_some() {
@@ -1213,7 +1224,7 @@ impl eframe::App for ViewerApp {
                             .on_hover_text("モデルを追加読み込み（Shift+D&Dでも可）")
                             .clicked()
                         {
-                            self.open_append_dialog();
+                            self.open_append_dialog(ctx);
                         }
                     }
 

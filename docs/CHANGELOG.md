@@ -3,9 +3,13 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.26](#v0226)
+  - [v0.2.27](#v0227)
     - [New Features](#new-features)
     - [Bug Fixes](#bug-fixes)
+    - [Code Quality & Performance Improvements](#code-quality--performance-improvements)
+  - [v0.2.26](#v0226)
+    - [New Features](#new-features-1)
+    - [Bug Fixes](#bug-fixes-1)
     - [Code Quality & Performance](#code-quality--performance)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -13,6 +17,33 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.2.27
+
+### New Features
+
+- **Asynchronous model loading** — VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x model parsing now runs on a background thread, eliminating UI freezes that previously lasted several seconds after file selection. Implemented with `std::thread::spawn` + `mpsc::channel`; the main thread polls results each frame via `try_recv()`. Camera and window operations remain responsive while the "Loading..." overlay is displayed
+- **Asynchronous file dialogs** — Texture replacement, model open, and model append dialogs are now non-blocking. UI stays responsive while the dialog is shown
+- **Raw RGBA texture bypass** — VRM/GLB raw pixel data is now stored directly in `IrTexture.data` without PNG encoding, and GPU upload skips PNG decoding. Identified by `mime_type = "image/x-raw-rgba8"` + `raw_dims: Option<(u32, u32)>`. Eliminates the PNG encode/decode roundtrip for VRMs with many 4K textures
+- **Background mipmap pre-generation** — Added `IrTexture.mip_chain` field. VRM extraction now pre-generates the mip chain (level 1 onward) on the background thread. The main thread only uploads via `queue.write_texture`. UI freeze time for KizunaAI_KAMATTE.vrm (26 textures, 4K resolution) reduced from 7.6s to 0.5s (15x improvement)
+
+### Bug Fixes
+
+- **IrTexture test compilation fix** — Fixed 4 test `IrTexture` literals in `export_filter.rs` that were missing the `source_path` field, which broke `cargo test --features viewer`
+- **Archive VRM/GLB PNG normalization** — Fixed missing `encode_ir_textures_as_png` call in the VRM branch of `build_ir_from_archive_bundle`
+- **PMD/PMX sphere map read regression** — Fixed `.sph`/`.spa` textures becoming empty (magenta fallback) when loading non-temp PMD/PMX files. `cpu_parse_model` always collected aux files via `collect_image_files_recursive`, but that function doesn't include `.sph`/`.spa` extensions, so sphere maps were missing. Non-temp PMD/PMX now uses `pmd_to_ir(path)` / `pmx_to_ir(pmx_dir)` to read from disk directly (same as pre-v0.2.26 path), and only temp/D&D uses the `*_with_aux` path via `preloaded.aux_files`
+- **Asynchronous load result discard on re-submission** — Fixed the bug where submitting a new load while one is in progress would overwrite the existing receiver channel, silently discarding the previous thread's completion result. `route_load_dispatch` now rejects new dispatches when `bg_load` is in progress and shows an error message
+- **Asynchronous texture dialog stale material index** — Fixed the issue where opening the texture dialog, then loading a different model, and confirming the dialog would apply the stored `mat_idx` to the new model's materials (or panic). The dialog result reception now verifies `mat_idx < loaded.ir.materials.len()` and discards out-of-range results. Additionally, `finish_load_with_gpu` clears `pending_file_dialog` on model switch
+- **DirectX .x texture Y flip** — Fixed textures being displayed upside-down for `.x` files (a regression introduced in v0.2.24 when DirectX .x support was added). Removed the `Vec2::new(tc.x, 1.0 - tc.y)` Y flip. DirectX .x uses D3D convention with UV (0,0) at the upper-left, the same as PMX/FBX, so no flip is needed (OBJ uses OpenGL convention with lower-left origin and does need the flip)
+- **Non-viewer build regression** — Fixed `cargo check` / `cargo test` (without `--features viewer`) failing with `could not find viewer in the crate root`. The mipmap generation helper in `vrm/extract.rs` was calling `crate::viewer::texture::rgba8_to_linear_f32` / `linear_f32_to_rgba8`, but the `viewer` module is gated behind `#[cfg(feature = "viewer")]`. Extracted the sRGB↔linear LUT conversion helpers into a new feature-independent `crate::color` module, consumed by both `vrm::extract` (CLI path) and `viewer::texture` (GPU path)
+
+### Code Quality & Performance Improvements
+
+- **Unified load entry points** — New `PendingLoadDispatch` struct unifies all load entry points (file dialog result, IPC receive, D&D including temp files, command-line args) through `pending.load_dispatch`. Removes `self.preloaded` from global state by embedding `preloaded: Option<PreloadedData>` in the dispatch
+- **Centralized post-processing** — New `apply_bg_load_result` method centralizes post-load work (animation clear, FBX auto-animation, coordinate system compatibility check)
+- **`cpu_parse_model` free function** — Extracted CPU parsing from `try_load_*` methods into a free function (no `&self`) that is safe to call from background threads
+- **`route_load_dispatch` routing** — Handles format detection, animation detection, FBX choice dialog, and archive/UnityPackage sync fallbacks on the main thread, sending only regular model loads to the background
+- **sRGB↔linear conversion LUT** — `srgb_to_linear` (256 entries) and `linear_to_srgb` (4096 entries) are now lookup tables initialized lazily via `OnceLock`, eliminating `powf` calls. Color space conversion during mipmap generation is several times faster
 
 ## v0.2.26
 

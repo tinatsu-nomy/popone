@@ -3,16 +3,47 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
-  - [v0.2.26](#v0226)
+  - [v0.2.27](#v0227)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84)
+  - [v0.2.26](#v0226)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
+    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-1)
+    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-1)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.2.27
+
+### 新機能
+
+- **非同期モデル読み込み** — VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x のモデルパースをバックグラウンドスレッドで実行し、UI フリーズを解消。従来はファイル選択後に 3D 表示まで数秒間 UI が固まっていた問題を根本解決。`std::thread::spawn` + `mpsc::channel` パターンで実装し、メインスレッドは毎フレーム `try_recv()` で結果をポーリング。「読み込み中...」オーバーレイが表示中もカメラ操作・ウィンドウ操作が継続可能
+- **非同期ファイルダイアログ** — テクスチャ差し替え、モデル開く、モデル追加のファイルダイアログを非同期化。ダイアログ表示中も UI が応答する
+- **生 RGBA テクスチャバイパス** — VRM/GLB の生ピクセルデータを PNG エンコードせずに直接 `IrTexture.data` に格納し、GPU アップロード時も PNG デコードをスキップ。`mime_type = "image/x-raw-rgba8"` + `raw_dims: Option<(u32, u32)>` で識別。4K テクスチャ × 多数マテリアルの VRM で PNG エンコード/デコードの往復を完全排除
+- **ミップマップのバックグラウンド事前生成** — `IrTexture.mip_chain` フィールドを追加し、VRM 抽出時にミップチェーン（レベル 1 以降）をバックグラウンドスレッドで事前生成。メインスレッドは `queue.write_texture` で GPU に転送するだけ。KizunaAI_KAMATTE.vrm（26 テクスチャ、4K 解像度）で UI フリーズ時間が 7.6秒 → 0.5秒（15倍改善）
+
+### バグ修正
+
+- **IrTexture テストコンパイル修正** — `export_filter.rs` のテスト用 `IrTexture` 初期化リテラル 4 箇所で `source_path` フィールドが欠落し `cargo test --features viewer` がコンパイル不可だった問題を修正
+- **archive 内 VRM/GLB の PNG 正規化漏れ** — `build_ir_from_archive_bundle` の VRM 分岐で `encode_ir_textures_as_png` の呼び出しが欠落していた問題を修正
+- **PMD/PMX スフィアマップ読み取り回帰** — 非 temp ファイルロード時に `.sph`/`.spa` が空になりマゼンタフォールバックされていた問題を修正。`cpu_parse_model` が常に `collect_image_files_recursive` 経由で aux を集めていたが、同関数は `.sph`/`.spa` 拡張子を収集対象外としているため、スフィアマップが欠落していた。非 temp の PMD/PMX は `pmd_to_ir(path)` / `pmx_to_ir(pmx_dir)` でディスクから直接読む v0.2.26 以前のパスに戻し、temp/D&D の場合のみ `preloaded.aux_files` 経由の `*_with_aux` パスを使う形に修正
+- **非同期ロード多重投入時の結果破棄** — ロード中にもう一度ロード要求を投入すると先行スレッドの受信チャネルが上書きされて完了結果が黙って破棄される問題を修正。`route_load_dispatch` 冒頭で `bg_load` が進行中なら新規 dispatch を拒否し、ユーザーにエラーメッセージを表示
+- **非同期テクスチャダイアログの stale material index** — ダイアログを開いた後に別モデルをロードすると、保存していた `mat_idx` が新モデルの材質として誤適用 or panic する問題を修正。ダイアログ結果受信時に `mat_idx < loaded.ir.materials.len()` を検証し、範囲外なら破棄。さらに `finish_load_with_gpu` でモデル切替時に `pending_file_dialog` をクリア
+- **DirectX .x テクスチャ Y 反転** — v0.2.24（DirectX .x サポート追加）以降、`.x` ファイルのテクスチャが上下逆に表示されていた問題を修正。`Vec2::new(tc.x, 1.0 - tc.y)` の Y 反転を削除。DirectX .x は D3D 慣習で UV (0,0) が左上原点のため、PMX/FBX と同じく反転不要（OBJ は OpenGL 慣習で左下原点のため反転が必要、という違い）
+- **非 viewer ビルド回帰** — `cargo check` / `cargo test`（`--features viewer` 無し）が `could not find viewer in the crate root` でコンパイル不可だった問題を修正。`vrm/extract.rs` のミップマップ生成ヘルパーが `crate::viewer::texture::rgba8_to_linear_f32` / `linear_f32_to_rgba8` を参照していたが、`viewer` モジュールは `#[cfg(feature = "viewer")]` 配下のため CLI ビルドで壊れていた。sRGB↔linear LUT 変換ヘルパーを feature 非依存の新モジュール `crate::color` に切り出し、`vrm::extract`（CLI 経路）と `viewer::texture`（GPU 経路）の両方から利用する形に統合
+
+### コード品質・パフォーマンス改善
+
+- **ロード入口の統一** — `PendingLoadDispatch` 構造体を新設し、ファイルダイアログ結果・IPC 受信・D&D（temp 含む）・コマンドライン引数の全ロード入口を `pending.load_dispatch` 経由に統一。`self.preloaded` をグローバル状態から外し、dispatch 内に `preloaded: Option<PreloadedData>` として持たせる
+- **後処理の集約** — `apply_bg_load_result` メソッドで direct ロード / append の後処理（アニメーションクリア、FBX 自動アニメーション適用、座標系互換チェック）を集約
+- **`cpu_parse_model` フリー関数** — `try_load_*` メソッドの CPU パース部分を `&self` を取らないフリー関数として抽出。バックグラウンドスレッドから安全に呼び出せる
+- **`route_load_dispatch` ルーティング** — メインスレッドでフォーマット検出・アニメ判定・FBX choice ダイアログ・アーカイブ/UnityPackage 同期フォールバックを振り分け、通常のモデル読み込みのみバックグラウンドに送る
+- **sRGB↔linear 変換の LUT 化** — `srgb_to_linear`（256 エントリ）・`linear_to_srgb`（4096 エントリ）を `OnceLock` で遅延初期化するルックアップテーブルに置き換え、`powf` 呼び出しを排除。ミップマップ生成時の色空間変換が数倍高速化
 
 ## v0.2.26
 

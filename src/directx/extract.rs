@@ -188,6 +188,8 @@ fn x_to_ir(
                             data,
                             mime_type: mime.to_string(),
                             source_path: tex_name.clone(),
+                            raw_dims: None,
+                            mip_chain: None,
                         });
                         texture_map.insert(tex_name.clone(), idx);
                         if ext == "dds" {
@@ -336,7 +338,9 @@ fn x_to_ir(
                         let uv = if has_texcoords {
                             let tc = mesh.texcoords.as_ref().expect("has_texcoords チェック済み");
                             if vi < tc.len() {
-                                Vec2::new(tc[vi].x, 1.0 - tc[vi].y)
+                                // DirectX .x の UV は D3D 慣習で左上原点（PMX/FBX と同じ）。
+                                // Y 反転は不要。
+                                Vec2::new(tc[vi].x, tc[vi].y)
                             } else {
                                 Vec2::ZERO
                             }
@@ -459,7 +463,9 @@ fn x_to_ir(
                                 let tc =
                                     mesh.texcoords.as_ref().expect("has_texcoords チェック済み");
                                 if vi < tc.len() {
-                                    Vec2::new(tc[vi].x, 1.0 - tc[vi].y)
+                                    // DirectX .x の UV は D3D 慣習で左上原点（PMX/FBX と同じ）。
+                                    // Y 反転は不要。
+                                    Vec2::new(tc[vi].x, tc[vi].y)
                                 } else {
                                     Vec2::ZERO
                                 }

@@ -977,12 +977,25 @@ impl Default for IrMaterial {
 pub struct IrTexture {
     /// ファイル名（出力時に使用）
     pub filename: String,
-    /// 生データ（PNG/JPEG）
+    /// 生データ（PNG/JPEG または mime_type == "image/x-raw-rgba8" の場合は生 RGBA）
     pub data: Vec<u8>,
     pub mime_type: String,
     /// テクスチャの出自パス（トラブルシュート用ログ表示）
     /// embedded/アーカイブ内パス/外部ファイルパス等
     pub source_path: String,
+    /// 生 RGBA データの場合の寸法（mime_type == "image/x-raw-rgba8" のとき有効）
+    pub raw_dims: Option<(u32, u32)>,
+    /// ミップチェーン（レベル1以降のダウンサンプル済みRGBA）。
+    /// バックグラウンドスレッドで事前生成することでメインスレッドの GPU 構築を高速化する。
+    /// Vec<(width, height, RGBA bytes)>
+    pub mip_chain: Option<Vec<(u32, u32, Vec<u8>)>>,
+}
+
+impl IrTexture {
+    /// `data` が生 RGBA バイト列（PNG デコード不要）かどうか
+    pub fn is_raw_rgba(&self) -> bool {
+        self.mime_type == "image/x-raw-rgba8" && self.raw_dims.is_some()
+    }
 }
 
 /// 拡張子から MIME タイプを返す（小文字の拡張子を期待）
@@ -1375,6 +1388,8 @@ mod tests {
                 data: vec![0],
                 mime_type: "image/png".into(),
                 source_path: String::new(),
+                raw_dims: None,
+                mip_chain: None,
             }],
             ..Default::default()
         };
@@ -1401,6 +1416,8 @@ mod tests {
                 data: vec![1],
                 mime_type: "image/png".into(),
                 source_path: String::new(),
+                raw_dims: None,
+                mip_chain: None,
             }],
             ..Default::default()
         };

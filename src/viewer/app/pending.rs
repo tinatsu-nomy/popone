@@ -8,7 +8,10 @@ use eframe::egui;
 
 use crate::unitypackage::UnityPackageIndex;
 
-use super::helpers::{FbxLoadMode, PkgModelType, ReloadableSource};
+use crate::intermediate::types::IrModel;
+
+use super::file_io::FileFormat;
+use super::helpers::{FbxLoadMode, PkgModelType, PreloadedData, ReloadableSource};
 use super::{ConvertMessage, ViewerApp};
 
 /// unitypackage 内に複数FBXがある場合の選択待ち状態
@@ -102,6 +105,43 @@ pub enum PendingOverlay {
     Ready,
 }
 
+/// ロード投入（全入口統一: ダイアログ / D&D / IPC）
+pub struct PendingLoadDispatch {
+    pub path: PathBuf,
+    pub append: bool,
+    pub overlay: PendingOverlay,
+    /// D&D temp ファイルの先読みデータ（self.preloaded から移動）
+    pub preloaded: Option<PreloadedData>,
+}
+
+/// バックグラウンド CPU パースの結果
+pub struct BgLoadResult {
+    pub ir: IrModel,
+    pub source: ReloadableSource,
+    pub kind: BgLoadKind,
+    pub path: PathBuf,
+}
+
+/// ロード種別（後処理の分岐に使用）
+pub enum BgLoadKind {
+    /// 通常ロード（format + FBX自動アニメフラグ）
+    Initial {
+        format: FileFormat,
+        auto_fbx_anim: bool,
+    },
+    /// 追加読み込み
+    Append,
+}
+
+/// 非同期ファイルダイアログの種別
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileDialogKind {
+    /// モデル/アニメーションを開く
+    Open,
+    /// モデル追加読み込み
+    Append,
+}
+
 /// 遅延処理（ペンディング）の集約状態
 pub struct PendingState {
     /// FBX読み込み方法選択待ち（モデル+アニメ両方含む場合）
@@ -112,12 +152,12 @@ pub struct PendingState {
     pub pkg_load: Option<PendingPkgModelLoad>,
     /// アーカイブ内モデル選択待ち
     pub archive: Option<PendingArchive>,
-    /// アーカイブモデル遅延読み込み
+    /// アーカイブモデル遅延読み���み
     pub archive_load: Option<PendingArchiveLoad>,
-    /// ファイル読み込み遅延実行 (path, overlay表示済みフラグ)
-    pub load: Option<(PathBuf, bool)>,
-    /// モデル追加読み込み遅延実行 (path, overlay表示済みフラグ)
-    pub append: Option<(PathBuf, bool)>,
+    /// ロード予約（preloaded 含む、全入口統一）
+    pub load_dispatch: Option<PendingLoadDispatch>,
+    /// バックグラウンド CPU パース結果の受信チャネル
+    pub bg_load: Option<std::sync::mpsc::Receiver<anyhow::Result<BgLoadResult>>>,
     /// PMX変換遅延実行
     pub convert: Option<PendingOverlay>,
     /// GPU再構築遅延実行
@@ -128,6 +168,8 @@ pub struct PendingState {
     pub refit: bool,
     /// テクスチャ履歴の上書き保存確認ダイアログ表示フラグ
     pub confirm_save_tex_history: bool,
+    /// 非同期ファ��ルダイアログ（種別, 結果受信チャネル）
+    pub file_dialog: Option<(FileDialogKind, std::sync::mpsc::Receiver<Option<PathBuf>>)>,
 }
 
 impl Default for PendingState {
@@ -138,13 +180,14 @@ impl Default for PendingState {
             pkg_load: None,
             archive: None,
             archive_load: None,
-            load: None,
-            append: None,
+            load_dispatch: None,
+            bg_load: None,
             convert: None,
             rebuild: None,
             reload: None,
             refit: false,
             confirm_save_tex_history: false,
+            file_dialog: None,
         }
     }
 }
@@ -192,8 +235,8 @@ impl ViewerApp {
         rect: egui::Rect,
         ctx: &egui::Context,
     ) {
-        let msg = if self.pending.load.is_some()
-            || self.pending.append.is_some()
+        let msg = if self.pending.load_dispatch.is_some()
+            || self.pending.bg_load.is_some()
             || self.pending.pkg_load.is_some()
             || self.pending.archive_load.is_some()
         {
@@ -233,15 +276,9 @@ impl ViewerApp {
 
     /// プログレスフラグ更新（次フレームで処理を実行するためのトリガー）
     pub(super) fn update_progress_flags(&mut self, ctx: &egui::Context) {
-        if let Some((_, ref mut shown)) = self.pending.load {
-            if !*shown {
-                *shown = true;
-                ctx.request_repaint();
-            }
-        }
-        if let Some((_, ref mut shown)) = self.pending.append {
-            if !*shown {
-                *shown = true;
+        if let Some(ref mut d) = self.pending.load_dispatch {
+            if d.overlay == PendingOverlay::WaitingOverlay {
+                d.overlay = PendingOverlay::Ready;
                 ctx.request_repaint();
             }
         }
@@ -273,22 +310,72 @@ impl ViewerApp {
 
     /// 遅延処理（ファイル読み込み、GPU再構築、PMX変換など）を実行
     pub(super) fn process_pending_tasks(&mut self) {
-        if let Some((_, true)) = self.pending.load {
-            let (path, _) = self
-                .pending
-                .load
-                .take()
-                .expect("pending_load は Some(true) 確認済み");
-            self.load_file(path);
+        // 非同期ファイルダイアログの結果をポーリング
+        if let Some((kind, ref rx)) = self.pending.file_dialog {
+            match rx.try_recv() {
+                Ok(Some(path)) => {
+                    if let Some(dir) = path.parent() {
+                        self.last_model_dir = Some(dir.to_path_buf());
+                    }
+                    let append = kind == FileDialogKind::Append;
+                    self.pending.load_dispatch = Some(PendingLoadDispatch {
+                        path,
+                        append,
+                        overlay: PendingOverlay::WaitingOverlay,
+                        preloaded: None,
+                    });
+                    self.pending.file_dialog = None;
+                }
+                Ok(None) => {
+                    // ユーザーがキャンセル
+                    self.pending.file_dialog = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // まだダイアログ表示中
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.pending.file_dialog = None;
+                }
+            }
         }
-        // モデル追加読み込み（アペンド）
-        if let Some((_, true)) = self.pending.append {
-            let (path, _) = self
+
+        // load_dispatch が Ready → メインスレッドルーティング
+        if self
+            .pending
+            .load_dispatch
+            .as_ref()
+            .is_some_and(|d| d.overlay == PendingOverlay::Ready)
+        {
+            let dispatch = self
                 .pending
-                .append
+                .load_dispatch
                 .take()
-                .expect("pending_append は Some(true) 確認済み");
-            self.append_model(path);
+                .expect("load_dispatch は Ready 確認済み");
+            self.route_load_dispatch(dispatch);
+        }
+        // バックグラウンド CPU パース結果をポーリング
+        if let Some(ref rx) = self.pending.bg_load {
+            match rx.try_recv() {
+                Ok(Ok(result)) => {
+                    self.pending.bg_load = None;
+                    if let Err(e) = self.apply_bg_load_result(result) {
+                        self.convert_message = Some(ConvertMessage::failure(format!("{:#}", e)));
+                    }
+                }
+                Ok(Err(e)) => {
+                    self.pending.bg_load = None;
+                    self.convert_message = Some(ConvertMessage::failure(format!("{:#}", e)));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // まだパース中
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.pending.bg_load = None;
+                    self.convert_message = Some(ConvertMessage::failure(
+                        "Background load thread panicked".to_string(),
+                    ));
+                }
+            }
         }
         // unitypackage モデル遅延読み込み
         if self.pending.pkg_load.as_ref().is_some_and(|p| p.shown) {

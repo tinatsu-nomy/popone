@@ -470,6 +470,8 @@ pub fn embed_textures_into_ir_with_label(
                     data: data.to_vec(),
                     mime_type: mime,
                     source_path: format!("{}: {}", source_label, key),
+                    raw_dims: None,
+                    mip_chain: None,
                 });
                 mat.texture_index = Some(tex_idx);
                 matched += 1;
@@ -2040,6 +2042,8 @@ pub fn embed_textures_with_prefab(
                                 data: pkg_tex.data.to_vec(),
                                 mime_type: mime,
                                 source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
+                                raw_dims: None,
+                                mip_chain: None,
                             });
                             mat.texture_index = Some(tex_idx);
                             added_guids.insert(Arc::clone(tex_guid), tex_idx);
@@ -2086,6 +2090,8 @@ pub fn embed_textures_with_prefab(
                                 data: pkg_tex.data.to_vec(),
                                 mime_type: mime,
                                 source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
+                                raw_dims: None,
+                                mip_chain: None,
                             });
                             mat.normal_texture = Some(
                                 crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
@@ -2150,6 +2156,8 @@ pub fn embed_textures_with_prefab(
                                     data: pkg_tex.data.to_vec(),
                                     mime_type: mime,
                                     source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
+                                    raw_dims: None,
+                                    mip_chain: None,
                                 });
                                 mat.emissive_texture = Some(
                                     crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
@@ -2243,6 +2251,8 @@ pub fn embed_textures_with_prefab(
                     data: pkg_tex.data.to_vec(),
                     mime_type: mime,
                     source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
+                    raw_dims: None,
+                    mip_chain: None,
                 });
                 mat.texture_index = Some(tex_idx);
                 added_guids.insert(Arc::clone(&pkg_tex.guid), tex_idx);
@@ -2586,6 +2596,8 @@ Material:
             data: vec![0u8; 4],
             mime_type: "image/png".into(),
             source_path: String::new(),
+            raw_dims: None,
+            mip_chain: None,
         });
 
         let textures = vec![PackageTexture {
@@ -2667,6 +2679,8 @@ Material:
             data: vec![0u8; 4],
             mime_type: "image/png".into(),
             source_path: String::new(),
+            raw_dims: None,
+            mip_chain: None,
         });
 
         let textures = vec![PackageTexture {

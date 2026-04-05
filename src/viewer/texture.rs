@@ -1,54 +1,7 @@
+use crate::color::{linear_f32_to_rgba8, rgba8_to_linear_f32};
 use crate::intermediate::types::IrModel;
 use anyhow::Result;
 use eframe::wgpu;
-
-// ── sRGB ↔ linear 変換 ──────────────────────────────────────────
-
-/// sRGB → linear (per channel, u8 → f32)
-fn srgb_to_linear(c: u8) -> f32 {
-    let s = c as f32 / 255.0;
-    if s <= 0.04045 {
-        s / 12.92
-    } else {
-        ((s + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-/// linear → sRGB (per channel, f32 → u8)
-fn linear_to_srgb(c: f32) -> u8 {
-    let s = if c <= 0.0031308 {
-        c * 12.92
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    };
-    (s.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
-}
-
-/// sRGB u8 RGBA → linear f32 RGBA (アルファはそのまま 0..1 にマップ)
-fn rgba8_to_linear_f32(src: &image::RgbaImage) -> image::Rgba32FImage {
-    let (w, h) = (src.width(), src.height());
-    let mut buf: Vec<f32> = Vec::with_capacity((w * h * 4) as usize);
-    for p in src.pixels() {
-        buf.push(srgb_to_linear(p[0]));
-        buf.push(srgb_to_linear(p[1]));
-        buf.push(srgb_to_linear(p[2]));
-        buf.push(p[3] as f32 / 255.0); // アルファは線形のまま
-    }
-    image::Rgba32FImage::from_raw(w, h, buf).expect("Rgba32FImage 構築失敗")
-}
-
-/// linear f32 RGBA → sRGB u8 RGBA
-fn linear_f32_to_rgba8(src: &image::Rgba32FImage) -> image::RgbaImage {
-    let (w, h) = (src.width(), src.height());
-    let mut buf: Vec<u8> = Vec::with_capacity((w * h * 4) as usize);
-    for p in src.pixels() {
-        buf.push(linear_to_srgb(p[0]));
-        buf.push(linear_to_srgb(p[1]));
-        buf.push(linear_to_srgb(p[2]));
-        buf.push((p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
-    }
-    image::RgbaImage::from_raw(w, h, buf).expect("RgbaImage 構築失敗")
-}
 
 /// sRGB RGBA バイト列を linear 空間で縮小し、sRGB に戻して返す
 fn resize_srgb(
@@ -75,6 +28,20 @@ pub fn upload_rgba_to_gpu(
     width: u32,
     height: u32,
     label: Option<&str>,
+) -> (wgpu::TextureView, wgpu::TextureView) {
+    upload_rgba_to_gpu_with_mips(device, queue, rgba, width, height, label, None)
+}
+
+/// 事前生成されたミップチェーンを受け取る版。
+/// `mip_chain` が Some なら CPU ミップ生成をスキップし、直接 GPU アップロードする。
+pub fn upload_rgba_to_gpu_with_mips(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    label: Option<&str>,
+    mip_chain: Option<&[(u32, u32, Vec<u8>)]>,
 ) -> (wgpu::TextureView, wgpu::TextureView) {
     let max_dim = device.limits().max_texture_dimension_2d;
     let (upload_owned, upload_w, upload_h) = if width > max_dim || height > max_dim {
@@ -143,42 +110,71 @@ pub fn upload_rgba_to_gpu(
         },
     );
 
-    // CPU 側でミップチェーンを生成してアップロード（sRGB リニアライズ対応）
+    // ミップチェーンをアップロード
+    // 事前生成済み（BGスレッドで生成）があればそれを使用、なければCPUで生成
     if mip_level_count > 1 {
-        let base_img = image::RgbaImage::from_raw(upload_w, upload_h, upload_rgba.to_vec())
-            .expect("ミップ生成用 RgbaImage 構築失敗");
-        // sRGB → linear に変換してから縮小し、アップロード時に sRGB に戻す
-        let linear_base = rgba8_to_linear_f32(&base_img);
-        let mut current_linear = linear_base;
-        for level in 1..mip_level_count {
-            let mip_w = (upload_w >> level).max(1);
-            let mip_h = (upload_h >> level).max(1);
-            current_linear = image::imageops::resize(
-                &current_linear,
-                mip_w,
-                mip_h,
-                image::imageops::FilterType::Triangle,
-            );
-            let mip_srgb = linear_f32_to_rgba8(&current_linear);
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &tex,
-                    mip_level: level,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &mip_srgb,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * mip_w),
-                    rows_per_image: None,
-                },
-                wgpu::Extent3d {
-                    width: mip_w,
-                    height: mip_h,
-                    depth_or_array_layers: 1,
-                },
-            );
+        // リサイズ後の場合（GPU 上限超過）は事前生成ミップを無視して新規生成
+        let use_prebuilt = mip_chain.is_some() && upload_owned.is_none();
+        if use_prebuilt {
+            let chain = mip_chain.expect("use_prebuilt で確認済み");
+            for (level_idx, (mip_w, mip_h, mip_data)) in chain.iter().enumerate() {
+                let level = (level_idx + 1) as u32;
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &tex,
+                        mip_level: level,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    mip_data,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(4 * mip_w),
+                        rows_per_image: None,
+                    },
+                    wgpu::Extent3d {
+                        width: *mip_w,
+                        height: *mip_h,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        } else {
+            // sRGB→linear→縮小→sRGB で色空間的に正確なダウンサンプリング
+            // (LUT で powf 呼び出しを排除済み)
+            let base = image::RgbaImage::from_raw(upload_w, upload_h, upload_rgba.to_vec())
+                .expect("ミップ生成用 RgbaImage 構築失敗");
+            let mut current_linear = rgba8_to_linear_f32(&base);
+            for level in 1..mip_level_count {
+                let mip_w = (upload_w >> level).max(1);
+                let mip_h = (upload_h >> level).max(1);
+                current_linear = image::imageops::resize(
+                    &current_linear,
+                    mip_w,
+                    mip_h,
+                    image::imageops::FilterType::Triangle,
+                );
+                let mip_srgb = linear_f32_to_rgba8(&current_linear);
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &tex,
+                        mip_level: level,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    mip_srgb.as_raw(),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(4 * mip_w),
+                        rows_per_image: None,
+                    },
+                    wgpu::Extent3d {
+                        width: mip_w,
+                        height: mip_h,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
         }
     }
 
@@ -367,6 +363,21 @@ pub fn upload_textures_from_ir(
                 1,
                 1,
                 Some(&format!("texture_{i}")),
+            ));
+            continue;
+        }
+        // 生 RGBA バイパス（VRM BG ロードパスで PNG エンコード/デコードの往復を回避）
+        if tex.is_raw_rgba() {
+            let (w, h) = tex.raw_dims.expect("is_raw_rgba で確認済み");
+            let label = format!("texture_{i}");
+            views.push(upload_rgba_to_gpu_with_mips(
+                device,
+                queue,
+                &tex.data,
+                w,
+                h,
+                Some(&label),
+                tex.mip_chain.as_deref(),
             ));
             continue;
         }

@@ -30,6 +30,8 @@ pub struct TextureState {
     pub pkg_popup_filter: String,
     /// 最後にテクスチャファイルを開いたディレクトリ
     pub last_dir: Option<PathBuf>,
+    /// 非同期テクスチャファイルダイアログ（材質Index, 結果受信チャネル）
+    pub pending_file_dialog: Option<(usize, std::sync::mpsc::Receiver<Option<PathBuf>>)>,
 }
 
 impl Default for TextureState {
@@ -44,6 +46,7 @@ impl Default for TextureState {
             link_same_name: true,
             pkg_popup_filter: String::new(),
             last_dir: None,
+            pending_file_dialog: None,
         }
     }
 }
@@ -341,6 +344,8 @@ impl ViewerApp {
                         data: ir_data,
                         mime_type: ir_mime,
                         source_path: display_name.clone(),
+                        raw_dims: None,
+                        mip_chain: None,
                     });
                 idx
             });
@@ -498,6 +503,8 @@ impl ViewerApp {
                         data: ir_data,
                         mime_type: ir_mime,
                         source_path: tex_name.to_string(),
+                        raw_dims: None,
+                        mip_chain: None,
                     });
                 idx
             });
@@ -843,6 +850,8 @@ impl ViewerApp {
                 data: ir_data,
                 mime_type: ir_mime,
                 source_path: path.display().to_string(),
+                raw_dims: None,
+                mip_chain: None,
             });
 
         // 選択した材質の texture_index を更新

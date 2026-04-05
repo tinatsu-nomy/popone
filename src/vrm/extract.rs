@@ -390,6 +390,38 @@ fn extract_meta_comment(typed: &VrmTyped) -> String {
     comment
 }
 
+/// 生 RGBA バイト列からミップチェーン（レベル 1 以降）を生成する。
+/// linear f32 空間で縮小してから sRGB に戻すことで色空間的に正確なダウンサンプリングを行う。
+/// バックグラウンドスレッドで実行されるため UI への影響はない。
+/// sRGB↔linear 変換は LUT 実装で `powf` 呼び出しを排除済み。
+fn generate_mip_chain(rgba: &[u8], width: u32, height: u32) -> Option<Vec<(u32, u32, Vec<u8>)>> {
+    if rgba.len() != (width * height * 4) as usize {
+        return None;
+    }
+    let max_side = width.max(height);
+    if max_side <= 1 {
+        return Some(Vec::new());
+    }
+    let mip_level_count = 32 - max_side.leading_zeros();
+    let base = image::RgbaImage::from_raw(width, height, rgba.to_vec())?;
+    // sRGB → linear f32 に変換（LUT で高速化）
+    let mut current_linear = crate::color::rgba8_to_linear_f32(&base);
+    let mut chain = Vec::with_capacity((mip_level_count - 1) as usize);
+    for level in 1..mip_level_count {
+        let mip_w = (width >> level).max(1);
+        let mip_h = (height >> level).max(1);
+        current_linear = image::imageops::resize(
+            &current_linear,
+            mip_w,
+            mip_h,
+            image::imageops::FilterType::Triangle,
+        );
+        let mip_srgb = crate::color::linear_f32_to_rgba8(&current_linear);
+        chain.push((mip_w, mip_h, mip_srgb.into_raw()));
+    }
+    Some(chain)
+}
+
 fn extract_textures(
     document: &gltf::Document,
     images: &[gltf::image::Data],
@@ -397,7 +429,36 @@ fn extract_textures(
     let mut textures = Vec::with_capacity(images.len());
     for (i, image_data) in images.iter().enumerate() {
         let filename = format!("tex_{:03}.png", i);
-        let mime_type = "image/png".to_string();
+        // gltf 生ピクセルを raw RGBA として保存（PNG エンコード/デコードの往復回避）
+        // RGB の場合は RGBA に変換
+        let (w, h) = (image_data.width, image_data.height);
+        let rgba: Vec<u8> = match image_data.format {
+            gltf::image::Format::R8G8B8A8 => image_data.pixels.clone(),
+            gltf::image::Format::R8G8B8 => {
+                let mut buf = Vec::with_capacity((w * h * 4) as usize);
+                for chunk in image_data.pixels.chunks(3) {
+                    buf.push(chunk[0]);
+                    buf.push(chunk[1]);
+                    buf.push(chunk[2]);
+                    buf.push(255);
+                }
+                buf
+            }
+            _ => {
+                // その他の形式（16bit, float 等）は非対応として空にする
+                log::warn!(
+                    "Unsupported gltf image format for texture {}: {:?}",
+                    i,
+                    image_data.format
+                );
+                Vec::new()
+            }
+        };
+        let (data, mime_type, raw_dims) = if rgba.is_empty() {
+            (Vec::new(), "image/png".to_string(), None)
+        } else {
+            (rgba, "image/x-raw-rgba8".to_string(), Some((w, h)))
+        };
         let source_path = match document.images().nth(i).and_then(|img| match img.source() {
             gltf::image::Source::Uri { uri, .. } => Some(uri.to_string()),
             _ => None,
@@ -405,11 +466,20 @@ fn extract_textures(
             Some(uri) => uri,
             None => "embedded".to_string(),
         };
+        // バックグラウンドスレッドでミップチェーンも事前生成
+        // （メインスレッドの GPU リソース構築時の CPU 負荷を削減）
+        let mip_chain = if let Some((w, h)) = raw_dims {
+            generate_mip_chain(&data, w, h)
+        } else {
+            None
+        };
         textures.push(IrTexture {
             filename,
-            data: image_data.pixels.clone(),
+            data,
             mime_type,
             source_path,
+            raw_dims,
+            mip_chain,
         });
     }
 
