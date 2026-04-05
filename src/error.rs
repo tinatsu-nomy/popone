@@ -48,13 +48,21 @@ pub enum PoponeError {
 
     #[error("{0}")]
     Other(String),
-}
 
-/// anyhow::Error から PoponeError への変換（既存コードとの互換用）
-impl From<anyhow::Error> for PoponeError {
-    fn from(e: anyhow::Error) -> Self {
-        PoponeError::Other(format!("{e:#}"))
-    }
+    /// コンテキストメッセージ付きエラー。
+    /// `ResultExt::context()` / `with_context()` 経由で生成され、
+    /// 元エラーの `source()` チェーンを保持する。
+    #[error("{context}")]
+    WithContext {
+        context: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// anyhow::Error の構造化エラーチェーンをそのまま保持するバリアント。
+    /// `From<anyhow::Error>` 経由で自動変換される。
+    #[error(transparent)]
+    Anyhow(#[from] anyhow::Error),
 }
 
 impl From<zip::result::ZipError> for PoponeError {
@@ -84,12 +92,18 @@ pub trait ResultExt<T> {
     fn with_context<F: FnOnce() -> String>(self, f: F) -> Result<T>;
 }
 
-impl<T, E: std::fmt::Display> ResultExt<T> for std::result::Result<T, E> {
+impl<T, E: std::error::Error + Send + Sync + 'static> ResultExt<T> for std::result::Result<T, E> {
     fn context(self, msg: &str) -> Result<T> {
-        self.map_err(|e| PoponeError::Other(format!("{msg}: {e}")))
+        self.map_err(|e| PoponeError::WithContext {
+            context: msg.to_string(),
+            source: Box::new(e),
+        })
     }
     fn with_context<F: FnOnce() -> String>(self, f: F) -> Result<T> {
-        self.map_err(|e| PoponeError::Other(format!("{}: {e}", f())))
+        self.map_err(|e| PoponeError::WithContext {
+            context: f(),
+            source: Box::new(e),
+        })
     }
 }
 

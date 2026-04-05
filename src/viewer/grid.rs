@@ -52,8 +52,9 @@ pub fn build_grid_vertices_with_params(extent: f32, step: f32) -> (Vec<GridVerte
     let axis_color_x = [0.6, 0.3, 0.3, 1.0]; // X軸（赤っぽい）
     let axis_color_z = [0.3, 0.3, 0.6, 1.0]; // Z軸（青っぽい）
 
-    let mut x = -extent;
-    while x <= extent + 0.001 {
+    let line_count = (2.0 * extent / step).round() as i32;
+    for i in 0..=line_count {
+        let x = -extent + i as f32 * step;
         let c = if x.abs() < 0.01 { axis_color_z } else { color };
         verts.push(GridVertex {
             position: [x, 0.0, -extent],
@@ -63,11 +64,10 @@ pub fn build_grid_vertices_with_params(extent: f32, step: f32) -> (Vec<GridVerte
             position: [x, 0.0, extent],
             color: c,
         });
-        x += step;
     }
 
-    let mut z = -extent;
-    while z <= extent + 0.001 {
+    for i in 0..=line_count {
+        let z = -extent + i as f32 * step;
         let c = if z.abs() < 0.01 { axis_color_x } else { color };
         verts.push(GridVertex {
             position: [-extent, 0.0, z],
@@ -77,7 +77,6 @@ pub fn build_grid_vertices_with_params(extent: f32, step: f32) -> (Vec<GridVerte
             position: [extent, 0.0, z],
             color: c,
         });
-        z += step;
     }
 
     // Y軸（緑っぽい）

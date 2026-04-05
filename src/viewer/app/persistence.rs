@@ -69,11 +69,11 @@ pub fn load_config(exe_dir: &Path) -> Option<AppConfig> {
     let text = std::fs::read_to_string(&path).ok()?;
     match toml::from_str::<AppConfig>(&text) {
         Ok(cfg) => {
-            log::info!("設定読み込み: {}", path.display());
+            log::info!("Settings loaded: {}", path.display());
             Some(cfg)
         }
         Err(e) => {
-            log::warn!("設定ファイル解析失敗: {e}");
+            log::warn!("Settings file parse failed: {e}");
             None
         }
     }
@@ -84,12 +84,12 @@ pub fn save_config(exe_dir: &Path, config: &AppConfig) {
     match toml::to_string_pretty(config) {
         Ok(text) => {
             if let Err(e) = atomic_write(&path, text.as_bytes()) {
-                log::warn!("設定ファイル保存失敗: {e}");
+                log::warn!("Settings file save failed: {e}");
             } else {
-                log::info!("設定保存: {}", path.display());
+                log::info!("Settings saved: {}", path.display());
             }
         }
-        Err(e) => log::warn!("設定シリアライズ失敗: {e}"),
+        Err(e) => log::warn!("Settings serialization failed: {e}"),
     }
 }
 
@@ -140,14 +140,14 @@ pub fn load_texture_history(exe_dir: &Path) -> TextureHistoryFile {
         Ok(text) => match serde_json::from_str::<TextureHistoryFile>(&text) {
             Ok(h) => {
                 log::info!(
-                    "テクスチャ履歴読み込み: {} ({}件)",
+                    "Texture history loaded: {} ({} entries)",
                     path.display(),
                     h.history.len()
                 );
                 h
             }
             Err(e) => {
-                log::warn!("テクスチャ履歴解析失敗 (空で続行): {e}");
+                log::warn!("Texture history parse failed (continuing empty): {e}");
                 TextureHistoryFile::default()
             }
         },
@@ -160,12 +160,12 @@ pub fn save_texture_history(exe_dir: &Path, history: &TextureHistoryFile) {
     match serde_json::to_string_pretty(history) {
         Ok(json) => {
             if let Err(e) = atomic_write(&path, json.as_bytes()) {
-                log::warn!("テクスチャ履歴保存失敗: {e}");
+                log::warn!("Texture history save failed: {e}");
             } else {
-                log::info!("テクスチャ履歴保存: {}", path.display());
+                log::info!("Texture history saved: {}", path.display());
             }
         }
-        Err(e) => log::warn!("テクスチャ履歴シリアライズ失敗: {e}"),
+        Err(e) => log::warn!("Texture history serialization failed: {e}"),
     }
 }
 
@@ -224,12 +224,12 @@ fn recover_from_bak(path: &Path) {
         if bak.exists() {
             if let Err(e) = std::fs::rename(&bak, path) {
                 log::warn!(
-                    "バックアップ復旧失敗: {} → {}: {e}",
+                    "Backup restore failed: {} -> {}: {e}",
                     bak.display(),
                     path.display()
                 );
             } else {
-                log::info!("バックアップから復旧: {}", path.display());
+                log::info!("Restored from backup: {}", path.display());
             }
         }
     }
@@ -245,7 +245,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&bak); // 古い bak は無視
         if let Err(e) = std::fs::rename(path, &bak) {
             // バックアップ作成失敗 → tmp を直接上書き（元ファイルは残る）
-            log::warn!("バックアップ作成失敗 (直接上書き): {e}");
+            log::warn!("Backup creation failed (direct overwrite): {e}");
             return std::fs::copy(&tmp, path).map(|_| ()).and_then(|_| {
                 let _ = std::fs::remove_file(&tmp);
                 Ok(())
@@ -253,7 +253,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         }
         if let Err(e) = std::fs::rename(&tmp, path) {
             // tmp→path の rename 失敗 → bak を復元
-            log::warn!("ファイル置換失敗 (バックアップから復元): {e}");
+            log::warn!("File replacement failed (restored from backup): {e}");
             let _ = std::fs::rename(&bak, path);
             return Err(e);
         }

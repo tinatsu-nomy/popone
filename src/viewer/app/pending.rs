@@ -298,6 +298,17 @@ impl ViewerApp {
                 .take()
                 .expect("pending_pkg_load は shown 確認済み");
             let source_path = p.source_path.clone();
+            let model_pathname = p
+                .assets
+                .get(p.fbx_index)
+                .map(|a| a.pathname.as_str())
+                .unwrap_or("?");
+            log::info!(
+                "Load from archive: {:?} [{}] from {}",
+                p.model_type,
+                model_pathname,
+                source_path.display()
+            );
 
             // source_override を構築（nested_archive_source > archive_snapshot > None）
             let source_override = if let Some(nested) = p.nested_archive_source {
@@ -371,7 +382,7 @@ impl ViewerApp {
                                         self.convert_message = None;
                                     }
                                     Err(e) => {
-                                        log::error!("読み込み失敗: {e}");
+                                        log::error!("Load failed: {e}");
                                         self.convert_message = Some(ConvertMessage::failure(
                                             format!("ファイルを読み込めませんでした。\n詳細: {e}"),
                                         ));
@@ -388,11 +399,11 @@ impl ViewerApp {
                                 pkg_index.as_deref(),
                             ) {
                                 Ok(()) => {
-                                    log::info!("読み込み成功: {}", source_path.display());
+                                    log::info!("Load success: {}", source_path.display());
                                     self.convert_message = None;
                                 }
                                 Err(e) => {
-                                    log::error!("読み込み失敗: {e}");
+                                    log::error!("Load failed: {e}");
                                     self.convert_message = Some(ConvertMessage::failure(format!(
                                         "ファイルを読み込めませんでした。\n詳細: {e}"
                                     )));
@@ -408,11 +419,11 @@ impl ViewerApp {
                             source_override,
                         ) {
                             Ok(()) => {
-                                log::info!("読み込み成功: {}", source_path.display());
+                                log::info!("Load success: {}", source_path.display());
                                 self.convert_message = None;
                             }
                             Err(e) => {
-                                log::error!("読み込み失敗: {e}");
+                                log::error!("Load failed: {e}");
                                 self.convert_message = Some(ConvertMessage::failure(format!(
                                     "ファイルを読み込めませんでした。\n詳細: {e}"
                                 )));
@@ -428,11 +439,11 @@ impl ViewerApp {
                             pkg_index,
                         ) {
                             Ok(()) => {
-                                log::info!("Prefab読み込み成功: {}", source_path.display());
+                                log::info!("PrefabLoad success: {}", source_path.display());
                                 self.convert_message = None;
                             }
                             Err(e) => {
-                                log::error!("Prefab読み込み失敗: {e}");
+                                log::error!("PrefabLoad failed: {e}");
                                 self.convert_message = Some(ConvertMessage::failure(format!(
                                     "Prefabを読み込めませんでした。\n詳細: {e}"
                                 )));
@@ -452,14 +463,14 @@ impl ViewerApp {
             let source_path = p.source_path.clone();
             match self.load_model_from_archive(p) {
                 Ok(()) => {
-                    log::info!("アーカイブ読み込み成功: {}", source_path.display());
+                    log::info!("Model loaded from archive: {}", source_path.display());
                     self.convert_message = None;
                     self.anim.state = None;
                     self.anim.library.clear();
                     self.anim.active_index = None;
                 }
                 Err(e) => {
-                    log::error!("アーカイブ読み込み失敗: {e}");
+                    log::error!("Archive load failed: {e}");
                     self.convert_message = Some(ConvertMessage::failure(format!(
                         "アーカイブからの読み込みに失敗しました。\n詳細: {e}"
                     )));

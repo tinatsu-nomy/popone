@@ -119,7 +119,7 @@ pub fn export_uv_map_grouped(
     w.flush()?;
 
     log::info!(
-        "UVマップ出力: {} ({}x{}, {}レイヤー)",
+        "UV map export: {} ({}x{}, {} layers)",
         path.display(),
         size,
         size,

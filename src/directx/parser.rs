@@ -404,11 +404,11 @@ impl Parser {
                     if let Some(resolved) = self.global_materials.get(ref_name) {
                         if *slot_idx < mat_list.materials.len() {
                             mat_list.materials[*slot_idx] = resolved.clone();
-                            log::info!("前方参照マテリアル '{}' を解決しました", ref_name);
+                            log::info!("Forward-reference material '{}' resolved", ref_name);
                         }
                     } else {
                         log::warn!(
-                            "マテリアル '{}' はパース完了後も見つかりません（スロット {}）",
+                            "Material '{}' not found even after parsing (slot {})",
                             ref_name,
                             slot_idx
                         );
@@ -594,7 +594,9 @@ impl Parser {
                         "SkinWeights" => {
                             mesh.has_skin_weights = true;
                             if !skin_warned {
-                                log::warn!("SkinWeights を検出しました。スキニング付き .x ファイルは未対応です");
+                                log::warn!(
+                                    "SkinWeights detected. Skinned .x files are not supported"
+                                );
                                 skin_warned = true;
                             }
                             self.pos += 1;
@@ -605,9 +607,7 @@ impl Parser {
                             }
                         }
                         "XSkinMeshHeader" => {
-                            log::debug!(
-                                "XSkinMeshHeader を検出しました（メタデータのみ、スキップ）"
-                            );
+                            log::debug!("XSkinMeshHeader detected (metadata only, skipped)");
                             self.pos += 1;
                             self.read_optional_name();
                             if self.peek() == Some(&Token::LBrace) {
@@ -802,7 +802,7 @@ impl Parser {
                             let slot_idx = materials.len();
                             unresolved_refs.push((slot_idx, ref_name.clone()));
                             log::debug!(
-                                "前方参照マテリアル '{}' をスロット {} に仮登録",
+                                "Forward-reference material '{}' tentatively registered to slot {}",
                                 ref_name,
                                 slot_idx
                             );
@@ -833,7 +833,7 @@ impl Parser {
         while materials.len() < mat_count {
             let idx = materials.len();
             log::warn!(
-                "材質スロット {} が未解決のため、デフォルト材質で補完します",
+                "Material slot {} unresolved, falling back to default material",
                 idx
             );
             materials.push(XMaterial {

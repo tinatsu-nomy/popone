@@ -2,6 +2,66 @@ use crate::intermediate::types::IrModel;
 use anyhow::Result;
 use eframe::wgpu;
 
+// ── sRGB ↔ linear 変換 ──────────────────────────────────────────
+
+/// sRGB → linear (per channel, u8 → f32)
+fn srgb_to_linear(c: u8) -> f32 {
+    let s = c as f32 / 255.0;
+    if s <= 0.04045 {
+        s / 12.92
+    } else {
+        ((s + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// linear → sRGB (per channel, f32 → u8)
+fn linear_to_srgb(c: f32) -> u8 {
+    let s = if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (s.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+}
+
+/// sRGB u8 RGBA → linear f32 RGBA (アルファはそのまま 0..1 にマップ)
+fn rgba8_to_linear_f32(src: &image::RgbaImage) -> image::Rgba32FImage {
+    let (w, h) = (src.width(), src.height());
+    let mut buf: Vec<f32> = Vec::with_capacity((w * h * 4) as usize);
+    for p in src.pixels() {
+        buf.push(srgb_to_linear(p[0]));
+        buf.push(srgb_to_linear(p[1]));
+        buf.push(srgb_to_linear(p[2]));
+        buf.push(p[3] as f32 / 255.0); // アルファは線形のまま
+    }
+    image::Rgba32FImage::from_raw(w, h, buf).expect("Rgba32FImage 構築失敗")
+}
+
+/// linear f32 RGBA → sRGB u8 RGBA
+fn linear_f32_to_rgba8(src: &image::Rgba32FImage) -> image::RgbaImage {
+    let (w, h) = (src.width(), src.height());
+    let mut buf: Vec<u8> = Vec::with_capacity((w * h * 4) as usize);
+    for p in src.pixels() {
+        buf.push(linear_to_srgb(p[0]));
+        buf.push(linear_to_srgb(p[1]));
+        buf.push(linear_to_srgb(p[2]));
+        buf.push((p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+    }
+    image::RgbaImage::from_raw(w, h, buf).expect("RgbaImage 構築失敗")
+}
+
+/// sRGB RGBA バイト列を linear 空間で縮小し、sRGB に戻して返す
+fn resize_srgb(
+    src: &image::RgbaImage,
+    new_w: u32,
+    new_h: u32,
+    filter: image::imageops::FilterType,
+) -> image::RgbaImage {
+    let linear = rgba8_to_linear_f32(src);
+    let resized = image::imageops::resize(&linear, new_w, new_h, filter);
+    linear_f32_to_rgba8(&resized)
+}
+
 // PSD 関連関数は crate::psd に移動済み — 後方互換のため re-export
 pub use crate::psd::{decode_psd, is_psd_filename};
 
@@ -19,7 +79,7 @@ pub fn upload_rgba_to_gpu(
     let max_dim = device.limits().max_texture_dimension_2d;
     let (upload_owned, upload_w, upload_h) = if width > max_dim || height > max_dim {
         log::warn!(
-            "テクスチャ {:?} ({}x{}) が GPU 制限 {} を超えています — 縮小します",
+            "Texture {:?} ({}x{}) exceeds GPU limit {} - downscaling",
             label,
             width,
             height,
@@ -30,13 +90,22 @@ pub fn upload_rgba_to_gpu(
         let new_h = ((height as f64 * scale) as u32).max(1);
         let src =
             image::RgbaImage::from_raw(width, height, rgba.to_vec()).expect("RgbaImage 構築失敗");
-        let resized =
-            image::imageops::resize(&src, new_w, new_h, image::imageops::FilterType::Triangle);
+        let resized = resize_srgb(&src, new_w, new_h, image::imageops::FilterType::Triangle);
         (Some(resized.into_raw()), new_w, new_h)
     } else {
         (None, width, height)
     };
     let upload_rgba: &[u8] = upload_owned.as_deref().unwrap_or(rgba);
+
+    // ミップレベル数を計算: floor(log2(max(w,h))) + 1
+    let mip_level_count = {
+        let max_side = upload_w.max(upload_h);
+        if max_side <= 1 {
+            1
+        } else {
+            32 - max_side.leading_zeros()
+        }
+    };
 
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label,
@@ -45,7 +114,7 @@ pub fn upload_rgba_to_gpu(
             height: upload_h,
             depth_or_array_layers: 1,
         },
-        mip_level_count: 1,
+        mip_level_count,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
@@ -53,6 +122,7 @@ pub fn upload_rgba_to_gpu(
         view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
     });
 
+    // レベル 0 をアップロード
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture: &tex,
@@ -72,6 +142,45 @@ pub fn upload_rgba_to_gpu(
             depth_or_array_layers: 1,
         },
     );
+
+    // CPU 側でミップチェーンを生成してアップロード（sRGB リニアライズ対応）
+    if mip_level_count > 1 {
+        let base_img = image::RgbaImage::from_raw(upload_w, upload_h, upload_rgba.to_vec())
+            .expect("ミップ生成用 RgbaImage 構築失敗");
+        // sRGB → linear に変換してから縮小し、アップロード時に sRGB に戻す
+        let linear_base = rgba8_to_linear_f32(&base_img);
+        let mut current_linear = linear_base;
+        for level in 1..mip_level_count {
+            let mip_w = (upload_w >> level).max(1);
+            let mip_h = (upload_h >> level).max(1);
+            current_linear = image::imageops::resize(
+                &current_linear,
+                mip_w,
+                mip_h,
+                image::imageops::FilterType::Triangle,
+            );
+            let mip_srgb = linear_f32_to_rgba8(&current_linear);
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &tex,
+                    mip_level: level,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &mip_srgb,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * mip_w),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: mip_w,
+                    height: mip_h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+    }
 
     let srgb_view = tex.create_view(&Default::default());
     let unorm_view = tex.create_view(&wgpu::TextureViewDescriptor {
@@ -140,11 +249,7 @@ pub fn upload_textures(
                 rgba
             }
             _ => {
-                log::warn!(
-                    "未対応テクスチャフォーマット: {:?} (index {})",
-                    img.format,
-                    i
-                );
+                log::warn!("Unsupported texture format: {:?} (index {})", img.format, i);
                 // 1x1 マゼンタ
                 vec![255, 0, 255, 255]
             }
@@ -254,7 +359,7 @@ pub fn upload_textures_from_ir(
     for (i, tex) in ir.textures.iter().enumerate() {
         let is_psd = is_psd_filename(&tex.filename);
         if tex.data.is_empty() {
-            log::warn!("テクスチャ '{}' のデータが空 (index {})", tex.filename, i);
+            log::warn!("Texture '{}' data is empty (index {})", tex.filename, i);
             views.push(upload_rgba_to_gpu(
                 device,
                 queue,
@@ -270,7 +375,7 @@ pub fn upload_textures_from_ir(
             Ok(d) => d,
             Err(e) => {
                 log::warn!(
-                    "テクスチャ '{}' のデコード失敗: {} (index {}, {} bytes)",
+                    "Texture '{}' decode failed: {} (index {}, {} bytes)",
                     tex.filename,
                     e,
                     i,

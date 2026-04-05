@@ -31,7 +31,7 @@ pub fn write_texture(
     } else {
         // サイズ不一致の場合は空白画像
         log::warn!(
-            "テクスチャ '{}' のサイズが不一致 (data={}, expected={}x{})",
+            "Texture '{}' size mismatch (data={}, expected={}x{})",
             tex.filename,
             tex.data.len(),
             width,
@@ -39,7 +39,7 @@ pub fn write_texture(
         );
         RgbaImage::new(1, 1).save(&out_path)?;
     };
-    log::info!("テクスチャ書き出し: {}", out_path.display());
+    log::info!("Texture export: {}", out_path.display());
 
     Ok(tex.filename.clone())
 }
@@ -97,16 +97,16 @@ pub fn write_all_textures_from_ir(
                             candidate = format!("{}_from_psd{}.png", stem, suffix);
                             suffix += 1;
                         }
-                        log::info!("PSD→PNG: 衝突回避 → '{}'", candidate);
+                        log::info!("PSD->PNG: collision avoidance -> '{}'", candidate);
                     }
                     used_names.insert(candidate.to_lowercase());
                     let out_path = output_dir.join(&candidate);
                     std::fs::write(&out_path, &png_data)?;
-                    log::info!("テクスチャ書き出し (PSD→PNG): {}", out_path.display());
+                    log::info!("Texture export (PSD->PNG): {}", out_path.display());
                     filenames.push(candidate);
                 }
                 Err(e) => {
-                    log::warn!("PSD→PNG変換失敗、PSDのまま書き出し: {e}");
+                    log::warn!("PSD->PNG conversion failed, exporting as PSD: {e}");
                     // 衝突回避（非PSD分岐と同じロジック）
                     let mut out_name = tex.filename.clone();
                     if used_names.contains(&out_name.to_lowercase()) {
@@ -125,7 +125,11 @@ pub fn write_all_textures_from_ir(
                             }
                             suffix += 1;
                         }
-                        log::info!("PSD衝突回避: '{}' → '{}'", tex.filename, out_name);
+                        log::info!(
+                            "PSD collision avoidance: '{}' -> '{}'",
+                            tex.filename,
+                            out_name
+                        );
                     }
                     used_names.insert(out_name.to_lowercase());
                     let out_path = output_dir.join(&out_name);
@@ -152,12 +156,16 @@ pub fn write_all_textures_from_ir(
                     }
                     suffix += 1;
                 }
-                log::info!("テクスチャ名衝突回避: '{}' → '{}'", tex.filename, out_name);
+                log::info!(
+                    "Texture name collision avoidance: '{}' -> '{}'",
+                    tex.filename,
+                    out_name
+                );
             }
             used_names.insert(out_name.to_lowercase());
             let out_path = output_dir.join(&out_name);
             std::fs::write(&out_path, &tex.data)?;
-            log::info!("テクスチャ��き出し: {}", out_path.display());
+            log::info!("Texture export: {}", out_path.display());
             filenames.push(out_name);
         }
     }

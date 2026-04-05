@@ -178,7 +178,7 @@ impl ViewerApp {
                     self.tex.pkg_thumb_cache.push(Some(tex_id));
                 }
                 Err(e) => {
-                    log::warn!("サムネイル生成失敗: {} - {}", name, e);
+                    log::warn!("Thumbnail generation failed: {} - {}", name, e);
                     self.tex.pkg_thumb_cache.push(None);
                 }
             }
@@ -200,7 +200,7 @@ impl ViewerApp {
             let tex_data = match std::fs::read(path) {
                 Ok(d) => d,
                 Err(e) => {
-                    log::error!("ファイル読み込み失敗: {e}");
+                    log::error!("File read failed: {e}");
                     self.convert_message = Some(ConvertMessage::failure(format!(
                         "テクスチャ読み込み失敗: {e}"
                     )));
@@ -235,7 +235,7 @@ impl ViewerApp {
                 let data = match std::fs::read(path) {
                     Ok(d) => d,
                     Err(e) => {
-                        log::error!("ファイル読み込み失敗: {e}");
+                        log::error!("File read failed: {e}");
                         self.convert_message = Some(ConvertMessage::failure(format!(
                             "テクスチャ読み込み失敗: {e}"
                         )));
@@ -280,7 +280,7 @@ impl ViewerApp {
             {
                 Ok(views) => views,
                 Err(e) => {
-                    log::error!("テクスチャ読み込み失敗: {e}");
+                    log::error!("Texture load failed: {e}");
                     self.convert_message = Some(ConvertMessage::failure(format!(
                         "テクスチャ読み込み失敗: {e}"
                     )));
@@ -308,9 +308,9 @@ impl ViewerApp {
                     "image/png".to_string(),
                 ),
                 Err(e) => {
-                    log::error!("PSD→PNG変換失敗: {e}");
+                    log::error!("PSD->PNG conversion failed: {e}");
                     self.convert_message =
-                        Some(ConvertMessage::failure(format!("PSD→PNG変換失敗: {e}")));
+                        Some(ConvertMessage::failure(format!("PSD→PNG 変換失敗: {e}")));
                     return;
                 }
             }
@@ -340,6 +340,7 @@ impl ViewerApp {
                         filename: ir_filename,
                         data: ir_data,
                         mime_type: ir_mime,
+                        source_path: display_name.clone(),
                     });
                 idx
             });
@@ -374,7 +375,7 @@ impl ViewerApp {
         );
 
         log::info!(
-            "テクスチャ割り当て: 材質[{}] '{}' ← {}",
+            "Texture assignment: mat[{}] '{}' <- {}",
             material_index,
             loaded.ir.materials[material_index].name,
             display_name
@@ -421,7 +422,7 @@ impl ViewerApp {
                     &sib_sampler_info,
                 );
                 self.tex.assignments.insert(sib_idx, tex_source.clone());
-                log::info!("  連動割り当て: 材質[{}] '{}'", sib_idx, target_name);
+                log::info!("  Linked assignment: mat[{}] '{}'", sib_idx, target_name);
             }
         }
 
@@ -447,7 +448,7 @@ impl ViewerApp {
             {
                 Ok(views) => views,
                 Err(e) => {
-                    log::error!("テクスチャデコード失敗: {e}");
+                    log::error!("Texture decode failed: {e}");
                     self.convert_message = Some(ConvertMessage::failure(format!(
                         "テクスチャデコード失敗: {e}"
                     )));
@@ -473,7 +474,7 @@ impl ViewerApp {
                     "image/png".to_string(),
                 ),
                 Err(e) => {
-                    log::warn!("PSD→PNG変換失敗 (IrTexture用): {e}");
+                    log::warn!("PSD->PNG conversion failed (for IrTexture): {e}");
                     (tex_data.to_vec(), tex_name.to_string(), String::new())
                 }
             }
@@ -496,6 +497,7 @@ impl ViewerApp {
                         filename: ir_filename,
                         data: ir_data,
                         mime_type: ir_mime,
+                        source_path: tex_name.to_string(),
                     });
                 idx
             });
@@ -536,7 +538,7 @@ impl ViewerApp {
         }
 
         log::info!(
-            "パッケージテクスチャ割り当て: 材質[{}] '{}' ← {}",
+            "Package texture assignment: mat[{}] '{}' <- {}",
             material_index,
             loaded.ir.materials[material_index].name,
             tex_name,
@@ -583,7 +585,7 @@ impl ViewerApp {
                         draw.mmd_texture_bind_group = None;
                     }
                 }
-                log::info!("  連動割り当て: 材質[{}] '{}'", sib_idx, target_name);
+                log::info!("  Linked assignment: mat[{}] '{}'", sib_idx, target_name);
             }
         }
 
@@ -813,7 +815,7 @@ impl ViewerApp {
                     "image/png".to_string(),
                 ),
                 Err(e) => {
-                    log::error!("PSD→PNG変換失敗: {e}");
+                    log::error!("PSD->PNG conversion failed: {e}");
                     return;
                 }
             }
@@ -840,6 +842,7 @@ impl ViewerApp {
                 filename: ir_filename,
                 data: ir_data,
                 mime_type: ir_mime,
+                source_path: path.display().to_string(),
             });
 
         // 選択した材質の texture_index を更新
@@ -849,7 +852,7 @@ impl ViewerApp {
             mat.texture_index = Some(tex_idx);
             mat.apply_textured_defaults();
             log::info!(
-                "テクスチャ割り当て: 材質[{}] '{}' ← {}",
+                "Texture assignment: mat[{}] '{}' <- {}",
                 mat_idx,
                 mat.name,
                 path_buf.display()
@@ -971,7 +974,7 @@ impl ViewerApp {
                                     pending.texture_views[tex_idx] = Some(view);
                                 }
                                 Err(e) => {
-                                    log::warn!("pkg テクスチャアップロード失敗 ({}): {e}", name);
+                                    log::warn!("pkg texture upload failed ({}): {e}", name);
                                     pending.failed_uploads.insert(tex_idx);
                                 }
                             }
@@ -1226,7 +1229,7 @@ impl ViewerApp {
                 let tex_path = PathBuf::from(&entry.texture_path);
                 if !tex_path.is_file() {
                     log::warn!(
-                        "テクスチャ履歴: ファイル不存在スキップ: {}",
+                        "Texture history: file not found, skipping: {}",
                         entry.texture_path
                     );
                     skipped += 1;

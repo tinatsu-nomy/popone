@@ -96,7 +96,7 @@ fn load_material_names(
     let lines: Vec<&str> = text.lines().collect();
     if lines.len() != materials.len() {
         log::info!(
-            "材質名テキスト '{}': 行数({})と材質数({})が不一致、スキップ",
+            "Material name text '{}': line count ({}) and material count ({}) mismatch, skipping",
             txt_path.display(),
             lines.len(),
             materials.len()
@@ -107,7 +107,7 @@ fn load_material_names(
         mat.name = line.trim().to_string();
     }
     log::info!(
-        "材質名テキスト '{}' から{}材質名を適用",
+        "Applied {} material names from material name text '{}'",
         txt_path.display(),
         materials.len()
     );
@@ -304,20 +304,21 @@ fn extract_textures(
                 if let Some(cached) = aux.get(&key) {
                     cached.to_vec()
                 } else {
-                    log::warn!("aux_files にテクスチャが見つかりません: {:?}", key);
+                    log::warn!("Texture not found in aux_files: {:?}", key);
                     Vec::new()
                 }
             } else if full_path.exists() {
                 std::fs::read(&full_path).unwrap_or_default()
             } else {
-                log::warn!("テクスチャファイルが見つかりません: {:?}", full_path);
+                log::warn!("Texture file not found: {:?}", full_path);
                 Vec::new()
             };
 
             IrTexture {
-                filename,
+                filename: filename.clone(),
                 data,
                 mime_type: mime.to_string(),
+                source_path: normalized.clone(),
             }
         })
         .collect()
@@ -405,7 +406,7 @@ fn extract_materials(pmd: &PmdModel, textures: &[IrTexture]) -> Vec<IrMaterial> 
                 }
             } else {
                 log::warn!(
-                    "材質{}: toon_index={} が範囲外（0-9）、トゥーンなしとして扱います",
+                    "Material {}: toon_index={} out of range (0-9), treating as no toon",
                     i + 1,
                     m.toon_index
                 );

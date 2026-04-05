@@ -13,7 +13,7 @@ use crate::intermediate::types::{
 pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> IrModel {
     // 全材質が非表示の場合は空 PMX を出力（ワーニング付き）
     if visible_mat_indices.is_empty() {
-        log::warn!("全材質が非表示です。空の PMX を出力します。");
+        log::warn!("All materials are hidden. Exporting empty PMX.");
         return IrModel {
             name: ir.name.clone(),
             comment: ir.comment.clone(),
@@ -133,7 +133,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
             break;
         }
         if iteration == ir.morphs.len().saturating_sub(1) {
-            log::warn!("グループモーフの収束ループが上限に到達");
+            log::warn!("Group morph convergence loop reached limit");
         }
     }
 
@@ -141,11 +141,11 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
     for (i, morph) in ir.morphs.iter().enumerate() {
         if !morph_alive[i] {
             let kind_label = match &morph.kind {
-                IrMorphKind::Vertex { .. } => "頂点",
-                IrMorphKind::Group(_) => "グループ",
+                IrMorphKind::Vertex { .. } => "Vertex",
+                IrMorphKind::Group(_) => "Group",
             };
             log::warn!(
-                "{}モーフ \"{}\" は除外材質の頂点のみを参照しているため削除されます。",
+                "{} morph \"{}\" references only excluded material vertices, removing.",
                 kind_label,
                 morph.name
             );
@@ -213,11 +213,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
 
     let removed = morph_count - final_morphs.len();
     if removed > 0 {
-        log::warn!(
-            "モーフ {} 個中 {} 個が除外されました。",
-            morph_count,
-            removed
-        );
+        log::warn!("{} of {} morphs excluded.", morph_count, removed);
     }
 
     // ── Phase 5: テクスチャ pruning ──

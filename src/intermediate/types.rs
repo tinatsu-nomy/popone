@@ -520,6 +520,78 @@ impl IrModel {
 
         (merged_count, new_bone_count)
     }
+
+    /// 各材質に割り当てられたテクスチャ情報をログ出力する
+    pub fn log_texture_assignments(&self) {
+        // テクスチャ名 + ソースパスを表示するヘルパー
+        let tex_label = |idx: usize| -> String {
+            self.textures.get(idx).map_or("?".to_string(), |t| {
+                if t.source_path.is_empty() {
+                    format!("\"{}\"", t.filename)
+                } else {
+                    format!("\"{}\" ({})", t.filename, t.source_path)
+                }
+            })
+        };
+        let info_label = |info: &IrTextureInfo| -> String { tex_label(info.index) };
+
+        log::info!("=== Texture assignments ===");
+        for (i, mat) in self.materials.iter().enumerate() {
+            let mut parts: Vec<String> = Vec::new();
+
+            if let Some(idx) = mat.texture_index {
+                parts.push(format!("base={}", tex_label(idx)));
+            } else {
+                parts.push("base=none".to_string());
+            }
+            if let Some(ref info) = mat.normal_texture {
+                parts.push(format!("normal={}", info_label(info)));
+            }
+            if let Some(ref info) = mat.emissive_texture {
+                parts.push(format!("emissive={}", info_label(info)));
+            }
+            if let Some(idx) = mat.sphere_texture_index {
+                let mode = match mat.sphere_mode {
+                    1 => "mul",
+                    2 => "add",
+                    _ => "?",
+                };
+                parts.push(format!("sphere={} [{}]", tex_label(idx), mode));
+            }
+            if let Some(idx) = mat.toon_texture_index {
+                parts.push(format!("toon={}", tex_label(idx)));
+            } else if let Some(shared) = mat.toon_shared_index {
+                parts.push(format!("toon=shared(toon{:02}.bmp)", shared + 1));
+            }
+
+            if let Some(ref mtoon) = mat.mtoon {
+                if let Some(ref info) = mtoon.shade_texture {
+                    parts.push(format!("shade={}", info_label(info)));
+                }
+                if let Some(ref info) = mtoon.rim_multiply_texture {
+                    parts.push(format!("rim={}", info_label(info)));
+                }
+                if let Some(ref info) = mtoon.matcap_texture {
+                    parts.push(format!("matcap={}", info_label(info)));
+                }
+                if let Some(ref info) = mtoon.outline_width_texture {
+                    parts.push(format!("outline={}", info_label(info)));
+                }
+                if let Some(ref info) = mtoon.shading_shift_texture {
+                    parts.push(format!("shading_shift={}", info_label(info)));
+                }
+                if let Some(ref info) = mtoon.uv_animation_mask_texture {
+                    parts.push(format!("uv_anim_mask={}", info_label(info)));
+                }
+            }
+
+            log::info!("Material[{}] \"{}\": {}", i, mat.name, parts.join(", "));
+        }
+        log::info!(
+            "=== Texture assignments done ({} materials) ===",
+            self.materials.len()
+        );
+    }
 }
 
 /// 中間ボーン
@@ -908,6 +980,9 @@ pub struct IrTexture {
     /// 生データ（PNG/JPEG）
     pub data: Vec<u8>,
     pub mime_type: String,
+    /// テクスチャの出自パス（トラブルシュート用ログ表示）
+    /// embedded/アーカイブ内パス/外部ファイルパス等
+    pub source_path: String,
 }
 
 /// 拡張子から MIME タイプを返す（小文字の拡張子を期待）
@@ -1299,6 +1374,7 @@ mod tests {
                 filename: "host_tex.png".into(),
                 data: vec![0],
                 mime_type: "image/png".into(),
+                source_path: String::new(),
             }],
             ..Default::default()
         };
@@ -1324,6 +1400,7 @@ mod tests {
                 filename: "other_tex.png".into(),
                 data: vec![1],
                 mime_type: "image/png".into(),
+                source_path: String::new(),
             }],
             ..Default::default()
         };

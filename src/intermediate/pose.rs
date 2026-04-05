@@ -84,7 +84,7 @@ fn compute_astance_corrections(
             let current_angle = dir.dot(horizontal).clamp(-1.0, 1.0).acos().to_degrees();
             if current_angle > A_STANCE_ANGLE_DEG - 5.0 && dir.y < 0.0 {
                 log::info!(
-                    "Aスタンス変換: {} は既にAスタンスに近い（{:.1}°）、スキップ",
+                    "A-stance conversion: {} already near A-stance ({:.1} deg), skipping",
                     upper,
                     current_angle
                 );
@@ -100,7 +100,7 @@ fn compute_astance_corrections(
             let correction = glam::Quat::from_axis_angle(axis, A_STANCE_ANGLE_DEG.to_radians());
 
             log::info!(
-                "Aスタンス変換: {} を {:.1}° 回転してAスタンスに変換",
+                "A-stance conversion: {} rotated {:.1} deg to A-stance",
                 upper,
                 A_STANCE_ANGLE_DEG
             );
@@ -427,7 +427,7 @@ fn compute_tstance_corrections(bones: &[IrBone]) -> (Vec<AStanceCorrection>, ASt
             let current_angle = dir.dot(horizontal).clamp(-1.0, 1.0).acos();
             if current_angle < 5.0f32.to_radians() {
                 log::info!(
-                    "A→T変換: {} は既に水平に近い（{:.1}°）、スキップ",
+                    "A->T conversion: {} already near horizontal ({:.1} deg), skipping",
                     bones[ua_idx].name,
                     current_angle.to_degrees()
                 );
@@ -445,7 +445,7 @@ fn compute_tstance_corrections(bones: &[IrBone]) -> (Vec<AStanceCorrection>, ASt
             let correction = glam::Quat::from_axis_angle(axis, -current_angle);
 
             log::info!(
-                "A→T変換: {} を {:.1}° 回転してTスタンスに変換",
+                "A->T conversion: {} rotated {:.1} deg to T-stance",
                 bones[ua_idx].name,
                 current_angle.to_degrees()
             );

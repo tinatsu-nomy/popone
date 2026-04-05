@@ -53,7 +53,7 @@ pub fn load_unity_anim_with_params(
 
     let mode_name = if has_params { "params" } else { "fallback" };
     log::info!(
-        "Unity .anim読み込み: '{}' ボーン{}ch, {:.2}秒, muscle_scale={:.2}, mode={}",
+        "Unity .anim loaded: '{}' bone {}ch, {:.2}s, muscle_scale={:.2}, mode={}",
         name,
         bone_channels.len(),
         parsed.duration,
@@ -252,7 +252,7 @@ fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
     }
 
     log::info!(
-        "Unity .animパース完了: カーブ{}本, duration={:.2}秒",
+        "Unity .anim parse complete: {} curves, duration={:.2}s",
         float_curves.len(),
         duration,
     );
@@ -720,7 +720,7 @@ pub fn load_humanoid_params(path: &Path) -> Result<HumanoidParams> {
     }
 
     log::info!(
-        "Humanoidパラメータ読み込み: {}ボーン, {}muscle",
+        "Humanoid params loaded: {} bones, {} muscles",
         bones.len(),
         muscle_ranges.len()
     );
@@ -1189,14 +1189,14 @@ mod tests {
             r"E:\misc\nomy\vrm_view\tmp\unitypackage\KizunaAI_KAMATTE_VRM&Motion\Assets\KizunaAI\KizunaAI_KAMATTE\Motion\KizunaAI_KAMATTE_Kamacho_Motion.anim",
         );
         if !path.exists() {
-            eprintln!("テストファイルが見つからない: {}", path.display());
+            eprintln!("Test file not found: {}", path.display());
             return;
         }
         let _ = env_logger::try_init();
-        let anim = load_unity_anim(path, 1.0).expect("Unity .anim読み込み失敗");
-        eprintln!("アニメ名: {}", anim.name);
-        eprintln!("duration: {:.2}秒", anim.duration);
-        eprintln!("ボーンch数: {}", anim.bone_channels.len());
+        let anim = load_unity_anim(path, 1.0).expect("Unity .anim load failed");
+        eprintln!("Anim name: {}", anim.name);
+        eprintln!("Duration: {:.2}s", anim.duration);
+        eprintln!("Bone channels: {}", anim.bone_channels.len());
         for (name, ch) in &anim.bone_channels {
             eprintln!(
                 "  {} : rot={}kf, trans={}kf",

@@ -104,7 +104,7 @@ pub fn try_send_to_existing(file_path: Option<&Path>) -> InstanceCheck {
     unsafe {
         let h_mutex = CreateMutexW(std::ptr::null_mut(), 0, mutex_name.as_ptr());
         if h_mutex.is_null() {
-            eprintln!("CreateMutexW 失敗（シングルインスタンス検出スキップ）");
+            eprintln!("CreateMutexW failed (skipping single instance detection)");
             return InstanceCheck::Primary;
         }
 
@@ -122,7 +122,7 @@ pub fn try_send_to_existing(file_path: Option<&Path>) -> InstanceCheck {
 
         // パイプがまだ作成されていない場合に備えて最大3秒待機
         if WaitNamedPipeW(pipe_name.as_ptr(), 3000) == 0 {
-            eprintln!("WaitNamedPipeW タイムアウト（既存インスタンスのパイプ未準備）");
+            eprintln!("WaitNamedPipeW timeout (existing instance pipe not ready)");
             return InstanceCheck::FallbackStart;
         }
 
@@ -136,7 +136,7 @@ pub fn try_send_to_existing(file_path: Option<&Path>) -> InstanceCheck {
             std::ptr::null_mut(),
         );
         if h_pipe == INVALID_HANDLE_VALUE {
-            eprintln!("パイプ接続失敗（既存インスタンスに送信できません）");
+            eprintln!("Pipe connection failed (cannot send to existing instance)");
             return InstanceCheck::FallbackStart;
         }
 
@@ -148,7 +148,16 @@ pub fn try_send_to_existing(file_path: Option<&Path>) -> InstanceCheck {
         let payload = match file_path {
             Some(p) => {
                 let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-                abs.to_string_lossy().into_owned().into_bytes()
+                let s = abs.to_string_lossy();
+                // \\?\UNC\server\share → \\server\share, \\?\C:\... → C:\...
+                let s = if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+                    std::borrow::Cow::Owned(format!(r"\\{rest}"))
+                } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+                    std::borrow::Cow::Borrowed(rest)
+                } else {
+                    s
+                };
+                s.as_bytes().to_vec()
             }
             None => Vec::new(),
         };
@@ -191,15 +200,15 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
                     pipe_name.as_ptr(),
                     PIPE_ACCESS_INBOUND,
                     PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-                    1,    // 最大インスタンス数
-                    4096, // 出力バッファ
-                    4096, // 入力バッファ
+                    1,     // 最大インスタンス数
+                    32768, // 出力バッファ
+                    32768, // 入力バッファ
                     0,
                     std::ptr::null_mut(),
                 )
             };
             if h_pipe == INVALID_HANDLE_VALUE {
-                log::warn!("CreateNamedPipeW 失敗、リスナー終了");
+                log::warn!("CreateNamedPipeW failed, listener stopped");
                 break;
             }
 
@@ -211,7 +220,7 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
                 // SAFETY: GetLastError has no preconditions.
                 let err = unsafe { GetLastError() };
                 if err != 535 {
-                    log::warn!("ConnectNamedPipe 失敗: error={err}");
+                    log::warn!("ConnectNamedPipe failed: error={err}");
                     // SAFETY: h_pipe is a valid handle from CreateNamedPipeW.
                     unsafe { CloseHandle(h_pipe) };
                     continue;
@@ -219,7 +228,7 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
             }
 
             // メッセージ読み取り
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; 32768];
             let mut bytes_read: u32 = 0;
             // SAFETY: h_pipe is a valid connected pipe handle, buf is a stack-allocated
             // array with known size, and bytes_read is a valid mutable pointer.
@@ -237,7 +246,7 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
                 // ReadFile 失敗（ERROR_MORE_DATA 等） — 無視して次の接続へ
                 // SAFETY: GetLastError has no preconditions.
                 let err = unsafe { GetLastError() };
-                log::warn!("ReadFile 失敗: error={err}");
+                log::warn!("ReadFile failed: error={err}");
             } else if bytes_read > 0 {
                 let s = String::from_utf8_lossy(&buf[..bytes_read as usize]);
                 let path = PathBuf::from(s.into_owned());

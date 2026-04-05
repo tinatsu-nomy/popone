@@ -4,9 +4,7 @@ use std::sync::Arc;
 use eframe::wgpu;
 use glam::{Mat4, Quat, Vec3};
 
-use crate::convert::coord::{
-    gltf_normal_to_pmx_unified, gltf_pos_to_pmx_unified, pmx_normal_to_gltf, pmx_pos_to_gltf,
-};
+use crate::convert::coord::PMX_SCALE;
 use crate::intermediate::animation::{BoneMatchMode, VrmaAnimation};
 use crate::intermediate::types::IrModel;
 
@@ -54,8 +52,6 @@ struct SkinningData {
     rest_local_scales: Vec<Vec3>,
     /// ボーンの親インデックス
     bone_parents: Vec<Option<usize>>,
-    /// ボーンの子インデックスリスト
-    bone_children: Vec<Vec<usize>>,
     /// IrBone インデックス → VRM ヒューマノイドボーン名（逆引き）
     bone_idx_to_name: HashMap<usize, String>,
     /// VRM 表情名 → モーフインデックス
@@ -100,12 +96,24 @@ pub struct AnimationState {
     work_computed: Vec<bool>,
     /// ボーンローカル行列の作業バッファ（付与処理用、毎フレーム alloc 回避）
     work_local_mats: Vec<Mat4>,
+    /// 表情チャネル名 → モーフインデックスの事前マッピング（毎フレームの HashMap 走査回避）
+    expr_mapping: Vec<(String, usize)>,
 }
 
 impl AnimationState {
     /// IrModel と GpuModel からアニメーション再生状態を構築
     pub fn new(animation: Arc<VrmaAnimation>, ir: &IrModel, gpu_model: &GpuModel) -> Self {
         let skin = build_skinning_data(ir, gpu_model, &animation);
+        // 表情チャネル名 → モーフインデックスの事前マッピングを構築（毎フレームの HashMap 走査回避）
+        let expr_mapping: Vec<(String, usize)> = animation
+            .expression_channels
+            .keys()
+            .filter_map(|name| {
+                skin.expr_name_to_morph
+                    .get(name.as_str())
+                    .map(|&idx| (name.clone(), idx))
+            })
+            .collect();
         Self {
             animation,
             playing: true,
@@ -119,6 +127,7 @@ impl AnimationState {
             work_computed: vec![false; skin.rest_global_mats.len()],
             work_local_mats: vec![Mat4::IDENTITY; skin.rest_global_mats.len()],
             cached_animated_globals: skin.rest_global_mats.clone(),
+            expr_mapping,
             skin,
         }
     }
@@ -197,17 +206,15 @@ impl AnimationState {
     /// 戻り値: 何か変更があったか
     pub fn apply_expressions(&self, morph_weights: &mut [f32]) -> bool {
         let mut changed = false;
-        for expr_name in self.animation.expression_channels.keys() {
-            if let Some(&morph_idx) = self.skin.expr_name_to_morph.get(expr_name.as_str()) {
-                if morph_idx < morph_weights.len() {
-                    let w = self
-                        .animation
-                        .sample_expression(expr_name, self.current_time)
-                        .unwrap_or(0.0);
-                    if (morph_weights[morph_idx] - w).abs() > 1e-6 {
-                        morph_weights[morph_idx] = w;
-                        changed = true;
-                    }
+        for (expr_name, morph_idx) in &self.expr_mapping {
+            if *morph_idx < morph_weights.len() {
+                let w = self
+                    .animation
+                    .sample_expression(expr_name, self.current_time)
+                    .unwrap_or(0.0);
+                if (morph_weights[*morph_idx] - w).abs() > 1e-6 {
+                    morph_weights[*morph_idx] = w;
+                    changed = true;
                 }
             }
         }
@@ -230,22 +237,24 @@ impl AnimationState {
         gpu_model: &mut GpuModel,
         queue: &wgpu::Queue,
         morph_weights: &[f32],
+        ir: &IrModel,
     ) {
         // グローバル行列を in-place で計算（alloc 回避）
-        self.compute_animated_globals_inplace();
+        self.compute_animated_globals_inplace(ir);
 
         // 付与（grant）処理: 付与親の回転/移動をコピー
         self.apply_grants();
 
-        // デルタ行列を作業バッファに計算（alloc 回避、逆行列はキャッシュ済み）
+        // デルタ行列を作業バッファに計算し、PMX座標系に事前変換（alloc 回避）
+        // M * delta * M でPMX空間のデルタ行列を得る（M はミラー行列、M² = I）
+        // これにより頂点ループ内の pmx_pos_to_gltf / gltf_pos_to_pmx 変換を排除
         let bone_count = self.skin.rest_global_mats.len();
         self.work_deltas.resize(bone_count, Mat4::IDENTITY);
-        for i in 0..bone_count {
-            self.work_deltas[i] =
-                self.cached_animated_globals[i] * self.skin.rest_global_inv_mats[i];
-        }
-
         let is_vrm0 = self.skin.is_vrm0;
+        for i in 0..bone_count {
+            let delta = self.cached_animated_globals[i] * self.skin.rest_global_inv_mats[i];
+            self.work_deltas[i] = conjugate_delta_to_pmx(delta, is_vrm0);
+        }
 
         // 頂点バッファを再利用（初回のみ alloc、以降は capacity 再利用）
         gpu_model.reset_animated_to_base();
@@ -275,28 +284,22 @@ impl AnimationState {
                     blended *= 1.0 / total_w;
                 }
 
-                // PMX位置 → glTF位置 → デルタ適用 → PMX位置
+                // デルタ行列はPMX空間に事前変換済み → 直接適用
                 let pmx_pos = Vec3::from(work[vi].position);
-                let gltf_pos = pmx_pos_to_gltf(pmx_pos, is_vrm0);
-                let new_pmx = gltf_pos_to_pmx_unified(blended.transform_point3(gltf_pos), is_vrm0);
-                work[vi].position = new_pmx.to_array();
+                work[vi].position = blended.transform_point3(pmx_pos).to_array();
 
-                // 法線
+                // 法線（PMX空間で直接変換）
                 let pmx_normal = Vec3::from(work[vi].normal);
-                let gltf_normal = pmx_normal_to_gltf(pmx_normal, is_vrm0);
-                let skinned_n = blended.transform_vector3(gltf_normal).normalize_or_zero();
-                let new_pmx_n = gltf_normal_to_pmx_unified(skinned_n, is_vrm0);
-                work[vi].normal = new_pmx_n.to_array();
+                let skinned_n = blended.transform_vector3(pmx_normal).normalize_or_zero();
+                work[vi].normal = skinned_n.to_array();
 
-                // 接線（tangent.w = handedness は変更しない）
+                // 接線（tangent.w = handedness は変更しない、PMX空間で直接変換）
                 let pmx_tangent = Vec3::from_slice(&work[vi].tangent[..3]);
-                let gltf_tangent = pmx_normal_to_gltf(pmx_tangent, is_vrm0);
-                let skinned_t = blended.transform_vector3(gltf_tangent).normalize_or_zero();
+                let skinned_t = blended.transform_vector3(pmx_tangent).normalize_or_zero();
                 // Gram-Schmidt 再直交化: normal に対して tangent を直交射影
                 let t_ortho =
                     (skinned_t - skinned_n * skinned_n.dot(skinned_t)).normalize_or_zero();
-                let new_pmx_t = gltf_normal_to_pmx_unified(t_ortho, is_vrm0);
-                work[vi].tangent = [new_pmx_t.x, new_pmx_t.y, new_pmx_t.z, work[vi].tangent[3]];
+                work[vi].tangent = [t_ortho.x, t_ortho.y, t_ortho.z, work[vi].tangent[3]];
             }
         } // work の可変借用をここでドロップ
 
@@ -397,7 +400,7 @@ impl AnimationState {
     }
 
     /// VRMA のキーフレームからボーンのグローバル行列を in-place 計算（alloc 回避）
-    fn compute_animated_globals_inplace(&mut self) {
+    fn compute_animated_globals_inplace(&mut self, ir: &IrModel) {
         let bone_count = self.skin.rest_global_mats.len();
         self.cached_animated_globals
             .resize(bone_count, Mat4::IDENTITY);
@@ -421,6 +424,7 @@ impl AnimationState {
                     &mut self.cached_animated_globals,
                     &mut self.work_computed,
                     &mut self.work_local_mats,
+                    &ir.bones,
                 );
             }
         }
@@ -435,6 +439,7 @@ impl AnimationState {
         globals: &mut [Mat4],
         computed: &mut [bool],
         local_mats: &mut [Mat4],
+        bones: &[crate::intermediate::types::IrBone],
     ) {
         if computed[bone_idx] {
             return;
@@ -598,7 +603,7 @@ impl AnimationState {
         }
 
         // 子ボーンを再帰処理
-        for &child_idx in &skin.bone_children[bone_idx] {
+        for &child_idx in &bones[bone_idx].children {
             Self::compute_global_recursive_static(
                 skin,
                 animation,
@@ -608,6 +613,7 @@ impl AnimationState {
                 globals,
                 computed,
                 local_mats,
+                bones,
             );
         }
     }
@@ -653,7 +659,6 @@ fn build_skinning_data(
     let mut rest_local_translations = vec![Vec3::ZERO; bone_count];
     let mut rest_local_scales = vec![Vec3::ONE; bone_count];
     let bone_parents: Vec<Option<usize>> = ir.bones.iter().map(|b| b.parent).collect();
-    let bone_children: Vec<Vec<usize>> = ir.bones.iter().map(|b| b.children.clone()).collect();
     let rest_global_mats: Vec<Mat4> = ir.bones.iter().map(|b| b.global_mat).collect();
     let rest_global_inv_mats: Vec<Mat4> = rest_global_mats.iter().map(|m| m.inverse()).collect();
 
@@ -703,13 +708,15 @@ fn build_skinning_data(
             // マッチしなかったチャネルをファジーマッチ（サフィックス一致）
             let matched_names: std::collections::HashSet<String> =
                 bone_name_to_idx.keys().cloned().collect();
+            let mut used_indices: std::collections::HashSet<usize> =
+                bone_name_to_idx.values().copied().collect();
             for anim_name in &anim_bone_names {
                 if matched_names.contains(*anim_name) {
                     continue;
                 }
                 // "Armature_Hips" → "Hips" のようなサフィックスマッチ
                 for (i, bone) in ir.bones.iter().enumerate() {
-                    if bone_name_to_idx.values().any(|&idx| idx == i) {
+                    if used_indices.contains(&i) {
                         continue;
                     }
                     let matches = anim_name.ends_with(&bone.name_en)
@@ -718,13 +725,14 @@ fn build_skinning_data(
                         || bone.name.ends_with(anim_name);
                     if matches {
                         bone_name_to_idx.insert(anim_name.to_string(), i);
+                        used_indices.insert(i);
                         break;
                     }
                 }
             }
 
             log::info!(
-                "ボーンマッチング: {}/{}ch マッチ",
+                "Bone matching: {}/{}ch matched",
                 bone_name_to_idx.len(),
                 animation.bone_channels.len(),
             );
@@ -779,7 +787,10 @@ fn build_skinning_data(
             let grant_set: std::collections::HashSet<usize> = has_grant.iter().copied().collect();
             let mut in_degree: HashMap<usize, usize> = has_grant.iter().map(|&i| (i, 0)).collect();
             for &i in &has_grant {
-                let gp = grants[i].as_ref().unwrap().parent_index;
+                let Some(grant) = grants[i].as_ref() else {
+                    continue;
+                };
+                let gp = grant.parent_index;
                 if grant_set.contains(&gp) {
                     *in_degree.entry(i).or_default() += 1;
                 }
@@ -794,8 +805,10 @@ fn build_skinning_data(
                 order.push(i);
                 // i を付与親とするボーンの入次数を減らす
                 for &j in &has_grant {
-                    if grants[j].as_ref().unwrap().parent_index == i {
-                        let deg = in_degree.get_mut(&j).unwrap();
+                    if grants[j].as_ref().is_some_and(|g| g.parent_index == i) {
+                        let Some(deg) = in_degree.get_mut(&j) else {
+                            continue;
+                        };
                         *deg -= 1;
                         if *deg == 0 {
                             queue.push_back(j);
@@ -806,7 +819,7 @@ fn build_skinning_data(
             // 循環参照がある場合はフォールバック（残りをインデックス順で追加）
             if order.len() < has_grant.len() {
                 log::warn!(
-                    "付与依存に循環参照あり: {} 本中 {} 本が未解決",
+                    "Grant dependency has circular reference: {} of {} bones unresolved",
                     has_grant.len(),
                     has_grant.len() - order.len()
                 );
@@ -831,7 +844,6 @@ fn build_skinning_data(
         rest_local_translations,
         rest_local_scales,
         bone_parents,
-        bone_children,
         bone_idx_to_name,
         expr_name_to_morph,
         is_vrm0: ir.source_format.is_vrm0(),
@@ -840,5 +852,47 @@ fn build_skinning_data(
     }
 }
 
-// 座標変換関数は crate::convert::coord に統一
-// pmx_pos_to_gltf, gltf_pos_to_pmx_unified, pmx_normal_to_gltf, gltf_normal_to_pmx_unified
+/// デルタ行列を glTF 空間から PMX 空間に変換する。
+///
+/// 元の変換: gltf_pos_to_pmx(delta.transform_point3(pmx_pos_to_gltf(pmx_pos)))
+/// = S * M * (R * M * p / S + t) = M * R * M * p + S * M * t
+///
+/// ここで R = delta の 3x3 回転部分、t = delta の平行移動、
+/// M = ミラー行列（自己逆行列）、S = PMX_SCALE。
+///
+/// PMX空間デルタ行列の構成:
+/// - 3x3 部分: M * R * M（共役変換、S と 1/S が打ち消し合う）
+/// - 平行移動: S * M * t（glTFメートル単位をPMXスケールに変換 + ミラー）
+///
+/// 3x3 部分は符号反転のみ、平行移動は符号反転 + スケール乗算で計算できる。
+/// VRM 1.0: M = diag(1,1,-1), VRM 0.0: M = diag(-1,1,1)
+///
+/// glam は列優先で `c[col][row]` のレイアウト。
+/// M*R*M の行i列j = mi * R[i][j] * mj（mi はミラー対角要素）
+#[inline]
+fn conjugate_delta_to_pmx(delta: Mat4, is_vrm0: bool) -> Mat4 {
+    let c = delta.to_cols_array_2d(); // c[col][row]
+    if is_vrm0 {
+        // M = diag(-1, 1, 1)
+        // 3x3: 行0と列0の符号反転（[0][0]は2回で戻る）
+        // 平行移動 (c[3][0..3]): M*t*S = (-tx*S, ty*S, tz*S)
+        let s = PMX_SCALE;
+        Mat4::from_cols_array_2d(&[
+            [c[0][0], -c[0][1], -c[0][2], c[0][3]],
+            [-c[1][0], c[1][1], c[1][2], c[1][3]],
+            [-c[2][0], c[2][1], c[2][2], c[2][3]],
+            [-c[3][0] * s, c[3][1] * s, c[3][2] * s, c[3][3]],
+        ])
+    } else {
+        // M = diag(1, 1, -1)
+        // 3x3: 行2と列2の符号反転（[2][2]は2回で戻る）
+        // 平行移動 (c[3][0..3]): M*t*S = (tx*S, ty*S, -tz*S)
+        let s = PMX_SCALE;
+        Mat4::from_cols_array_2d(&[
+            [c[0][0], c[0][1], -c[0][2], c[0][3]],
+            [c[1][0], c[1][1], -c[1][2], c[1][3]],
+            [-c[2][0], -c[2][1], c[2][2], c[2][3]],
+            [c[3][0] * s, c[3][1] * s, -c[3][2] * s, c[3][3]],
+        ])
+    }
+}

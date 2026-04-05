@@ -16,7 +16,7 @@ struct BloomParams {
 
 /// ダウンサンプルチェーン + composite 出力のテクスチャキャッシュ
 struct BloomTextures {
-    /// levels[i] = 1/(2^(i+1)) 解像度 (Rgba8Unorm, linear)
+    /// levels[i] = 1/(2^(i+1)) 解像度 (Rgba16Float, linear)
     levels: Vec<(wgpu::Texture, wgpu::TextureView)>,
     /// Composite 出力（メインと同サイズ、Rgba8UnormSrgb）
     _composite: wgpu::Texture,
@@ -41,7 +41,7 @@ pub struct BloomPass {
     /// composite BGL (scene texture + bloom texture + sampler)
     composite_bgl: wgpu::BindGroupLayout,
     /// params uniform BGL
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     params_bgl: wgpu::BindGroupLayout,
     /// Bright extract 用 params (is_first_pass=1.0)
     params_buf_extract: wgpu::Buffer,
@@ -51,10 +51,14 @@ pub struct BloomPass {
     params_bg_blur: wgpu::BindGroup,
     sampler: wgpu::Sampler,
     textures: Option<BloomTextures>,
+    /// down0 パス用 BindGroup キャッシュ（外部 bloom_input テクスチャ依存）
+    cached_down0_bind_group: Option<wgpu::BindGroup>,
+    /// composite パス用 BindGroup キャッシュ（外部 scene_view テクスチャ依存）
+    cached_composite_bind_group: Option<wgpu::BindGroup>,
 }
 
-/// Bloom 中間バッファのフォーマット（linear 空間で blur 演算するため Unorm）
-const BLOOM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+/// Bloom 中間バッファのフォーマット（linear 空間で blur 演算、HDR 精度確保のため f16）
+const BLOOM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// Composite 出力のフォーマット（egui 表示用、offscreen と同じ）
 const COMPOSITE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// ダウンサンプル最大段数
@@ -161,7 +165,7 @@ fn fs_composite(in: VsOut) -> @location(0) vec4<f32> {
 
 /// PMX/PMD 材質の Bloom 判定。`(bloom_emissive, bloom_strength)` を返す。
 /// `bloom_strength == 0.0` なら非 Bloom 対象。
-/// bloom_emissive の各成分は 0.0-1.0 にクランプ（MRT/中間バッファが Rgba8Unorm のため）。
+/// bloom_emissive の各成分は 0.0-1.0 にクランプ（MRT bloom 出力が Rgba8Unorm のため）。
 pub fn derive_pmx_bloom(mat: &IrMaterial) -> ([f32; 3], f32) {
     if mat.specular == Vec3::ZERO && mat.specular_power >= 100.0 {
         let strength = ((mat.specular_power - 100.0) / 10.0).max(0.0);
@@ -318,7 +322,7 @@ impl BloomPass {
             compilation_options: Default::default(),
         };
 
-        // --- Downsample pipeline (output: Rgba8Unorm) ---
+        // --- Downsample pipeline (output: Rgba16Float) ---
         let downsample_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("bloom_downsample"),
             layout: Some(&down_up_layout),
@@ -343,7 +347,7 @@ impl BloomPass {
             cache: None,
         });
 
-        // --- Upsample pipeline (output: Rgba8Unorm, additive blend) ---
+        // --- Upsample pipeline (output: Rgba16Float, additive blend) ---
         let upsample_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("bloom_upsample"),
             layout: Some(&down_up_layout),
@@ -417,7 +421,16 @@ impl BloomPass {
             params_bg_blur,
             sampler,
             textures: None,
+            cached_down0_bind_group: None,
+            cached_composite_bind_group: None,
         }
+    }
+
+    /// 外部テクスチャ（offscreen）依存の BindGroup キャッシュを無効化する。
+    /// offscreen テクスチャが再作成された時に呼ぶこと。
+    pub fn invalidate_external_cache(&mut self) {
+        self.cached_down0_bind_group = None;
+        self.cached_composite_bind_group = None;
     }
 
     /// Bloom テクスチャを確保（サイズ・段数変更時に再作成）
@@ -437,7 +450,11 @@ impl BloomPass {
             }
         }
 
-        // ダウンサンプルチェーン (Rgba8Unorm, linear)
+        // テクスチャ再作成に伴い外部依存キャッシュも無効化
+        self.cached_down0_bind_group = None;
+        self.cached_composite_bind_group = None;
+
+        // ダウンサンプルチェーン (Rgba16Float, linear)
         let mut levels: Vec<(wgpu::Texture, wgpu::TextureView)> = Vec::with_capacity(num_levels);
         let mut w = width / 2;
         let mut h = height / 2;
@@ -554,42 +571,58 @@ impl BloomPass {
     ) -> &'a wgpu::TextureView {
         let num_levels = num_levels.clamp(1, MAX_LEVELS);
         self.ensure_textures(device, width, height, num_levels);
-        let textures = self.textures.as_ref().unwrap();
 
-        // 外部ビュー依存の bind group を毎フレーム作成
-        // （MSAA 切り替え等で offscreen テクスチャが再作成されるため、キャッシュ不可）
-        let down0_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("bloom_down_bg_0"),
-            layout: &self.tex_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(bloom_input),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-        let composite_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("bloom_composite_bg"),
-            layout: &self.composite_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(scene_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&textures.levels[0].1),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
+        // 外部ビュー依存の bind group をキャッシュから取得、無ければ作成
+        if self.cached_down0_bind_group.is_none() {
+            self.cached_down0_bind_group =
+                Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("bloom_down_bg_0"),
+                    layout: &self.tex_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(bloom_input),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                }));
+        }
+        if self.cached_composite_bind_group.is_none() {
+            let level0_view = &self
+                .textures
+                .as_ref()
+                .expect("ensure_textures で初期化済み")
+                .levels[0]
+                .1;
+            self.cached_composite_bind_group =
+                Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("bloom_composite_bg"),
+                    layout: &self.composite_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(scene_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(level0_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                }));
+        }
+        let down0_bind_group = self.cached_down0_bind_group.as_ref().unwrap();
+        let composite_bind_group = self.cached_composite_bind_group.as_ref().unwrap();
+        let textures = self
+            .textures
+            .as_ref()
+            .expect("ensure_textures で初期化済み");
 
         // Uniform 更新
         let extract_params = BloomParams {
@@ -614,7 +647,7 @@ impl BloomPass {
         // --- Downsample chain ---
         for i in 0..num_levels {
             let (params_bg, down_bg) = if i == 0 {
-                (&self.params_bg_extract, &down0_bind_group)
+                (&self.params_bg_extract, down0_bind_group)
             } else {
                 (
                     &self.params_bg_blur,
@@ -679,12 +712,16 @@ impl BloomPass {
                 ..Default::default()
             });
             pass.set_pipeline(&self.composite_pipeline);
-            pass.set_bind_group(0, &composite_bind_group, &[]);
+            pass.set_bind_group(0, composite_bind_group, &[]);
             pass.set_bind_group(1, &self.params_bg_blur, &[]);
             pass.draw(0..3, 0..1);
         }
 
-        &self.textures.as_ref().unwrap().composite_view
+        &self
+            .textures
+            .as_ref()
+            .expect("execute 内で ensure_textures 呼び出し済み")
+            .composite_view
     }
 
     /// Composite 結果の TextureView（bloom 有効時に egui に登録するビュー）

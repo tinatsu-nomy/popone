@@ -26,13 +26,15 @@ impl TextureSearchCache {
             let mut map = HashMap::new();
             collect_files(search_root, &mut map, 0);
             log::debug!(
-                "テクスチャ検索キャッシュ構築: {} ファイル (root={})",
+                "Texture search cache built: {} files (root={})",
                 map.len(),
                 search_root.display()
             );
             self.map = Some(map);
         }
-        self.map.as_ref().unwrap()
+        self.map
+            .as_ref()
+            .expect("map は直前の is_none 分岐で必ず初期化済み")
     }
 
     fn lookup(&mut self, fbx_dir: &Path, basename: &str) -> Option<PathBuf> {
@@ -180,7 +182,7 @@ pub fn extract_texture_for_material(
     let basename = file_basename?;
     if let Some(found) = search_cache.lookup(fbx_dir, &basename) {
         log::info!(
-            "テクスチャ '{}' を近傍検索で発見: {}",
+            "Texture '{}' found by proximity search: {}",
             basename,
             found.display()
         );
@@ -189,15 +191,12 @@ pub fn extract_texture_for_material(
                 return Some(tex);
             }
         }
-        log::warn!(
-            "テクスチャ '{}' はファイルとして存在しますがデコードに失敗しました",
-            basename
-        );
+        log::warn!("Texture '{}' exists as file but decoding failed", basename);
         return None;
     }
 
     log::warn!(
-        "テクスチャ '{}' が見つかりません (FBXディレクトリ近傍を検索済み)",
+        "Texture '{}' not found (searched near FBX directory)",
         basename
     );
     None
@@ -231,7 +230,7 @@ fn decode_image_data_with_ext(
                 });
             }
             Err(e) => {
-                log::warn!("PSD デコード失敗 '{}': {}", name, e);
+                log::warn!("PSD decode failed '{}': {}", name, e);
                 return None;
             }
         }
@@ -271,7 +270,7 @@ fn decode_image_data_with_ext(
                 }
                 Err(e) => {
                     log::warn!(
-                        "テクスチャ '{}' のデコード失敗 (format={:?}): {}",
+                        "Texture '{}' decode failed (format={:?}): {}",
                         name,
                         format,
                         e
@@ -282,6 +281,6 @@ fn decode_image_data_with_ext(
         }
     }
 
-    log::warn!("テクスチャ '{}' のフォーマットを判別できません", name);
+    log::warn!("Cannot determine format of texture '{}'", name);
     None
 }

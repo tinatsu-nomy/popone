@@ -9,6 +9,11 @@ use super::export_filter::build_filtered_ir;
 use super::gpu::{DrawMode, LightMode, ShaderSelection};
 use crate::intermediate::types::CullMode;
 
+/// ダークテーマのパネル背景色 (#1D1D1D)
+const DARK_PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x1D, 0x1D);
+/// ダークテーマのボーダー色 (#333333)
+const DARK_BORDER_COLOR: egui::Color32 = egui::Color32::from_rgb(0x33, 0x33, 0x33);
+
 /// 材質パネルからのテクスチャ割り当てリクエスト
 enum TexAssignRequest {
     /// ファイルダイアログから選択
@@ -21,8 +26,8 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
     // テクスチャ割り当てリクエスト（借用制約回避のためパネル外で処理）
     let mut tex_assign_request: Option<TexAssignRequest> = None;
 
-    let dark_panel = egui::Color32::from_rgb(0x1D, 0x1D, 0x1D);
-    let dark_border = egui::Stroke::new(1.0, egui::Color32::from_rgb(0x33, 0x33, 0x33));
+    let dark_panel = DARK_PANEL_BG;
+    let dark_border = egui::Stroke::new(1.0, DARK_BORDER_COLOR);
     let panel_frame = egui::Frame::new()
         .fill(dark_panel)
         .stroke(dark_border)
@@ -274,7 +279,9 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             ui.label("読み込むファイルを選択してください。");
             ui.separator();
             // クロージャ内で pending を再借用（名前の String clone を回避）
-            let pending = app.pending.unity_pkg.as_ref().unwrap();
+            let Some(pending) = app.pending.unity_pkg.as_ref() else {
+                return;
+            };
             egui::ScrollArea::vertical()
                 .max_height(300.0)
                 .show(ui, |ui| {
@@ -338,7 +345,9 @@ fn show_archive_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             ui.label("読み込むファイルを選択してください。");
             ui.separator();
             // クロージャ内で pending を再借用（PathBuf/String clone を回避）
-            let pending = app.pending.archive.as_ref().unwrap();
+            let Some(pending) = app.pending.archive.as_ref() else {
+                return;
+            };
             egui::ScrollArea::vertical()
                 .max_height(300.0)
                 .show(ui, |ui| {
@@ -913,20 +922,18 @@ pub fn execute_conversion(app: &mut ViewerApp) {
         .unwrap_or(0);
 
     // 法線が変更されている場合、IrModel に書き戻して変換（変換後に元の法線を復元）
-    let normals_modified = app.smooth_normals_per_mat.iter().any(|&v| v)
-        || app.clear_normals_per_mat.iter().any(|&v| v);
+    let normals_modified = app.material_display.iter().any(|d| d.smooth_normals)
+        || app.material_display.iter().any(|d| d.clear_normals);
     // 元の法線を保存（復元用）
     let saved_normals: Option<Vec<Vec<glam::Vec3>>> = if normals_modified {
-        Some(
-            app.loaded
-                .as_ref()
-                .unwrap()
+        app.loaded.as_ref().map(|loaded| {
+            loaded
                 .ir
                 .meshes
                 .iter()
                 .map(|m| m.vertices.iter().map(|v| v.normal).collect())
-                .collect(),
-        )
+                .collect()
+        })
     } else {
         None
     };
@@ -957,7 +964,7 @@ pub fn execute_conversion(app: &mut ViewerApp) {
             .collect();
 
         log::info!(
-            "表示材質のみ出力: {}/{} 材質を出力",
+            "Exporting visible materials only: {}/{} materials",
             visible_mat_indices.len(),
             &loaded.ir.materials.len()
         );
@@ -1064,14 +1071,15 @@ pub fn execute_conversion(app: &mut ViewerApp) {
 /// 数値をカンマ区切りでフォーマット (例: 34059 → "34,059")
 fn format_number(n: usize) -> String {
     let s = n.to_string();
-    let mut result = String::with_capacity(s.len() + s.len() / 3);
-    for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
+    let len = s.len();
+    let mut result = String::with_capacity(len + (len.saturating_sub(1)) / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
             result.push(',');
         }
         result.push(c);
     }
-    result.chars().rev().collect()
+    result
 }
 
 /// メタ情報をセクションごとに折り畳み可能な Grid で表示
@@ -1526,21 +1534,23 @@ fn show_tab_display(
     ui.add_enabled_ui(!has_mmd_normals, |ui| {
         // 法線平滑化 一括
         {
-            let all_on = !app.smooth_normals_per_mat.is_empty()
-                && app.smooth_normals_per_mat.iter().all(|&v| v);
+            let all_on = !app.material_display.is_empty()
+                && app.material_display.iter().all(|d| d.smooth_normals);
             let mut checked = all_on;
             let resp = ui.checkbox(&mut checked, "法線平滑化（一括）");
-            if resp.changed() && app.loaded.is_some() {
-                let ir_mats = &app.loaded.as_ref().unwrap().ir.materials;
-                for (i, v) in app.smooth_normals_per_mat.iter_mut().enumerate() {
-                    // 法線マップ付き材質はスキップ
-                    if ir_mats.get(i).is_some_and(|m| m.normal_texture.is_some()) {
-                        *v = false;
-                    } else {
-                        *v = checked;
+            if resp.changed() {
+                if let Some(ref loaded) = app.loaded {
+                    let ir_mats = &loaded.ir.materials;
+                    for (i, d) in app.material_display.iter_mut().enumerate() {
+                        // 法線マップ付き材質はスキップ
+                        if ir_mats.get(i).is_some_and(|m| m.normal_texture.is_some()) {
+                            d.smooth_normals = false;
+                        } else {
+                            d.smooth_normals = checked;
+                        }
                     }
+                    app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                 }
-                app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
             }
             if has_mmd_normals {
                 resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
@@ -1548,20 +1558,22 @@ fn show_tab_display(
         }
         // カスタム法線クリア 一括
         {
-            let all_on = !app.clear_normals_per_mat.is_empty()
-                && app.clear_normals_per_mat.iter().all(|&v| v);
+            let all_on = !app.material_display.is_empty()
+                && app.material_display.iter().all(|d| d.clear_normals);
             let mut checked = all_on;
             let resp = ui.checkbox(&mut checked, "カスタム法線クリア（一括）");
-            if resp.changed() && app.loaded.is_some() {
-                let ir_mats = &app.loaded.as_ref().unwrap().ir.materials;
-                for (i, v) in app.clear_normals_per_mat.iter_mut().enumerate() {
-                    if ir_mats.get(i).is_some_and(|m| m.normal_texture.is_some()) {
-                        *v = false;
-                    } else {
-                        *v = checked;
+            if resp.changed() {
+                if let Some(ref loaded) = app.loaded {
+                    let ir_mats = &loaded.ir.materials;
+                    for (i, d) in app.material_display.iter_mut().enumerate() {
+                        if ir_mats.get(i).is_some_and(|m| m.normal_texture.is_some()) {
+                            d.clear_normals = false;
+                        } else {
+                            d.clear_normals = checked;
+                        }
                     }
+                    app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                 }
-                app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
             }
             if has_mmd_normals {
                 resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
@@ -1750,7 +1762,9 @@ fn show_tab_display(
                 {
                     let all_on = !group_mat_idxs.is_empty()
                         && group_mat_idxs.iter().all(|&mi| {
-                            app.smooth_normals_per_mat.get(mi).copied().unwrap_or(false)
+                            app.material_display
+                                .get(mi)
+                                .is_some_and(|d| d.smooth_normals)
                         });
                     let resp = ui.add_enabled(
                         !group_mat_idxs.is_empty(),
@@ -1759,8 +1773,8 @@ fn show_tab_display(
                     if resp.clicked() && !group_mat_idxs.is_empty() {
                         let new_val = !all_on;
                         for &mi in &group_mat_idxs {
-                            if mi < app.smooth_normals_per_mat.len() {
-                                app.smooth_normals_per_mat[mi] = new_val;
+                            if let Some(d) = app.material_display.get_mut(mi) {
+                                d.smooth_normals = new_val;
                             }
                         }
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
@@ -1770,9 +1784,11 @@ fn show_tab_display(
                 // [C] カスタム法線クリア（グループ一括）
                 {
                     let all_on = !group_mat_idxs.is_empty()
-                        && group_mat_idxs
-                            .iter()
-                            .all(|&mi| app.clear_normals_per_mat.get(mi).copied().unwrap_or(false));
+                        && group_mat_idxs.iter().all(|&mi| {
+                            app.material_display
+                                .get(mi)
+                                .is_some_and(|d| d.clear_normals)
+                        });
                     let resp = ui.add_enabled(
                         !group_mat_idxs.is_empty(),
                         egui::SelectableLabel::new(all_on, "C"),
@@ -1780,8 +1796,8 @@ fn show_tab_display(
                     if resp.clicked() && !group_mat_idxs.is_empty() {
                         let new_val = !all_on;
                         for &mi in &group_mat_idxs {
-                            if mi < app.clear_normals_per_mat.len() {
-                                app.clear_normals_per_mat[mi] = new_val;
+                            if let Some(d) = app.material_display.get_mut(mi) {
+                                d.clear_normals = new_val;
                             }
                         }
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
@@ -1798,7 +1814,7 @@ fn show_tab_display(
                     let all_on = !eligible.is_empty()
                         && eligible
                             .iter()
-                            .all(|&mi| app.normal_map_per_mat.get(mi).copied().unwrap_or(true));
+                            .all(|&mi| app.material_display.get(mi).map_or(true, |d| d.normal_map));
                     let resp = ui.add_enabled(
                         !eligible.is_empty(),
                         egui::SelectableLabel::new(all_on, "N"),
@@ -1806,8 +1822,8 @@ fn show_tab_display(
                     if resp.clicked() && !eligible.is_empty() {
                         let new_val = !all_on;
                         for &mi in &eligible {
-                            if mi < app.normal_map_per_mat.len() {
-                                app.normal_map_per_mat[mi] = new_val;
+                            if let Some(d) = app.material_display.get_mut(mi) {
+                                d.normal_map = new_val;
                             }
                         }
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
@@ -1824,7 +1840,7 @@ fn show_tab_display(
                     let all_on = !eligible.is_empty()
                         && eligible
                             .iter()
-                            .all(|&mi| app.bloom_per_mat.get(mi).copied().unwrap_or(true));
+                            .all(|&mi| app.material_display.get(mi).map_or(true, |d| d.bloom));
                     let resp = ui.add_enabled(
                         !eligible.is_empty(),
                         egui::SelectableLabel::new(all_on, "B"),
@@ -1832,8 +1848,8 @@ fn show_tab_display(
                     if resp.clicked() && !eligible.is_empty() {
                         let new_val = !all_on;
                         for &mi in &eligible {
-                            if mi < app.bloom_per_mat.len() {
-                                app.bloom_per_mat[mi] = new_val;
+                            if let Some(d) = app.material_display.get_mut(mi) {
+                                d.bloom = new_val;
                             }
                         }
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
@@ -1876,7 +1892,7 @@ fn show_tab_display(
                 }
             }
             state.show_body_indented(&header_res.response, ui, |ui| {
-                let loaded = app.loaded.as_ref().unwrap();
+                let Some(loaded) = app.loaded.as_ref() else { return };
                 let mat_tex_info = &loaded.mat_cache.tex_indices;
                 let mat_names = &loaded.mat_cache.names;
                 let mat_src_tex = &loaded.mat_cache.source_tex_names;
@@ -1991,56 +2007,56 @@ fn show_tab_display(
                 // 法線 per-material トグル（S=平滑化, C=カスタム法線クリア, N=ノーマルマップ, B=Bloom）
                 let has_nmap = mat_has_normal_map.get(mat_idx).copied().unwrap_or(false);
                 // [S][C] は常に有効（ノーマルマップと併用可: TBN 基底法線の平滑化で品質向上）
-                if mat_idx < app.smooth_normals_per_mat.len() {
-                    let old = app.smooth_normals_per_mat[mat_idx];
+                if let Some(d) = app.material_display.get(mat_idx) {
+                    let old = d.smooth_normals;
                     let resp = ui.add_enabled(
                         true,
-                        egui::SelectableLabel::new(app.smooth_normals_per_mat[mat_idx], "S"),
+                        egui::SelectableLabel::new(old, "S"),
                     );
                     if resp.clicked() {
-                        app.smooth_normals_per_mat[mat_idx] = !old;
+                        app.material_display[mat_idx].smooth_normals = !old;
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
                     if resp.hovered() { row_highlight = true; }
                     resp.on_hover_text("法線平滑化");
                 }
-                if mat_idx < app.clear_normals_per_mat.len() {
-                    let old = app.clear_normals_per_mat[mat_idx];
+                if let Some(d) = app.material_display.get(mat_idx) {
+                    let old = d.clear_normals;
                     let resp = ui.add_enabled(
                         true,
-                        egui::SelectableLabel::new(app.clear_normals_per_mat[mat_idx], "C"),
+                        egui::SelectableLabel::new(old, "C"),
                     );
                     if resp.clicked() {
-                        app.clear_normals_per_mat[mat_idx] = !old;
+                        app.material_display[mat_idx].clear_normals = !old;
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
                     if resp.hovered() { row_highlight = true; }
                     resp.on_hover_text("カスタム法線クリア");
                 }
                 // [N] ノーマルマップ ON/OFF
-                if mat_idx < app.normal_map_per_mat.len() {
-                    let old = app.normal_map_per_mat[mat_idx];
+                if let Some(d) = app.material_display.get(mat_idx) {
+                    let old = d.normal_map;
                     let resp = ui.add_enabled(
                         has_nmap,
                         egui::SelectableLabel::new(old, "N"),
                     );
                     if resp.clicked() && has_nmap {
-                        app.normal_map_per_mat[mat_idx] = !old;
+                        app.material_display[mat_idx].normal_map = !old;
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
                     if resp.hovered() { row_highlight = true; }
                     resp.on_hover_text("ノーマルマップ");
                 }
                 // [B] Bloom/Emissive ON/OFF
-                if mat_idx < app.bloom_per_mat.len() {
-                    let old = app.bloom_per_mat[mat_idx];
+                if let Some(d) = app.material_display.get(mat_idx) {
+                    let old = d.bloom;
                     let has_bloom = mat_has_bloom.get(mat_idx).copied().unwrap_or(false);
                     let resp = ui.add_enabled(
                         has_bloom,
                         egui::SelectableLabel::new(old, "B"),
                     );
                     if resp.clicked() && has_bloom {
-                        app.bloom_per_mat[mat_idx] = !old;
+                        app.material_display[mat_idx].bloom = !old;
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
                     if resp.hovered() { row_highlight = true; }
@@ -2509,7 +2525,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 // 出力ディレクトリ作成
                 if let Some(dir) = output_path.parent() {
                     if let Err(e) = std::fs::create_dir_all(dir) {
-                        log::warn!("出力ディレクトリ作成失敗: {e}");
+                        log::warn!("Failed to create output directory: {e}");
                     }
                 }
                 app.export.pmx_output_path = output_path.to_string_lossy().into_owned();
@@ -3009,23 +3025,23 @@ fn write_convert_log(
     let mut file = match std::fs::File::create(log_path) {
         Ok(f) => f,
         Err(e) => {
-            log::warn!("ログファイル作成失敗: {e}");
+            log::warn!("Failed to create log file: {e}");
             return;
         }
     };
 
-    let _ = writeln!(file, "[vrm-viewer] PMX変換ログ");
+    let _ = writeln!(file, "[vrm-viewer] PMX conversion log");
     let _ = writeln!(
         file,
-        "日時: {}",
+        "Date: {}",
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
     );
-    let _ = writeln!(file, "ソース形式: {}", ir.source_format.label());
+    let _ = writeln!(file, "Source format: {}", ir.source_format.label());
     let _ = writeln!(file);
 
     // 入力モデル情報
     let _ = writeln!(file, "=== 入力 VRM ===");
-    let _ = writeln!(file, "モデル名: {}", ir.name);
+    let _ = writeln!(file, "Model name: {}", ir.name);
     let _ = writeln!(file, "ボーン数: {}", ir.bones.len());
     let _ = writeln!(file, "頂点数: {}", ir.total_vertices());
     let _ = writeln!(file, "面数: {}", ir.total_faces());
@@ -3045,14 +3061,14 @@ fn write_convert_log(
 
     // モーフ一覧
     let _ = writeln!(file);
-    let _ = writeln!(file, "--- モーフ一覧 ---");
+    let _ = writeln!(file, "--- Morph list ---");
     for morph in &ir.morphs {
         let _ = writeln!(file, "  [panel{}] {}", morph.panel, morph.name);
     }
 
     // 材質一覧
     let _ = writeln!(file);
-    let _ = writeln!(file, "--- 材質一覧 ---");
+    let _ = writeln!(file, "--- Material list ---");
     for (i, mat) in ir.materials.iter().enumerate() {
         let _ = writeln!(
             file,

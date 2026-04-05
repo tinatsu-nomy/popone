@@ -810,7 +810,7 @@ mod tests {
         let total_face_verts: u32 = model.materials.iter().map(|m| m.face_count).sum();
         assert_eq!(total_face_verts as usize, model.faces.len() * 3);
 
-        println!("PMX読み込みテスト成功: {} ボーン={}, 頂点={}, 面={}, 材質={}, モーフ={}, 剛体={}, ジョイント={}",
+        println!("PMX load test success: {} bones={}, vertices={}, faces={}, materials={}, morphs={}, rigidbodies={}, joints={}",
             model.model_info.name,
             model.bones.len(),
             model.vertices.len(),

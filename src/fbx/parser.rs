@@ -506,7 +506,7 @@ impl<'a> AsciiParser<'a> {
                     let joined = raw_lines.join("");
                     properties = vec![FbxProperty::String(joined)];
                     log::debug!(
-                        "ASCII FBX: Content ブロック（{}行）を文字列として保持",
+                        "ASCII FBX: Content block ({} lines) stored as string",
                         raw_lines.len()
                     );
                 }

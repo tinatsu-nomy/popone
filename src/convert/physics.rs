@@ -179,7 +179,7 @@ pub fn build_physics_v0(
         if let Some(center) = group.center {
             if center >= 0 {
                 log::warn!(
-                    "BoneGroup center ノード({}) は PMX では未サポート（無視）",
+                    "BoneGroup center node ({}) is not supported in PMX (ignored)",
                     center
                 );
             }
@@ -251,7 +251,7 @@ fn build_spring_chain_v0(
     while let Some((bone_idx, parent_rigid_idx, depth)) = stack.pop() {
         if depth >= MAX_SPRING_CHAIN_DEPTH {
             log::warn!(
-                "スプリングチェーンが最大深さ({})に到達 — 打ち切り (bone={})",
+                "Spring chain reached max depth ({}) - truncated (bone={})",
                 MAX_SPRING_CHAIN_DEPTH,
                 bones.get(bone_idx).map(|b| b.name.as_str()).unwrap_or("?")
             );
@@ -444,7 +444,7 @@ pub fn build_physics_v1(
         // center ノード警告
         if let Some(center) = spring.center {
             log::warn!(
-                "Spring \"{}\" の center ノード({}) は PMX では未サポート（無視）",
+                "Spring \"{}\" center node ({}) is not supported in PMX (ignored)",
                 spring.name.as_deref().unwrap_or("?"),
                 center
             );

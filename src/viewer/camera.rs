@@ -133,20 +133,21 @@ impl OrbitCamera {
         1.0 / (FOV_DEGREES.to_radians() * 0.5).tan()
     }
 
-    /// View-Projection 行列（左手系、wgpu NDC: Z∈[0,1]）
+    /// View-Projection 行列（左手系、Reverse-Z: near→1.0, far→0.0）
     /// near/far はカメラ距離に応じて動的調整
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
         let view = self.view_matrix();
         let near = (self.distance * NEAR_FACTOR).clamp(NEAR_MIN, NEAR_MAX);
         let far = (self.distance * FAR_FACTOR).clamp(FAR_MIN, FAR_MAX);
         let proj = if self.perspective {
-            Mat4::perspective_lh(FOV_DEGREES.to_radians(), aspect, near, far)
+            // Reverse-Z: near と far を入れ替えて depth 0→far, 1→near にマッピング
+            Mat4::perspective_lh(FOV_DEGREES.to_radians(), aspect, far, near)
         } else {
-            // 正射影: 透視投影と同じ距離でのビュー高さに合わせる
+            // 正射影 Reverse-Z: near/far を入れ替え
             let fov_half = (FOV_DEGREES / 2.0).to_radians();
             let half_h = self.distance * fov_half.tan();
             let half_w = half_h * aspect;
-            Mat4::orthographic_lh(-half_w, half_w, -half_h, half_h, near, far)
+            Mat4::orthographic_lh(-half_w, half_w, -half_h, half_h, far, near)
         };
         proj * view
     }

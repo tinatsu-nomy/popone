@@ -321,7 +321,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                     }
                 }
                 log::info!(
-                    "glTFヒューマノイド検出: {} ({}/{}ch マッピング)",
+                    "glTF humanoid detected: {} ({}/{}ch mapping)",
                     humanoid.rig_type.label(),
                     mapped_count,
                     name_list.len(),
@@ -332,7 +332,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
             };
 
             log::info!(
-                "glTFアニメーション読み込み: '{}' ボーン{}ch, 表情{}ch, レスト{}件, {:.2}秒, モード={:?}",
+                "glTF animation loaded: '{}' bone {}ch, expression {}ch, rest {} entries, {:.2}s, mode={:?}",
                 anim_name,
                 final_channels.len(),
                 expression_channels.len(),
@@ -523,7 +523,7 @@ fn parse_vrma(
     }
 
     log::info!(
-        "VRMA読み込み: ボーン{}ch, 表情{}ch, {:.2}秒",
+        "VRMA loaded: bone {}ch, expression {}ch, {:.2}s",
         bone_channels.len(),
         expression_channels.len(),
         duration,
@@ -660,7 +660,7 @@ mod tests {
     fn test_load_vrma_sample() {
         let path = Path::new("../tmp/vrma/VRMA_MotionPack/vrma/VRMA_01.vrma");
         if !path.exists() {
-            eprintln!("VRMA サンプルファイルが見つかりません（スキップ）");
+            eprintln!("VRMA sample file not found (skipping)");
             return;
         }
         let anim = load_vrma(path).expect("VRMA 読み込み失敗");

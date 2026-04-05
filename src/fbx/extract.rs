@@ -53,7 +53,7 @@ pub fn extract_ir_model_from_fbx_with_options(
     let humanoid_mapping = humanoid::detect_humanoid(&bone_names);
 
     log::info!(
-        "FBX ボーン: {} 本, リグ: {}",
+        "FBX bones: {}, rig: {}",
         hierarchy.bones.len(),
         humanoid_mapping.rig_type.label()
     );
@@ -114,7 +114,7 @@ pub fn extract_ir_model_from_fbx_with_options(
             // テクスチャ有無に関係なく全材質にデフォルト値として出力されるため、無条件でフォールバック
             let opacity = if props.opacity_both_zero {
                 log::debug!(
-                    "材質 '{}': Opacity=0+TransparencyFactor=1 → 1.0 にフォールバック",
+                    "Material '{}': Opacity=0+TransparencyFactor=1 -> fallback to 1.0",
                     mat_obj.name
                 );
                 1.0
@@ -368,7 +368,7 @@ pub fn extract_ir_model_from_fbx_with_options(
         .to_string();
 
     log::info!(
-        "FBX 抽出完了: ボーン={}, メッシュ={}, 材質={}, テクスチャ={}, モーフ={}",
+        "FBX extraction done: bones={}, meshes={}, materials={}, textures={}, morphs={}",
         ir_bones.len(),
         ir_meshes.len(),
         ir_materials.len(),
@@ -450,7 +450,7 @@ fn build_coord_transform(doc: &parser::FbxDocument) -> impl Fn([f32; 3]) -> [f32
     let to_meters = (unit_scale_factor / 100.0) as f32;
 
     log::info!(
-        "FBX 座標系: UpAxis={} (sign={}), FrontAxis={} (sign={}), CoordAxis={} (sign={}), UnitScale={}(→×{}m)",
+        "FBX coord system: UpAxis={} (sign={}), FrontAxis={} (sign={}), CoordAxis={} (sign={}), UnitScale={}(->x{}m)",
         up_axis, up_sign, front_axis, front_sign, coord_axis, coord_sign,
         unit_scale_factor, to_meters
     );
@@ -552,7 +552,7 @@ fn texture_to_ir(tex: &texture::TextureData, ir_textures: &mut Vec<IrTexture>) -
             )
             .is_err()
         {
-            log::warn!("テクスチャ '{}' の PNG エンコード失敗", tex.name);
+            log::warn!("Texture '{}' PNG encoding failed", tex.name);
             return None;
         }
     }
@@ -562,6 +562,7 @@ fn texture_to_ir(tex: &texture::TextureData, ir_textures: &mut Vec<IrTexture>) -
         filename: format!("{}.png", sanitize_filename(&tex.name)),
         data: png_data,
         mime_type: "image/png".to_string(),
+        source_path: "embedded (FBX)".to_string(),
     });
     Some(idx)
 }

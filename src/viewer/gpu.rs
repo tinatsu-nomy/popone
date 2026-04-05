@@ -7,6 +7,27 @@ use super::camera::OrbitCamera;
 use super::mesh::{GpuModel, RenderQueue};
 use crate::intermediate::types::{CullMode, IrModel};
 
+/// MMD ライティングのアンビエントスケール（154/255 ≈ 0.604）
+const MMD_LIGHT_AMBIENT: f32 = 154.0 / 255.0;
+/// MMD ライトのデフォルト強度（mmd_ambient_scale 算出の基準値）
+const MMD_DEFAULT_LIGHT_INTENSITY: f32 = 0.7;
+/// ボーン表示の外側（通常）半径係数
+const BONE_DISPLAY_RADIUS: f32 = 0.004;
+/// ボーン表示の内側（移動ボーン）半径係数
+const BONE_JOINT_RADIUS: f32 = 0.0022;
+/// ボーン・物理表示の球セグメント数
+const SPHERE_SEGMENTS: u32 = 16;
+
+/// bool を f32 に変換（シェーダー uniform 用）
+#[inline]
+fn b2f(b: bool) -> f32 {
+    if b {
+        1.0
+    } else {
+        0.0
+    }
+}
+
 /// 材質用 BindGroupLayout を作成（共通定義、gpu.rs と mesh.rs で共有）
 pub fn create_material_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -221,6 +242,41 @@ impl Vertex {
     }
 }
 
+/// 可視化バッファの共通パターン（GPU バッファ + 容量 + 頂点数）
+struct DynamicBuffer {
+    buf: Option<wgpu::Buffer>,
+    capacity: usize,
+    vertex_count: u32,
+}
+
+impl DynamicBuffer {
+    /// 空の DynamicBuffer を作成
+    fn new() -> Self {
+        Self {
+            buf: None,
+            capacity: 0,
+            vertex_count: 0,
+        }
+    }
+
+    /// 作業バッファの内容を GPU にアップロードする。
+    /// 容量不足なら新規バッファを作成し、十分なら既存バッファに書き込む。
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, data: &[u8], label: &str) {
+        if data.len() > self.capacity {
+            self.buf = Some(
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: data,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                }),
+            );
+            self.capacity = data.len();
+        } else if let Some(ref buf) = self.buf {
+            queue.write_buffer(buf, 0, data);
+        }
+    }
+}
+
 /// グリッド用頂点
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -365,12 +421,10 @@ macro_rules! wgsl_material_uniform {
     };
 }
 
-const SHADER_SRC: &str = concat!(
-    wgsl_camera_uniform!(),
-    "\n",
-    wgsl_material_uniform!(),
-    r#"
-
+/// WGSL 共通: MToon テクスチャバインディング宣言（メイン/アウトラインシェーダーで共有）
+macro_rules! wgsl_mtoon_bindings {
+    () => {
+        r#"
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 @group(1) @binding(0) var t_diffuse: texture_2d<f32>;
 @group(1) @binding(1) var s_diffuse: sampler;
@@ -391,16 +445,15 @@ const SHADER_SRC: &str = concat!(
 @group(3) @binding(13) var t_emissive: texture_2d<f32>;
 @group(3) @binding(14) var s_normal: sampler;
 @group(3) @binding(15) var t_normal: texture_2d<f32>;
+"#
+    };
+}
 
-struct VertexOutput {
-    @builtin(position) clip_position: vec4<f32>,
-    @location(0) normal: vec3<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) world_pos: vec3<f32>,
-    @location(3) uv1: vec2<f32>,
-    @location(4) tangent: vec4<f32>,
-};
-
+/// WGSL 共通: MToon ヘルパー関数群（メイン/アウトラインシェーダーで共有）
+/// apply_texture_transform, resolve_mtoon_uv, apply_uv_anim_core, select_channel, apply_normal_map
+macro_rules! wgsl_mtoon_helpers {
+    () => {
+        r#"
 /// KHR_texture_transform 適用（uv_a = [texCoord, offset.x, offset.y, rotation], uv_b = [scale.x, scale.y, 0, 0]）
 fn apply_texture_transform(uv: vec2<f32>, uv_a: vec4<f32>, uv_b: vec4<f32>) -> vec2<f32> {
     let offset = vec2<f32>(uv_a.y, uv_a.z);
@@ -449,26 +502,8 @@ fn apply_uv_anim_core(uv: vec2<f32>, anim_mask: f32) -> vec2<f32> {
     ) + vec2<f32>(0.5);
 }
 
-@vertex
-fn vs_main(
-    @location(0) position: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-    @location(2) uv: vec2<f32>,
-    @location(3) uv1_in: vec2<f32>,
-    @location(4) tangent_in: vec4<f32>,
-) -> VertexOutput {
-    var out: VertexOutput;
-    out.clip_position = camera.view_proj * vec4<f32>(position, 1.0);
-    out.normal = normal;
-    out.uv = uv;
-    out.world_pos = position;
-    out.uv1 = uv1_in;
-    out.tangent = tangent_in;
-    return out;
-}
-
 /// テクセルからチャネル選択（0=R, 1=G, 2=B）
-fn select_channel_main(texel: vec4<f32>, ch: f32) -> f32 {
+fn select_channel(texel: vec4<f32>, ch: f32) -> f32 {
     if ch < 0.5 {
         return texel.r;
     } else if ch < 1.5 {
@@ -496,6 +531,47 @@ fn apply_normal_map(base_n: vec3<f32>, tangent: vec4<f32>, normal_uv: vec2<f32>)
         normal_sample.z,
     );
     return normalize(t * scaled_normal.x + b * scaled_normal.y + n * scaled_normal.z);
+}
+"#
+    };
+}
+
+const SHADER_SRC: &str = concat!(
+    wgsl_camera_uniform!(),
+    "\n",
+    wgsl_material_uniform!(),
+    wgsl_mtoon_bindings!(),
+    r#"
+const PI: f32 = 3.14159265;
+const ALPHA_DISCARD_THRESHOLD: f32 = 0.004;
+
+struct VertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) world_pos: vec3<f32>,
+    @location(3) uv1: vec2<f32>,
+    @location(4) tangent: vec4<f32>,
+};
+"#,
+    wgsl_mtoon_helpers!(),
+    r#"
+@vertex
+fn vs_main(
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) uv1_in: vec2<f32>,
+    @location(4) tangent_in: vec4<f32>,
+) -> VertexOutput {
+    var out: VertexOutput;
+    out.clip_position = camera.view_proj * vec4<f32>(position, 1.0);
+    out.normal = normal;
+    out.uv = uv;
+    out.world_pos = position;
+    out.uv1 = uv1_in;
+    out.tangent = tangent_in;
+    return out;
 }
 
 /// アルファモード処理（OPAQUE / MASK+A2C / BLEND）
@@ -540,7 +616,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
             let uv_mask_uv = resolve_mtoon_uv(in.uv, in.uv1, material.uv_mask_uv_a, material.uv_mask_uv_b);
             var anim_mask = 1.0;
             if material.has_uv_anim_mask > 0.5 {
-                anim_mask = select_channel_main(textureSample(t_uv_anim_mask, s_uv_anim_mask, uv_mask_uv), material.uv_anim_mask_channel);
+                anim_mask = select_channel(textureSample(t_uv_anim_mask, s_uv_anim_mask, uv_mask_uv), material.uv_anim_mask_channel);
             }
             anim_uv = apply_uv_anim_core(in.uv, anim_mask);
             anim_uv1 = apply_uv_anim_core(in.uv1, anim_mask);
@@ -609,7 +685,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
         let a = ROUGHNESS * ROUGHNESS;
         let a2 = a * a;
         let d_denom = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
-        let d = a2 / (3.14159 * d_denom * d_denom);
+        let d = a2 / (PI * d_denom * d_denom);
 
         // Smith GGX geometry
         let k = (ROUGHNESS + 1.0) * (ROUGHNESS + 1.0) / 8.0;
@@ -618,7 +694,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
         let g = g1_v * g1_l;
 
         let specular = (d * f * g) / (4.0 * n_dot_v * n_dot_l + 0.001);
-        let diffuse_brdf = (vec3<f32>(1.0) - f) * (1.0 - METALLIC) * base_color.rgb / 3.14159;
+        let diffuse_brdf = (vec3<f32>(1.0) - f) * (1.0 - METALLIC) * base_color.rgb / PI;
 
         let direct = (diffuse_brdf + specular) * camera.light_intensity * camera.light_color * n_dot_l;
 
@@ -764,6 +840,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
 macro_rules! wgsl_mmd_main_body {
     () => {
         r#"
+const ALPHA_DISCARD_THRESHOLD: f32 = 0.004;
+
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 @group(1) @binding(0) var t_diffuse: texture_2d<f32>;
 @group(1) @binding(1) var s_diffuse: sampler;
@@ -838,7 +916,7 @@ fn compute_mmd_lighting(in: MmdVertexOutput) -> vec4<f32> {
     }
 
     // アルファテスト
-    if out_a < 0.004 { discard; }
+    if out_a < ALPHA_DISCARD_THRESHOLD { discard; }
 
     // スペキュラ (最後に加算、トゥーンの影響を受けない)
     // LightSpecular = mmd_ambient_scale × light_color
@@ -863,6 +941,9 @@ fn compute_mmd_lighting(in: MmdVertexOutput) -> vec4<f32> {
 macro_rules! wgsl_mmd_edge_body {
     () => {
         r#"
+const EDGE_OFFSET_BASE: f32 = 0.003;
+const EDGE_OFFSET_DIST_POW: f32 = 0.7;
+
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 @group(1) @binding(0) var<uniform> material: MmdMaterialUniform;
 
@@ -882,7 +963,7 @@ fn vs_edge(
     var out: EdgeVertexOutput;
     let dist = max(length(position - camera.camera_pos), 5.0);
     let offset = edge_scale * material.edge_size * camera.mmd_edge_thickness
-                 * pow(dist, 0.7) * 0.003;
+                 * pow(dist, EDGE_OFFSET_DIST_POW) * EDGE_OFFSET_BASE;
     let expanded = position + normalize(normal) * offset;
     out.clip_position = camera.view_proj * vec4<f32>(expanded, 1.0);
     return out;
@@ -1067,30 +1148,10 @@ fn fs_highlight_fill(in: VertexOutput) -> FsOutput {
 
 /// MToon アウトラインシェーダー共通部（inverted hull 法）
 /// 本体と同等の MToon ライティング計算を行い、outlineLightingMixFactor で混合する
+/// バインディング宣言とヘルパー関数は wgsl_mtoon_bindings! / wgsl_mtoon_helpers! で共通化
 macro_rules! wgsl_outline_body {
     () => {
         r#"
-@group(0) @binding(0) var<uniform> camera: CameraUniform;
-@group(1) @binding(0) var t_diffuse: texture_2d<f32>;
-@group(1) @binding(1) var s_diffuse: sampler;
-@group(2) @binding(0) var<uniform> material: MaterialUniform;
-@group(3) @binding(0) var s_matcap: sampler;
-@group(3) @binding(1) var t_matcap: texture_2d<f32>;
-@group(3) @binding(2) var s_shade_multiply: sampler;
-@group(3) @binding(3) var t_shade_multiply: texture_2d<f32>;
-@group(3) @binding(4) var s_shading_shift: sampler;
-@group(3) @binding(5) var t_shading_shift: texture_2d<f32>;
-@group(3) @binding(6) var s_rim_multiply: sampler;
-@group(3) @binding(7) var t_rim_multiply: texture_2d<f32>;
-@group(3) @binding(8) var s_uv_anim_mask: sampler;
-@group(3) @binding(9) var t_uv_anim_mask: texture_2d<f32>;
-@group(3) @binding(10) var s_outline_width: sampler;
-@group(3) @binding(11) var t_outline_width: texture_2d<f32>;
-@group(3) @binding(12) var s_emissive: sampler;
-@group(3) @binding(13) var t_emissive: texture_2d<f32>;
-@group(3) @binding(14) var s_normal: sampler;
-@group(3) @binding(15) var t_normal: texture_2d<f32>;
-
 struct OutlineVertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) normal: vec3<f32>,
@@ -1099,62 +1160,6 @@ struct OutlineVertexOutput {
     @location(3) uv1: vec2<f32>,
     @location(4) tangent: vec4<f32>,
 };
-
-/// KHR_texture_transform 適用（アウトラインシェーダー用、本体と同一ロジック）
-fn apply_texture_transform(uv: vec2<f32>, uv_a: vec4<f32>, uv_b: vec4<f32>) -> vec2<f32> {
-    let offset = vec2<f32>(uv_a.y, uv_a.z);
-    let rotation = uv_a.w;
-    let scale = vec2<f32>(uv_b.x, uv_b.y);
-    if abs(rotation) < 0.00001 && abs(scale.x - 1.0) < 0.00001 && abs(scale.y - 1.0) < 0.00001
-       && abs(offset.x) < 0.00001 && abs(offset.y) < 0.00001 {
-        return uv;
-    }
-    let scaled = uv * scale;
-    let c = cos(rotation);
-    let s = sin(rotation);
-    let rotated = vec2<f32>(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c);
-    return rotated + offset;
-}
-
-/// MToon 補助テクスチャ用 UV 解決（アウトラインシェーダー用）
-fn resolve_mtoon_uv(uv0: vec2<f32>, uv1: vec2<f32>, uv_a: vec4<f32>, uv_b: vec4<f32>) -> vec2<f32> {
-    let base_uv = select(uv0, uv1, u32(uv_a.x) == 1u);
-    return apply_texture_transform(base_uv, uv_a, uv_b);
-}
-
-/// UVアニメーション（スクロール+回転）の計算本体（マスク値は呼び出し元で決定）
-/// UniVRM互換順序: scroll → pivot(-0.5) → rotation → pivot(+0.5)
-/// ※ VRM仕様書は rotate→scroll だが、UniVRM 実装は scroll→rotate。互換性を優先
-/// UniVRM: vrmc_materials_mtoon_geometry_uv.hlsl — rotate(uv + translate - pivot) + pivot
-fn apply_uv_anim_core(uv: vec2<f32>, anim_mask: f32) -> vec2<f32> {
-    let translate = vec2<f32>(
-        camera.time * material.uv_anim_scroll_x,
-        camera.time * material.uv_anim_scroll_y,
-    ) * anim_mask;
-
-    // 2π 周期で wrap して長時間稼働時の float 精度劣化を防止（UniVRM 準拠）
-    let tau = 6.28318530718;
-    let turns = (camera.time * material.uv_anim_rotation * anim_mask) / tau;
-    let angle = fract(turns) * tau;
-    let cos_a = cos(angle);
-    let sin_a = sin(angle);
-    let centered = (uv + translate) - vec2<f32>(0.5);
-
-    return vec2<f32>(
-        centered.x * cos_a - centered.y * sin_a,
-        centered.x * sin_a + centered.y * cos_a,
-    ) + vec2<f32>(0.5);
-}
-
-/// テクセルからチャネル選択（0=R, 1=G, 2=B）
-fn select_channel(texel: vec4<f32>, ch: f32) -> f32 {
-    if ch < 0.5 {
-        return texel.r;
-    } else if ch < 1.5 {
-        return texel.g;
-    }
-    return texel.b;
-}
 
 /// UV Animation を適用（頂点シェーダー用、UV0/UV1 ペア対応）
 /// 戻り値: vec4(anim_uv0.xy, anim_uv1.zw)
@@ -1219,25 +1224,6 @@ fn vs_outline(
     out.uv1 = uv1_in;
     out.tangent = tangent_in;
     return out;
-}
-
-/// 頂点接線から TBN 行列を構築して法線マップを適用（UniVRM MToon_GetTangentToWorld 準拠、アウトライン用）
-fn apply_normal_map(base_n: vec3<f32>, tangent: vec4<f32>, normal_uv: vec2<f32>) -> vec3<f32> {
-    // ゼロ接線ガード: 退化した tangent では法線マップをスキップし基底法線を返す
-    if dot(tangent.xyz, tangent.xyz) < 1e-6 {
-        return normalize(base_n);
-    }
-    let normal_sample = textureSample(t_normal, s_normal, normal_uv).xyz * 2.0 - 1.0;
-    let n = normalize(base_n);
-    let t = normalize(tangent.xyz);
-    let tangent_sign = select(-1.0, 1.0, tangent.w > 0.0);
-    let b = normalize(cross(n, t) * tangent_sign);
-    let scaled_normal = vec3<f32>(
-        normal_sample.x * material.normal_scale,
-        normal_sample.y * material.normal_scale,
-        normal_sample.z,
-    );
-    return normalize(t * scaled_normal.x + b * scaled_normal.y + n * scaled_normal.z);
 }
 
 /// 本体シェーダーと同等の MToon ライティング計算（アウトライン用）
@@ -1363,106 +1349,77 @@ fn compute_mtoon_surface_lighting(n: vec3<f32>, uv: vec2<f32>, uv1: vec2<f32>, w
     };
 }
 
+/// WGSL 共通: fs_outline フラグメントシェーダー本体（sRGB/Unorm の出力式のみパラメータ化）
+/// $output_expr: sRGB 版では `lit`、Unorm 版では `clamp(lit, vec3<f32>(0.0), vec3<f32>(1.0))`
+macro_rules! wgsl_fs_outline {
+    ($output_expr:expr) => {
+        concat!(r#"
+struct FsOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) bloom: vec4<f32>,
+};
+
+@fragment
+fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput {
+    let base = material.outline_color;
+    // doubleSided 背面法線反転（UniVRM 準拠）
+    let face_sign = select(-1.0, 1.0, is_front);
+    var n = normalize(in.normal) * face_sign;
+    // UVアニメーション事前計算（normalTexture にも適用: 仕様準拠）
+    var anim_uv_o = in.uv;
+    var anim_uv1_o = in.uv1;
+    let has_uv_anim_o = material.uv_anim_scroll_x != 0.0
+        || material.uv_anim_scroll_y != 0.0
+        || material.uv_anim_rotation != 0.0;
+    if has_uv_anim_o {
+        let uv_mask_uv = resolve_mtoon_uv(in.uv, in.uv1, material.uv_mask_uv_a, material.uv_mask_uv_b);
+        var anim_mask_o = 1.0;
+        if material.has_uv_anim_mask > 0.5 {
+            anim_mask_o = select_channel(textureSample(t_uv_anim_mask, s_uv_anim_mask, uv_mask_uv), material.uv_anim_mask_channel);
+        }
+        anim_uv_o = apply_uv_anim_core(in.uv, anim_mask_o);
+        anim_uv1_o = apply_uv_anim_core(in.uv1, anim_mask_o);
+    }
+    // 法線マップ適用（animated UV）
+    if material.has_normal_tex > 0.5 {
+        let normal_uv = resolve_mtoon_uv(anim_uv_o, anim_uv1_o, material.normal_uv_a, material.normal_uv_b);
+        n = apply_normal_map(n, in.tangent, normal_uv);
+    }
+    // 本体と同等の MToon ライティング計算結果を取得（アルファ処理・discard 含む）
+    let surface = compute_mtoon_surface_lighting(n, in.uv, in.uv1, in.world_pos);
+    // UniVRM 準拠: outlineColor * lerp(1, baseCol, outlineLightingMix)
+    let lit = base.rgb * mix(vec3<f32>(1.0), surface.rgb, material.outline_lighting_mix);
+    var out: FsOutput;
+    out.color = vec4<f32>("#, $output_expr, r#", surface.a);
+    out.bloom = vec4<f32>(0.0);
+    return out;
+}
+"#)
+    };
+}
+
 /// MToon アウトラインシェーダー（sRGB版）
 /// 本体と同等の MToon ライティングを計算し、outlineLightingMixFactor で混合
 const OUTLINE_SHADER_SRC: &str = concat!(
     wgsl_camera_uniform!(),
     "\n",
     wgsl_material_uniform!(),
+    wgsl_mtoon_bindings!(),
+    wgsl_mtoon_helpers!(),
     wgsl_outline_body!(),
-    r#"
-struct FsOutput {
-    @location(0) color: vec4<f32>,
-    @location(1) bloom: vec4<f32>,
-};
-
-@fragment
-fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput {
-    let base = material.outline_color;
-    // doubleSided 背面法線反転（UniVRM 準拠）
-    let face_sign = select(-1.0, 1.0, is_front);
-    var n = normalize(in.normal) * face_sign;
-    // UVアニメーション事前計算（normalTexture にも適用: 仕様準拠）
-    var anim_uv_o = in.uv;
-    var anim_uv1_o = in.uv1;
-    let has_uv_anim_o = material.uv_anim_scroll_x != 0.0
-        || material.uv_anim_scroll_y != 0.0
-        || material.uv_anim_rotation != 0.0;
-    if has_uv_anim_o {
-        let uv_mask_uv = resolve_mtoon_uv(in.uv, in.uv1, material.uv_mask_uv_a, material.uv_mask_uv_b);
-        var anim_mask_o = 1.0;
-        if material.has_uv_anim_mask > 0.5 {
-            anim_mask_o = select_channel(textureSample(t_uv_anim_mask, s_uv_anim_mask, uv_mask_uv), material.uv_anim_mask_channel);
-        }
-        anim_uv_o = apply_uv_anim_core(in.uv, anim_mask_o);
-        anim_uv1_o = apply_uv_anim_core(in.uv1, anim_mask_o);
-    }
-    // 法線マップ適用（animated UV）
-    if material.has_normal_tex > 0.5 {
-        let normal_uv = resolve_mtoon_uv(anim_uv_o, anim_uv1_o, material.normal_uv_a, material.normal_uv_b);
-        n = apply_normal_map(n, in.tangent, normal_uv);
-    }
-    // 本体と同等の MToon ライティング計算結果を取得（アルファ処理・discard 含む）
-    let surface = compute_mtoon_surface_lighting(n, in.uv, in.uv1, in.world_pos);
-    // UniVRM 準拠: outlineColor * lerp(1, baseCol, outlineLightingMix)
-    let lit = base.rgb * mix(vec3<f32>(1.0), surface.rgb, material.outline_lighting_mix);
-    var out: FsOutput;
-    out.color = vec4<f32>(lit, surface.a);
-    out.bloom = vec4<f32>(0.0);
-    return out;
-}
-"#
+    wgsl_fs_outline!("lit"),
 );
 
-/// MToon アウトラインシェーダー Unorm版（pow(2.2) 除去）
+/// MToon アウトラインシェーダー Unorm版（clamp で 0..1 に制限）
 /// 本体と同等の MToon ライティングを計算し、outlineLightingMixFactor で混合
 const OUTLINE_SHADER_UNORM_SRC: &str = concat!(
     wgsl_camera_uniform!(),
     "\n",
     wgsl_material_uniform!(),
+    wgsl_mtoon_bindings!(),
+    wgsl_mtoon_helpers!(),
     wgsl_outline_body!(),
-    r#"
-struct FsOutput {
-    @location(0) color: vec4<f32>,
-    @location(1) bloom: vec4<f32>,
-};
-
-@fragment
-fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput {
-    let base = material.outline_color;
-    // doubleSided 背面法線反転（UniVRM 準拠）
-    let face_sign = select(-1.0, 1.0, is_front);
-    var n = normalize(in.normal) * face_sign;
-    // UVアニメーション事前計算（normalTexture にも適用: 仕様準拠）
-    var anim_uv_o = in.uv;
-    var anim_uv1_o = in.uv1;
-    let has_uv_anim_o = material.uv_anim_scroll_x != 0.0
-        || material.uv_anim_scroll_y != 0.0
-        || material.uv_anim_rotation != 0.0;
-    if has_uv_anim_o {
-        let uv_mask_uv = resolve_mtoon_uv(in.uv, in.uv1, material.uv_mask_uv_a, material.uv_mask_uv_b);
-        var anim_mask_o = 1.0;
-        if material.has_uv_anim_mask > 0.5 {
-            anim_mask_o = select_channel(textureSample(t_uv_anim_mask, s_uv_anim_mask, uv_mask_uv), material.uv_anim_mask_channel);
-        }
-        anim_uv_o = apply_uv_anim_core(in.uv, anim_mask_o);
-        anim_uv1_o = apply_uv_anim_core(in.uv1, anim_mask_o);
-    }
-    // 法線マップ適用（animated UV）
-    if material.has_normal_tex > 0.5 {
-        let normal_uv = resolve_mtoon_uv(anim_uv_o, anim_uv1_o, material.normal_uv_a, material.normal_uv_b);
-        n = apply_normal_map(n, in.tangent, normal_uv);
-    }
-    // 本体と同等の MToon ライティング計算結果を取得（アルファ処理・discard 含む）
-    let surface = compute_mtoon_surface_lighting(n, in.uv, in.uv1, in.world_pos);
-    // UniVRM 準拠: outlineColor * lerp(1, baseCol, outlineLightingMix)
-    let lit = base.rgb * mix(vec3<f32>(1.0), surface.rgb, material.outline_lighting_mix);
-    var out: FsOutput;
-    out.color = vec4<f32>(clamp(lit, vec3<f32>(0.0), vec3<f32>(1.0)), surface.a);
-    out.bloom = vec4<f32>(0.0);
-    return out;
-}
-"#
+    wgsl_fs_outline!("clamp(lit, vec3<f32>(0.0), vec3<f32>(1.0))"),
 );
 
 const GRID_SHADER_SRC: &str = concat!(
@@ -1570,20 +1527,36 @@ struct PipelineSet {
 }
 
 pub struct GpuRenderer {
-    /// MSAA パイプラインセット (sample_count=4, sRGB)
-    pipelines_msaa_srgb: PipelineSet,
-    /// 非MSAA パイプラインセット (sample_count=1, sRGB)
-    pipelines_no_msaa_srgb: PipelineSet,
-    /// MSAA パイプラインセット (sample_count=4, Unorm)
-    pipelines_msaa_unorm: PipelineSet,
-    /// 非MSAA パイプラインセット (sample_count=1, Unorm)
-    pipelines_no_msaa_unorm: PipelineSet,
+    /// MSAA パイプラインセット (sample_count=4, sRGB) — 遅延生成
+    pipelines_msaa_srgb: Option<PipelineSet>,
+    /// 非MSAA パイプラインセット (sample_count=1, sRGB) — 遅延生成
+    pipelines_no_msaa_srgb: Option<PipelineSet>,
+    /// MSAA パイプラインセット (sample_count=4, Unorm) — 遅延生成
+    pipelines_msaa_unorm: Option<PipelineSet>,
+    /// 非MSAA パイプラインセット (sample_count=1, Unorm) — 遅延生成
+    pipelines_no_msaa_unorm: Option<PipelineSet>,
+    // パイプライン遅延生成用リソース
+    shader: wgpu::ShaderModule,
+    grid_shader_srgb: wgpu::ShaderModule,
+    grid_shader_unorm: wgpu::ShaderModule,
+    wire_overlay_shader: wgpu::ShaderModule,
+    mmd_edge_shader_srgb: wgpu::ShaderModule,
+    mmd_edge_shader_unorm: wgpu::ShaderModule,
+    mmd_main_shader_srgb: wgpu::ShaderModule,
+    mmd_main_shader_unorm: wgpu::ShaderModule,
+    outline_shader_srgb: wgpu::ShaderModule,
+    outline_shader_unorm: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
+    grid_pipeline_layout: wgpu::PipelineLayout,
+    mmd_edge_pipeline_layout: wgpu::PipelineLayout,
+    mmd_main_pipeline_layout: wgpu::PipelineLayout,
+    supports_wireframe: bool,
     /// カメラ uniform バッファ
     camera_buf: wgpu::Buffer,
     /// カメラ bind group
     camera_bind_group: wgpu::BindGroup,
     /// カメラ bind group layout（BindGroup の lifetime 維持に必要）
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     camera_bgl: wgpu::BindGroupLayout,
     /// テクスチャ bind group layout
     texture_bgl: wgpu::BindGroupLayout,
@@ -1601,31 +1574,19 @@ pub struct GpuRenderer {
     grid_vbuf: wgpu::Buffer,
     grid_vertex_count: u32,
     /// ボーンテールバッファ（LineList、テール三角形）
-    bone_tail_buf: Option<wgpu::Buffer>,
-    bone_tail_buf_capacity: usize,
-    bone_tail_vertex_count: u32,
+    bone_tail: DynamicBuffer,
     /// ボーン塗りつぶしバッファ（TriangleList、マーカー塗り面）
-    bone_fill_buf: Option<wgpu::Buffer>,
-    bone_fill_buf_capacity: usize,
-    bone_fill_vertex_count: u32,
+    bone_fill: DynamicBuffer,
     /// ボーン外枠バッファ（LineList、マーカー外枠線）
-    bone_buf: Option<wgpu::Buffer>,
-    bone_buf_capacity: usize,
-    bone_vertex_count: u32,
+    bone_line: DynamicBuffer,
     /// SpringBone頂点バッファ
-    spring_buf: Option<wgpu::Buffer>,
-    spring_buf_capacity: usize,
-    spring_vertex_count: u32,
-    joint_buf: Option<wgpu::Buffer>,
-    joint_buf_capacity: usize,
-    joint_vertex_count: u32,
-    joint_edge_buf: Option<wgpu::Buffer>,
-    joint_edge_buf_capacity: usize,
-    joint_edge_vertex_count: u32,
+    spring: DynamicBuffer,
+    /// ジョイント面バッファ（TriangleList）
+    joint: DynamicBuffer,
+    /// ジョイントエッジバッファ（LineList）
+    joint_edge: DynamicBuffer,
     /// 法線表示頂点バッファ
-    normal_buf: Option<wgpu::Buffer>,
-    normal_buf_capacity: usize,
-    normal_vertex_count: u32,
+    normal: DynamicBuffer,
     /// 法線キャッシュ無効フラグ（true = 再生成が必要）
     normal_dirty: bool,
     /// 法線キャッシュ用: 前回の normal_length
@@ -1668,10 +1629,18 @@ pub struct GpuRenderer {
     work_draw_centers: Vec<glam::Vec3>,
     /// 半透明ソート用: ソート済みインデックスの作業バッファ
     work_sorted_indices: Vec<usize>,
+    /// 半透明ソートキャッシュ: 前回ソート時のカメラ eye 位置
+    cache_sort_eye: Option<glam::Vec3>,
+    /// 半透明ソートキャッシュ: 前回ソート時の DrawCall 数
+    cache_sort_draw_count: usize,
+    /// 半透明ソートキャッシュ: 前回の頂点ポインタ（アニメーション変更検出用）
+    cache_sort_vert_ptr: usize,
+    /// 半透明ソート強制再計算フラグ
+    sort_dirty: bool,
     // MMD リソース
     mmd_material_bgl: wgpu::BindGroupLayout,
     mmd_aux_bgl: wgpu::BindGroupLayout,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     shared_toon_textures: [wgpu::TextureView; 10],
     shared_toon_textures_unorm: [wgpu::TextureView; 10],
     shared_toon_sampler: wgpu::Sampler,
@@ -1795,13 +1764,13 @@ impl GpuRenderer {
             }, // normal: フラット
         );
 
-        // Shader modules
+        // Shader modules（パイプライン遅延生成のため保持）
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mesh_shader"),
             source: wgpu::ShaderSource::Wgsl(SHADER_SRC.into()),
         });
 
-        let grid_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let grid_shader_srgb = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("grid_shader"),
             source: wgpu::ShaderSource::Wgsl(GRID_SHADER_SRC.into()),
         });
@@ -1877,11 +1846,11 @@ impl GpuRenderer {
         });
 
         // MMD シェーダーモジュール（sRGB 版: pow(2.2) 付き）
-        let mmd_edge_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let mmd_edge_shader_srgb = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mmd_edge_shader"),
             source: wgpu::ShaderSource::Wgsl(MMD_EDGE_SHADER_SRC.into()),
         });
-        let mmd_main_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let mmd_main_shader_srgb = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mmd_main_shader"),
             source: wgpu::ShaderSource::Wgsl(MMD_MAIN_SHADER_SRC.into()),
         });
@@ -1897,7 +1866,7 @@ impl GpuRenderer {
         });
 
         // MToon アウトラインシェーダー（sRGB 版 / Unorm 版）
-        let outline_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let outline_shader_srgb = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("outline_shader"),
             source: wgpu::ShaderSource::Wgsl(OUTLINE_SHADER_SRC.into()),
         });
@@ -1967,80 +1936,10 @@ impl GpuRenderer {
             .features()
             .contains(wgpu::Features::POLYGON_MODE_LINE);
         if !supports_wireframe {
-            log::warn!("POLYGON_MODE_LINE 非対応: ワイヤーフレーム無効");
+            log::warn!("POLYGON_MODE_LINE not supported: wireframe disabled");
         }
 
-        // sRGB パイプラインセット（現行シェーダー: pow(2.2) 付き）
-        let bloom_format = wgpu::TextureFormat::Rgba8Unorm;
-        let pipelines_msaa_srgb = Self::create_pipeline_set(
-            device,
-            &shader,
-            &grid_shader,
-            &wire_overlay_shader,
-            &mmd_edge_shader,
-            &mmd_main_shader,
-            &outline_shader,
-            &pipeline_layout,
-            &grid_pipeline_layout,
-            &mmd_edge_pipeline_layout,
-            &mmd_main_pipeline_layout,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
-            bloom_format,
-            MSAA_SAMPLE_COUNT,
-            supports_wireframe,
-        );
-        let pipelines_no_msaa_srgb = Self::create_pipeline_set(
-            device,
-            &shader,
-            &grid_shader,
-            &wire_overlay_shader,
-            &mmd_edge_shader,
-            &mmd_main_shader,
-            &outline_shader,
-            &pipeline_layout,
-            &grid_pipeline_layout,
-            &mmd_edge_pipeline_layout,
-            &mmd_main_pipeline_layout,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
-            bloom_format,
-            1,
-            supports_wireframe,
-        );
-        // Unorm パイプラインセット（pow(2.2) 除去 + linear_to_srgb）
-        let pipelines_msaa_unorm = Self::create_pipeline_set(
-            device,
-            &shader,
-            &grid_shader_unorm,
-            &wire_overlay_shader,
-            &mmd_edge_shader_unorm,
-            &mmd_main_shader_unorm,
-            &outline_shader_unorm,
-            &pipeline_layout,
-            &grid_pipeline_layout,
-            &mmd_edge_pipeline_layout,
-            &mmd_main_pipeline_layout,
-            wgpu::TextureFormat::Rgba8Unorm,
-            bloom_format,
-            MSAA_SAMPLE_COUNT,
-            supports_wireframe,
-        );
-        let pipelines_no_msaa_unorm = Self::create_pipeline_set(
-            device,
-            &shader,
-            &grid_shader_unorm,
-            &wire_overlay_shader,
-            &mmd_edge_shader_unorm,
-            &mmd_main_shader_unorm,
-            &outline_shader_unorm,
-            &pipeline_layout,
-            &grid_pipeline_layout,
-            &mmd_edge_pipeline_layout,
-            &mmd_main_pipeline_layout,
-            wgpu::TextureFormat::Rgba8Unorm,
-            bloom_format,
-            1,
-            supports_wireframe,
-        );
+        // パイプラインセットは遅延生成（初回描画時に必要なセットのみ作成）
 
         // 共通サンプラー（テクスチャ bind group 作成時に使い回す）
         let default_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -2062,10 +1961,25 @@ impl GpuRenderer {
         });
 
         Self {
-            pipelines_msaa_srgb,
-            pipelines_no_msaa_srgb,
-            pipelines_msaa_unorm,
-            pipelines_no_msaa_unorm,
+            pipelines_msaa_srgb: None,
+            pipelines_no_msaa_srgb: None,
+            pipelines_msaa_unorm: None,
+            pipelines_no_msaa_unorm: None,
+            shader,
+            grid_shader_srgb,
+            grid_shader_unorm,
+            wire_overlay_shader,
+            mmd_edge_shader_srgb,
+            mmd_edge_shader_unorm,
+            mmd_main_shader_srgb,
+            mmd_main_shader_unorm,
+            outline_shader_srgb,
+            outline_shader_unorm,
+            pipeline_layout,
+            grid_pipeline_layout,
+            mmd_edge_pipeline_layout,
+            mmd_main_pipeline_layout,
+            supports_wireframe,
             camera_buf,
             camera_bind_group,
             camera_bgl,
@@ -2075,27 +1989,13 @@ impl GpuRenderer {
             mtoon_aux_bgl,
             default_mtoon_aux_bind_group,
             default_sampler,
-            bone_tail_buf: None,
-            bone_tail_buf_capacity: 0,
-            bone_tail_vertex_count: 0,
-            bone_fill_buf: None,
-            bone_fill_buf_capacity: 0,
-            bone_fill_vertex_count: 0,
-            bone_buf: None,
-            bone_buf_capacity: 0,
-            bone_vertex_count: 0,
-            spring_buf: None,
-            spring_buf_capacity: 0,
-            spring_vertex_count: 0,
-            joint_buf: None,
-            joint_buf_capacity: 0,
-            joint_vertex_count: 0,
-            joint_edge_buf: None,
-            joint_edge_buf_capacity: 0,
-            joint_edge_vertex_count: 0,
-            normal_buf: None,
-            normal_buf_capacity: 0,
-            normal_vertex_count: 0,
+            bone_tail: DynamicBuffer::new(),
+            bone_fill: DynamicBuffer::new(),
+            bone_line: DynamicBuffer::new(),
+            spring: DynamicBuffer::new(),
+            joint: DynamicBuffer::new(),
+            joint_edge: DynamicBuffer::new(),
+            normal: DynamicBuffer::new(),
             normal_dirty: true,
             normal_cache_length: 0.0,
             normal_cache_visibility: Vec::new(),
@@ -2120,6 +2020,10 @@ impl GpuRenderer {
             cache_had_anim: false,
             work_draw_centers: Vec::new(),
             work_sorted_indices: Vec::new(),
+            cache_sort_eye: None,
+            cache_sort_draw_count: 0,
+            cache_sort_vert_ptr: 0,
+            sort_dirty: true,
             mmd_material_bgl,
             mmd_aux_bgl,
             shared_toon_textures,
@@ -2128,6 +2032,11 @@ impl GpuRenderer {
             default_mmd_aux_bind_group,
             bloom: super::bloom::BloomPass::new(device),
         }
+    }
+
+    /// 半透明ソートの強制再計算フラグを立てる（モデル追加・リロード時に呼ぶ）
+    pub fn mark_sort_dirty(&mut self) {
+        self.sort_dirty = true;
     }
 
     /// モデルの bbox に合わせてグリッドバッファを再構築する
@@ -2151,33 +2060,48 @@ impl GpuRenderer {
         self.joint_cache_opacity = -1.0;
         self.spring_cache_align = false;
         self.cache_had_anim = false;
-        self.bone_tail_vertex_count = 0;
-        self.bone_fill_vertex_count = 0;
-        self.bone_vertex_count = 0;
-        self.spring_vertex_count = 0;
-        self.joint_vertex_count = 0;
-        self.joint_edge_vertex_count = 0;
+        self.bone_tail.vertex_count = 0;
+        self.bone_fill.vertex_count = 0;
+        self.bone_line.vertex_count = 0;
+        self.spring.vertex_count = 0;
+        self.joint.vertex_count = 0;
+        self.joint_edge.vertex_count = 0;
         self.normal_dirty = true;
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn create_pipeline_set(
+        &self,
         device: &wgpu::Device,
-        shader: &wgpu::ShaderModule,
-        grid_shader: &wgpu::ShaderModule,
-        wire_overlay_shader: &wgpu::ShaderModule,
-        mmd_edge_shader: &wgpu::ShaderModule,
-        mmd_main_shader: &wgpu::ShaderModule,
-        outline_shader: &wgpu::ShaderModule,
-        pipeline_layout: &wgpu::PipelineLayout,
-        grid_pipeline_layout: &wgpu::PipelineLayout,
-        mmd_edge_pipeline_layout: &wgpu::PipelineLayout,
-        mmd_main_pipeline_layout: &wgpu::PipelineLayout,
-        target_format: wgpu::TextureFormat,
-        bloom_format: wgpu::TextureFormat,
-        sample_count: u32,
-        supports_wireframe: bool,
+        use_unorm: bool,
+        msaa: bool,
     ) -> PipelineSet {
+        let (grid_shader, mmd_edge_shader, mmd_main_shader, outline_shader, target_format) =
+            if use_unorm {
+                (
+                    &self.grid_shader_unorm,
+                    &self.mmd_edge_shader_unorm,
+                    &self.mmd_main_shader_unorm,
+                    &self.outline_shader_unorm,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                )
+            } else {
+                (
+                    &self.grid_shader_srgb,
+                    &self.mmd_edge_shader_srgb,
+                    &self.mmd_main_shader_srgb,
+                    &self.outline_shader_srgb,
+                    wgpu::TextureFormat::Rgba8UnormSrgb,
+                )
+            };
+        let bloom_format = wgpu::TextureFormat::Rgba8Unorm;
+        let sample_count = if msaa { MSAA_SAMPLE_COUNT } else { 1 };
+        let shader = &self.shader;
+        let wire_overlay_shader = &self.wire_overlay_shader;
+        let pipeline_layout = &self.pipeline_layout;
+        let grid_pipeline_layout = &self.grid_pipeline_layout;
+        let mmd_edge_pipeline_layout = &self.mmd_edge_pipeline_layout;
+        let mmd_main_pipeline_layout = &self.mmd_main_pipeline_layout;
+        let supports_wireframe = self.supports_wireframe;
         let ms = wgpu::MultisampleState {
             count: sample_count,
             ..Default::default()
@@ -2203,34 +2127,34 @@ impl GpuRenderer {
         let depth_write = wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
+            depth_compare: wgpu::CompareFunction::Greater,
             stencil: Default::default(),
             bias: Default::default(),
         };
         let depth_no_write = wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: false,
-            depth_compare: wgpu::CompareFunction::Less,
+            depth_compare: wgpu::CompareFunction::Greater,
             stencil: Default::default(),
             bias: Default::default(),
         };
-        // アウトライン用 depth bias（UniVRM Offset 1,1 相当）— Z-fighting 防止
+        // アウトライン用 depth bias（UniVRM Offset 1,1 相当）— Reverse-Z で符号反転
         let outline_bias = wgpu::DepthBiasState {
-            constant: 1,
-            slope_scale: 1.0,
+            constant: -1,
+            slope_scale: -1.0,
             clamp: 0.0,
         };
         let depth_outline_write = wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
+            depth_compare: wgpu::CompareFunction::Greater,
             stencil: Default::default(),
             bias: outline_bias,
         };
         let depth_outline_no_write = wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: false,
-            depth_compare: wgpu::CompareFunction::Less,
+            depth_compare: wgpu::CompareFunction::Greater,
             stencil: Default::default(),
             bias: outline_bias,
         };
@@ -2415,11 +2339,11 @@ impl GpuRenderer {
             let depth_bias = wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_compare: wgpu::CompareFunction::GreaterEqual,
                 stencil: Default::default(),
                 bias: wgpu::DepthBiasState {
-                    constant: -2,
-                    slope_scale: -1.0,
+                    constant: 2,
+                    slope_scale: 1.0,
                     clamp: 0.0,
                 },
             };
@@ -3095,16 +3019,39 @@ impl GpuRenderer {
 
     /// ワイヤーフレーム対応かどうか
     pub fn supports_wireframe(&self) -> bool {
-        self.pipelines_msaa_srgb.pipeline_wireframe.is_some()
+        self.supports_wireframe
+    }
+
+    /// 必要なパイプラインセットが未生成なら遅延生成する
+    fn ensure_pipelines(&mut self, device: &wgpu::Device, use_unorm: bool) {
+        let msaa = self.current_msaa;
+        // 既に生成済みなら何もしない
+        let already = match (msaa, use_unorm) {
+            (true, false) => self.pipelines_msaa_srgb.is_some(),
+            (false, false) => self.pipelines_no_msaa_srgb.is_some(),
+            (true, true) => self.pipelines_msaa_unorm.is_some(),
+            (false, true) => self.pipelines_no_msaa_unorm.is_some(),
+        };
+        if already {
+            return;
+        }
+        let ps = self.create_pipeline_set(device, use_unorm, msaa);
+        match (msaa, use_unorm) {
+            (true, false) => self.pipelines_msaa_srgb = Some(ps),
+            (false, false) => self.pipelines_no_msaa_srgb = Some(ps),
+            (true, true) => self.pipelines_msaa_unorm = Some(ps),
+            (false, true) => self.pipelines_no_msaa_unorm = Some(ps),
+        }
     }
 
     /// 現在の MSAA 設定と Unorm フラグに応じたパイプラインセットを取得
+    /// （事前に ensure_pipelines を呼んでおくこと）
     fn pipelines(&self, use_unorm: bool) -> &PipelineSet {
         match (self.current_msaa, use_unorm) {
-            (true, false) => &self.pipelines_msaa_srgb,
-            (true, true) => &self.pipelines_msaa_unorm,
-            (false, false) => &self.pipelines_no_msaa_srgb,
-            (false, true) => &self.pipelines_no_msaa_unorm,
+            (true, false) => self.pipelines_msaa_srgb.as_ref().unwrap(),
+            (true, true) => self.pipelines_msaa_unorm.as_ref().unwrap(),
+            (false, false) => self.pipelines_no_msaa_srgb.as_ref().unwrap(),
+            (false, true) => self.pipelines_no_msaa_unorm.as_ref().unwrap(),
         }
     }
 
@@ -3147,6 +3094,9 @@ impl GpuRenderer {
         if !need_recreate {
             return;
         }
+
+        // offscreen テクスチャ再作成に伴い Bloom の外部依存キャッシュを無効化
+        self.bloom.invalidate_external_cache();
 
         let tex_size = wgpu::Extent3d {
             width,
@@ -3272,7 +3222,7 @@ impl GpuRenderer {
         // ボーン頂点を更新（変化時のみ）
         if params.display.show_bones && !ir.bones.is_empty() {
             let eye = params.camera.eye();
-            let bone_changed = self.bone_vertex_count == 0
+            let bone_changed = self.bone_line.vertex_count == 0
                 || has_anim
                 || anim_just_cleared
                 || eye != self.bone_cache_eye
@@ -3280,11 +3230,7 @@ impl GpuRenderer {
             if bone_changed {
                 self.bone_cache_eye = eye;
                 self.bone_cache_opacity = params.display.bone_opacity;
-                let pos_fn: fn(Vec3) -> Vec3 = if ir.source_format.is_vrm0() {
-                    crate::convert::coord::gltf_pos_to_pmx_v0
-                } else {
-                    crate::convert::coord::gltf_pos_to_pmx
-                };
+                let pos_fn = crate::convert::coord::pos_fn(ir.source_format.is_vrm0());
                 generate_bone_vertices(
                     &mut self.bone_tail_work,
                     &mut self.bone_fill_work,
@@ -3296,50 +3242,29 @@ impl GpuRenderer {
                     params.animated_bone_globals,
                 );
                 // テールバッファ（LineList）
-                self.bone_tail_vertex_count = self.bone_tail_work.len() as u32;
-                let tail_data = bytemuck::cast_slice(&self.bone_tail_work);
-                if tail_data.len() > self.bone_tail_buf_capacity {
-                    self.bone_tail_buf = Some(device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("bone_tail_vbuf"),
-                            contents: tail_data,
-                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                        },
-                    ));
-                    self.bone_tail_buf_capacity = tail_data.len();
-                } else if let Some(ref buf) = self.bone_tail_buf {
-                    queue.write_buffer(buf, 0, tail_data);
-                }
+                self.bone_tail.vertex_count = self.bone_tail_work.len() as u32;
+                self.bone_tail.upload(
+                    device,
+                    queue,
+                    bytemuck::cast_slice(&self.bone_tail_work),
+                    "bone_tail_vbuf",
+                );
                 // 塗りバッファ（TriangleList）
-                self.bone_fill_vertex_count = self.bone_fill_work.len() as u32;
-                let fill_data = bytemuck::cast_slice(&self.bone_fill_work);
-                if fill_data.len() > self.bone_fill_buf_capacity {
-                    self.bone_fill_buf = Some(device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("bone_fill_vbuf"),
-                            contents: fill_data,
-                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                        },
-                    ));
-                    self.bone_fill_buf_capacity = fill_data.len();
-                } else if let Some(ref buf) = self.bone_fill_buf {
-                    queue.write_buffer(buf, 0, fill_data);
-                }
+                self.bone_fill.vertex_count = self.bone_fill_work.len() as u32;
+                self.bone_fill.upload(
+                    device,
+                    queue,
+                    bytemuck::cast_slice(&self.bone_fill_work),
+                    "bone_fill_vbuf",
+                );
                 // 外枠バッファ（LineList）
-                self.bone_vertex_count = self.bone_work.len() as u32;
-                let line_data = bytemuck::cast_slice(&self.bone_work);
-                if line_data.len() > self.bone_buf_capacity {
-                    self.bone_buf = Some(device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("bone_vbuf"),
-                            contents: line_data,
-                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                        },
-                    ));
-                    self.bone_buf_capacity = line_data.len();
-                } else if let Some(ref buf) = self.bone_buf {
-                    queue.write_buffer(buf, 0, line_data);
-                }
+                self.bone_line.vertex_count = self.bone_work.len() as u32;
+                self.bone_line.upload(
+                    device,
+                    queue,
+                    bytemuck::cast_slice(&self.bone_work),
+                    "bone_vbuf",
+                );
             }
         }
 
@@ -3358,20 +3283,13 @@ impl GpuRenderer {
                     params.display.normal_length,
                     params.material_visibility,
                 );
-                self.normal_vertex_count = self.normal_work.len() as u32;
-                let data = bytemuck::cast_slice(&self.normal_work);
-                if data.len() > self.normal_buf_capacity {
-                    self.normal_buf = Some(device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("normal_vbuf"),
-                            contents: data,
-                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                        },
-                    ));
-                    self.normal_buf_capacity = data.len();
-                } else if let Some(ref buf) = self.normal_buf {
-                    queue.write_buffer(buf, 0, data);
-                }
+                self.normal.vertex_count = self.normal_work.len() as u32;
+                self.normal.upload(
+                    device,
+                    queue,
+                    bytemuck::cast_slice(&self.normal_work),
+                    "normal_vbuf",
+                );
                 self.normal_dirty = false;
                 self.normal_cache_length = params.display.normal_length;
                 self.normal_cache_visibility.clear();
@@ -3379,10 +3297,10 @@ impl GpuRenderer {
                     .extend_from_slice(params.material_visibility);
             }
         } else {
-            if self.normal_vertex_count > 0 {
+            if self.normal.vertex_count > 0 {
                 self.normal_dirty = true; // 再表示時に再生成するためフラグを立てる
             }
-            self.normal_vertex_count = 0;
+            self.normal.vertex_count = 0;
         }
 
         // SpringBone/Joint共通: ボーンデルタを1回だけ計算
@@ -3399,10 +3317,10 @@ impl GpuRenderer {
         if !params.display.show_spring_bones
             || (ir.physics.rigid_bodies.is_empty() && ir.physics.joints.is_empty())
         {
-            self.spring_vertex_count = 0;
+            self.spring.vertex_count = 0;
         }
         if need_spring {
-            let spring_changed = self.spring_vertex_count == 0
+            let spring_changed = self.spring.vertex_count == 0
                 || has_anim
                 || anim_just_cleared
                 || params.display.spring_bone_opacity != self.spring_cache_opacity
@@ -3418,30 +3336,23 @@ impl GpuRenderer {
                     &bone_deltas,
                     params.is_vrm0,
                 );
-                self.spring_vertex_count = self.spring_work.len() as u32;
-                let data = bytemuck::cast_slice(&self.spring_work);
-                if data.len() > self.spring_buf_capacity {
-                    self.spring_buf = Some(device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("spring_vbuf"),
-                            contents: data,
-                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                        },
-                    ));
-                    self.spring_buf_capacity = data.len();
-                } else if let Some(ref buf) = self.spring_buf {
-                    queue.write_buffer(buf, 0, data);
-                }
+                self.spring.vertex_count = self.spring_work.len() as u32;
+                self.spring.upload(
+                    device,
+                    queue,
+                    bytemuck::cast_slice(&self.spring_work),
+                    "spring_vbuf",
+                );
             }
         }
 
         // ジョイント頂点を毎フレーム更新
         if !params.display.show_joints || ir.physics.joints.is_empty() {
-            self.joint_vertex_count = 0;
-            self.joint_edge_vertex_count = 0;
+            self.joint.vertex_count = 0;
+            self.joint_edge.vertex_count = 0;
         }
         if need_joint {
-            let joint_changed = self.joint_vertex_count == 0
+            let joint_changed = self.joint.vertex_count == 0
                 || has_anim
                 || anim_just_cleared
                 || params.display.joint_opacity != self.joint_cache_opacity;
@@ -3456,35 +3367,21 @@ impl GpuRenderer {
                     params.is_vrm0,
                 );
                 // 面バッファ（TriangleList）
-                self.joint_vertex_count = self.joint_work.len() as u32;
-                let data = bytemuck::cast_slice(&self.joint_work);
-                if data.len() > self.joint_buf_capacity {
-                    self.joint_buf = Some(device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("joint_vbuf"),
-                            contents: data,
-                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                        },
-                    ));
-                    self.joint_buf_capacity = data.len();
-                } else if let Some(ref buf) = self.joint_buf {
-                    queue.write_buffer(buf, 0, data);
-                }
+                self.joint.vertex_count = self.joint_work.len() as u32;
+                self.joint.upload(
+                    device,
+                    queue,
+                    bytemuck::cast_slice(&self.joint_work),
+                    "joint_vbuf",
+                );
                 // エッジバッファ（LineList）
-                self.joint_edge_vertex_count = self.joint_edge_work.len() as u32;
-                let edge_data = bytemuck::cast_slice(&self.joint_edge_work);
-                if edge_data.len() > self.joint_edge_buf_capacity {
-                    self.joint_edge_buf = Some(device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("joint_edge_vbuf"),
-                            contents: edge_data,
-                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                        },
-                    ));
-                    self.joint_edge_buf_capacity = edge_data.len();
-                } else if let Some(ref buf) = self.joint_edge_buf {
-                    queue.write_buffer(buf, 0, edge_data);
-                }
+                self.joint_edge.vertex_count = self.joint_edge_work.len() as u32;
+                self.joint_edge.upload(
+                    device,
+                    queue,
+                    bytemuck::cast_slice(&self.joint_edge_work),
+                    "joint_edge_vbuf",
+                );
             }
         }
     }
@@ -3507,76 +3404,6 @@ impl GpuRenderer {
         // 可視化バッファの準備（ボーン・法線・剛体・ジョイント）
         self.prepare_visualization_buffers(device, queue, model, ir, params);
 
-        let offscreen = self
-            .offscreen
-            .as_ref()
-            .expect("ensure_offscreen で初期化済み");
-
-        // Update camera uniform
-        let aspect = params.width as f32 / params.height as f32;
-        let light_dir = match params.display.light_mode {
-            LightMode::CameraFollow => params.camera.camera_following_light_dir(),
-            LightMode::Fixed => OrbitCamera::fixed_light_dir(),
-        };
-        let view_mat = params.camera.view_matrix();
-        let cam_uniform = CameraUniform {
-            view_proj: params.camera.view_proj(aspect).to_cols_array_2d(),
-            light_dir: light_dir.to_array(),
-            light_intensity: params.display.light_intensity,
-            ambient: [
-                params.display.ambient_sky_color[0] * params.display.ambient_intensity,
-                params.display.ambient_sky_color[1] * params.display.ambient_intensity,
-                params.display.ambient_sky_color[2] * params.display.ambient_intensity,
-            ],
-            shader_mode: params.display.shader_override as u32,
-            camera_pos: params.camera.eye().to_array(),
-            mmd_edge_thickness: params.display.mmd_edge_thickness,
-            view_row0: [view_mat.x_axis.x, view_mat.y_axis.x, view_mat.z_axis.x],
-            _pad1: 0.0,
-            view_row1: [view_mat.x_axis.y, view_mat.y_axis.y, view_mat.z_axis.y],
-            mmd_ambient_scale: if params.display.use_mmd_path {
-                // light_intensity を正規化して反映 (デフォルト 0.7 で従来値 154/255 を維持)
-                (154.0 / 255.0) * (params.display.light_intensity / 0.7)
-            } else {
-                params.display.ambient_intensity
-            },
-            time: params.time,
-            aspect,
-            proj_11: params.camera.proj_11(),
-            _pad2: 0.0,
-            // GI 均一化（UniVRM 準拠: (indirectLight(up) + indirectLight(down)) / 2）
-            // 半球 ambient の sky/ground 平均値を uniformedGi として使用
-            gi_equalized: {
-                let ai = params.display.ambient_intensity;
-                let s = &params.display.ambient_sky_color;
-                let g = &params.display.ambient_ground_color;
-                [
-                    (s[0] + g[0]) * 0.5 * ai,
-                    (s[1] + g[1]) * 0.5 * ai,
-                    (s[2] + g[2]) * 0.5 * ai,
-                ]
-            },
-            is_perspective: if params.camera.perspective { 1.0 } else { 0.0 },
-            camera_forward: (params.camera.target - params.camera.eye())
-                .normalize()
-                .to_array(),
-            _pad3: 0.0,
-            light_color: params.display.light_color,
-            _pad4: 0.0,
-            ambient_ground: [
-                params.display.ambient_ground_color[0] * params.display.ambient_intensity,
-                params.display.ambient_ground_color[1] * params.display.ambient_intensity,
-                params.display.ambient_ground_color[2] * params.display.ambient_intensity,
-            ],
-            _pad5: 0.0,
-        };
-        queue.write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&cam_uniform));
-
-        // Encode
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("offscreen_encoder"),
-        });
-
         let mmd_mode = params.display.use_mmd_path;
         let mmd_edge_enabled = params.display.mmd_edge_enabled;
         // ワイヤーフレーム/シェーダーオーバーライド時は MMD パスを使わず既存パイプラインにフォールバック
@@ -3594,23 +3421,46 @@ impl GpuRenderer {
         // Unorm フレーム判定: MMD 専用パスに完全に乗るフレームのみ
         let use_unorm = can_use_unorm_frame(model, params.material_visibility, mmd_solid);
 
+        // パイプラインセットの遅延生成（未作成なら初回のみコンパイル）
+        self.ensure_pipelines(device, use_unorm);
+
+        let offscreen = self
+            .offscreen
+            .as_ref()
+            .expect("ensure_offscreen で初期化済み");
+
+        // カメラユニフォーム更新
+        let cam_uniform = Self::build_camera_uniform(params);
+        queue.write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&cam_uniform));
+
+        // Encode
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("offscreen_encoder"),
+        });
+
         // take で借用衝突を回避（self.pipelines() が self 全体を immutable borrow するため）
         let mut work_draw_centers = std::mem::take(&mut self.work_draw_centers);
         let mut work_sorted_indices = std::mem::take(&mut self.work_sorted_indices);
+
+        // 描画順インデックス構築
+        let pending_sort_cache = self.build_draw_queue(
+            model,
+            params,
+            &mut work_draw_centers,
+            &mut work_sorted_indices,
+        );
 
         let ps = self.pipelines(use_unorm);
 
         // カラービュー選択: use_unorm に応じて Unorm / sRGB ビュー
         let (color_view, resolve_target): (&wgpu::TextureView, Option<&wgpu::TextureView>) =
             if use_unorm {
-                // Unorm ビューで描画
                 if let Some(ref msaa_view_unorm) = offscreen.msaa_color_view_unorm {
                     (msaa_view_unorm, Some(&offscreen.color_view_unorm))
                 } else {
                     (&offscreen.color_view_unorm, None)
                 }
             } else {
-                // sRGB ビューで描画（現行動作）
                 if let Some(ref msaa_view) = offscreen.msaa_color_view {
                     (msaa_view, Some(&offscreen.color_view))
                 } else {
@@ -3671,7 +3521,7 @@ impl GpuRenderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &offscreen.depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -3679,458 +3529,61 @@ impl GpuRenderer {
                 ..Default::default()
             });
 
-            // メッシュ描画（空モデルの場合はスキップ）
+            // Standard メッシュ描画（空モデルの場合はスキップ）
             if !model.draws.is_empty() {
                 pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
                 pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
 
-                let use_wireframe = params.display.draw_mode == DrawMode::Wireframe
-                    && ps.pipeline_wireframe.is_some();
-                let use_solid_wire = params.display.draw_mode == DrawMode::SolidWireframe
-                    && ps.pipeline_wire_overlay.is_some();
-
-                // --- renderQueueOffsetNumber + カメラ距離による描画順インデックス構築 ---
-                // BLEND/BlendZWrite カテゴリ内: renderQueueOffsetNumber → カメラ距離(遠→近)で安定ソート
-                // アニメーション済み頂点から重心を再計算（rest pose 固定だと動的シーンで破綻するため）
-                let eye = params.camera.eye();
-                let verts = model.current_vertices();
-                let indices = model.base_indices();
-                work_draw_centers.clear();
-                work_draw_centers.extend(model.draws.iter().map(|draw| {
-                    if !matches!(
-                        draw.render_queue,
-                        RenderQueue::Blend | RenderQueue::BlendZWrite
-                    ) || draw.index_count == 0
-                    {
-                        return draw.center; // 不透明は固定重心で十分
-                    }
-                    // 均等サンプリングで重心を近似（全走査と先頭1三角形の中間）
-                    let start = draw.index_offset as usize;
-                    let total = draw.index_count as usize;
-                    let max_samples = 30; // 最大 10 三角形（30 index）
-                    let mut sum = glam::Vec3::ZERO;
-                    if total <= max_samples {
-                        // 少数なら全走査
-                        for &idx in &indices[start..start + total] {
-                            sum += glam::Vec3::from(verts[idx as usize].position);
-                        }
-                        sum / total as f32
-                    } else {
-                        // 均等間隔でサンプリング
-                        let step = total / max_samples;
-                        let mut count = 0u32;
-                        let mut i = 0;
-                        while i < total {
-                            sum += glam::Vec3::from(verts[indices[start + i] as usize].position);
-                            count += 1;
-                            i += step;
-                        }
-                        sum / count as f32
-                    }
-                }));
-
-                work_sorted_indices.clear();
-                work_sorted_indices.extend(0..model.draws.len());
-                work_sorted_indices.sort_by(|&a, &b| {
-                    let da = &model.draws[a];
-                    let db = &model.draws[b];
-                    da.render_queue
-                        .cmp(&db.render_queue)
-                        .then(da.render_queue_offset.cmp(&db.render_queue_offset))
-                        .then_with(|| {
-                            if matches!(
-                                da.render_queue,
-                                RenderQueue::Blend | RenderQueue::BlendZWrite
-                            ) {
-                                // back-to-front: 遠いものを先に描画
-                                let za = work_draw_centers[a].distance_squared(eye);
-                                let zb = work_draw_centers[b].distance_squared(eye);
-                                zb.partial_cmp(&za).unwrap_or(std::cmp::Ordering::Equal)
-                            } else {
-                                std::cmp::Ordering::Equal
-                            }
-                        })
-                });
-
-                // --- MToon 4段階描画: OPAQUE → MASK → BlendZWrite → Blend ---
-                let queue_phases: &[RenderQueue] = &[
-                    RenderQueue::Opaque,
-                    RenderQueue::Mask,
-                    RenderQueue::BlendZWrite,
-                    RenderQueue::Blend,
-                ];
-
-                for target_queue in queue_phases {
-                    // BLEND/BlendZWrite: draw ごとに surface→outline を連続発行（ZWrite OFF で
-                    // 描画順=合成順のため、分離すると奥のアウトラインが手前サーフェスに浮く）
-                    // OPAQUE/MASK: 深度バッファで保護されるため従来通り2パス
-                    let interleave_outline =
-                        matches!(target_queue, RenderQueue::Blend | RenderQueue::BlendZWrite);
-
-                    // メッシュ描画
-                    for &draw_idx in &work_sorted_indices {
-                        let draw = &model.draws[draw_idx];
-                        if draw.render_queue != *target_queue {
-                            continue;
-                        }
-                        if !params
-                            .material_visibility
-                            .get(draw_idx)
-                            .copied()
-                            .unwrap_or(true)
-                        {
-                            continue;
-                        }
-                        // MMD 材質は Pass 2 で描画するのでスキップ
-                        let is_mmd_draw = mmd_solid
-                            && draw.render_style == super::mesh::RenderStyle::Mmd
-                            && draw.mmd_material_bind_group.is_some();
-                        if is_mmd_draw {
-                            continue;
-                        }
-
-                        if use_wireframe {
-                            pass.set_pipeline(ps.pipeline_wireframe.as_ref().expect(
-                                "wireframe パイプラインは supports_wireframe チェック済み",
-                            ));
-                        } else {
-                            // レンダーキュー × カリングモードに応じたパイプライン選択
-                            match (draw.render_queue, draw.cull_mode) {
-                                (RenderQueue::Opaque, CullMode::Back) => {
-                                    pass.set_pipeline(&ps.pipeline_cull)
-                                }
-                                (RenderQueue::Opaque, CullMode::None) => {
-                                    pass.set_pipeline(&ps.pipeline_no_cull)
-                                }
-                                (RenderQueue::Opaque, CullMode::Front) => {
-                                    pass.set_pipeline(&ps.pipeline_front_cull)
-                                }
-                                (RenderQueue::Mask, CullMode::Back) => {
-                                    pass.set_pipeline(&ps.pipeline_mask_cull)
-                                }
-                                (RenderQueue::Mask, CullMode::None) => {
-                                    pass.set_pipeline(&ps.pipeline_mask_no_cull)
-                                }
-                                (RenderQueue::Mask, CullMode::Front) => {
-                                    pass.set_pipeline(&ps.pipeline_mask_front_cull)
-                                }
-                                (RenderQueue::BlendZWrite, CullMode::Back) => {
-                                    pass.set_pipeline(&ps.pipeline_alpha_zwrite_cull)
-                                }
-                                (RenderQueue::BlendZWrite, CullMode::None) => {
-                                    pass.set_pipeline(&ps.pipeline_alpha_zwrite_no_cull)
-                                }
-                                (RenderQueue::BlendZWrite, CullMode::Front) => {
-                                    pass.set_pipeline(&ps.pipeline_alpha_zwrite_front_cull)
-                                }
-                                (RenderQueue::Blend, CullMode::Back) => {
-                                    pass.set_pipeline(&ps.pipeline_alpha_cull)
-                                }
-                                (RenderQueue::Blend, CullMode::None) => {
-                                    pass.set_pipeline(&ps.pipeline_alpha_no_cull)
-                                }
-                                (RenderQueue::Blend, CullMode::Front) => {
-                                    pass.set_pipeline(&ps.pipeline_alpha_front_cull)
-                                }
-                            }
-                        }
-                        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                        let tex_bg = draw
-                            .texture_bind_group
-                            .as_ref()
-                            .unwrap_or(&self.default_tex_bind_group);
-                        pass.set_bind_group(1, tex_bg, &[]);
-                        pass.set_bind_group(2, &draw.material_bind_group, &[]);
-                        let mtoon_aux_bg = draw
-                            .mtoon_aux_bind_group
-                            .as_ref()
-                            .unwrap_or(&self.default_mtoon_aux_bind_group);
-                        pass.set_bind_group(3, mtoon_aux_bg, &[]);
-
-                        pass.draw_indexed(
-                            draw.index_offset..(draw.index_offset + draw.index_count),
-                            0,
-                            0..1,
-                        );
-
-                        // BLEND/BlendZWrite: サーフェス直後にアウトライン描画（インターリーブ）
-                        // Wire モード、シェーダーオーバーライド、MMD パス時はアウトラインをスキップ
-                        if interleave_outline
-                            && !use_wireframe
-                            && params.display.outline_enabled
-                            && params.display.shader_override == ShaderOverride::Default
-                            && !mmd_mode
-                            && draw.render_style == super::mesh::RenderStyle::Standard
-                            && draw.has_outline
-                        {
-                            let outline_pipeline = match draw.render_queue {
-                                RenderQueue::Blend => &ps.pipeline_outline_blend,
-                                RenderQueue::Mask => &ps.pipeline_outline_mask,
-                                _ => &ps.pipeline_outline,
-                            };
-                            pass.set_pipeline(outline_pipeline);
-                            pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
-                            pass.set_index_buffer(
-                                model.index_buf.slice(..),
-                                wgpu::IndexFormat::Uint32,
-                            );
-                            pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                            let tex_bg = draw
-                                .texture_bind_group
-                                .as_ref()
-                                .unwrap_or(&self.default_tex_bind_group);
-                            pass.set_bind_group(1, tex_bg, &[]);
-                            pass.set_bind_group(2, &draw.material_bind_group, &[]);
-                            let outline_aux_bg = draw
-                                .mtoon_aux_bind_group
-                                .as_ref()
-                                .unwrap_or(&self.default_mtoon_aux_bind_group);
-                            pass.set_bind_group(3, outline_aux_bg, &[]);
-                            pass.draw_indexed(
-                                draw.index_offset..(draw.index_offset + draw.index_count),
-                                0,
-                                0..1,
-                            );
-                        }
-                    }
-
-                    // OPAQUE/MASK: アウトラインをフェーズ後にまとめて描画
-                    // Wire モード、シェーダーオーバーライド、MMD パス時はスキップ
-                    if !interleave_outline
-                        && !use_wireframe
-                        && params.display.outline_enabled
-                        && params.display.shader_override == ShaderOverride::Default
-                        && !mmd_mode
-                    {
-                        for &draw_idx in &work_sorted_indices {
-                            let draw = &model.draws[draw_idx];
-                            if draw.render_queue != *target_queue {
-                                continue;
-                            }
-                            if !params
-                                .material_visibility
-                                .get(draw_idx)
-                                .copied()
-                                .unwrap_or(true)
-                            {
-                                continue;
-                            }
-                            if draw.render_style != super::mesh::RenderStyle::Standard {
-                                continue;
-                            }
-                            if !draw.has_outline {
-                                continue;
-                            }
-
-                            let outline_pipeline = match draw.render_queue {
-                                RenderQueue::Mask => &ps.pipeline_outline_mask,
-                                _ => &ps.pipeline_outline,
-                            };
-                            pass.set_pipeline(outline_pipeline);
-                            pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
-                            pass.set_index_buffer(
-                                model.index_buf.slice(..),
-                                wgpu::IndexFormat::Uint32,
-                            );
-                            pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                            let tex_bg = draw
-                                .texture_bind_group
-                                .as_ref()
-                                .unwrap_or(&self.default_tex_bind_group);
-                            pass.set_bind_group(1, tex_bg, &[]);
-                            pass.set_bind_group(2, &draw.material_bind_group, &[]);
-                            let outline_aux_bg = draw
-                                .mtoon_aux_bind_group
-                                .as_ref()
-                                .unwrap_or(&self.default_mtoon_aux_bind_group);
-                            pass.set_bind_group(3, outline_aux_bg, &[]);
-                            pass.draw_indexed(
-                                draw.index_offset..(draw.index_offset + draw.index_count),
-                                0,
-                                0..1,
-                            );
-                        }
-                    }
-                }
-
-                // Solid+Wire オーバーレイ
-                if use_solid_wire {
-                    let wire_pl = ps
-                        .pipeline_wire_overlay
-                        .as_ref()
-                        .expect("wire_overlay パイプラインは supports_wireframe チェック済み");
-                    pass.set_pipeline(wire_pl);
-                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                    for (draw_idx, draw) in model.draws.iter().enumerate() {
-                        if !params
-                            .material_visibility
-                            .get(draw_idx)
-                            .copied()
-                            .unwrap_or(true)
-                        {
-                            continue;
-                        }
-                        let tex_bg = draw
-                            .texture_bind_group
-                            .as_ref()
-                            .unwrap_or(&self.default_tex_bind_group);
-                        pass.set_bind_group(1, tex_bg, &[]);
-                        pass.set_bind_group(2, &draw.material_bind_group, &[]);
-                        pass.set_bind_group(3, &self.default_mtoon_aux_bind_group, &[]);
-                        pass.draw_indexed(
-                            draw.index_offset..(draw.index_offset + draw.index_count),
-                            0,
-                            0..1,
-                        );
-                    }
-                }
-                // 作業バッファを返却（容量を保持して次フレームで再利用）
-            } // end if !model.draws.is_empty()
+                Self::draw_standard_meshes(
+                    &mut pass,
+                    model,
+                    params,
+                    ps,
+                    &work_sorted_indices,
+                    &self.camera_bind_group,
+                    &self.default_tex_bind_group,
+                    &self.default_mtoon_aux_bind_group,
+                    mmd_solid,
+                    mmd_mode,
+                );
+            }
 
             // MMD 描画（材質インデックス順 — PMX の描画順序を維持）
-            // Unorm 時はガンマ空間直接出力、sRGB 時は pow(2.2) で sRGB encode を打ち消す
             if has_mmd_draws && !model.draws.is_empty() {
-                pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
-                pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-
-                let use_wireframe = params.display.draw_mode == DrawMode::Wireframe
-                    && ps.pipeline_wireframe.is_some();
-                let can_edge = mmd_edge_enabled
-                    && model.edge_scale_buf.is_some()
-                    && ps.pipeline_mmd_edge.is_some();
-
-                for (draw_idx, draw) in model.draws.iter().enumerate() {
-                    if !params
-                        .material_visibility
-                        .get(draw_idx)
-                        .copied()
-                        .unwrap_or(true)
-                    {
-                        continue;
-                    }
-                    if draw.render_style != super::mesh::RenderStyle::Mmd
-                        || draw.mmd_material_bind_group.is_none()
-                    {
-                        continue;
-                    }
-
-                    // Wire モードではワイヤーフレームパイプラインを使用
-                    if use_wireframe {
-                        pass.set_pipeline(
-                            ps.pipeline_wireframe
-                                .as_ref()
-                                .expect("wireframe パイプラインは supports_wireframe チェック済み"),
-                        );
-                    } else {
-                        // 不透明 / 半透明 × カリングモードでパイプラインを切り替え
-                        // MMD は Front cull 未対応のため Back 以外は no_cull
-                        let is_no_cull = draw.cull_mode != CullMode::Back;
-                        if draw.is_alpha {
-                            if is_no_cull {
-                                pass.set_pipeline(ps.pipeline_mmd_alpha_no_cull.as_ref().unwrap());
-                            } else {
-                                pass.set_pipeline(ps.pipeline_mmd_alpha_cull.as_ref().unwrap());
-                            }
-                        } else if is_no_cull {
-                            pass.set_pipeline(ps.pipeline_mmd_main_no_cull.as_ref().unwrap());
-                        } else {
-                            pass.set_pipeline(ps.pipeline_mmd_main_cull.as_ref().unwrap());
-                        }
-                    }
-                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                    if use_wireframe {
-                        // Wire モードでは標準バインドグループを使用
-                        // （wireframe パイプラインは標準 pipeline_layout）
-                        let tex_bg = draw
-                            .texture_bind_group
-                            .as_ref()
-                            .unwrap_or(&self.default_tex_bind_group);
-                        pass.set_bind_group(1, tex_bg, &[]);
-                        pass.set_bind_group(2, &draw.material_bind_group, &[]);
-                        let mtoon_aux_bg = draw
-                            .mtoon_aux_bind_group
-                            .as_ref()
-                            .unwrap_or(&self.default_mtoon_aux_bind_group);
-                        pass.set_bind_group(3, mtoon_aux_bg, &[]);
-                    } else {
-                        let tex_bg = draw
-                            .mmd_texture_bind_group
-                            .as_ref()
-                            .or(draw.texture_bind_group.as_ref())
-                            .unwrap_or(&self.default_tex_bind_group);
-                        pass.set_bind_group(1, tex_bg, &[]);
-                        pass.set_bind_group(2, draw.mmd_material_bind_group.as_ref().unwrap(), &[]);
-                        let aux_bg = draw
-                            .mmd_aux_bind_group
-                            .as_ref()
-                            .unwrap_or(&self.default_mmd_aux_bind_group);
-                        pass.set_bind_group(3, aux_bg, &[]);
-                    }
-                    pass.draw_indexed(
-                        draw.index_offset..(draw.index_offset + draw.index_count),
-                        0,
-                        0..1,
-                    );
-
-                    // 不透明材質のエッジをその場で描画（Wire モードではスキップ）
-                    if !use_wireframe && can_edge && !draw.is_alpha && draw.has_edge {
-                        if let Some(ref mmd_mat_bg) = draw.mmd_material_bind_group {
-                            let edge_scale_buf = model.edge_scale_buf.as_ref().unwrap();
-                            let edge_pipeline = ps.pipeline_mmd_edge.as_ref().unwrap();
-                            pass.set_pipeline(edge_pipeline);
-                            pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
-                            pass.set_vertex_buffer(1, edge_scale_buf.slice(..));
-                            pass.set_index_buffer(
-                                model.index_buf.slice(..),
-                                wgpu::IndexFormat::Uint32,
-                            );
-                            pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                            pass.set_bind_group(1, mmd_mat_bg, &[]);
-                            pass.draw_indexed(
-                                draw.index_offset..(draw.index_offset + draw.index_count),
-                                0,
-                                0..1,
-                            );
-                            // エッジ描画後にメインバッファを復元
-                            pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
-                            pass.set_index_buffer(
-                                model.index_buf.slice(..),
-                                wgpu::IndexFormat::Uint32,
-                            );
-                        }
-                    }
-                }
+                Self::draw_mmd_meshes(
+                    &mut pass,
+                    model,
+                    params,
+                    ps,
+                    &self.camera_bind_group,
+                    &self.default_tex_bind_group,
+                    &self.default_mtoon_aux_bind_group,
+                    &self.default_mmd_aux_bind_group,
+                    mmd_edge_enabled,
+                );
             }
 
-            // ===== 材質ホバーハイライト（オレンジワイヤーフレーム、MRT 化済み）=====
-            if !params.hovered_draw_indices.is_empty() && !model.draws.is_empty() {
-                if let Some(ref highlight_pl) = ps.pipeline_highlight {
-                    pass.set_pipeline(highlight_pl);
-                    pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
-                    pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                    for &draw_idx in params.hovered_draw_indices {
-                        if let Some(draw) = model.draws.get(draw_idx) {
-                            let tex_bg = draw
-                                .texture_bind_group
-                                .as_ref()
-                                .unwrap_or(&self.default_tex_bind_group);
-                            pass.set_bind_group(1, tex_bg, &[]);
-                            pass.set_bind_group(2, &draw.material_bind_group, &[]);
-                            pass.set_bind_group(3, &self.default_mtoon_aux_bind_group, &[]);
-                            pass.draw_indexed(
-                                draw.index_offset..(draw.index_offset + draw.index_count),
-                                0,
-                                0..1,
-                            );
-                        }
-                    }
-                }
-            }
+            // 材質ホバーハイライト（オレンジワイヤーフレーム）
+            Self::draw_highlight(
+                &mut pass,
+                model,
+                params,
+                ps,
+                &self.camera_bind_group,
+                &self.default_tex_bind_group,
+                &self.default_mtoon_aux_bind_group,
+            );
         } // end Pass 1 (MRT)
 
         // ===== Pass 2 (1ターゲット): グリッド + オーバーレイ（法線・ボーン・剛体・ジョイント）=====
+        // NOTE: MSAA 有効時、LoadOp::Load はタイルベース GPU（Intel iGPU 等）で MSAA カラー
+        // テクスチャの VRAM→タイル読み戻しが発生し帯域コストがかかる。
+        // Pass 1 (MRT: 2ターゲット) と統合すればレンダーパス開始を1回に削減できるが、
+        // オーバーレイパイプラインが1ターゲットで作成されているため MRT 互換化
+        // （2番目のターゲットに write_mask::EMPTY を追加）が必要になる。
+        // 現時点では実測での問題報告がなく、パイプライン複雑化のコストに見合わないため
+        // 現状維持とする。将来 MSAA+タイル GPU で帯域がボトルネックになった場合に再検討。
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("pass2_overlay"),
@@ -4138,14 +3591,14 @@ impl GpuRenderer {
                     view: color_view,
                     resolve_target: resolve_target,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // Pass 1 の結果を保持
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &offscreen.depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // Pass 1 で書いた depth を再利用
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -4153,93 +3606,20 @@ impl GpuRenderer {
                 ..Default::default()
             });
 
-            // グリッド描画
-            if params.display.show_grid {
-                pass.set_pipeline(&ps.pipeline_grid);
-                pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.grid_vbuf.slice(..));
-                pass.draw(0..self.grid_vertex_count, 0..1);
-            }
-
-            // 描画順: 法線 → ボーン → 剛体 → ジョイント（後が最前面）
-
-            // 法線表示（LineList オーバーレイ）
-            if params.display.show_normals && self.normal_vertex_count > 0 {
-                if let Some(ref normal_buf) = self.normal_buf {
-                    pass.set_pipeline(&ps.pipeline_line_overlay);
-                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                    pass.set_vertex_buffer(0, normal_buf.slice(..));
-                    pass.draw(0..self.normal_vertex_count, 0..1);
-                }
-            }
-
-            // ボーン描画（3段階: テール → 塗り → 外枠）
-            if params.display.show_bones {
-                // 1. テール三角形（LineList）— 最背面
-                if self.bone_tail_vertex_count > 0 {
-                    if let Some(ref tail_buf) = self.bone_tail_buf {
-                        pass.set_pipeline(&ps.pipeline_line_overlay);
-                        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                        pass.set_vertex_buffer(0, tail_buf.slice(..));
-                        pass.draw(0..self.bone_tail_vertex_count, 0..1);
-                    }
-                }
-                // 2. マーカー塗りつぶし（TriangleList）— テールの上
-                if self.bone_fill_vertex_count > 0 {
-                    if let Some(ref fill_buf) = self.bone_fill_buf {
-                        pass.set_pipeline(&ps.pipeline_bone);
-                        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                        pass.set_vertex_buffer(0, fill_buf.slice(..));
-                        pass.draw(0..self.bone_fill_vertex_count, 0..1);
-                    }
-                }
-                // 3. マーカー外枠（LineList）— 最前面
-                if self.bone_vertex_count > 0 {
-                    if let Some(ref bone_buf) = self.bone_buf {
-                        pass.set_pipeline(&ps.pipeline_line_overlay);
-                        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                        pass.set_vertex_buffer(0, bone_buf.slice(..));
-                        pass.draw(0..self.bone_vertex_count, 0..1);
-                    }
-                }
-            }
-
-            // 剛体描画（1px LineList オーバーレイ）
-            if params.display.show_spring_bones && self.spring_vertex_count > 0 {
-                if let Some(ref spring_buf) = self.spring_buf {
-                    pass.set_pipeline(&ps.pipeline_line_overlay);
-                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                    pass.set_vertex_buffer(0, spring_buf.slice(..));
-                    pass.draw(0..self.spring_vertex_count, 0..1);
-                }
-            }
-
-            // ジョイント描画（オーバーレイ、最前面）
-            if params.display.show_joints {
-                // 面（TriangleList）
-                if self.joint_vertex_count > 0 {
-                    if let Some(ref joint_buf) = self.joint_buf {
-                        pass.set_pipeline(&ps.pipeline_bone);
-                        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                        pass.set_vertex_buffer(0, joint_buf.slice(..));
-                        pass.draw(0..self.joint_vertex_count, 0..1);
-                    }
-                }
-                // エッジ（LineList, 1px）
-                if self.joint_edge_vertex_count > 0 {
-                    if let Some(ref edge_buf) = self.joint_edge_buf {
-                        pass.set_pipeline(&ps.pipeline_line_overlay);
-                        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                        pass.set_vertex_buffer(0, edge_buf.slice(..));
-                        pass.draw(0..self.joint_edge_vertex_count, 0..1);
-                    }
-                }
-            }
+            self.draw_overlays(&mut pass, params, ps);
         } // end Pass 2 (overlay)
 
         // 作業バッファを返却（容量を保持して次フレームで再利用）
         self.work_draw_centers = work_draw_centers;
         self.work_sorted_indices = work_sorted_indices;
+
+        // 半透明ソートキャッシュ更新（ps 借用解放後にまとめて書き込み）
+        if let Some((eye, draw_count, vert_ptr)) = pending_sort_cache {
+            self.cache_sort_eye = Some(eye);
+            self.cache_sort_draw_count = draw_count;
+            self.cache_sort_vert_ptr = vert_ptr;
+            self.sort_dirty = false;
+        }
 
         // --- Bloom ポストエフェクト ---
         let bloom_enabled = params.display.bloom_enabled && params.display.bloom_intensity > 0.0;
@@ -4248,8 +3628,8 @@ impl GpuRenderer {
                 device,
                 queue,
                 &mut encoder,
-                &offscreen.bloom_source_view, // MRT の bloom 出力（emissive-only）
-                &offscreen.color_view,        // 元のシーンカラー（composite 用）
+                &offscreen.bloom_source_view,
+                &offscreen.color_view,
                 params.width,
                 params.height,
                 params.display.bloom_threshold,
@@ -4286,6 +3666,625 @@ impl GpuRenderer {
         };
 
         (tex_id, ())
+    }
+
+    // -----------------------------------------------------------------------
+    // render_to_texture ヘルパー群
+    // -----------------------------------------------------------------------
+
+    /// カメラユニフォームを構築する
+    fn build_camera_uniform(params: &RenderParams) -> CameraUniform {
+        let aspect = params.width as f32 / params.height as f32;
+        let light_dir = match params.display.light_mode {
+            LightMode::CameraFollow => params.camera.camera_following_light_dir(),
+            LightMode::Fixed => OrbitCamera::fixed_light_dir(),
+        };
+        let view_mat = params.camera.view_matrix();
+        let ai = params.display.ambient_intensity;
+        let s = &params.display.ambient_sky_color;
+        let g = &params.display.ambient_ground_color;
+        CameraUniform {
+            view_proj: params.camera.view_proj(aspect).to_cols_array_2d(),
+            light_dir: light_dir.to_array(),
+            light_intensity: params.display.light_intensity,
+            ambient: [s[0] * ai, s[1] * ai, s[2] * ai],
+            shader_mode: params.display.shader_override as u32,
+            camera_pos: params.camera.eye().to_array(),
+            mmd_edge_thickness: params.display.mmd_edge_thickness,
+            view_row0: [view_mat.x_axis.x, view_mat.y_axis.x, view_mat.z_axis.x],
+            _pad1: 0.0,
+            view_row1: [view_mat.x_axis.y, view_mat.y_axis.y, view_mat.z_axis.y],
+            mmd_ambient_scale: if params.display.use_mmd_path {
+                MMD_LIGHT_AMBIENT * (params.display.light_intensity / MMD_DEFAULT_LIGHT_INTENSITY)
+            } else {
+                ai
+            },
+            time: params.time,
+            aspect,
+            proj_11: params.camera.proj_11(),
+            _pad2: 0.0,
+            gi_equalized: [
+                (s[0] + g[0]) * 0.5 * ai,
+                (s[1] + g[1]) * 0.5 * ai,
+                (s[2] + g[2]) * 0.5 * ai,
+            ],
+            is_perspective: b2f(params.camera.perspective),
+            camera_forward: (params.camera.target - params.camera.eye())
+                .normalize()
+                .to_array(),
+            _pad3: 0.0,
+            light_color: params.display.light_color,
+            _pad4: 0.0,
+            ambient_ground: [g[0] * ai, g[1] * ai, g[2] * ai],
+            _pad5: 0.0,
+        }
+    }
+
+    /// 描画順インデックスをソートする（半透明のカメラ距離ソート含む）
+    ///
+    /// ソートが行われた場合は `Some((eye, draw_count, vert_ptr))` を返す。
+    fn build_draw_queue(
+        &self,
+        model: &GpuModel,
+        params: &RenderParams,
+        work_draw_centers: &mut Vec<glam::Vec3>,
+        work_sorted_indices: &mut Vec<usize>,
+    ) -> Option<(glam::Vec3, usize, usize)> {
+        let eye = params.camera.eye();
+        let vert_ptr = model.current_vertices().as_ptr() as usize;
+        let draw_count = model.draws.len();
+        let sort_needed = self.sort_dirty
+            || self.cache_sort_draw_count != draw_count
+            || self.cache_sort_vert_ptr != vert_ptr
+            || self
+                .cache_sort_eye
+                .map_or(true, |prev_eye| prev_eye.to_array() != eye.to_array())
+            || work_sorted_indices.len() != draw_count;
+
+        if !sort_needed {
+            return None;
+        }
+
+        let verts = model.current_vertices();
+        let indices = model.base_indices();
+        work_draw_centers.clear();
+        work_draw_centers.extend(model.draws.iter().map(|draw| {
+            if !matches!(
+                draw.render_queue,
+                RenderQueue::Blend | RenderQueue::BlendZWrite
+            ) || draw.index_count == 0
+            {
+                return draw.center;
+            }
+            let start = draw.index_offset as usize;
+            let total = draw.index_count as usize;
+            let max_samples = 30;
+            let mut sum = glam::Vec3::ZERO;
+            if total <= max_samples {
+                for &idx in &indices[start..start + total] {
+                    sum += glam::Vec3::from(verts[idx as usize].position);
+                }
+                sum / total as f32
+            } else {
+                let step = total / max_samples;
+                let mut count = 0u32;
+                let mut i = 0;
+                while i < total {
+                    sum += glam::Vec3::from(verts[indices[start + i] as usize].position);
+                    count += 1;
+                    i += step;
+                }
+                sum / count as f32
+            }
+        }));
+
+        work_sorted_indices.clear();
+        work_sorted_indices.extend(0..model.draws.len());
+        work_sorted_indices.sort_by(|&a, &b| {
+            let da = &model.draws[a];
+            let db = &model.draws[b];
+            da.render_queue
+                .cmp(&db.render_queue)
+                .then(da.render_queue_offset.cmp(&db.render_queue_offset))
+                .then_with(|| {
+                    if matches!(
+                        da.render_queue,
+                        RenderQueue::Blend | RenderQueue::BlendZWrite
+                    ) {
+                        let za = work_draw_centers[a].distance_squared(eye);
+                        let zb = work_draw_centers[b].distance_squared(eye);
+                        zb.partial_cmp(&za).unwrap_or(std::cmp::Ordering::Equal)
+                    } else {
+                        std::cmp::Ordering::Equal
+                    }
+                })
+        });
+
+        Some((eye, draw_count, vert_ptr))
+    }
+
+    /// MToon 4段階描画（Standard RenderStyle のメッシュ描画 + アウトライン）
+    #[allow(clippy::too_many_arguments)]
+    fn draw_standard_meshes<'a>(
+        pass: &mut wgpu::RenderPass<'a>,
+        model: &'a GpuModel,
+        params: &RenderParams,
+        ps: &'a PipelineSet,
+        work_sorted_indices: &[usize],
+        camera_bind_group: &'a wgpu::BindGroup,
+        default_tex_bind_group: &'a wgpu::BindGroup,
+        default_mtoon_aux_bind_group: &'a wgpu::BindGroup,
+        mmd_solid: bool,
+        mmd_mode: bool,
+    ) {
+        let use_wireframe =
+            params.display.draw_mode == DrawMode::Wireframe && ps.pipeline_wireframe.is_some();
+        let use_solid_wire = params.display.draw_mode == DrawMode::SolidWireframe
+            && ps.pipeline_wire_overlay.is_some();
+
+        let queue_phases: &[RenderQueue] = &[
+            RenderQueue::Opaque,
+            RenderQueue::Mask,
+            RenderQueue::BlendZWrite,
+            RenderQueue::Blend,
+        ];
+
+        for target_queue in queue_phases {
+            let interleave_outline =
+                matches!(target_queue, RenderQueue::Blend | RenderQueue::BlendZWrite);
+
+            for &draw_idx in work_sorted_indices {
+                let draw = &model.draws[draw_idx];
+                if draw.render_queue != *target_queue {
+                    continue;
+                }
+                if !params
+                    .material_visibility
+                    .get(draw_idx)
+                    .copied()
+                    .unwrap_or(true)
+                {
+                    continue;
+                }
+                let is_mmd_draw = mmd_solid
+                    && draw.render_style == super::mesh::RenderStyle::Mmd
+                    && draw.mmd_material_bind_group.is_some();
+                if is_mmd_draw {
+                    continue;
+                }
+
+                if use_wireframe {
+                    pass.set_pipeline(
+                        ps.pipeline_wireframe
+                            .as_ref()
+                            .expect("wireframe パイプラインは supports_wireframe チェック済み"),
+                    );
+                } else {
+                    match (draw.render_queue, draw.cull_mode) {
+                        (RenderQueue::Opaque, CullMode::Back) => {
+                            pass.set_pipeline(&ps.pipeline_cull)
+                        }
+                        (RenderQueue::Opaque, CullMode::None) => {
+                            pass.set_pipeline(&ps.pipeline_no_cull)
+                        }
+                        (RenderQueue::Opaque, CullMode::Front) => {
+                            pass.set_pipeline(&ps.pipeline_front_cull)
+                        }
+                        (RenderQueue::Mask, CullMode::Back) => {
+                            pass.set_pipeline(&ps.pipeline_mask_cull)
+                        }
+                        (RenderQueue::Mask, CullMode::None) => {
+                            pass.set_pipeline(&ps.pipeline_mask_no_cull)
+                        }
+                        (RenderQueue::Mask, CullMode::Front) => {
+                            pass.set_pipeline(&ps.pipeline_mask_front_cull)
+                        }
+                        (RenderQueue::BlendZWrite, CullMode::Back) => {
+                            pass.set_pipeline(&ps.pipeline_alpha_zwrite_cull)
+                        }
+                        (RenderQueue::BlendZWrite, CullMode::None) => {
+                            pass.set_pipeline(&ps.pipeline_alpha_zwrite_no_cull)
+                        }
+                        (RenderQueue::BlendZWrite, CullMode::Front) => {
+                            pass.set_pipeline(&ps.pipeline_alpha_zwrite_front_cull)
+                        }
+                        (RenderQueue::Blend, CullMode::Back) => {
+                            pass.set_pipeline(&ps.pipeline_alpha_cull)
+                        }
+                        (RenderQueue::Blend, CullMode::None) => {
+                            pass.set_pipeline(&ps.pipeline_alpha_no_cull)
+                        }
+                        (RenderQueue::Blend, CullMode::Front) => {
+                            pass.set_pipeline(&ps.pipeline_alpha_front_cull)
+                        }
+                    }
+                }
+                pass.set_bind_group(0, camera_bind_group, &[]);
+                let tex_bg = draw
+                    .texture_bind_group
+                    .as_ref()
+                    .unwrap_or(default_tex_bind_group);
+                pass.set_bind_group(1, tex_bg, &[]);
+                pass.set_bind_group(2, &draw.material_bind_group, &[]);
+                let mtoon_aux_bg = draw
+                    .mtoon_aux_bind_group
+                    .as_ref()
+                    .unwrap_or(default_mtoon_aux_bind_group);
+                pass.set_bind_group(3, mtoon_aux_bg, &[]);
+
+                pass.draw_indexed(
+                    draw.index_offset..(draw.index_offset + draw.index_count),
+                    0,
+                    0..1,
+                );
+
+                // BLEND/BlendZWrite: サーフェス直後にアウトライン描画（インターリーブ）
+                if interleave_outline
+                    && !use_wireframe
+                    && params.display.outline_enabled
+                    && params.display.shader_override == ShaderOverride::Default
+                    && !mmd_mode
+                    && draw.render_style == super::mesh::RenderStyle::Standard
+                    && draw.has_outline
+                {
+                    let outline_pipeline = match draw.render_queue {
+                        RenderQueue::Blend => &ps.pipeline_outline_blend,
+                        RenderQueue::Mask => &ps.pipeline_outline_mask,
+                        _ => &ps.pipeline_outline,
+                    };
+                    pass.set_pipeline(outline_pipeline);
+                    pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
+                    pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_bind_group(0, camera_bind_group, &[]);
+                    let tex_bg = draw
+                        .texture_bind_group
+                        .as_ref()
+                        .unwrap_or(default_tex_bind_group);
+                    pass.set_bind_group(1, tex_bg, &[]);
+                    pass.set_bind_group(2, &draw.material_bind_group, &[]);
+                    let outline_aux_bg = draw
+                        .mtoon_aux_bind_group
+                        .as_ref()
+                        .unwrap_or(default_mtoon_aux_bind_group);
+                    pass.set_bind_group(3, outline_aux_bg, &[]);
+                    pass.draw_indexed(
+                        draw.index_offset..(draw.index_offset + draw.index_count),
+                        0,
+                        0..1,
+                    );
+                }
+            }
+
+            // OPAQUE/MASK: アウトラインをフェーズ後にまとめて描画
+            if !interleave_outline
+                && !use_wireframe
+                && params.display.outline_enabled
+                && params.display.shader_override == ShaderOverride::Default
+                && !mmd_mode
+            {
+                for &draw_idx in work_sorted_indices {
+                    let draw = &model.draws[draw_idx];
+                    if draw.render_queue != *target_queue {
+                        continue;
+                    }
+                    if !params
+                        .material_visibility
+                        .get(draw_idx)
+                        .copied()
+                        .unwrap_or(true)
+                    {
+                        continue;
+                    }
+                    if draw.render_style != super::mesh::RenderStyle::Standard {
+                        continue;
+                    }
+                    if !draw.has_outline {
+                        continue;
+                    }
+
+                    let outline_pipeline = match draw.render_queue {
+                        RenderQueue::Mask => &ps.pipeline_outline_mask,
+                        _ => &ps.pipeline_outline,
+                    };
+                    pass.set_pipeline(outline_pipeline);
+                    pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
+                    pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_bind_group(0, camera_bind_group, &[]);
+                    let tex_bg = draw
+                        .texture_bind_group
+                        .as_ref()
+                        .unwrap_or(default_tex_bind_group);
+                    pass.set_bind_group(1, tex_bg, &[]);
+                    pass.set_bind_group(2, &draw.material_bind_group, &[]);
+                    let outline_aux_bg = draw
+                        .mtoon_aux_bind_group
+                        .as_ref()
+                        .unwrap_or(default_mtoon_aux_bind_group);
+                    pass.set_bind_group(3, outline_aux_bg, &[]);
+                    pass.draw_indexed(
+                        draw.index_offset..(draw.index_offset + draw.index_count),
+                        0,
+                        0..1,
+                    );
+                }
+            }
+        }
+
+        // Solid+Wire オーバーレイ
+        if use_solid_wire {
+            let wire_pl = ps
+                .pipeline_wire_overlay
+                .as_ref()
+                .expect("wire_overlay パイプラインは supports_wireframe チェック済み");
+            pass.set_pipeline(wire_pl);
+            pass.set_bind_group(0, camera_bind_group, &[]);
+            for (draw_idx, draw) in model.draws.iter().enumerate() {
+                if !params
+                    .material_visibility
+                    .get(draw_idx)
+                    .copied()
+                    .unwrap_or(true)
+                {
+                    continue;
+                }
+                let tex_bg = draw
+                    .texture_bind_group
+                    .as_ref()
+                    .unwrap_or(default_tex_bind_group);
+                pass.set_bind_group(1, tex_bg, &[]);
+                pass.set_bind_group(2, &draw.material_bind_group, &[]);
+                pass.set_bind_group(3, default_mtoon_aux_bind_group, &[]);
+                pass.draw_indexed(
+                    draw.index_offset..(draw.index_offset + draw.index_count),
+                    0,
+                    0..1,
+                );
+            }
+        }
+    }
+
+    /// MMD 描画パス（材質インデックス順）
+    #[allow(clippy::too_many_arguments)]
+    fn draw_mmd_meshes<'a>(
+        pass: &mut wgpu::RenderPass<'a>,
+        model: &'a GpuModel,
+        params: &RenderParams,
+        ps: &'a PipelineSet,
+        camera_bind_group: &'a wgpu::BindGroup,
+        default_tex_bind_group: &'a wgpu::BindGroup,
+        default_mtoon_aux_bind_group: &'a wgpu::BindGroup,
+        default_mmd_aux_bind_group: &'a wgpu::BindGroup,
+        mmd_edge_enabled: bool,
+    ) {
+        pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
+        pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+
+        let use_wireframe =
+            params.display.draw_mode == DrawMode::Wireframe && ps.pipeline_wireframe.is_some();
+        let can_edge =
+            mmd_edge_enabled && model.edge_scale_buf.is_some() && ps.pipeline_mmd_edge.is_some();
+
+        for (draw_idx, draw) in model.draws.iter().enumerate() {
+            if !params
+                .material_visibility
+                .get(draw_idx)
+                .copied()
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            if draw.render_style != super::mesh::RenderStyle::Mmd
+                || draw.mmd_material_bind_group.is_none()
+            {
+                continue;
+            }
+
+            if use_wireframe {
+                pass.set_pipeline(
+                    ps.pipeline_wireframe
+                        .as_ref()
+                        .expect("wireframe パイプラインは supports_wireframe チェック済み"),
+                );
+            } else {
+                let is_no_cull = draw.cull_mode != CullMode::Back;
+                let mmd_pipeline = if draw.is_alpha {
+                    if is_no_cull {
+                        ps.pipeline_mmd_alpha_no_cull.as_ref()
+                    } else {
+                        ps.pipeline_mmd_alpha_cull.as_ref()
+                    }
+                } else if is_no_cull {
+                    ps.pipeline_mmd_main_no_cull.as_ref()
+                } else {
+                    ps.pipeline_mmd_main_cull.as_ref()
+                };
+                let Some(mmd_pipeline) = mmd_pipeline else {
+                    continue;
+                };
+                pass.set_pipeline(mmd_pipeline);
+            }
+            pass.set_bind_group(0, camera_bind_group, &[]);
+            if use_wireframe {
+                let tex_bg = draw
+                    .texture_bind_group
+                    .as_ref()
+                    .unwrap_or(default_tex_bind_group);
+                pass.set_bind_group(1, tex_bg, &[]);
+                pass.set_bind_group(2, &draw.material_bind_group, &[]);
+                let mtoon_aux_bg = draw
+                    .mtoon_aux_bind_group
+                    .as_ref()
+                    .unwrap_or(default_mtoon_aux_bind_group);
+                pass.set_bind_group(3, mtoon_aux_bg, &[]);
+            } else {
+                let tex_bg = draw
+                    .mmd_texture_bind_group
+                    .as_ref()
+                    .or(draw.texture_bind_group.as_ref())
+                    .unwrap_or(default_tex_bind_group);
+                pass.set_bind_group(1, tex_bg, &[]);
+                let Some(ref mmd_mat_bg_main) = draw.mmd_material_bind_group else {
+                    continue;
+                };
+                pass.set_bind_group(2, mmd_mat_bg_main, &[]);
+                let aux_bg = draw
+                    .mmd_aux_bind_group
+                    .as_ref()
+                    .unwrap_or(default_mmd_aux_bind_group);
+                pass.set_bind_group(3, aux_bg, &[]);
+            }
+            pass.draw_indexed(
+                draw.index_offset..(draw.index_offset + draw.index_count),
+                0,
+                0..1,
+            );
+
+            // 不透明材質のエッジをその場で描画（Wire モードではスキップ）
+            if !use_wireframe && can_edge && !draw.is_alpha && draw.has_edge {
+                if let (Some(ref mmd_mat_bg), Some(ref edge_scale_buf), Some(ref edge_pipeline)) = (
+                    &draw.mmd_material_bind_group,
+                    model.edge_scale_buf.as_ref(),
+                    ps.pipeline_mmd_edge.as_ref(),
+                ) {
+                    pass.set_pipeline(edge_pipeline);
+                    pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
+                    pass.set_vertex_buffer(1, edge_scale_buf.slice(..));
+                    pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_bind_group(0, camera_bind_group, &[]);
+                    pass.set_bind_group(1, mmd_mat_bg, &[]);
+                    pass.draw_indexed(
+                        draw.index_offset..(draw.index_offset + draw.index_count),
+                        0,
+                        0..1,
+                    );
+                    // エッジ描画後にメインバッファを復元
+                    pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
+                    pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+                }
+            }
+        }
+    }
+
+    /// 材質ホバーハイライト描画（オレンジワイヤーフレーム）
+    fn draw_highlight<'a>(
+        pass: &mut wgpu::RenderPass<'a>,
+        model: &'a GpuModel,
+        params: &RenderParams,
+        ps: &'a PipelineSet,
+        camera_bind_group: &'a wgpu::BindGroup,
+        default_tex_bind_group: &'a wgpu::BindGroup,
+        default_mtoon_aux_bind_group: &'a wgpu::BindGroup,
+    ) {
+        if params.hovered_draw_indices.is_empty() || model.draws.is_empty() {
+            return;
+        }
+        let Some(ref highlight_pl) = ps.pipeline_highlight else {
+            return;
+        };
+        pass.set_pipeline(highlight_pl);
+        pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
+        pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+        pass.set_bind_group(0, camera_bind_group, &[]);
+        for &draw_idx in params.hovered_draw_indices {
+            if let Some(draw) = model.draws.get(draw_idx) {
+                let tex_bg = draw
+                    .texture_bind_group
+                    .as_ref()
+                    .unwrap_or(default_tex_bind_group);
+                pass.set_bind_group(1, tex_bg, &[]);
+                pass.set_bind_group(2, &draw.material_bind_group, &[]);
+                pass.set_bind_group(3, default_mtoon_aux_bind_group, &[]);
+                pass.draw_indexed(
+                    draw.index_offset..(draw.index_offset + draw.index_count),
+                    0,
+                    0..1,
+                );
+            }
+        }
+    }
+
+    /// Pass 2: グリッド + 可視化オーバーレイ（法線・ボーン・剛体・ジョイント）
+    fn draw_overlays<'p>(
+        &'p self,
+        pass: &mut wgpu::RenderPass<'p>,
+        params: &RenderParams,
+        ps: &'p PipelineSet,
+    ) {
+        // グリッド描画
+        if params.display.show_grid {
+            pass.set_pipeline(&ps.pipeline_grid);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.grid_vbuf.slice(..));
+            pass.draw(0..self.grid_vertex_count, 0..1);
+        }
+
+        // 法線表示（LineList オーバーレイ）
+        if params.display.show_normals && self.normal.vertex_count > 0 {
+            if let Some(ref buf) = self.normal.buf {
+                pass.set_pipeline(&ps.pipeline_line_overlay);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..self.normal.vertex_count, 0..1);
+            }
+        }
+
+        // ボーン描画（3段階: テール → 塗り → 外枠）
+        if params.display.show_bones {
+            if self.bone_tail.vertex_count > 0 {
+                if let Some(ref buf) = self.bone_tail.buf {
+                    pass.set_pipeline(&ps.pipeline_line_overlay);
+                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..self.bone_tail.vertex_count, 0..1);
+                }
+            }
+            if self.bone_fill.vertex_count > 0 {
+                if let Some(ref buf) = self.bone_fill.buf {
+                    pass.set_pipeline(&ps.pipeline_bone);
+                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..self.bone_fill.vertex_count, 0..1);
+                }
+            }
+            if self.bone_line.vertex_count > 0 {
+                if let Some(ref buf) = self.bone_line.buf {
+                    pass.set_pipeline(&ps.pipeline_line_overlay);
+                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..self.bone_line.vertex_count, 0..1);
+                }
+            }
+        }
+
+        // 剛体描画
+        if params.display.show_spring_bones && self.spring.vertex_count > 0 {
+            if let Some(ref buf) = self.spring.buf {
+                pass.set_pipeline(&ps.pipeline_line_overlay);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..self.spring.vertex_count, 0..1);
+            }
+        }
+
+        // ジョイント描画
+        if params.display.show_joints {
+            if self.joint.vertex_count > 0 {
+                if let Some(ref buf) = self.joint.buf {
+                    pass.set_pipeline(&ps.pipeline_bone);
+                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..self.joint.vertex_count, 0..1);
+                }
+            }
+            if self.joint_edge.vertex_count > 0 {
+                if let Some(ref buf) = self.joint_edge.buf {
+                    pass.set_pipeline(&ps.pipeline_line_overlay);
+                    pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..self.joint_edge.vertex_count, 0..1);
+                }
+            }
+        }
     }
 
     /// MMD 用 GPU リソースを DrawCall に構築（全 GPU モデル生成経路から呼ぶ）
@@ -4558,103 +4557,109 @@ pub fn pack_uv_params(
     }
 }
 
+/// `create_material_bind_group` に渡すマテリアルパラメータ群
+pub struct MaterialParams {
+    pub diffuse: [f32; 4],
+    pub shade_color: [f32; 3],
+    pub is_mtoon: bool,
+    pub shading_toony: f32,
+    pub shading_shift: f32,
+    pub outline_width: f32,
+    pub outline_mode: f32,
+    pub outline_color: [f32; 4],
+    pub outline_lighting_mix: f32,
+    pub rim_color: [f32; 3],
+    pub rim_fresnel_power: f32,
+    pub rim_lift: f32,
+    pub rim_lighting_mix: f32,
+    pub has_matcap: bool,
+    pub matcap_factor: [f32; 3],
+    pub has_shade_multiply_tex: bool,
+    pub has_shading_shift_tex: bool,
+    pub shading_shift_tex_scale: f32,
+    pub has_rim_multiply_tex: bool,
+    pub uv_anim_scroll_x: f32,
+    pub uv_anim_scroll_y: f32,
+    pub uv_anim_rotation: f32,
+    pub has_uv_anim_mask: bool,
+    pub alpha_cutoff: f32,
+    pub base_uv: ([f32; 4], [f32; 4]),
+    pub shade_uv: ([f32; 4], [f32; 4]),
+    pub shift_uv: ([f32; 4], [f32; 4]),
+    pub rim_uv: ([f32; 4], [f32; 4]),
+    pub outline_uv: ([f32; 4], [f32; 4]),
+    pub uv_mask_uv: ([f32; 4], [f32; 4]),
+    pub emissive_factor: [f32; 3],
+    pub has_emissive_tex: bool,
+    pub emissive_uv: ([f32; 4], [f32; 4]),
+    pub has_normal_tex: bool,
+    pub normal_scale: f32,
+    pub normal_uv: ([f32; 4], [f32; 4]),
+    pub gi_equalization_factor: f32,
+    pub outline_width_channel: f32,
+    pub uv_anim_mask_channel: f32,
+    pub matcap_uv: ([f32; 4], [f32; 4]),
+}
+
 pub fn create_material_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    diffuse: [f32; 4],
-    shade_color: [f32; 3],
-    is_mtoon: bool,
-    shading_toony: f32,
-    shading_shift: f32,
-    outline_width: f32,
-    outline_mode: f32,
-    outline_color: [f32; 4],
-    outline_lighting_mix: f32,
-    rim_color: [f32; 3],
-    rim_fresnel_power: f32,
-    rim_lift: f32,
-    rim_lighting_mix: f32,
-    has_matcap: bool,
-    matcap_factor: [f32; 3],
-    has_shade_multiply_tex: bool,
-    has_shading_shift_tex: bool,
-    shading_shift_tex_scale: f32,
-    has_rim_multiply_tex: bool,
-    uv_anim_scroll_x: f32,
-    uv_anim_scroll_y: f32,
-    uv_anim_rotation: f32,
-    has_uv_anim_mask: bool,
-    alpha_cutoff: f32,
-    base_uv: ([f32; 4], [f32; 4]),
-    shade_uv: ([f32; 4], [f32; 4]),
-    shift_uv: ([f32; 4], [f32; 4]),
-    rim_uv: ([f32; 4], [f32; 4]),
-    outline_uv: ([f32; 4], [f32; 4]),
-    uv_mask_uv: ([f32; 4], [f32; 4]),
-    emissive_factor: [f32; 3],
-    has_emissive_tex: bool,
-    emissive_uv: ([f32; 4], [f32; 4]),
-    has_normal_tex: bool,
-    normal_scale: f32,
-    normal_uv: ([f32; 4], [f32; 4]),
-    gi_equalization_factor: f32,
-    outline_width_channel: f32,
-    uv_anim_mask_channel: f32,
-    matcap_uv: ([f32; 4], [f32; 4]),
+    params: &MaterialParams,
 ) -> wgpu::BindGroup {
+    let p = params;
     let uniform = MaterialUniform {
-        diffuse,
-        shade_color,
-        is_mtoon: if is_mtoon { 1.0 } else { 0.0 },
-        shading_toony,
-        shading_shift,
-        outline_width,
-        outline_mode,
-        outline_color,
-        outline_lighting_mix,
-        rim_color,
-        rim_fresnel_power,
-        rim_lift,
-        rim_lighting_mix,
-        has_matcap: if has_matcap { 1.0 } else { 0.0 },
-        matcap_factor,
-        has_shade_multiply_tex: if has_shade_multiply_tex { 1.0 } else { 0.0 },
-        has_shading_shift_tex: if has_shading_shift_tex { 1.0 } else { 0.0 },
-        shading_shift_tex_scale,
-        has_rim_multiply_tex: if has_rim_multiply_tex { 1.0 } else { 0.0 },
-        uv_anim_scroll_x,
-        uv_anim_scroll_y,
-        uv_anim_rotation,
-        has_uv_anim_mask: if has_uv_anim_mask { 1.0 } else { 0.0 },
-        alpha_cutoff,
-        base_uv_a: base_uv.0,
-        base_uv_b: base_uv.1,
-        shade_uv_a: shade_uv.0,
-        shade_uv_b: shade_uv.1,
-        shift_uv_a: shift_uv.0,
-        shift_uv_b: shift_uv.1,
-        rim_uv_a: rim_uv.0,
-        rim_uv_b: rim_uv.1,
-        outline_uv_a: outline_uv.0,
-        outline_uv_b: outline_uv.1,
-        uv_mask_uv_a: uv_mask_uv.0,
-        uv_mask_uv_b: uv_mask_uv.1,
-        emissive_factor,
-        has_emissive_tex: if has_emissive_tex { 1.0 } else { 0.0 },
-        emissive_uv_a: emissive_uv.0,
-        emissive_uv_b: emissive_uv.1,
-        has_normal_tex: if has_normal_tex { 1.0 } else { 0.0 },
-        normal_scale,
-        gi_equalization_factor,
-        outline_width_channel,
-        normal_uv_a: normal_uv.0,
-        normal_uv_b: normal_uv.1,
-        uv_anim_mask_channel,
+        diffuse: p.diffuse,
+        shade_color: p.shade_color,
+        is_mtoon: b2f(p.is_mtoon),
+        shading_toony: p.shading_toony,
+        shading_shift: p.shading_shift,
+        outline_width: p.outline_width,
+        outline_mode: p.outline_mode,
+        outline_color: p.outline_color,
+        outline_lighting_mix: p.outline_lighting_mix,
+        rim_color: p.rim_color,
+        rim_fresnel_power: p.rim_fresnel_power,
+        rim_lift: p.rim_lift,
+        rim_lighting_mix: p.rim_lighting_mix,
+        has_matcap: b2f(p.has_matcap),
+        matcap_factor: p.matcap_factor,
+        has_shade_multiply_tex: b2f(p.has_shade_multiply_tex),
+        has_shading_shift_tex: b2f(p.has_shading_shift_tex),
+        shading_shift_tex_scale: p.shading_shift_tex_scale,
+        has_rim_multiply_tex: b2f(p.has_rim_multiply_tex),
+        uv_anim_scroll_x: p.uv_anim_scroll_x,
+        uv_anim_scroll_y: p.uv_anim_scroll_y,
+        uv_anim_rotation: p.uv_anim_rotation,
+        has_uv_anim_mask: b2f(p.has_uv_anim_mask),
+        alpha_cutoff: p.alpha_cutoff,
+        base_uv_a: p.base_uv.0,
+        base_uv_b: p.base_uv.1,
+        shade_uv_a: p.shade_uv.0,
+        shade_uv_b: p.shade_uv.1,
+        shift_uv_a: p.shift_uv.0,
+        shift_uv_b: p.shift_uv.1,
+        rim_uv_a: p.rim_uv.0,
+        rim_uv_b: p.rim_uv.1,
+        outline_uv_a: p.outline_uv.0,
+        outline_uv_b: p.outline_uv.1,
+        uv_mask_uv_a: p.uv_mask_uv.0,
+        uv_mask_uv_b: p.uv_mask_uv.1,
+        emissive_factor: p.emissive_factor,
+        has_emissive_tex: b2f(p.has_emissive_tex),
+        emissive_uv_a: p.emissive_uv.0,
+        emissive_uv_b: p.emissive_uv.1,
+        has_normal_tex: b2f(p.has_normal_tex),
+        normal_scale: p.normal_scale,
+        gi_equalization_factor: p.gi_equalization_factor,
+        outline_width_channel: p.outline_width_channel,
+        normal_uv_a: p.normal_uv.0,
+        normal_uv_b: p.normal_uv.1,
+        uv_anim_mask_channel: p.uv_anim_mask_channel,
         _pad_ch1: 0.0,
         _pad_ch2: 0.0,
         _pad_ch3: 0.0,
-        matcap_uv_a: matcap_uv.0,
-        matcap_uv_b: matcap_uv.1,
+        matcap_uv_a: p.matcap_uv.0,
+        matcap_uv_b: p.matcap_uv.1,
     };
     let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("material_uniform"),
@@ -4969,79 +4974,64 @@ fn generate_shared_toon_textures(
     queue: &wgpu::Queue,
 ) -> ([wgpu::TextureView; 10], [wgpu::TextureView; 10]) {
     // MMD 標準トゥーンの行ごとの RGB 値 (row 0=上端, row 31=下端)
-    // toon01: 白→灰 (境界 row16)
-    #[rustfmt::skip]
-    const TOON01: [[u8; 3]; 32] = [
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [205,205,205],[205,205,205],[205,205,205],[205,205,205],
-        [205,205,205],[205,205,205],[205,205,205],[205,205,205],
-        [205,205,205],[205,205,205],[205,205,205],[205,205,205],
-        [205,205,205],[205,205,205],[205,205,205],[205,205,205],
-    ];
-    // toon02: 白→ピンク系 (境界 row16)
-    #[rustfmt::skip]
-    const TOON02: [[u8; 3]; 32] = [
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [245,225,225],[245,225,225],[245,225,225],[245,225,225],
-        [245,225,225],[245,225,225],[245,225,225],[245,225,225],
-        [245,225,225],[245,225,225],[245,225,225],[245,225,225],
-        [245,225,225],[245,225,225],[245,225,225],[245,225,225],
-    ];
-    // toon03: 白→暗灰 (境界 row16)
-    #[rustfmt::skip]
-    const TOON03: [[u8; 3]; 32] = [
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [154,154,154],[154,154,154],[154,154,154],[154,154,154],
-        [154,154,154],[154,154,154],[154,154,154],[154,154,154],
-        [154,154,154],[154,154,154],[154,154,154],[154,154,154],
-        [154,154,154],[154,154,154],[154,154,154],[154,154,154],
-    ];
-    // toon04: 白→暖色ベージュ (境界 row16)
-    #[rustfmt::skip]
-    const TOON04: [[u8; 3]; 32] = [
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [248,239,235],[248,239,235],[248,239,235],[248,239,235],
-        [248,239,235],[248,239,235],[248,239,235],[248,239,235],
-        [248,239,235],[248,239,235],[248,239,235],[248,239,235],
-        [248,239,235],[248,239,235],[248,239,235],[248,239,235],
-    ];
-    // toon05: 白→暖ピンクのグラデーション
-    #[rustfmt::skip]
-    const TOON05: [[u8; 3]; 32] = [
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,255,255],
-        [255,255,255],[255,255,255],[255,255,255],[255,254,254],
-        [255,250,248],[255,246,242],[255,240,234],[255,236,229],
-        [255,233,224],[255,231,222],[255,231,221],[255,231,221],
-        [255,231,221],[255,231,221],[255,231,222],[254,232,223],
-    ];
-    // toon06: 黄色系 (中央ハイライトバンド + 暗黄)
-    #[rustfmt::skip]
-    const TOON06: [[u8; 3]; 32] = [
-        [255,237, 97],[255,237, 97],[255,237, 97],[255,237, 97],
-        [255,237, 97],[255,237, 97],[255,237, 97],[255,237, 97],
-        [255,238,106],[255,246,175],[255,254,242],[255,242,138],
-        [255,237, 97],[255,237, 97],[255,237, 97],[255,237, 97],
-        [255,237, 97],[255,237, 97],[255,237, 97],[255,237, 97],
-        [255,237, 97],[255,237, 97],[254,235, 94],[238,218, 69],
-        [209,187, 24],[197,174,  6],[195,172,  3],[195,172,  3],
-        [195,172,  3],[195,172,  3],[195,172,  3],[195,172,  3],
-    ];
+    // ---------------------------------------------------------------
+    // toon01-04: row 0-15 = 白, row 16-31 = shadow色 の 2色ステップ
+    // toon05-06: MMD 参照データ (不規則グラデーション、LUT)
     // toon07-10: 全白 (トゥーン効果なし)
+    // ---------------------------------------------------------------
+
+    /// 上半分=白, 下半分=shadow の 2色ステップテクスチャを生成
+    const fn toon_step(shadow: [u8; 3]) -> [[u8; 3]; 32] {
+        let mut rows = [[255u8, 255, 255]; 32];
+        let mut i = 16;
+        while i < 32 {
+            rows[i] = shadow;
+            i += 1;
+        }
+        rows
+    }
+
+    /// (色, 繰り返し回数) のランレングスから 32行テクスチャを展開
+    const fn toon_rle<const N: usize>(runs: [([u8; 3], u8); N]) -> [[u8; 3]; 32] {
+        let mut rows = [[0u8; 3]; 32];
+        let mut pos = 0usize;
+        let mut r = 0;
+        while r < N {
+            let (color, count) = runs[r];
+            let mut c = 0u8;
+            while c < count {
+                rows[pos] = color;
+                pos += 1;
+                c += 1;
+            }
+            r += 1;
+        }
+        rows
+    }
+
+    const TOON01: [[u8; 3]; 32] = toon_step([205, 205, 205]); // 白→灰
+    const TOON02: [[u8; 3]; 32] = toon_step([245, 225, 225]); // 白→ピンク系
+    const TOON03: [[u8; 3]; 32] = toon_step([154, 154, 154]); // 白→暗灰
+    const TOON04: [[u8; 3]; 32] = toon_step([248, 239, 235]); // 白→暖色ベージュ
+
+    // toon05: 白→暖ピンクのグラデーション (MMD 参照 LUT)
+    #[rustfmt::skip]
+    const TOON05: [[u8; 3]; 32] = toon_rle([
+        ([255,255,255], 19), ([255,254,254], 1), ([255,250,248], 1),
+        ([255,246,242], 1),  ([255,240,234], 1), ([255,236,229], 1),
+        ([255,233,224], 1),  ([255,231,222], 1), ([255,231,221], 4),
+        ([255,231,222], 1),  ([254,232,223], 1),
+    ]);
+
+    // toon06: 黄色系 — 中央ハイライトバンド + 暗黄 (MMD 参照 LUT)
+    #[rustfmt::skip]
+    const TOON06: [[u8; 3]; 32] = toon_rle([
+        ([255,237, 97], 8),  ([255,238,106], 1), ([255,246,175], 1),
+        ([255,254,242], 1),  ([255,242,138], 1), ([255,237, 97], 10),
+        ([254,235, 94], 1),  ([238,218, 69], 1), ([209,187, 24], 1),
+        ([197,174,  6], 1),  ([195,172,  3], 6),
+    ]);
+
     const TOON_WHITE: [[u8; 3]; 32] = [[255, 255, 255]; 32];
 
     let toon_data: [&[[u8; 3]; 32]; 10] = [
@@ -5146,10 +5136,10 @@ fn generate_bone_vertices(
     out_lines.clear();
     let blue = [0.0, 0.0, 1.0, opacity];
     let orange = [1.0, 0.4, 0.0, opacity]; // 濃いオレンジ #ff6600
-    let outer_factor = 0.004_f32;
-    let inner_factor = 0.0022_f32;
+    let outer_factor = BONE_DISPLAY_RADIUS;
+    let inner_factor = BONE_JOINT_RADIUS;
     let ik_center_factor = inner_factor; // IKコントローラ中心の青正方形（移動ボーンと同サイズ）
-    let segments = 16u32;
+    let segments = SPHERE_SEGMENTS;
 
     // 描画優先順: 通常 → IK影響下(orange) → 軸制限 → IKコントローラ
     // （後に描画されるほど手前に表示される）
@@ -5509,11 +5499,7 @@ fn compute_bone_deltas(
     animated_globals: Option<&[glam::Mat4]>,
     is_vrm0: bool,
 ) -> Option<Vec<(Vec3, glam::Quat)>> {
-    let pos_fn: fn(Vec3) -> Vec3 = if is_vrm0 {
-        crate::convert::coord::gltf_pos_to_pmx_v0
-    } else {
-        crate::convert::coord::gltf_pos_to_pmx
-    };
+    let pos_fn = crate::convert::coord::pos_fn(is_vrm0);
     animated_globals.map(|globals| {
         ir.bones
             .iter()
@@ -5572,17 +5558,12 @@ fn generate_spring_bone_vertices(
     let physics_color = [1.0, 0.0, 0.0, opacity]; // レッド
     let physics_bone_color = [0.0, 0.5, 1.0, opacity]; // ブルー
 
-    let segments = 16u32;
+    let segments = SPHERE_SEGMENTS;
     let line_width = 0.0_f32; // 1px描画（draw_ring/draw_line_quad の _width 引数用）
 
     // bone.position はすべての形式で glTF 空間に格納されている（PMX/PMD も pmx_pos_to_gltf 済み）
     // rb.position は PMX 空間なので、bone 側を PMX 空間に戻して差分を取る
-    let pos_fn: fn(Vec3) -> Vec3 = if is_vrm0 {
-        crate::convert::coord::gltf_pos_to_pmx_v0
-    } else {
-        // PMX/PMD も VRM 1.0 と同じ Z-flip 変換（pmx_pos_to_gltf の逆）
-        crate::convert::coord::gltf_pos_to_pmx
-    };
+    let pos_fn = crate::convert::coord::pos_fn(is_vrm0);
 
     // 剛体の形状を描画
     for rb in &ir.physics.rigid_bodies {
@@ -6009,12 +5990,7 @@ fn generate_joint_vertices(
     let is_pmx_pmd = ir.source_format.is_pmx_pmd();
 
     // bone.position はすべての形式で glTF 空間（PMX/PMD も pmx_pos_to_gltf 済み）
-    let pos_fn: fn(Vec3) -> Vec3 = if is_vrm0 {
-        crate::convert::coord::gltf_pos_to_pmx_v0
-    } else {
-        // PMX/PMD も VRM 1.0 と同じ Z-flip 変換
-        crate::convert::coord::gltf_pos_to_pmx
-    };
+    let pos_fn = crate::convert::coord::pos_fn(is_vrm0);
 
     for joint in &ir.physics.joints {
         if joint.rigid_a >= ir.physics.rigid_bodies.len() {

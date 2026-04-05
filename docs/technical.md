@@ -37,6 +37,7 @@
     - [T-Stance Conversion](#t-stance-conversion)
     - [Rigid Body Rotation](#rigid-body-rotation)
     - [Texture Loading](#texture-loading)
+    - [Mipmap Generation (v0.2.26)](#mipmap-generation-v0226)
   - [MMD Rendering](#mmd-rendering)
     - [Architecture](#architecture)
     - [MMD Shaders](#mmd-shaders)
@@ -517,6 +518,15 @@ The viewer renders rigid bodies and joints in PMX space. `rb.position` and `join
 - MIME hint: Infer MIME type from extension and explicitly specify via `image::load_from_memory_with_format` (TGA has no magic number so auto-detection fails). `.sph/.spa` treated as `image/bmp`
 - UnityPackage textures: `embed_textures_into_ir` derives MIME type from file extension via `mime_for_ext`. Without MIME hints, TGA/BMP auto-detection fails and falls back to magenta
 
+### Mipmap Generation (v0.2.26)
+
+GPU textures are uploaded with a full mipmap chain. The number of mip levels is `floor(log2(max(w,h))) + 1`.
+
+- **sRGB-correct downsampling** — Source pixels are decoded from sRGB to linear (`IEC 61966-2-1`), resized using `image::imageops::resize` (Triangle filter) in linear f32 space, then re-encoded to sRGB for each mip level. Alpha channel is kept linear throughout
+- **NPOT support** — Each level dimension is `max(1, dim >> level)`, supporting non-power-of-two textures
+- **GPU max size** — Textures exceeding `max_texture_dimension_2d` are pre-downscaled using the same sRGB-correct resize before mip generation
+- **Sampler** — `mipmap_filter: Linear` was already set, now effective with multiple mip levels
+
 ## MMD Rendering
 
 MMD rendering mode that auto-enables on PMX/PMD load.
@@ -525,7 +535,7 @@ MMD rendering mode that auto-enables on PMX/PMD load.
 
 - **RenderStyle enum** — Per-DrawCall `Standard` / `Mmd` determination (based on material's `source_format.is_pmx_pmd()`). Works correctly with append-mixed models
 - **Per-frame sRGB/Unorm switching** — PMX/PMD-only frames (all visible materials are MMD) use `Rgba8Unorm` render target for correct gamma-space alpha blending. Falls back to `Rgba8UnormSrgb` when VRM is mixed
-- **4 pipeline sets** — `(MSAA on/off) × (sRGB/Unorm)` = 4 sets created at init. Runtime cost is pipeline reference switching only
+- **4 pipeline sets** — `(MSAA on/off) × (sRGB/Unorm)` = 4 sets, lazily created on first use via `ensure_pipelines()` (v0.2.26; previously all compiled at startup). Runtime cost is pipeline reference switching only
 - **Texture dual views** — `view_formats: [Rgba8Unorm]` creates both sRGB/Unorm views for the same texture. MMD reads via Unorm view (gamma space, zero memory overhead)
 
 ### MMD Shaders
@@ -1032,7 +1042,7 @@ Dual Kawase (Dual Filtering) bloom implemented in `bloom.rs` (~500 lines). Alter
 
 The render pass is split into mesh drawing (MRT with 2 targets) and overlay drawing (1 target). The mesh drawing pass outputs scene color at `@location(0)` and emissive component at `@location(1)`. Grids and non-emissive surfaces write zero to `@location(1)`, so they are excluded from bloom.
 
-Bloom intermediate buffers use `Rgba8Unorm` (linear) to avoid arithmetic artifacts from sRGB texture formats.
+Bloom intermediate buffers use `Rgba16Float` (v0.2.26; previously `Rgba8Unorm`) to avoid banding in HDR emissive gradients. BindGroups for the external offscreen texture are cached and only recreated on resize/MSAA toggle.
 
 ### UI Parameters
 
@@ -1205,6 +1215,8 @@ Items drawn later appear in front:
 | Controls | Left drag: rotate, Right/Middle drag: pan, Scroll: zoom |
 | Precision | Shift key for 1/3 speed |
 | Fit | F / Double-click (preserves yaw/pitch), R (front reset) |
+| Depth | Reverse-Z (v0.2.26): near→1.0, far→0.0 with `Greater` compare. Depth32Float format |
+| Near/Far | `distance * 0.005` / `distance * 50`, near clamped to `NEAR_MAX=1.0` |
 
 ### Fit Calculation (compute_fit)
 

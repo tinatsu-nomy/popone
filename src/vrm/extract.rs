@@ -101,7 +101,7 @@ fn read_texture_info(obj: &Value, document: &gltf::Document) -> Option<IrTexture
     // - テクスチャを消失させるよりも texCoord=0 で描画を維持する方が被害が小さい
     let tex_coord = if tex_coord > 1 {
         log::warn!(
-            "texCoord={} は非対応のため texCoord=0 にフォールバックします (texture index={})",
+            "texCoord={} not supported, falling back to texCoord=0 (texture index={})",
             tex_coord,
             texture_index,
         );
@@ -203,14 +203,14 @@ pub fn extract_ir_model_with_options(
     let typed = match version {
         VrmVersion::V0 => {
             let v0: VrmV0 = serde_json::from_value(vrm_ext.clone()).unwrap_or_else(|e| {
-                log::warn!("VrmV0 デシリアライズエラー: {}", e);
+                log::warn!("VrmV0 deserialization error: {}", e);
                 VrmV0::default()
             });
             VrmTyped::V0(v0)
         }
         VrmVersion::V1 => {
             let v1: VrmV1 = serde_json::from_value(vrm_ext.clone()).unwrap_or_else(|e| {
-                log::warn!("VrmV1 デシリアライズエラー: {}", e);
+                log::warn!("VrmV1 deserialization error: {}", e);
                 VrmV1::default()
             });
             VrmTyped::V1(v1)
@@ -398,10 +398,18 @@ fn extract_textures(
     for (i, image_data) in images.iter().enumerate() {
         let filename = format!("tex_{:03}.png", i);
         let mime_type = "image/png".to_string();
+        let source_path = match document.images().nth(i).and_then(|img| match img.source() {
+            gltf::image::Source::Uri { uri, .. } => Some(uri.to_string()),
+            _ => None,
+        }) {
+            Some(uri) => uri,
+            None => "embedded".to_string(),
+        };
         textures.push(IrTexture {
             filename,
             data: image_data.pixels.clone(),
             mime_type,
+            source_path,
         });
     }
 
@@ -700,7 +708,10 @@ fn extract_materials(
             if v0_is_mtoon {
                 ir_mat.mtoon = Some(MtoonParams::default());
                 ir_mat.shader_family = ShaderFamily::Mtoon;
-                let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                let mtoon = ir_mat
+                    .mtoon
+                    .as_mut()
+                    .expect("mtoon は直前で Some に設定済み");
 
                 // _OutlineWidthMode: 0=None, 1=WorldCoordinates, 2=ScreenCoordinates
                 let outline_mode = v0_prop
@@ -759,7 +770,7 @@ fn extract_materials(
                     }
                 }
 
-                log::debug!("材質[{}] \"{}\" is_mtoon=true, outline_mode={}, edge_size={:.3}, edge_color=({:.2},{:.2},{:.2},{:.2})",
+                log::debug!("Material[{}] \"{}\" is_mtoon=true, outline_mode={}, edge_size={:.3}, edge_color=({:.2},{:.2},{:.2},{:.2})",
                     i, ir_mat.name, outline_mode, ir_mat.edge_size,
                     ir_mat.edge_color.x, ir_mat.edge_color.y, ir_mat.edge_color.z, ir_mat.edge_color.w);
 
@@ -806,7 +817,10 @@ fn extract_materials(
                 };
 
                 // 再取得（ir_mat のフィールドアクセス後に mtoon を再借用）
-                let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                let mtoon = ir_mat
+                    .mtoon
+                    .as_mut()
+                    .expect("mtoon は直前で Some に設定済み");
 
                 // _ShadeColor
                 mtoon.shade_color = Some(srgb_vec3_to_linear(get_color3(
@@ -844,7 +858,10 @@ fn extract_materials(
 
                 // _RimColor / _RimFresnelPower / _RimLift
                 // 再取得（ir_mat のフィールドアクセス後に mtoon を再借用）
-                let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                let mtoon = ir_mat
+                    .mtoon
+                    .as_mut()
+                    .expect("mtoon は直前で Some に設定済み");
                 mtoon.parametric_rim_color =
                     srgb_vec3_to_linear(get_color3("_RimColor", 0.0, 0.0, 0.0));
                 mtoon.parametric_rim_fresnel_power = get_float("_RimFresnelPower", 1.0);
@@ -926,7 +943,10 @@ fn extract_materials(
 
                 // --- 1st ShadeColor → shade_color ---
                 {
-                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
                     mtoon.shade_color = Some(srgb_vec3_to_linear(get_color3(
                         "_1st_ShadeColor",
                         0.5,
@@ -948,7 +968,10 @@ fn extract_materials(
                 {
                     let step = get_float("_BaseColor_Step", 0.5);
                     let feather = get_float("_BaseShade_Feather", 0.01).max(0.001);
-                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
                     mtoon.shading_toony_factor = (1.0 - feather).clamp(0.0, 1.0);
                     mtoon.shading_shift_factor = (-(step * 2.0 - 1.0)).clamp(-1.0, 1.0);
                 }
@@ -963,11 +986,14 @@ fn extract_materials(
                 };
 
                 {
-                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
                     mtoon.outline_width_mode = if outline_keyword != 0 {
                         if outline_keyword == 2 {
                             log::warn!(
-                                "材質[{}] \"{}\" UTS2 POS outline → WorldCoordinates 近似",
+                                "Material[{}] \"{}\" UTS2 POS outline -> WorldCoordinates approximation",
                                 i,
                                 ir_mat.name
                             );
@@ -981,7 +1007,10 @@ fn extract_materials(
                 if outline_keyword != 0 {
                     // _Outline_Width
                     let width = get_float("_Outline_Width", 0.0);
-                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
                     mtoon.outline_width_factor = width * 0.01; // 任意スケール → メートル近似
                     ir_mat.edge_size = (mtoon.outline_width_factor * PMX_SCALE * 10.0).min(1.0);
 
@@ -991,7 +1020,10 @@ fn extract_materials(
                     ir_mat.edge_color = Vec4::new(oc_linear.x, oc_linear.y, oc_linear.z, 1.0);
 
                     // _Outline_Sampler → outline_width_texture (Rチャネル)
-                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
                     mtoon.outline_width_texture = resolve_tex("_Outline_Sampler", true);
                     mtoon.outline_width_tex_channel = ColorChannel::R;
 
@@ -1021,7 +1053,7 @@ fn extract_materials(
                     let use_base_alpha = get_float("_IsBaseMapAlphaAsClippingMask", 0.0) > 0.5;
                     if has_clip_mask && !use_base_alpha {
                         log::warn!(
-                            "材質[{}] \"{}\" UTS2 _ClippingMask テクスチャは未対応（base alpha フォールバック）",
+                            "Material[{}] \"{}\" UTS2 _ClippingMask texture not supported (base alpha fallback)",
                             i, ir_mat.name
                         );
                     }
@@ -1039,7 +1071,10 @@ fn extract_materials(
                 // --- リムライト ---
                 {
                     let rim_enabled = get_float("_RimLight", 0.0);
-                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
                     if rim_enabled > 0.5 {
                         mtoon.parametric_rim_color =
                             srgb_vec3_to_linear(get_color3("_RimLightColor", 1.0, 1.0, 1.0));
@@ -1052,7 +1087,10 @@ fn extract_materials(
                 // --- MatCap ---
                 {
                     let matcap_enabled = get_float("_MatCap", 0.0);
-                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
                     if matcap_enabled > 0.5 {
                         if let Some(tex_info) = resolve_tex("_MatCap_Sampler", false) {
                             mtoon.matcap_texture = Some(tex_info);
@@ -1085,18 +1123,22 @@ fn extract_materials(
                 // MToon の gi_equalization_factor は raw/equalized GI の補間係数で意味が異なる。
                 // 直接マッピングすると意味が逆転するため、0.0 固定（GI 均一化なし）で安全に。
                 {
-                    let mtoon = ir_mat.mtoon.as_mut().unwrap();
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
                     mtoon.gi_equalization_factor = 0.0;
                 }
 
                 log::debug!(
-                    "材質[{}] \"{}\" is_uts2=true, shader=\"{}\", outline={}, edge_size={:.3}, shade={:?}",
+                    "Material[{}] \"{}\" is_uts2=true, shader=\"{}\", outline={}, edge_size={:.3}, shade={:?}",
                     i,
                     ir_mat.name,
                     v0_prop.shader,
                     outline_keyword,
                     ir_mat.edge_size,
-                    ir_mat.mtoon.as_ref().unwrap().shade_color,
+                    ir_mat.mtoon.as_ref()
+                        .expect("mtoon は直前で Some に設定済み").shade_color,
                 );
             }
         }
@@ -1141,7 +1183,10 @@ fn extract_materials(
                     if let Some(mtoon_json) = exts.others.get("VRMC_materials_mtoon") {
                         ir_mat.mtoon = Some(MtoonParams::default());
                         ir_mat.shader_family = ShaderFamily::Mtoon;
-                        let mp = ir_mat.mtoon.as_mut().unwrap();
+                        let mp = ir_mat
+                            .mtoon
+                            .as_mut()
+                            .expect("mtoon は直前で Some に設定済み");
 
                         // outlineWidthMode が "none" 以外ならエッジ有効
                         let mode = mtoon_json
@@ -1341,7 +1386,7 @@ fn extract_materials(
                             AlphaMode::Blend => raw_offset.clamp(-9, 0),
                         };
 
-                        log::debug!("材質[{}] \"{}\" is_mtoon=true, edge_size={:.3}, edge_color=({:.2},{:.2},{:.2},{:.2}), rim=({:.2},{:.2},{:.2}), matcap_tex={:?}",
+                        log::debug!("Material[{}] \"{}\" is_mtoon=true, edge_size={:.3}, edge_color=({:.2},{:.2},{:.2},{:.2}), rim=({:.2},{:.2},{:.2}), matcap_tex={:?}",
                             i, ir_mat.name, ir_mat.edge_size,
                             ir_mat.edge_color.x, ir_mat.edge_color.y, ir_mat.edge_color.z, ir_mat.edge_color.w,
                             mp.parametric_rim_color.x, mp.parametric_rim_color.y, mp.parametric_rim_color.z,
@@ -1820,7 +1865,7 @@ fn extract_meshes(
                                 vertices.iter().filter(|v| v.edge_scale < 0.01).count();
                             let full_count =
                                 vertices.iter().filter(|v| v.edge_scale > 0.99).count();
-                            log::debug!("メッシュ \"{}\" outline_width_texture: 頂点{}中 edge_scale≈0:{}, ≈1:{}",
+                            log::debug!("Mesh \"{}\" outline_width_texture: {} vertices, edge_scale~0:{}, ~1:{}",
                                 mesh.name().unwrap_or("?"), vertices.len(), zero_count, full_count);
                         }
                     }

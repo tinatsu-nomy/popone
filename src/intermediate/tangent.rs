@@ -81,7 +81,7 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
         if mesh.uvs1.len() == vertex_count {
             mesh.uvs1.clone()
         } else {
-            log::debug!("tangent 生成: texCoord=1 ですが UV1 不在のため zero UV を使用");
+            log::debug!("Tangent generation: texCoord=1 but UV1 absent, using zero UV");
             vec![[0.0, 0.0]; vertex_count]
         }
     } else {
@@ -186,7 +186,7 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
 
         if split_count > 0 {
             log::info!(
-                "MikkTSpace w 不一致により頂点分割: mesh='{}' splits={} ({}→{}頂点)",
+                "MikkTSpace w mismatch vertex split: mesh='{}' splits={} ({}->{}vertices)",
                 mesh.name,
                 split_count,
                 vertex_count,
@@ -234,13 +234,13 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
             }
         }
         log::debug!(
-            "MikkTSpace 接線生成完了: mesh='{}' vertices={}",
+            "MikkTSpace tangent generation complete: mesh='{}' vertices={}",
             mesh.name,
             new_vertex_count
         );
     } else {
         log::warn!(
-            "MikkTSpace 接線生成失敗: mesh='{}' — デフォルト接線を使用",
+            "MikkTSpace tangent generation failed: mesh='{}' - using default tangents",
             mesh.name
         );
         for v in &mut mesh.vertices {

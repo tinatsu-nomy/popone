@@ -166,6 +166,8 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - **PMX/PMD is view-only** — PMX conversion (re-export) is not supported. Viewer display and UV map export only
 - **Sphere Mode 3 (sub-texture) unsupported** — Requires additional UVs, not implemented. Detected with warning log and disabled
 - **Texture size limit** — Textures exceeding the GPU's `max_texture_dimension_2d` (typically 8192px) are automatically downscaled. This may result in slight quality loss. Does not affect PMX conversion output (viewer display only)
+- **Mipmap generation** — All textures are uploaded with a full mipmap chain. Downsampling is performed in linear color space (sRGB-correct) to eliminate moiré and aliasing when the camera is pulled back
+- **Depth precision** — Reverse-Z depth buffer provides high precision at all distances, minimizing Z-fighting on large models and stages
 - **Extraction size limit** — Archive (ZIP / 7z) and `.unitypackage` extraction is capped at 2GB total. Files exceeding this limit will produce an error
 - **MMD-specialized models** — Models optimized for MMD-specific rendering may display some surfaces incorrectly
 - **PMX 2.1 SoftBody** — Skipped (not supported)

@@ -266,7 +266,11 @@ impl GpuModel {
         queue.write_buffer(
             &self.vertex_buf,
             0,
-            bytemuck::cast_slice(self.animated_vertices.as_ref().unwrap()),
+            bytemuck::cast_slice(
+                self.animated_vertices
+                    .as_ref()
+                    .expect("animated_vertices は apply_morphs 内で必ず Some に設定済み"),
+            ),
         );
 
         // 次回比較用に weights を記録
@@ -275,17 +279,23 @@ impl GpuModel {
     }
 
     /// モーフウェイトを外部バッファに適用（アニメーション用：GPU アップロードはしない）
-    pub fn apply_morphs_to_buf(&self, weights: &[f32], vertices: &mut [Vertex]) {
+    pub fn apply_morphs_to_buf(&mut self, weights: &[f32], vertices: &mut [Vertex]) {
         let morph_len = self.gpu_morphs.len();
-        // ループ外で1回だけ確保し fill(false) で再利用（毎回 alloc を回避）
-        let mut visited = vec![false; morph_len];
+        // visited バッファを1回だけ確保し fill(false) で再利用
+        self.morph_visited.resize(morph_len, false);
         for morph_idx in 0..morph_len {
             let w = weights.get(morph_idx).copied().unwrap_or(0.0);
             if w.abs() < 1e-6 {
                 continue;
             }
-            Self::apply_gpu_morph_recursive(&self.gpu_morphs, morph_idx, w, vertices, &mut visited);
-            visited.fill(false);
+            Self::apply_gpu_morph_recursive(
+                &self.gpu_morphs,
+                morph_idx,
+                w,
+                vertices,
+                &mut self.morph_visited,
+            );
+            self.morph_visited.fill(false);
         }
     }
 
@@ -348,7 +358,7 @@ impl GpuModel {
                     }
                     if sub_idx >= gpu_morphs.len() {
                         log::warn!(
-                            "グループモーフ[{}]: サブインデックス {} が範囲外 (len={})",
+                            "Group morph[{}]: sub-index {} out of range (len={})",
                             morph_idx,
                             sub_idx,
                             gpu_morphs.len()
@@ -651,7 +661,9 @@ fn build_gpu_model_inner(
         ensure_sampler(&mut sampler_cache, device, base_sampler_info);
         let tex_bg = mat.texture_index.and_then(|ti| {
             gpu_textures_dual.get(ti).map(|(srgb_view, _)| {
-                let sampler = sampler_cache.get(base_sampler_info).unwrap();
+                let sampler = sampler_cache
+                    .get(base_sampler_info)
+                    .expect("ensure_sampler で登録済み");
                 gpu::create_texture_bind_group(device, &texture_bgl, srgb_view, sampler)
             })
         });
@@ -668,56 +680,59 @@ fn build_gpu_model_inner(
         let mat_bg = gpu::create_material_bind_group(
             device,
             &material_bgl,
-            diffuse.to_array(),
-            shade_color,
-            mat.is_mtoon(),
-            mp.shading_toony_factor,
-            mp.shading_shift_factor,
-            mp.outline_width_factor,
-            outline_mode,
-            mat.edge_color.to_array(),
-            mp.outline_lighting_mix,
-            mp.parametric_rim_color.to_array(),
-            mp.parametric_rim_fresnel_power,
-            mp.parametric_rim_lift,
-            mp.rim_lighting_mix,
-            mp.matcap_texture.is_some(),
-            mp.matcap_factor.to_array(),
-            mp.shade_texture.is_some(),
-            mp.shading_shift_texture.is_some(),
-            mp.shading_shift_texture_scale,
-            mp.rim_multiply_texture.is_some(),
-            mp.uv_animation_scroll_x_speed,
-            mp.uv_animation_scroll_y_speed,
-            mp.uv_animation_rotation_speed,
-            mp.uv_animation_mask_texture.is_some(),
-            // alphaMode エンコーディング: OPAQUE=-1.0, MASK=cutoff(>=0.0), BLEND=-0.5
-            match mat.alpha_mode {
-                AlphaMode::Opaque => -1.0,
-                AlphaMode::Mask => mat.alpha_cutoff, // 0.0 も合法値
-                _ => -0.5,                           // Blend / BlendZWrite
+            &gpu::MaterialParams {
+                diffuse: diffuse.to_array(),
+                shade_color,
+                is_mtoon: mat.is_mtoon(),
+                shading_toony: mp.shading_toony_factor,
+                shading_shift: mp.shading_shift_factor,
+                outline_width: mp.outline_width_factor,
+                outline_mode,
+                outline_color: mat.edge_color.to_array(),
+                outline_lighting_mix: mp.outline_lighting_mix,
+                rim_color: mp.parametric_rim_color.to_array(),
+                rim_fresnel_power: mp.parametric_rim_fresnel_power,
+                rim_lift: mp.parametric_rim_lift,
+                rim_lighting_mix: mp.rim_lighting_mix,
+                has_matcap: mp.matcap_texture.is_some(),
+                matcap_factor: mp.matcap_factor.to_array(),
+                has_shade_multiply_tex: mp.shade_texture.is_some(),
+                has_shading_shift_tex: mp.shading_shift_texture.is_some(),
+                shading_shift_tex_scale: mp.shading_shift_texture_scale,
+                has_rim_multiply_tex: mp.rim_multiply_texture.is_some(),
+                uv_anim_scroll_x: mp.uv_animation_scroll_x_speed,
+                uv_anim_scroll_y: mp.uv_animation_scroll_y_speed,
+                uv_anim_rotation: mp.uv_animation_rotation_speed,
+                has_uv_anim_mask: mp.uv_animation_mask_texture.is_some(),
+                // alphaMode エンコーディング: OPAQUE=-1.0, MASK=cutoff(>=0.0), BLEND=-0.5
+                alpha_cutoff: match mat.alpha_mode {
+                    AlphaMode::Opaque => -1.0,
+                    AlphaMode::Mask => mat.alpha_cutoff, // 0.0 も合法値
+                    _ => -0.5,                           // Blend / BlendZWrite
+                },
+                base_uv: gpu::pack_uv_params(mat.base_color_tex_info.as_ref()),
+                shade_uv: gpu::pack_uv_params(mp.shade_texture.as_ref()),
+                shift_uv: gpu::pack_uv_params(mp.shading_shift_texture.as_ref()),
+                rim_uv: gpu::pack_uv_params(mp.rim_multiply_texture.as_ref()),
+                outline_uv: gpu::pack_uv_params(mp.outline_width_texture.as_ref()),
+                uv_mask_uv: gpu::pack_uv_params(mp.uv_animation_mask_texture.as_ref()),
+                emissive_factor: if bloom_per_mat.get(mat_idx).copied().unwrap_or(true) {
+                    mat.emissive_factor.to_array()
+                } else {
+                    [0.0; 3]
+                },
+                has_emissive_tex: mat.emissive_texture.is_some()
+                    && bloom_per_mat.get(mat_idx).copied().unwrap_or(true),
+                emissive_uv: gpu::pack_uv_params(mat.emissive_texture.as_ref()),
+                has_normal_tex: mat.normal_texture.is_some()
+                    && normal_map_per_mat.get(mat_idx).copied().unwrap_or(true),
+                normal_scale: mat.normal_texture_scale,
+                normal_uv: gpu::pack_uv_params(mat.normal_texture.as_ref()),
+                gi_equalization_factor: mp.gi_equalization_factor,
+                outline_width_channel: mp.outline_width_tex_channel.to_f32(),
+                uv_anim_mask_channel: mp.uv_anim_mask_tex_channel.to_f32(),
+                matcap_uv: gpu::pack_uv_params(mp.matcap_texture.as_ref()),
             },
-            gpu::pack_uv_params(mat.base_color_tex_info.as_ref()),
-            gpu::pack_uv_params(mp.shade_texture.as_ref()),
-            gpu::pack_uv_params(mp.shading_shift_texture.as_ref()),
-            gpu::pack_uv_params(mp.rim_multiply_texture.as_ref()),
-            gpu::pack_uv_params(mp.outline_width_texture.as_ref()),
-            gpu::pack_uv_params(mp.uv_animation_mask_texture.as_ref()),
-            if bloom_per_mat.get(mat_idx).copied().unwrap_or(true) {
-                mat.emissive_factor.to_array()
-            } else {
-                [0.0; 3]
-            },
-            mat.emissive_texture.is_some() && bloom_per_mat.get(mat_idx).copied().unwrap_or(true),
-            gpu::pack_uv_params(mat.emissive_texture.as_ref()),
-            mat.normal_texture.is_some()
-                && normal_map_per_mat.get(mat_idx).copied().unwrap_or(true),
-            mat.normal_texture_scale,
-            gpu::pack_uv_params(mat.normal_texture.as_ref()),
-            mp.gi_equalization_factor,
-            mp.outline_width_tex_channel.to_f32(),
-            mp.uv_anim_mask_tex_channel.to_f32(),
-            gpu::pack_uv_params(mp.matcap_texture.as_ref()),
         );
 
         // MToon 補助テクスチャ bind group（group 3）
@@ -778,14 +793,15 @@ fn build_gpu_model_inner(
             ] {
                 ensure_sampler(&mut sampler_cache, device, si);
             }
-            let matcap_sampler = sampler_cache.get(&matcap_si).unwrap();
-            let shade_sampler = sampler_cache.get(&shade_si).unwrap();
-            let shift_sampler = sampler_cache.get(&shift_si).unwrap();
-            let rim_sampler = sampler_cache.get(&rim_si).unwrap();
-            let uv_mask_sampler = sampler_cache.get(&uv_mask_si).unwrap();
-            let outline_sampler = sampler_cache.get(&outline_si).unwrap();
-            let emissive_sampler = sampler_cache.get(&emissive_si).unwrap();
-            let normal_sampler = sampler_cache.get(&normal_si).unwrap();
+            let expect_msg = "ensure_sampler で登録済み";
+            let matcap_sampler = sampler_cache.get(&matcap_si).expect(expect_msg);
+            let shade_sampler = sampler_cache.get(&shade_si).expect(expect_msg);
+            let shift_sampler = sampler_cache.get(&shift_si).expect(expect_msg);
+            let rim_sampler = sampler_cache.get(&rim_si).expect(expect_msg);
+            let uv_mask_sampler = sampler_cache.get(&uv_mask_si).expect(expect_msg);
+            let outline_sampler = sampler_cache.get(&outline_si).expect(expect_msg);
+            let emissive_sampler = sampler_cache.get(&emissive_si).expect(expect_msg);
+            let normal_sampler = sampler_cache.get(&normal_si).expect(expect_msg);
             Some(gpu::create_mtoon_aux_bind_group(
                 device,
                 &mtoon_aux_bgl,

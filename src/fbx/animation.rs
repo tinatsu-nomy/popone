@@ -91,7 +91,7 @@ fn read_axis_config(doc: &FbxDocument) -> FbxAxisConfig {
     let to_meters = (unit_scale_factor / 100.0) as f32;
 
     log::info!(
-        "FBXアニメーション座標系: UpAxis={} (sign={}), FrontAxis={} (sign={}), CoordAxis={} (sign={}), UnitScale={}(→×{}m)",
+        "FBX animation coord system: UpAxis={} (sign={}), FrontAxis={} (sign={}), CoordAxis={} (sign={}), UnitScale={}(->x{}m)",
         up_axis, up_sign, front_axis, front_sign, coord_axis, coord_sign,
         unit_scale_factor, to_meters
     );
@@ -109,7 +109,7 @@ fn read_axis_config(doc: &FbxDocument) -> FbxAxisConfig {
         .all(|&v| v.abs() < 1e-6);
 
     if is_identity {
-        log::info!("FBX座標系: Y-Up標準（軸変換なし）");
+        log::info!("FBX coord system: Y-Up standard (no axis conversion)");
     }
 
     FbxAxisConfig {
@@ -377,7 +377,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
                     }
                 }
                 log::info!(
-                    "FBXヒューマノイド検出: {} ({}→{}/{}ch マッピング)",
+                    "FBX humanoid detected: {} ({}->{}/{}ch mapping)",
                     humanoid.rig_type.label(),
                     bone_channels.len() + mapped_count,
                     mapped_count,
@@ -420,7 +420,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
                 };
 
             log::info!(
-                "FBXアニメーション読み込み: '{}' ボーン{}ch, 表情{}ch, レスト{}件, {:.2}秒, モード={:?}",
+                "FBX animation loaded: '{}' bone {}ch, expression {}ch, rest {} entries, {:.2}s, mode={:?}",
                 stack_name, final_channels.len(), expression_channels.len(),
                 matched_rests.len(), duration, match_mode,
             );
@@ -470,7 +470,7 @@ fn collect_bone_pre_rotations(scene: &FbxScene) -> HashMap<String, Quat> {
         .filter(|q| q.dot(Quat::IDENTITY).abs() < 0.9999)
         .count();
     log::info!(
-        "FBX PreRotation: 全{}ボーン（非identity {}件）",
+        "FBX PreRotation: {} bones total ({} non-identity)",
         pre_rots.len(),
         non_identity_count
     );
@@ -713,7 +713,7 @@ fn detect_facing(global_positions: &HashMap<String, Vec3>) -> bool {
 
     let result = count > 0 && left_x_sum / count as f32 > 0.005;
     log::info!(
-        "facing検出: Left {}件, avg_x={:.4}, flip={}",
+        "Facing detection: Left {} entries, avg_x={:.4}, flip={}",
         count,
         if count > 0 {
             left_x_sum / count as f32

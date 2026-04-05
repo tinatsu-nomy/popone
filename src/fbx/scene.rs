@@ -241,7 +241,7 @@ impl<'a> FbxScene<'a> {
             let model_id = match parent_models.len() {
                 0 => {
                     log::warn!(
-                        "Geometry '{}' (id={}) に親 Model がありません。スキップします",
+                        "Geometry '{}' (id={}) has no parent Model. Skipping",
                         geom.name,
                         geom.id
                     );
@@ -250,7 +250,7 @@ impl<'a> FbxScene<'a> {
                 1 => parent_models[0],
                 _ => {
                     log::warn!(
-                        "Geometry '{}' (id={}) に複数の親 Model があります（{}個）。先頭を使用します",
+                        "Geometry '{}' (id={}) has multiple parent Models ({}). Using first",
                         geom.name,
                         geom.id,
                         parent_models.len()
@@ -259,7 +259,10 @@ impl<'a> FbxScene<'a> {
                 }
             };
 
-            let model = self.objects.get(&model_id).unwrap();
+            let Some(model) = self.objects.get(&model_id) else {
+                log::warn!("Model id={} not found in objects. Skipping", model_id);
+                continue;
+            };
             let world_transform = self.compute_world_transform(model_id);
             let material_slots = self.material_slots_for_instance(model_id, geom.id);
 

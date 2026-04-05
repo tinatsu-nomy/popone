@@ -207,20 +207,21 @@ fn extract_textures(
                 if let Some(cached) = aux.get(&key) {
                     cached.to_vec()
                 } else {
-                    log::warn!("aux_files にテクスチャが見つかりません: {:?}", key);
+                    log::warn!("Texture not found in aux_files: {:?}", key);
                     Vec::new()
                 }
             } else if full_path.exists() {
                 std::fs::read(&full_path).unwrap_or_default()
             } else {
-                log::warn!("テクスチャファイルが見つかりません: {:?}", full_path);
+                log::warn!("Texture file not found: {:?}", full_path);
                 Vec::new()
             };
 
             IrTexture {
-                filename,
+                filename: filename.clone(),
                 data,
                 mime_type: mime.to_string(),
+                source_path: normalized.clone(),
             }
         })
         .collect()
@@ -242,7 +243,7 @@ fn extract_materials(pmx: &PmxModel) -> Vec<IrMaterial> {
             // スフィアモード: 3（サブテクスチャ）は非対応
             let sphere_mode = if m.sphere_mode == 3 {
                 log::warn!(
-                    "材質 '{}': sphere_mode=3（サブテクスチャ）は非対応、無効化します",
+                    "Material '{}': sphere_mode=3 (sub-texture) not supported, disabling",
                     m.name
                 );
                 0
@@ -547,7 +548,7 @@ fn extract_morphs(pmx: &PmxModel, meshes: &[IrMesh]) -> Vec<IrMorph> {
                                 Some(ir_idx) => Some((ir_idx, off.weight)),
                                 None => {
                                     log::warn!(
-                                        "グループモーフ: サブモーフ[{}]は非対応モーフ種別のためスキップ",
+                                        "Group morph: sub-morph[{}] has unsupported morph type, skipping",
                                         pmx_idx
                                     );
                                     None

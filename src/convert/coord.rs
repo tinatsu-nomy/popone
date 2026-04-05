@@ -51,6 +51,16 @@ pub fn flip_face_winding(indices: &mut [u32]) {
     }
 }
 
+/// `is_vrm0` フラグに基づき glTF→PMX 座標変換の関数ポインタを返す
+#[inline]
+pub fn pos_fn(is_vrm0: bool) -> fn(Vec3) -> Vec3 {
+    if is_vrm0 {
+        gltf_pos_to_pmx_v0
+    } else {
+        gltf_pos_to_pmx
+    }
+}
+
 /// PMX位置 → glTF位置（逆変換、スケール除去 + ミラー）
 /// VRM 0.0/1.0 を `is_vrm0` フラグで統一的に処理
 #[inline]

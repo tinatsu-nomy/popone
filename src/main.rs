@@ -209,27 +209,30 @@ fn detach_console() {
 /// IrModel のダンプ出力（共通処理）
 fn dump_ir(ir: &intermediate::types::IrModel) {
     println!("=== {} dump ===", ir.source_format.label());
-    println!("モデル名: {}", ir.name);
-    println!("ボーン数: {}", ir.bones.len());
-    println!("メッシュ数: {}", ir.meshes.len());
-    println!("頂点数(合計): {}", ir.total_vertices());
-    println!("面数(合計): {}", ir.total_faces());
-    println!("材質数: {}", ir.materials.len());
-    println!("テクスチャ数: {}", ir.textures.len());
-    println!("モーフ数: {}", ir.morphs.len());
-    println!("剛体数: {}", ir.physics.rigid_bodies.len());
-    println!("ジョイント数: {}", ir.physics.joints.len());
+    println!("Model name: {}", ir.name);
+    println!("Bones: {}", ir.bones.len());
+    println!("Meshes: {}", ir.meshes.len());
+    println!("Vertices (total): {}", ir.total_vertices());
+    println!("Faces (total): {}", ir.total_faces());
+    println!("Materials: {}", ir.materials.len());
+    println!("Textures: {}", ir.textures.len());
+    println!("Morphs: {}", ir.morphs.len());
+    println!("Rigidbodies: {}", ir.physics.rigid_bodies.len());
+    println!("Joints: {}", ir.physics.joints.len());
     if let Some(ref rig) = ir.rig_type {
-        println!("リグ種別: {} (Humanoid: {}本)", rig, ir.humanoid_bone_count);
+        println!(
+            "Rig type: {} (Humanoid: {} bones)",
+            rig, ir.humanoid_bone_count
+        );
     }
 
-    println!("\n--- ボーン一覧 ---");
+    println!("\n--- Bone list ---");
     for (i, bone) in ir.bones.iter().enumerate() {
         let vrm_name = bone.vrm_bone_name.as_deref().unwrap_or("-");
         println!("  [{:3}] {} (vrm: {})", i, bone.name, vrm_name);
     }
 
-    println!("\n--- モーフ一覧 ---");
+    println!("\n--- Morph list ---");
     for morph in &ir.morphs {
         println!("  [panel{}] {}", morph.panel, morph.name);
     }
@@ -251,7 +254,7 @@ fn main() {
     };
 
     if let Err(e) = run_main(args) {
-        eprintln!("エラー: {e:#}");
+        eprintln!("Error: {e:#}");
         std::process::exit(1);
     }
 }
@@ -296,7 +299,7 @@ fn run_main(mut args: Args) -> Result<()> {
         let contents = popone::archive::list_models(&data, format)
             .context("アーカイブ内モデル一覧取得失敗")?;
         if contents.models.is_empty() {
-            println!("アーカイブ内にモデルファイルが見つかりません");
+            println!("No model files found in archive");
         } else {
             for (_, path, _, kind) in &contents.models {
                 println!("[{}] {}", kind.label(), path.display());
@@ -343,10 +346,10 @@ fn run_main(mut args: Args) -> Result<()> {
     };
     setup_logging(log_level, log_path.as_deref()).context("ロガー初期化失敗")?;
     if let Some(ref p) = log_path {
-        log::info!("ログファイル: {}", p.display());
+        log::info!("Log file: {}", p.display());
     }
 
-    log::info!("入力ファイル: {}", input.display());
+    log::info!("Input file: {}", input.display());
 
     // 中間表現抽出（VRM / FBX / OBJ / STL / unitypackage 分岐）
     // VRM の場合は glb を保持してテクスチャ書き出しに再利用（二重読み込み回避）
@@ -405,10 +408,7 @@ fn run_main(mut args: Args) -> Result<()> {
             }
 
             if fbx_indices.len() > 1 {
-                log::info!(
-                    ".unitypackage 内に {} 個の FBX が見つかりました:",
-                    fbx_indices.len()
-                );
+                log::info!("Found {} FBX files in .unitypackage:", fbx_indices.len());
                 for (_, name) in &fbx_indices {
                     log::info!("  FBX: {}", name);
                 }
@@ -438,21 +438,30 @@ fn run_main(mut args: Args) -> Result<()> {
 
             let prepared = popone::unitypackage::prepare_pkg_fbx(&pkg, selected_idx)
                 .context("Prefab テクスチャ解決失敗")?;
-            log::info!("unitypackage内FBX: {}", prepared.model.pathname);
+            log::info!("FBX in unitypackage: {}", prepared.model.pathname);
 
+            // unitypackage 経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
             let mut ir = popone::fbx::extract::extract_ir_model_from_fbx_with_options(
                 &prepared.fbx_data,
-                Some(&input),
+                None,
                 args.normalize_pose,
                 args.normalize_to_tstance,
             )
             .context("FBX中間表現の抽出に失敗")?;
 
             if !prepared.resolved.is_empty() {
+                let prefab_label = format!(
+                    "prefab({})",
+                    std::path::Path::new(&*prepared.model.pathname)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                );
                 popone::unitypackage::embed_textures_with_prefab(
                     &mut ir,
                     &prepared.textures,
                     &prepared.resolved,
+                    &prefab_label,
                 );
             } else {
                 // フォールバック: 既存のファイル名マッチング
@@ -469,7 +478,7 @@ fn run_main(mut args: Args) -> Result<()> {
             let glb = vrm::loader::load_glb(&input)
                 .with_context(|| format!("GLB読み込み失敗: {}", input.display()))?;
             let version = vrm::detect::detect_version(&glb.document);
-            log::info!("VRMバージョン: {:?}", version);
+            log::info!("VRM version: {:?}", version);
             let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
             let ir = vrm::extract::extract_ir_model_with_options(
                 &glb.document,
@@ -484,6 +493,9 @@ fn run_main(mut args: Args) -> Result<()> {
             (ir, Some(glb))
         }
     };
+
+    // テクスチャ割当ログ出力
+    ir.log_texture_assignments();
 
     if args.dump {
         dump_ir(&ir);
@@ -532,8 +544,12 @@ fn run_main(mut args: Args) -> Result<()> {
         .write_model(&pmx_model)
         .context("PMX書き出し失敗")?;
 
-    log::info!("変換完了: {}", output.display());
-    println!("変換完了: {} → {}", input.display(), output.display());
+    log::info!("Conversion complete: {}", output.display());
+    println!(
+        "Conversion complete: {} -> {}",
+        input.display(),
+        output.display()
+    );
 
     Ok(())
 }
@@ -551,7 +567,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
     };
     setup_logging(log_level, log_path.as_deref()).context("ロガー初期化失敗")?;
 
-    log::info!("入力ファイル（アーカイブ）: {}", input.display());
+    log::info!("Input file (archive): {}", input.display());
 
     let data = std::fs::read(input)
         .with_context(|| format!("アーカイブ読み込み失敗: {}", input.display()))?;
@@ -643,7 +659,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         }
     };
 
-    log::info!("選択モデル: {}", contents.models[selected].1.display());
+    log::info!("Selected model: {}", contents.models[selected].1.display());
 
     let bundle = popone::archive::extract_model_bundle(&data, format, contents, selected)
         .context("モデル展開失敗")?;
@@ -672,21 +688,30 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
             .context("PMD中間表現の抽出に失敗")?
         }
         ArchiveModelKind::Fbx => {
+            // アーカイブ経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
             let mut ir = popone::fbx::extract::extract_ir_model_from_fbx_with_options(
                 &bundle.model.data,
-                Some(input),
+                None,
                 args.normalize_pose,
                 args.normalize_to_tstance,
             )
             .context("FBX中間表現の抽出に失敗")?;
-            popone::unitypackage::embed_textures_into_ir(&mut ir, &bundle.textures);
+            let label = format!(
+                "archive({})",
+                input.file_name().unwrap_or_default().to_string_lossy()
+            );
+            popone::unitypackage::embed_textures_into_ir_with_label(
+                &mut ir,
+                &bundle.textures,
+                &label,
+            );
             ir
         }
         ArchiveModelKind::Vrm | ArchiveModelKind::Glb => {
             let glb = popone::vrm::loader::load_glb_from_data(&bundle.model.data)
                 .context("VRM/GLB読み込み失敗")?;
             let version = popone::vrm::detect::detect_version(&glb.document);
-            log::info!("VRMバージョン: {:?}", version);
+            log::info!("VRM version: {:?}", version);
             let all_extensions = popone::vrm::loader::get_raw_extensions(&glb.document);
             popone::vrm::extract::extract_ir_model_with_options(
                 &glb.document,
@@ -790,24 +815,33 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
             let prepared = popone::unitypackage::prepare_pkg_fbx(&pkg, selected_idx)
                 .context("Prefab テクスチャ解決失敗")?;
             log::info!(
-                "unitypackage内FBX: {} テクスチャ: {}個",
+                "FBX in unitypackage: {} textures: {}",
                 prepared.model.pathname,
                 prepared.textures.len()
             );
 
+            // unitypackage 経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
             let mut ir = popone::fbx::extract::extract_ir_model_from_fbx_with_options(
                 &prepared.fbx_data,
-                Some(input),
+                None,
                 args.normalize_pose,
                 args.normalize_to_tstance,
             )
             .context("FBX中間表現の抽出に失敗")?;
 
             if !prepared.resolved.is_empty() {
+                let prefab_label = format!(
+                    "prefab({})",
+                    std::path::Path::new(&*prepared.model.pathname)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                );
                 popone::unitypackage::embed_textures_with_prefab(
                     &mut ir,
                     &prepared.textures,
                     &prepared.resolved,
+                    &prefab_label,
                 );
             } else {
                 let textures: Vec<(String, Vec<u8>)> = prepared
@@ -820,6 +854,9 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
             ir
         }
     };
+
+    // テクスチャ割当ログ出力
+    ir.log_texture_assignments();
 
     if args.dump {
         dump_ir(&ir);
@@ -858,8 +895,12 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         .write_model(&pmx_model)
         .context("PMX書き出し失敗")?;
 
-    log::info!("変換完了: {}", output.display());
-    println!("変換完了: {} → {}", input.display(), output.display());
+    log::info!("Conversion complete: {}", output.display());
+    println!(
+        "Conversion complete: {} -> {}",
+        input.display(),
+        output.display()
+    );
     Ok(())
 }
 
@@ -924,7 +965,7 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
     }
 
     if let Some(ref path) = initial_file {
-        log::info!("ビューアモード: {}", path.display());
+        log::info!("Viewer mode: {}", path.display());
     }
 
     let png = include_bytes!("../assets/popone_icon.png");
@@ -953,7 +994,10 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size(inner_size)
-            .with_title(format!("POPONE Model Viewer v{}", env!("CARGO_PKG_VERSION")))
+            .with_title(format!(
+                "POPONE Model Viewer v{}",
+                env!("CARGO_PKG_VERSION")
+            ))
             .with_drag_and_drop(true)
             .with_icon(icon),
         renderer: eframe::Renderer::Wgpu,

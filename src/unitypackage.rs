@@ -227,7 +227,7 @@ fn build_unity_package_index_with_limit(
                 }
                 let cow = String::from_utf8_lossy(&data);
                 if matches!(&cow, std::borrow::Cow::Owned(_)) {
-                    log::warn!("asset.meta (GUID={}) に不正な UTF-8 が含まれています", guid);
+                    log::warn!("asset.meta (GUID={}) contains invalid UTF-8", guid);
                 }
                 metas.insert(guid, cow.into_owned());
             }
@@ -256,7 +256,7 @@ fn build_unity_package_index_with_limit(
     }
 
     log::debug!(
-        "UnityPackageIndex 構築完了: {}エントリ, 合計 {}KB",
+        "UnityPackageIndex built: {} entries, total {}KB",
         entries.len(),
         total_bytes / 1024
     );
@@ -311,7 +311,7 @@ pub fn take_fbx_and_textures(
         .collect();
 
     log::info!(
-        ".unitypackage 展開: FBX={} ({}KB), テクスチャ={}個",
+        ".unitypackage extract: FBX={} ({}KB), textures={}",
         fbx_name,
         fbx_data.len() / 1024,
         textures.len(),
@@ -343,7 +343,7 @@ pub fn take_vrm(mut assets: Vec<ExtractedAsset>, vrm_index: usize) -> Result<(Ve
     let vrm_name = vrm_asset.filename();
     let vrm_data = vrm_asset.data.to_vec();
     log::info!(
-        ".unitypackage 展開: VRM={} ({}KB)",
+        ".unitypackage extract: VRM={} ({}KB)",
         vrm_name,
         vrm_data.len() / 1024,
     );
@@ -368,10 +368,7 @@ pub fn extract_fbx_from_unitypackage(
 
     // 複数ある場合はログ出力
     if fbx_list.len() > 1 {
-        log::info!(
-            ".unitypackage 内に {} 個の FBX が見つかりました:",
-            fbx_list.len(),
-        );
+        log::info!("Found {} FBX files in .unitypackage:", fbx_list.len(),);
         for (_, name) in &fbx_list {
             log::info!("  FBX: {}", name);
         }
@@ -408,6 +405,15 @@ pub fn extract_fbx_from_unitypackage(
 pub fn embed_textures_into_ir(
     ir: &mut crate::intermediate::types::IrModel,
     textures: &[(String, Vec<u8>)],
+) -> Vec<usize> {
+    embed_textures_into_ir_with_label(ir, textures, "package")
+}
+
+/// テクスチャ埋め込み（ソースラベル指定版）
+pub fn embed_textures_into_ir_with_label(
+    ir: &mut crate::intermediate::types::IrModel,
+    textures: &[(String, Vec<u8>)],
+    source_label: &str,
 ) -> Vec<usize> {
     if textures.is_empty() {
         return (0..ir.materials.len()).collect();
@@ -463,11 +469,12 @@ pub fn embed_textures_into_ir(
                     filename: key.clone(),
                     data: data.to_vec(),
                     mime_type: mime,
+                    source_path: format!("{}: {}", source_label, key),
                 });
                 mat.texture_index = Some(tex_idx);
                 matched += 1;
                 log::info!(
-                    "テクスチャ割当: {} → mat[{}]",
+                    "Texture assigned: {} -> mat[{}]",
                     mat.source_texture_name.as_deref().unwrap_or("?"),
                     mat.name,
                 );
@@ -485,7 +492,7 @@ pub fn embed_textures_into_ir(
         .collect();
 
     log::info!(
-        "unitypackageテクスチャ: {}/{}材質マッチ, 未割当: {}",
+        "Unitypackage textures: {}/{} materials matched, unassigned: {}",
         matched,
         ir.materials.len(),
         unmatched.len()
@@ -619,7 +626,7 @@ fn parse_prefab_new(content: &str) -> PkgResult<Vec<NewPrefabInfo>> {
 
         // objectReference: {fileID: ..., guid: XXXX, ...}
         if pending_slot_index.is_some() && trimmed.contains("objectReference:") {
-            let slot_idx = pending_slot_index.take().unwrap();
+            let slot_idx = pending_slot_index.take().expect("is_some() チェック済み");
             if let Some(guid) = extract_guid_from_line(trimmed) {
                 current_overrides.push(MaterialOverride {
                     slot_index: slot_idx,
@@ -722,7 +729,6 @@ fn parse_prefab_old(content: &str) -> PkgResult<Vec<OldPrefabInfo>> {
 }
 
 /// FBX .meta 内のマテリアル情報
-#[allow(dead_code)]
 struct FbxMetaMaterial {
     material_name: String,
     material_guid: String,
@@ -757,7 +763,7 @@ fn parse_fbx_meta(meta_content: &str) -> PkgResult<(Vec<FbxMetaMaterial>, Option
             if trimmed.starts_with("name:") {
                 let val = trimmed
                     .strip_prefix("name:")
-                    .unwrap()
+                    .expect("starts_with チェック済み")
                     .trim()
                     .trim_matches('"');
                 current_name = Some(decode_unity_escape(val));
@@ -766,8 +772,10 @@ fn parse_fbx_meta(meta_content: &str) -> PkgResult<(Vec<FbxMetaMaterial>, Option
             // second: で始まる GUID
             if trimmed.starts_with("second:") && current_name.is_some() {
                 if let Some(guid) = extract_guid_from_line(trimmed) {
-                    let name = current_name.take().unwrap();
-                    log::debug!("  externalObjects: name='{}' → guid={}", name, guid);
+                    let name = current_name
+                        .take()
+                        .expect("current_name.is_some() チェック済み");
+                    log::debug!("  externalObjects: name='{}' -> guid={}", name, guid);
                     materials.push(FbxMetaMaterial {
                         material_name: name,
                         material_guid: guid.to_string(),
@@ -781,7 +789,10 @@ fn parse_fbx_meta(meta_content: &str) -> PkgResult<(Vec<FbxMetaMaterial>, Option
 
         // materialImportMode:
         if trimmed.starts_with("materialImportMode:") {
-            let val = trimmed.strip_prefix("materialImportMode:").unwrap().trim();
+            let val = trimmed
+                .strip_prefix("materialImportMode:")
+                .expect("starts_with チェック済み")
+                .trim();
             import_mode = val.parse().ok();
         }
     }
@@ -790,7 +801,7 @@ fn parse_fbx_meta(meta_content: &str) -> PkgResult<(Vec<FbxMetaMaterial>, Option
     if let Some(mode) = import_mode {
         if mode != 2 {
             log::info!(
-                "FBX .meta: materialImportMode={} (!=2) だが externalObjects ({} 件) を使用",
+                "FBX .meta: materialImportMode={} (!=2) but using externalObjects ({} entries)",
                 mode,
                 materials.len()
             );
@@ -813,7 +824,7 @@ struct MatFloatParam {
 }
 
 /// .mat ファイル内の Color パラメータ情報
-#[allow(dead_code)]
+#[expect(dead_code)]
 struct MatColorParam {
     param_name: String,
     r: f32,
@@ -856,7 +867,11 @@ fn parse_material_textures(mat_content: &str) -> PkgResult<ParsedMaterial> {
 
         // m_Name:（セクション外でも処理）
         if trimmed.starts_with("m_Name:") {
-            name = trimmed.strip_prefix("m_Name:").unwrap().trim().to_string();
+            name = trimmed
+                .strip_prefix("m_Name:")
+                .expect("starts_with チェック済み")
+                .trim()
+                .to_string();
             continue;
         }
 
@@ -912,11 +927,10 @@ fn parse_material_textures(mat_content: &str) -> PkgResult<ParsedMaterial> {
                 // スロット名検出: "- _SlotName:" の形式
                 if trimmed.starts_with("- _") {
                     // "- _MainTex:" → "_MainTex"
-                    let slot = trimmed
-                        .strip_prefix("- ")
-                        .unwrap()
-                        .trim_end_matches(':')
-                        .to_string();
+                    let Some(stripped) = trimmed.strip_prefix("- ") else {
+                        continue;
+                    };
+                    let slot = stripped.trim_end_matches(':').to_string();
                     current_slot = Some(slot);
                     continue;
                 }
@@ -1112,7 +1126,7 @@ fn resolve_variant_multi_inner(
     let entry_idx = match pkg.by_guid.get(guid) {
         Some(&idx) => idx,
         None => {
-            log::debug!("resolve_variant: guid={} → エントリなし", guid);
+            log::debug!("resolve_variant: guid={} -> no entry", guid);
             return Ok(Vec::new());
         }
     };
@@ -1120,7 +1134,7 @@ fn resolve_variant_multi_inner(
     let lower = pathname.to_lowercase();
 
     log::debug!(
-        "resolve_variant: guid={} → pathname={} (depth={})",
+        "resolve_variant: guid={} -> pathname={} (depth={})",
         guid,
         pathname,
         depth
@@ -1141,7 +1155,7 @@ fn resolve_variant_multi_inner(
         // New 形式パース（PrefabInstance ブロック）
         if format == PrefabFormat::New {
             if let Ok(infos) = parse_prefab_new(&content) {
-                log::debug!("resolve_variant: New Prefab infos={} 件", infos.len());
+                log::debug!("resolve_variant: New Prefab infos={}", infos.len());
                 for (i, info) in infos.iter().enumerate() {
                     log::debug!(
                         "resolve_variant:   [{}] source_guid={}",
@@ -1169,7 +1183,7 @@ fn resolve_variant_multi_inner(
         // 混合形式（PrefabInstance + SkinnedMeshRenderer 共存）は New + Old 両方をパースする
         {
             if let Ok(infos) = parse_prefab_old(&content) {
-                log::debug!("resolve_variant: Old Prefab infos={} 件", infos.len());
+                log::debug!("resolve_variant: Old Prefab infos={}", infos.len());
                 for (i, info) in infos.iter().enumerate() {
                     log::debug!("resolve_variant:   [{}] fbx_guid={}", i, info.fbx_guid);
                 }
@@ -1187,7 +1201,7 @@ fn resolve_variant_multi_inner(
     }
 
     log::debug!(
-        "resolve_variant: guid={} は .fbx/.prefab ではないため空",
+        "resolve_variant: guid={} is not .fbx/.prefab, returning empty",
         guid
     );
     Ok(Vec::new())
@@ -1210,7 +1224,7 @@ pub fn resolve_prefab_textures(
         let content = String::from_utf8_lossy(&entry.data);
         let format = detect_prefab_format(&content);
 
-        log::debug!("Prefab 検査: {} format={:?}", entry.pathname, format);
+        log::debug!("Prefab inspection: {} format={:?}", entry.pathname, format);
 
         // New 形式（PrefabInstance: あり）のパース
         let mut new_matched = false;
@@ -1218,12 +1232,12 @@ pub fn resolve_prefab_textures(
             let infos = match parse_prefab_new(&content) {
                 Ok(v) => v,
                 Err(e) => {
-                    log::warn!("Prefab パース失敗 ({}): {}", entry.pathname, e);
+                    log::warn!("Prefab parse failed ({}): {}", entry.pathname, e);
                     Vec::new()
                 }
             };
 
-            log::debug!("  New Prefab infos: {} 件", infos.len());
+            log::debug!("  New Prefab infos: {}", infos.len());
             for (i, info) in infos.iter().enumerate() {
                 log::debug!(
                     "    [{}] source_guid={}, overrides={}",
@@ -1239,17 +1253,17 @@ pub fn resolve_prefab_textures(
                     Ok(gs) => {
                         if gs.is_empty() {
                             log::debug!(
-                                "  Variant 解決: 空 (guid={} をそのまま使用)",
+                                "  Variant resolve: empty (using guid={} as-is)",
                                 info.source_fbx_guid
                             );
                             vec![info.source_fbx_guid.clone()]
                         } else {
-                            log::debug!("  Variant 解決成功: {} → {:?}", info.source_fbx_guid, gs);
+                            log::debug!("  Variant resolved: {} -> {:?}", info.source_fbx_guid, gs);
                             gs
                         }
                     }
                     Err(e) => {
-                        log::warn!("Variant 解決失敗: {}", e);
+                        log::warn!("Variant resolve failed: {}", e);
                         continue;
                     }
                 };
@@ -1278,7 +1292,7 @@ pub fn resolve_prefab_textures(
                     match parse_fbx_meta(meta) {
                         Ok((mats, _)) => mats,
                         Err(e) => {
-                            log::warn!("FBX .meta パース失敗: {}", e);
+                            log::warn!("FBX .meta parse failed: {}", e);
                             Vec::new()
                         }
                     }
@@ -1333,14 +1347,14 @@ pub fn resolve_prefab_textures(
         if format == PrefabFormat::Old || (format == PrefabFormat::New && !new_matched) {
             if format == PrefabFormat::New {
                 log::debug!(
-                    "  New 形式でマッチせず → Old 形式フォールバック ({})",
+                    "  New format no match -> Old format fallback ({})",
                     entry.pathname
                 );
             }
             let infos = match parse_prefab_old(&content) {
                 Ok(v) => v,
                 Err(e) => {
-                    log::warn!("旧 Prefab パース失敗 ({}): {}", entry.pathname, e);
+                    log::warn!("Old Prefab parse failed ({}): {}", entry.pathname, e);
                     continue;
                 }
             };
@@ -1376,7 +1390,7 @@ pub fn resolve_prefab_textures(
                             .map(|m| (m.material_guid, m.material_name))
                             .collect(),
                         Err(e) => {
-                            log::warn!("FBX .meta パース失敗: {}", e);
+                            log::warn!("FBX .meta parse failed: {}", e);
                             HashMap::new()
                         }
                     }
@@ -1410,14 +1424,14 @@ pub fn resolve_prefab_textures(
 
     if candidates.is_empty() {
         log::info!(
-            "Prefab テクスチャ解決: FBX {} に対応する Prefab が見つかりません",
+            "Prefab texture resolve: no Prefab found for FBX {}",
             fbx_path
         );
         return Vec::new();
     }
 
     log::info!(
-        "Prefab テクスチャ解決: {} 候補 ({})",
+        "Prefab texture resolve: {} candidates ({})",
         candidates.len(),
         candidates
             .iter()
@@ -1428,14 +1442,20 @@ pub fn resolve_prefab_textures(
 
     match choose_prefab(&candidates, fbx_path) {
         Some(c) => {
-            log::info!("Prefab 選択: {}", c.prefab_path);
+            log::info!("Prefab selected: {}", c.prefab_path);
             // 所有権を移動するため候補リストから取り出す
-            let idx = candidates.iter().position(|x| std::ptr::eq(x, c)).unwrap();
-            let chosen = candidates.into_iter().nth(idx).unwrap();
-            chosen.materials
+            let idx = candidates
+                .iter()
+                .position(|x| std::ptr::eq(x, c))
+                .expect("choose_prefab は candidates 内の参照を返す");
+            candidates
+                .into_iter()
+                .nth(idx)
+                .expect("position で見つかったインデックスは nth で必ず取得可能")
+                .materials
         }
         None => {
-            log::warn!("Prefab テクスチャ解決: 曖昧なため空を返却");
+            log::warn!("Prefab texture resolve: ambiguous, returning empty");
             Vec::new()
         }
     }
@@ -1499,9 +1519,12 @@ fn resolve_single_prefab_inner(
 
             if is_nested_prefab {
                 // Nested Prefab: 再帰的に解決して全 FBX エントリを取得
-                let nested_idx = *pkg.by_guid.get(&info.source_fbx_guid).unwrap();
+                let nested_idx = *pkg
+                    .by_guid
+                    .get(&info.source_fbx_guid)
+                    .expect("is_nested_prefab チェックで存在確認済み");
                 log::debug!(
-                    "resolve_single_prefab: ネスト Prefab 解決 (depth={}) → {}",
+                    "resolve_single_prefab: nested Prefab resolve (depth={}) -> {}",
                     depth,
                     pkg.entries[nested_idx].pathname
                 );
@@ -1514,7 +1537,7 @@ fn resolve_single_prefab_inner(
                         }
                     }
                     Err(e) => {
-                        log::warn!("ネストされた Prefab の解決失敗: {}", e);
+                        log::warn!("Nested Prefab resolve failed: {}", e);
                     }
                 }
             } else {
@@ -1525,7 +1548,7 @@ fn resolve_single_prefab_inner(
                     continue; // 重複 FBX GUID スキップ
                 }
                 let Some(&fbx_idx) = pkg.by_guid.get(&resolved_guid) else {
-                    log::warn!("Prefab 参照先 FBX が見つかりません: GUID={}", resolved_guid);
+                    log::warn!("Prefab referenced FBX not found: GUID={}", resolved_guid);
                     continue;
                 };
                 // 新形式: FBX .meta + Prefab オーバーライド
@@ -1533,7 +1556,7 @@ fn resolve_single_prefab_inner(
                     match parse_fbx_meta(meta) {
                         Ok((mats, _)) => mats,
                         Err(e) => {
-                            log::warn!("FBX .meta パース失敗: {}", e);
+                            log::warn!("FBX .meta parse failed: {}", e);
                             Vec::new()
                         }
                     }
@@ -1593,7 +1616,7 @@ fn resolve_single_prefab_inner(
                         continue; // New 経路で既に追加済み
                     }
                     let Some(&fbx_idx) = pkg.by_guid.get(&fbx_guid) else {
-                        log::warn!("Prefab 参照先 FBX が見つかりません: GUID={}", fbx_guid);
+                        log::warn!("Prefab referenced FBX not found: GUID={}", fbx_guid);
                         continue;
                     };
                     // FBX .meta からマテリアル GUID → FBX マテリアル名のマッピングを構築
@@ -1605,7 +1628,7 @@ fn resolve_single_prefab_inner(
                                     .map(|m| (m.material_guid, m.material_name))
                                     .collect(),
                                 Err(e) => {
-                                    log::warn!("FBX .meta パース失敗: {}", e);
+                                    log::warn!("FBX .meta parse failed: {}", e);
                                     HashMap::new()
                                 }
                             }
@@ -1668,7 +1691,7 @@ fn resolve_material_guids_to_textures_with_meta(
         let mat_entry_idx = match pkg.by_guid.get(mat_guid.as_str()) {
             Some(&idx) => idx,
             None => {
-                log::debug!("マテリアル GUID {} が見つかりません", mat_guid);
+                log::debug!("Material GUID {} not found", mat_guid);
                 continue;
             }
         };
@@ -1678,7 +1701,7 @@ fn resolve_material_guids_to_textures_with_meta(
         let parsed = match parse_material_textures(&mat_content) {
             Ok(p) => p,
             Err(e) => {
-                log::warn!("マテリアル パース失敗 ({}): {}", mat_guid, e);
+                log::warn!("Material parse failed ({}): {}", mat_guid, e);
                 continue;
             }
         };
@@ -1705,7 +1728,7 @@ fn resolve_material_guids_to_textures_with_meta(
         if let (Some(b), Some(n)) = (bump_map, normal_map) {
             if b.texture_guid != n.texture_guid {
                 log::warn!(
-                    "材質 '{}': _BumpMap と _NormalMap の GUID が異なります（_BumpMap 優先）",
+                    "Material '{}': _BumpMap and _NormalMap GUIDs differ (_BumpMap preferred)",
                     parsed.name
                 );
             }
@@ -1759,7 +1782,7 @@ fn resolve_material_guids_to_textures_with_meta(
             .map(|n| Arc::from(n.as_str()));
 
         log::debug!(
-            "  材質解決: slot={} mat_guid={} → .mat name='{}' fbx_name={:?} main_tex={:?} normal_tex={:?} bump_scale={} slots=[{}]",
+            "  Material resolve: slot={} mat_guid={} -> .mat name='{}' fbx_name={:?} main_tex={:?} normal_tex={:?} bump_scale={} slots=[{}]",
             slot_idx,
             mat_guid,
             parsed.name,
@@ -1793,6 +1816,8 @@ pub struct PackageTexture {
     pub guid: Arc<str>,
     pub display_name: Arc<str>,
     pub data: Arc<[u8]>,
+    /// アーカイブ内フルパス（例: "Assets/texture/body.png"）
+    pub pathname: Arc<str>,
 }
 
 /// Prefab 解決済み FBX パッケージ
@@ -1842,12 +1867,13 @@ pub fn prepare_pkg_fbx(pkg: &UnityPackageIndex, fbx_index: usize) -> Result<Prep
                 guid: Arc::from(e.guid.as_str()),
                 display_name: Arc::from(display_name.as_ref()),
                 data: Arc::clone(&e.data),
+                pathname: Arc::from(e.pathname.as_str()),
             }
         })
         .collect();
 
     log::info!(
-        "prepare_pkg_fbx: FBX={}, テクスチャ={}個, Prefab解決マテリアル={}個",
+        "prepare_pkg_fbx: FBX={}, textures={}, Prefab resolved materials={}",
         fbx_path,
         textures.len(),
         resolved.len()
@@ -1873,12 +1899,16 @@ pub fn select_best_fbx_index(pkg: &UnityPackageIndex, fbx_indices: &[(usize, Str
     let best = fbx_indices
         .iter()
         .max_by_key(|(idx, _)| pkg.entries[*idx].data.len())
-        .unwrap();
+        .expect("fbx_indices は len>=2（len==1 は早期リターン済み）");
     log::info!(
-        "FBX 自動選択: {} ({}KB, {}/{}候補)",
+        "FBX auto-selected: {} ({}KB, {}/{} candidates)",
         best.1,
         pkg.entries[best.0].data.len() / 1024,
-        fbx_indices.iter().position(|(i, _)| *i == best.0).unwrap() + 1,
+        fbx_indices
+            .iter()
+            .position(|(i, _)| *i == best.0)
+            .expect("best は fbx_indices から取得したため必ず存在")
+            + 1,
         fbx_indices.len()
     );
     best.0
@@ -1890,6 +1920,7 @@ pub fn embed_textures_with_prefab(
     ir: &mut crate::intermediate::types::IrModel,
     textures: &[PackageTexture],
     resolved: &[ResolvedMaterialTextures],
+    prefab_label: &str,
 ) -> Vec<usize> {
     if textures.is_empty() {
         return (0..ir.materials.len()).collect();
@@ -1933,7 +1964,7 @@ pub fn embed_textures_with_prefab(
             .collect();
 
         log::debug!(
-            "Prefab resolved マテリアル名: [{}]",
+            "Prefab resolved material names: [{}]",
             resolved
                 .iter()
                 .map(|r| {
@@ -1947,7 +1978,7 @@ pub fn embed_textures_with_prefab(
                 .join(", ")
         );
         log::debug!(
-            "IrModel 材質名: [{}]",
+            "IrModel material names: [{}]",
             ir.materials
                 .iter()
                 .map(|m| m.name.as_str())
@@ -1992,7 +2023,7 @@ pub fn embed_textures_with_prefab(
                             mat.texture_index = Some(existing_idx);
                             matched_base += 1;
                             log::info!(
-                                "Prefab テクスチャ割当 (名前, 再利用): {} → mat[{}]",
+                                "Prefab texture assign (name, reuse): {} -> mat[{}]",
                                 tex_guid,
                                 mat.name
                             );
@@ -2008,18 +2039,19 @@ pub fn embed_textures_with_prefab(
                                 filename: pkg_tex.display_name.to_string(),
                                 data: pkg_tex.data.to_vec(),
                                 mime_type: mime,
+                                source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
                             });
                             mat.texture_index = Some(tex_idx);
                             added_guids.insert(Arc::clone(tex_guid), tex_idx);
                             matched_base += 1;
                             log::info!(
-                                "Prefab テクスチャ割当 (名前): {} → mat[{}]",
+                                "Prefab texture assign (name): {} -> mat[{}]",
                                 pkg_tex.display_name,
                                 mat.name
                             );
                         } else {
                             log::debug!(
-                                "Prefab テクスチャ GUID {} が pkg 内に見つかりません (mat: {})",
+                                "Prefab texture GUID {} not found in pkg (mat: {})",
                                 tex_guid,
                                 mat.name
                             );
@@ -2037,7 +2069,7 @@ pub fn embed_textures_with_prefab(
                             mat.normal_texture_scale = res.bump_scale;
                             matched_normal += 1;
                             log::info!(
-                                "Prefab ノーマルマップ割当 (再利用): {} → mat[{}]",
+                                "Prefab normal map assign (reuse): {} -> mat[{}]",
                                 normal_guid,
                                 mat.name
                             );
@@ -2053,6 +2085,7 @@ pub fn embed_textures_with_prefab(
                                 filename: pkg_tex.display_name.to_string(),
                                 data: pkg_tex.data.to_vec(),
                                 mime_type: mime,
+                                source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
                             });
                             mat.normal_texture = Some(
                                 crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
@@ -2061,13 +2094,13 @@ pub fn embed_textures_with_prefab(
                             added_guids.insert(Arc::clone(normal_guid), tex_idx);
                             matched_normal += 1;
                             log::info!(
-                                "Prefab ノーマルマップ割当: {} → mat[{}]",
+                                "Prefab normal map assign: {} -> mat[{}]",
                                 pkg_tex.display_name,
                                 mat.name
                             );
                         } else {
                             log::debug!(
-                                "Prefab ノーマルマップ GUID {} が pkg 内に見つかりません (mat: {})",
+                                "Prefab normal map GUID {} not found in pkg (mat: {})",
                                 normal_guid,
                                 mat.name
                             );
@@ -2082,7 +2115,7 @@ pub fn embed_textures_with_prefab(
                     if ec != [0.0; 3] && mat.emissive_factor == glam::Vec3::ZERO {
                         mat.emissive_factor = glam::Vec3::new(ec[0], ec[1], ec[2]);
                         log::info!(
-                            "Prefab Emission 色割当: [{:.2},{:.2},{:.2}] → mat[{}]",
+                            "Prefab emission color assign: [{:.2},{:.2},{:.2}] -> mat[{}]",
                             ec[0],
                             ec[1],
                             ec[2],
@@ -2099,7 +2132,7 @@ pub fn embed_textures_with_prefab(
                                         existing_idx,
                                     ));
                                 log::info!(
-                                    "Prefab Emission テクスチャ割当 (再利用): {} → mat[{}]",
+                                    "Prefab emission texture assign (reuse): {} -> mat[{}]",
                                     em_guid,
                                     mat.name
                                 );
@@ -2116,13 +2149,14 @@ pub fn embed_textures_with_prefab(
                                     filename: pkg_tex.display_name.to_string(),
                                     data: pkg_tex.data.to_vec(),
                                     mime_type: mime,
+                                    source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
                                 });
                                 mat.emissive_texture = Some(
                                     crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
                                 );
                                 added_guids.insert(Arc::clone(em_guid), tex_idx);
                                 log::info!(
-                                    "Prefab Emission テクスチャ割当: {} → mat[{}]",
+                                    "Prefab Emission Texture assigned: {} -> mat[{}]",
                                     pkg_tex.display_name,
                                     mat.name
                                 );
@@ -2135,7 +2169,7 @@ pub fn embed_textures_with_prefab(
                     if mat.emissive_texture.is_some() && mat.emissive_factor == glam::Vec3::ZERO {
                         mat.emissive_factor = glam::Vec3::ONE;
                         log::info!(
-                            "Prefab Emission 色補正: (0,0,0) → (1,1,1) (テクスチャあり) mat[{}]",
+                            "Prefab emission color correction: (0,0,0) -> (1,1,1) (has texture) mat[{}]",
                             mat.name
                         );
                     }
@@ -2190,7 +2224,7 @@ pub fn embed_textures_with_prefab(
                     mat.texture_index = Some(existing_idx);
                     matched_base += 1;
                     log::info!(
-                        "テクスチャ割当 (ファイル名, 再利用): {} → mat[{}]",
+                        "Texture assign (filename, reuse): {} -> mat[{}]",
                         pkg_tex.display_name,
                         mat.name
                     );
@@ -2208,12 +2242,13 @@ pub fn embed_textures_with_prefab(
                     filename: pkg_tex.display_name.to_string(),
                     data: pkg_tex.data.to_vec(),
                     mime_type: mime,
+                    source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
                 });
                 mat.texture_index = Some(tex_idx);
                 added_guids.insert(Arc::clone(&pkg_tex.guid), tex_idx);
                 matched_base += 1;
                 log::info!(
-                    "テクスチャ割当 (ファイル名): {} → mat[{}]",
+                    "Texture assign (filename): {} -> mat[{}]",
                     pkg_tex.display_name,
                     mat.name
                 );
@@ -2230,7 +2265,7 @@ pub fn embed_textures_with_prefab(
         .collect();
 
     log::info!(
-        "Prefab テクスチャ: base={}/{}, normal={}/{}, 未割当: {}",
+        "Prefab textures: base={}/{}, normal={}/{}, unassigned: {}",
         matched_base,
         ir.materials.len(),
         matched_normal,
@@ -2550,12 +2585,14 @@ Material:
             filename: "base.png".into(),
             data: vec![0u8; 4],
             mime_type: "image/png".into(),
+            source_path: String::new(),
         });
 
         let textures = vec![PackageTexture {
             guid: Arc::from("normal-guid"),
             display_name: Arc::from("body_n.png"),
             data: Arc::from(vec![1u8; 4].as_slice()),
+            pathname: Arc::from(""),
         }];
         let resolved = vec![ResolvedMaterialTextures {
             source_material: None,
@@ -2569,7 +2606,7 @@ Material:
             emission_enabled: false,
         }];
 
-        let unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved);
+        let unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved, "test");
 
         // ベースカラーは設定済みなので unmatched は空
         assert!(unmatched.is_empty());
@@ -2593,6 +2630,7 @@ Material:
             guid: Arc::from("normal-guid"),
             display_name: Arc::from("body_n.png"),
             data: Arc::from(vec![1u8; 4].as_slice()),
+            pathname: Arc::from(""),
         }];
         let resolved = vec![ResolvedMaterialTextures {
             source_material: None,
@@ -2606,7 +2644,7 @@ Material:
             emission_enabled: false,
         }];
 
-        let unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved);
+        let unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved, "test");
 
         // ベースカラーが None のまま → unmatched に含まれる
         assert_eq!(unmatched, vec![0]);
@@ -2628,12 +2666,14 @@ Material:
             filename: "base.png".into(),
             data: vec![0u8; 4],
             mime_type: "image/png".into(),
+            source_path: String::new(),
         });
 
         let textures = vec![PackageTexture {
             guid: Arc::from("shared-normal"),
             display_name: Arc::from("shared_n.png"),
             data: Arc::from(vec![2u8; 4].as_slice()),
+            pathname: Arc::from(""),
         }];
         let resolved = vec![
             ResolvedMaterialTextures {
@@ -2660,7 +2700,7 @@ Material:
             },
         ];
 
-        let _unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved);
+        let _unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved, "test");
 
         // 両方の材質が同じテクスチャインデックスを参照
         let idx0 = ir.materials[0]

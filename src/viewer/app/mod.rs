@@ -24,6 +24,11 @@ use super::gpu::{DrawMode, GpuRenderer, LightMode, RenderParams, ShaderOverride,
 use super::mesh::GpuModel;
 use super::ui;
 
+/// ダークテーマのパネル背景色 (#1D1D1D)
+const DARK_PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x1D, 0x1D);
+/// ダークテーマのボーダー色 (#333333)
+const DARK_BORDER_COLOR: egui::Color32 = egui::Color32::from_rgb(0x33, 0x33, 0x33);
+
 // サブモジュールから再エクスポート
 pub use helpers::{FbxLoadMode, PkgModelType, PreloadedData, ReloadableSource, TextureSource};
 pub use pending::{
@@ -99,6 +104,30 @@ pub struct LoadedModel {
     pub prefab_name: Option<String>,
     /// Prefab エントリのパス名（リロード時に再解決するため保持）
     pub prefab_entry_path: Option<String>,
+}
+
+/// 材質ごとの表示・描画状態（mat_idx でインデックス）
+#[derive(Clone, Debug)]
+pub struct MaterialDisplayState {
+    /// 法線平滑化 ON/OFF
+    pub smooth_normals: bool,
+    /// カスタム法線クリア ON/OFF
+    pub clear_normals: bool,
+    /// ノーマルマップ適用 ON/OFF
+    pub normal_map: bool,
+    /// Bloom/Emissive 適用 ON/OFF
+    pub bloom: bool,
+}
+
+impl Default for MaterialDisplayState {
+    fn default() -> Self {
+        Self {
+            smooth_normals: false,
+            clear_normals: false,
+            normal_map: true,
+            bloom: true,
+        }
+    }
 }
 
 /// 変換結果の種類
@@ -353,16 +382,10 @@ pub struct ViewerApp {
     pub display: DisplaySettings,
     /// PMXエクスポート関連の状態
     pub export: ExportState,
-    /// 材質ごとの表示ON/OFF
+    /// 材質ごとの表示ON/OFF（draw_idx でインデックス）
     pub material_visibility: Vec<bool>,
-    /// 材質ごとの法線平滑化 ON/OFF（mat_idx でインデックス）
-    pub smooth_normals_per_mat: Vec<bool>,
-    /// 材質ごとのカスタム法線クリア ON/OFF（mat_idx でインデックス）
-    pub clear_normals_per_mat: Vec<bool>,
-    /// 材質ごとのノーマルマップ適用 ON/OFF（mat_idx でインデックス）
-    pub normal_map_per_mat: Vec<bool>,
-    /// 材質ごとの Bloom/Emissive 適用 ON/OFF（mat_idx でインデックス）
-    pub bloom_per_mat: Vec<bool>,
+    /// 材質ごとの描画状態（mat_idx でインデックス）
+    pub material_display: Vec<MaterialDisplayState>,
     /// 材質フィルター文字列
     pub material_filter: String,
     /// 表情モーフフィルター文字列
@@ -434,6 +457,8 @@ pub struct ViewerApp {
     pending_window_restore: PendingWindowRestore,
     /// テクスチャ割り当て履歴（メモリキャッシュ）
     pub texture_history: persistence::TextureHistoryFile,
+    /// ダークテーマ適用済みフラグ（update初回で再適用、eframeのスタイルリセット対策）
+    dark_theme_applied: bool,
 }
 
 /// ウィンドウ位置の初回フレーム検証・適用用
@@ -508,10 +533,7 @@ impl ViewerApp {
             morph_dirty: false,
             display: DisplaySettings::default(),
             material_visibility: Vec::new(),
-            smooth_normals_per_mat: Vec::new(),
-            clear_normals_per_mat: Vec::new(),
-            normal_map_per_mat: Vec::new(),
-            bloom_per_mat: Vec::new(),
+            material_display: Vec::new(),
             export: ExportState::default(),
             material_filter: String::new(),
             morph_filter: String::new(),
@@ -549,6 +571,7 @@ impl ViewerApp {
             config_dirty: false,
             pending_window_restore,
             texture_history,
+            dark_theme_applied: false,
         }
     }
 
@@ -601,12 +624,11 @@ impl ViewerApp {
         let mut visuals = egui::Visuals::dark();
 
         // パネル・ウィンドウ背景: #1D1D1D
-        let panel_bg = egui::Color32::from_rgb(0x1D, 0x1D, 0x1D);
-        visuals.panel_fill = panel_bg;
-        visuals.window_fill = panel_bg;
+        visuals.panel_fill = DARK_PANEL_BG;
+        visuals.window_fill = DARK_PANEL_BG;
 
         // ボーダー: #333333
-        let border = egui::Color32::from_rgb(0x33, 0x33, 0x33);
+        let border = DARK_BORDER_COLOR;
         let border_stroke = egui::Stroke::new(1.0, border);
         visuals.window_stroke = border_stroke;
 
@@ -670,22 +692,14 @@ impl ViewerApp {
         let queue = &self.render_state.queue;
 
         // GPU リソース構築（IrTexture から直接アップロード）
-        // 初回ロード時は per_mat 未初期化のため空スライス（全OFF扱い）
-        let smooth_per_mat: Vec<bool>;
-        let clear_per_mat: Vec<bool>;
-        let nmap_per_mat: Vec<bool>;
-        let bloom_per_mat: Vec<bool>;
-        if self.smooth_normals_per_mat.len() == ir.materials.len() {
-            smooth_per_mat = self.smooth_normals_per_mat.clone();
-            clear_per_mat = self.clear_normals_per_mat.clone();
-            nmap_per_mat = self.normal_map_per_mat.clone();
-            bloom_per_mat = self.bloom_per_mat.clone();
+        // 初回ロード時は material_display 未初期化のためデフォルト値使用
+        let display = if self.material_display.len() == ir.materials.len() {
+            self.material_display.clone()
         } else {
-            smooth_per_mat = vec![false; ir.materials.len()];
-            clear_per_mat = vec![false; ir.materials.len()];
-            nmap_per_mat = vec![true; ir.materials.len()];
-            bloom_per_mat = Self::default_bloom_per_mat(&ir);
-        }
+            Self::default_material_display(&ir)
+        };
+        let (smooth_per_mat, clear_per_mat, nmap_per_mat, bloom_per_mat) =
+            Self::extract_per_mat_vecs(&display);
         let gpu_model = super::mesh::build_gpu_model_from_ir(
             &ir,
             device,
@@ -746,16 +760,15 @@ impl ViewerApp {
             self.renderer = Some(GpuRenderer::new(device, queue, gpu_model.has_alpha));
         } else if let Some(ref mut renderer) = self.renderer {
             renderer.invalidate_visualization_cache();
+            renderer.mark_sort_dirty();
         }
 
         // 材質ごとのフラグを先に初期化（MMD リソース構築で使用するため）
-        self.smooth_normals_per_mat = vec![false; ir.materials.len()];
-        self.clear_normals_per_mat = vec![false; ir.materials.len()];
-        self.normal_map_per_mat = vec![true; ir.materials.len()];
-        self.bloom_per_mat = Self::default_bloom_per_mat(&ir);
+        self.material_display = Self::default_material_display(&ir);
 
         // MMD リソース構築
-        self.prepare_mmd_for_model(&mut gpu_model, &ir, &self.bloom_per_mat.clone());
+        let bloom_vec: Vec<bool> = self.material_display.iter().map(|d| d.bloom).collect();
+        self.prepare_mmd_for_model(&mut gpu_model, &ir, &bloom_vec);
 
         // テクスチャ割り当て履歴クリア（別モデル読み込み時）
         self.tex.assignments.clear();
@@ -788,6 +801,7 @@ impl ViewerApp {
         // グリッドをモデルサイズに合わせて再構築
         if let Some(ref mut renderer) = self.renderer {
             renderer.rebuild_grid(&self.render_state.device, bbox_min, bbox_max);
+            renderer.mark_sort_dirty();
         }
         // ビューポートサイズ確定後に refit（初回ロード時はサイズが未確定の場合がある）
         self.pending.refit = true;
@@ -813,6 +827,9 @@ impl ViewerApp {
         // キャッシュ構築
         let mat_cache = Self::build_mat_cache(&ir, &gpu_model);
         let stats_cache = CachedStats::new(&ir);
+
+        // テクスチャ割当ログ出力
+        ir.log_texture_assignments();
 
         let format_name = ir.source_format.label().to_string();
         let model_name = ir.name.clone();
@@ -873,24 +890,14 @@ impl ViewerApp {
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
 
+        let (smooth, clear, nmap, bloom) = Self::extract_per_mat_vecs(&self.material_display);
         match super::mesh::build_gpu_model_from_ir(
-            &loaded.ir,
-            device,
-            queue,
-            &self.smooth_normals_per_mat,
-            &self.clear_normals_per_mat,
-            &self.normal_map_per_mat,
-            &self.bloom_per_mat,
+            &loaded.ir, device, queue, &smooth, &clear, &nmap, &bloom,
         ) {
             Ok(mut new_model) => {
                 // MMD リソース構築
                 if let Some(ref renderer) = self.renderer {
-                    renderer.prepare_mmd_resources(
-                        device,
-                        &mut new_model,
-                        &loaded.ir,
-                        &self.bloom_per_mat,
-                    );
+                    renderer.prepare_mmd_resources(device, &mut new_model, &loaded.ir, &bloom);
                 }
                 let mat_cache = Self::build_mat_cache(&loaded.ir, &new_model);
                 // draw数が同じなら材質表示状態を保持
@@ -904,6 +911,7 @@ impl ViewerApp {
                 self.normalize_shader_state();
                 if let Some(ref mut renderer) = self.renderer {
                     renderer.invalidate_normal_cache();
+                    renderer.mark_sort_dirty();
                 }
                 // アニメーション状態を新しい gpu_model で再構築
                 if let (Some(ref loaded), Some(ref old_anim)) = (&self.loaded, &self.anim.state) {
@@ -921,39 +929,53 @@ impl ViewerApp {
                     new_state.ping_pong_direction = old_anim.ping_pong_direction;
                     self.anim.state = Some(new_state);
                 }
-                log::info!("GPU モデル再構築完了 (per-material normals)");
+                log::info!("GPU model rebuilt (per-material normals)");
             }
-            Err(e) => log::error!("GPU モデル再構築失敗: {}", e),
+            Err(e) => log::error!("GPU model rebuild failed: {}", e),
         }
     }
 
-    /// Bloom per-mat のデフォルト値を生成（HDR emissive は OFF）
-    fn default_bloom_per_mat(ir: &IrModel) -> Vec<bool> {
+    /// 材質ごとのデフォルト表示状態を生成（HDR emissive は Bloom OFF）
+    fn default_material_display(ir: &IrModel) -> Vec<MaterialDisplayState> {
         ir.materials
             .iter()
             .map(|m| {
                 let ef = m.emissive_factor;
                 // 任意成分が 1.0 を超える場合は HDR → デフォルト OFF
-                !(ef.x > 1.0 || ef.y > 1.0 || ef.z > 1.0)
+                let bloom = !(ef.x > 1.0 || ef.y > 1.0 || ef.z > 1.0);
+                MaterialDisplayState {
+                    bloom,
+                    ..Default::default()
+                }
             })
             .collect()
     }
 
-    /// per_mat フラグが材質数と一致すればそのまま返し、不一致なら全 false で生成
-    fn per_mat_or_default(flags: &[bool], mat_count: usize) -> Vec<bool> {
-        if flags.len() == mat_count {
-            flags.to_vec()
-        } else {
-            vec![false; mat_count]
-        }
+    /// `material_display` から各フラグの `Vec<bool>` を展開する
+    fn extract_per_mat_vecs(
+        display: &[MaterialDisplayState],
+    ) -> (Vec<bool>, Vec<bool>, Vec<bool>, Vec<bool>) {
+        let smooth = display.iter().map(|d| d.smooth_normals).collect();
+        let clear = display.iter().map(|d| d.clear_normals).collect();
+        let nmap = display.iter().map(|d| d.normal_map).collect();
+        let bloom = display.iter().map(|d| d.bloom).collect();
+        (smooth, clear, nmap, bloom)
     }
 
-    /// per_mat フラグが材質数と一致すればそのまま返し、不一致なら全 true で生成
-    fn per_mat_or_default_true(flags: &[bool], mat_count: usize) -> Vec<bool> {
-        if flags.len() == mat_count {
-            flags.to_vec()
+    /// `material_display` が材質数と一致すればそのまま展開し、不一致ならデフォルト値で生成
+    fn per_mat_or_default_display(
+        display: &[MaterialDisplayState],
+        mat_count: usize,
+    ) -> (Vec<bool>, Vec<bool>, Vec<bool>, Vec<bool>) {
+        if display.len() == mat_count {
+            Self::extract_per_mat_vecs(display)
         } else {
-            vec![true; mat_count]
+            (
+                vec![false; mat_count],
+                vec![false; mat_count],
+                vec![true; mat_count],
+                vec![true; mat_count],
+            )
         }
     }
 
@@ -1021,7 +1043,7 @@ impl ViewerApp {
                 if let Some(ref saved) = self.pending_window_restore.saved_config {
                     if saved.width >= 10.0 && saved.height >= 10.0 {
                         restore_pos = Some(egui::pos2(saved.x, saved.y));
-                        log::info!("ウィンドウ位置復元: ({}, {})", saved.x, saved.y);
+                        log::info!("Window position restored: ({}, {})", saved.x, saved.y);
                     }
                 }
                 self.pending_window_restore.validated = true;
@@ -1075,7 +1097,12 @@ impl ViewerApp {
 
             if let Some(ref mut loaded) = self.loaded {
                 let queue = &self.render_state.queue;
-                anim.apply_bone_animation(&mut loaded.gpu_model, queue, &self.morph_weights);
+                anim.apply_bone_animation(
+                    &mut loaded.gpu_model,
+                    queue,
+                    &self.morph_weights,
+                    &loaded.ir,
+                );
                 self.morph_dirty = false;
             }
         }
@@ -1084,6 +1111,13 @@ impl ViewerApp {
 
 impl eframe::App for ViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // ダークテーマ: new() での設定が eframe の初期化で上書きされる場合があるため
+        // update() 初回で再適用する（以降はフラグで1回のみ）
+        if !self.dark_theme_applied {
+            Self::setup_dark_theme(ctx);
+            self.dark_theme_applied = true;
+        }
+
         // IPC: 別プロセスからのファイルパス受信
         #[cfg(target_os = "windows")]
         while let Ok(path) = self.ipc_receiver.try_recv() {
@@ -1126,7 +1160,7 @@ impl eframe::App for ViewerApp {
         if now.duration_since(self.fps_last_update).as_secs_f32() >= 0.5 {
             if self.frame_times.len() >= 2 {
                 let span = now
-                    .duration_since(*self.frame_times.front().unwrap())
+                    .duration_since(*self.frame_times.front().expect("len >= 2 確認済み"))
                     .as_secs_f32();
                 if span > 0.0 {
                     self.fps_display = (self.frame_times.len() - 1) as f32 / span;
@@ -1141,12 +1175,9 @@ impl eframe::App for ViewerApp {
         let (is_hover_image, is_hover_model) = self.process_drag_and_drop(ctx);
         self.process_keyboard_shortcuts(ctx);
 
-        // ダークテーマ: 毎フレームビジュアルを適用（ツールチップ・ポップアップ含む全UIに反映）
-        Self::setup_dark_theme(ctx);
-
-        // ダークテーマ: パネル背景を明示的に設定
-        let dark_panel = egui::Color32::from_rgb(0x1D, 0x1D, 0x1D);
-        let dark_border = egui::Stroke::new(1.0, egui::Color32::from_rgb(0x33, 0x33, 0x33));
+        // ダークテーマ: パネル背景を明示的に設定（テーマ自体は new() で1回だけ設定済み）
+        let dark_panel = DARK_PANEL_BG;
+        let dark_border = egui::Stroke::new(1.0, DARK_BORDER_COLOR);
         let panel_frame = egui::Frame::new()
             .fill(dark_panel)
             .stroke(dark_border)
@@ -1158,7 +1189,7 @@ impl eframe::App for ViewerApp {
             .show(ctx, |bar| {
                 bar.horizontal(|ui| {
                     // トップバーボタン: 通常時は透明背景、ホバー時はグローバルテーマのブルーが効く
-                    let border33 = egui::Color32::from_rgb(0x33, 0x33, 0x33);
+                    let border33 = DARK_BORDER_COLOR;
                     ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
                     ui.visuals_mut().widgets.inactive.bg_fill = egui::Color32::TRANSPARENT;
                     ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border33);

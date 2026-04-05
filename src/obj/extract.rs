@@ -16,7 +16,7 @@ pub fn load_obj(path: &Path) -> Result<IrModel> {
     let materials = match materials_result {
         Ok(mats) => mats,
         Err(e) => {
-            log::warn!("MTL 読み込み失敗（デフォルト材質で続行）: {}", e);
+            log::warn!("MTL load failed (continuing with default material): {}", e);
             Vec::new()
         }
     };
@@ -49,7 +49,7 @@ pub fn load_obj_from_data(
                 tobj::load_mtl_buf(&mut mtl_reader)
             }
             None => {
-                log::warn!("MTL ファイルが見つかりません: {:?}", mtl_path);
+                log::warn!("MTL file not found: {:?}", mtl_path);
                 Ok((Vec::new(), Default::default()))
             }
         }
@@ -62,7 +62,7 @@ pub fn load_obj_from_data(
     let materials = match materials_result {
         Ok(mats) => mats,
         Err(e) => {
-            log::warn!("MTL 読み込み失敗（デフォルト材質で続行）: {}", e);
+            log::warn!("MTL load failed (continuing with default material): {}", e);
             Vec::new()
         }
     };
@@ -195,6 +195,7 @@ fn build_ir_model(
                     filename: tex_name.clone(),
                     data,
                     mime_type: mime.to_string(),
+                    source_path: tex_name.clone(),
                 });
                 texture_map.insert(tex_name.clone(), idx);
                 Some(idx)

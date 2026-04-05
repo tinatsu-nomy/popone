@@ -187,10 +187,11 @@ fn x_to_ir(
                             filename: safe_filename,
                             data,
                             mime_type: mime.to_string(),
+                            source_path: tex_name.clone(),
                         });
                         texture_map.insert(tex_name.clone(), idx);
                         if ext == "dds" {
-                            log::info!("DDS テクスチャ '{}' を検出しました", tex_name);
+                            log::info!("DDS texture '{}' detected", tex_name);
                         }
                         Some(idx)
                     }
@@ -333,7 +334,7 @@ fn x_to_ir(
                         };
 
                         let uv = if has_texcoords {
-                            let tc = mesh.texcoords.as_ref().unwrap();
+                            let tc = mesh.texcoords.as_ref().expect("has_texcoords チェック済み");
                             if vi < tc.len() {
                                 Vec2::new(tc[vi].x, 1.0 - tc[vi].y)
                             } else {
@@ -396,7 +397,10 @@ fn x_to_ir(
             });
         } else {
             // 複数材質: 三角形を材質ごとにグループ分け
-            let mat_list = mesh.materials.as_ref().unwrap();
+            let mat_list = mesh
+                .materials
+                .as_ref()
+                .expect("mat_count > 1 のため materials は Some");
 
             for local_mat_idx in 0..mat_count {
                 let global_mat_idx = mat_offset + local_mat_idx;
@@ -452,7 +456,8 @@ fn x_to_ir(
                             }
 
                             let uv = if has_texcoords {
-                                let tc = mesh.texcoords.as_ref().unwrap();
+                                let tc =
+                                    mesh.texcoords.as_ref().expect("has_texcoords チェック済み");
                                 if vi < tc.len() {
                                     Vec2::new(tc[vi].x, 1.0 - tc[vi].y)
                                 } else {
