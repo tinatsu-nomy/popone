@@ -171,6 +171,7 @@ impl ConvertMessage {
 }
 
 /// 表示・描画関連の設定
+#[derive(Clone)]
 pub struct DisplaySettings {
     /// ライト明るさ (0.0〜2.0)
     pub light_intensity: f32,
@@ -875,7 +876,10 @@ impl ViewerApp {
             prefab_entry_path: None,
         });
 
-        // シェーダー状態を正規化（PMX/PMD → 自動 MMD、VRM → 標準パスに戻す）
+        // 新規ロード時: シェーダーを初期値にリセットしてからモデル形式に応じて正規化
+        self.display.shader_override = ShaderOverride::Default;
+        self.display.use_mmd_path = false;
+        self.display.auto_shader = true;
         self.normalize_shader_state();
 
         // ウィンドウタイトル更新

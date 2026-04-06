@@ -13,7 +13,6 @@ use super::MaterialDisplayState;
 use crate::vrm;
 
 use super::pending::PendingOverlay;
-use crate::viewer::gpu::ShaderOverride;
 
 use super::super::animation::AnimationState;
 use super::helpers::{
@@ -24,7 +23,10 @@ use super::pending::{
     PendingArchiveLoad, PendingFbxChoice, PendingPkgModelLoad, PendingUnityPackage,
 };
 use super::texture_mgmt::PendingTexMatch;
-use super::{AppendedModel, CachedStats, ConvertMessage, ConvertResult, MaterialGroup, ViewerApp};
+use super::{
+    AppendedModel, CachedStats, ConvertMessage, ConvertResult, DisplaySettings, MaterialGroup,
+    ViewerApp,
+};
 
 /// FBX ファイルのメッシュ・アニメーション有無
 struct FbxContentInfo {
@@ -366,6 +368,7 @@ struct ReloadSnapshot {
         Arc<crate::intermediate::animation::VrmaAnimation>,
     )>,
     vrma_active_index: Option<usize>,
+    display: DisplaySettings,
 }
 
 impl ViewerApp {
@@ -574,12 +577,9 @@ impl ViewerApp {
         // FBX auto-animation 判定（BG 完了後に自動適用するかどうか）
         let auto_fbx_anim = format == FileFormat::Fbx && self.inspect_fbx(&path).has_anim;
 
-        // 新規モデルロード時: スタンス・シェーダーを初期値にリセット
+        // スタンスのみ事前リセット（シェーダーは finish_load_with_gpu 成功時にリセット）
         self.normalize_pose = false;
         self.normalize_to_tstance = false;
-        self.display.shader_override = ShaderOverride::Default;
-        self.display.use_mmd_path = false;
-        self.display.auto_shader = true;
 
         self.spawn_bg_load(
             path,
@@ -759,12 +759,9 @@ impl ViewerApp {
 
     /// モデルとしてファイルを読み込む（FBX選択ダイアログ不要時のパス）
     fn load_file_as_model(&mut self, path: PathBuf) {
-        // 新規モデルロード時: スタンス・シェーダーを初期値にリセット
+        // スタンスのみ事前リセット（シェーダーは finish_load_with_gpu 成功時にリセット）
         self.normalize_pose = false;
         self.normalize_to_tstance = false;
-        self.display.shader_override = ShaderOverride::Default;
-        self.display.use_mmd_path = false;
-        self.display.auto_shader = true;
 
         let ext = path
             .extension()
@@ -2590,6 +2587,7 @@ impl ViewerApp {
             pkg_textures: self.tex.pkg_textures.take(),
             vrma_library: std::mem::take(&mut self.anim.library),
             vrma_active_index: self.anim.active_index.take(),
+            display: self.display.clone(),
         }
     }
 
@@ -2611,6 +2609,7 @@ impl ViewerApp {
         self.tex.pkg_assignments = snap.pkg_tex_assignments;
         self.anim.library = snap.vrma_library;
         self.anim.active_index = snap.vrma_active_index;
+        self.display = snap.display;
         self.suppress_tex_match = false;
     }
 
@@ -2672,6 +2671,8 @@ impl ViewerApp {
                 self.switch_vrma(idx);
             }
         }
+        // 表示設定を復元（シェーダーオーバーライド・ライト・Bloom 等）
+        self.display = snap.display;
         // リロード完了: テクスチャ選択ダイアログ抑制を解除
         self.suppress_tex_match = false;
     }

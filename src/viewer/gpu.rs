@@ -70,41 +70,110 @@ pub fn create_texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGrou
     })
 }
 
-/// カメラ uniform バッファ
-#[derive(Clone, encase::ShaderType)]
-pub struct CameraUniform {
-    pub view_proj: glam::Mat4,
-    pub light_dir: glam::Vec3,
-    pub light_intensity: f32,
-    pub ambient: glam::Vec3,
-    pub shader_mode: u32, // ShaderOverride as u32
-    pub camera_pos: glam::Vec3,
-    pub mmd_edge_thickness: f32,
-    pub view_row0: glam::Vec3,
-    // encase auto-pads vec3 trailing 4 bytes
-    pub view_row1: glam::Vec3,
-    pub mmd_ambient_scale: f32,
-    /// 累積時間（秒、UVアニメーション用）
-    pub time: f32,
-    /// アスペクト比 (width / height)（MToon アウトライン: 1/aspect で X 補正）
-    pub aspect: f32,
-    /// 射影行列 [1][1] = 1/tan(halfFov)（MToon アウトライン距離クランプ用）
-    pub proj_11: f32,
-    // encase auto-pads to align next vec3
-    /// SH ベース GI の均一化値: (rawGi(up) + rawGi(down)) / 2（CPU 事前計算）
-    pub gi_equalized: glam::Vec3,
-    /// 透視投影フラグ（1.0 = 透視, 0.0 = 正射影）
-    pub is_perspective: f32,
-    /// カメラ前方ベクトル（正射影時の view direction 用）
-    pub camera_forward: glam::Vec3,
-    // encase auto-pads vec3 trailing 4 bytes
-    /// ライト色 RGB (linear)
-    pub light_color: glam::Vec3,
-    // encase auto-pads vec3 trailing 4 bytes
-    /// 環境光 Ground 色 RGB (linear, 半球 ambient 補間用)
-    pub ambient_ground: glam::Vec3,
-    // encase auto-pads vec3 trailing 4 bytes (struct tail)
+// encase::ShaderType derive マクロが内部的に `check` 関数を生成し dead_code 警告が出るため、
+// サブモジュールで #![allow(dead_code)] を適用して抑制する。
+mod encase_uniforms {
+    #![allow(dead_code)]
+
+    /// カメラ uniform バッファ
+    #[derive(Clone, encase::ShaderType)]
+    pub struct CameraUniform {
+        pub view_proj: glam::Mat4,
+        pub light_dir: glam::Vec3,
+        pub light_intensity: f32,
+        pub ambient: glam::Vec3,
+        pub shader_mode: u32, // ShaderOverride as u32
+        pub camera_pos: glam::Vec3,
+        pub mmd_edge_thickness: f32,
+        pub view_row0: glam::Vec3,
+        // encase auto-pads vec3 trailing 4 bytes
+        pub view_row1: glam::Vec3,
+        pub mmd_ambient_scale: f32,
+        /// 累積時間（秒、UVアニメーション用）
+        pub time: f32,
+        /// アスペクト比 (width / height)（MToon アウトライン: 1/aspect で X 補正）
+        pub aspect: f32,
+        /// 射影行列 [1][1] = 1/tan(halfFov)（MToon アウトライン距離クランプ用）
+        pub proj_11: f32,
+        // encase auto-pads to align next vec3
+        /// SH ベース GI の均一化値: (rawGi(up) + rawGi(down)) / 2（CPU 事前計算）
+        pub gi_equalized: glam::Vec3,
+        /// 透視投影フラグ（1.0 = 透視, 0.0 = 正射影）
+        pub is_perspective: f32,
+        /// カメラ前方ベクトル（正射影時の view direction 用）
+        pub camera_forward: glam::Vec3,
+        // encase auto-pads vec3 trailing 4 bytes
+        /// ライト色 RGB (linear)
+        pub light_color: glam::Vec3,
+        // encase auto-pads vec3 trailing 4 bytes
+        /// 環境光 Ground 色 RGB (linear, 半球 ambient 補間用)
+        pub ambient_ground: glam::Vec3,
+        // encase auto-pads vec3 trailing 4 bytes (struct tail)
+    }
+
+    /// 材質 uniform バッファ（MToon パラメータ含む）
+    #[derive(Clone, encase::ShaderType)]
+    pub struct MaterialUniform {
+        pub diffuse: glam::Vec4,
+        pub shade_color: glam::Vec3,
+        pub is_mtoon: f32,
+        pub shading_toony: f32,
+        pub shading_shift: f32,
+        pub outline_width: f32,
+        pub outline_mode: f32, // 0=none, 1=world, 2=screen
+        pub outline_color: glam::Vec4,
+        pub outline_lighting_mix: f32,
+        pub rim_fresnel_power: f32,
+        pub rim_lift: f32,
+        pub rim_lighting_mix: f32,
+        pub rim_color: glam::Vec3,
+        pub has_matcap: f32,
+        pub matcap_factor: glam::Vec3,
+        pub has_shade_multiply_tex: f32,
+        pub has_shading_shift_tex: f32,
+        pub shading_shift_tex_scale: f32,
+        pub has_rim_multiply_tex: f32,
+        pub uv_anim_scroll_x: f32,
+        pub uv_anim_scroll_y: f32,
+        pub uv_anim_rotation: f32,
+        pub has_uv_anim_mask: f32,
+        /// MASK モード時の alphaCutoff（0.0 = 無効）
+        pub alpha_cutoff: f32,
+        // --- テクスチャ UV パラメータ（texCoord + KHR_texture_transform）---
+        // 各テクスチャ: [tex_coord, offset.x, offset.y, rotation] + [scale.x, scale.y, 0, 0]
+        pub base_uv_a: glam::Vec4,
+        pub base_uv_b: glam::Vec4,
+        pub shade_uv_a: glam::Vec4,
+        pub shade_uv_b: glam::Vec4,
+        pub shift_uv_a: glam::Vec4,
+        pub shift_uv_b: glam::Vec4,
+        pub rim_uv_a: glam::Vec4,
+        pub rim_uv_b: glam::Vec4,
+        pub outline_uv_a: glam::Vec4,
+        pub outline_uv_b: glam::Vec4,
+        pub uv_mask_uv_a: glam::Vec4,
+        pub uv_mask_uv_b: glam::Vec4,
+        pub emissive_factor: glam::Vec3,
+        pub has_emissive_tex: f32,
+        pub emissive_uv_a: glam::Vec4,
+        pub emissive_uv_b: glam::Vec4,
+        // --- 法線マップパラメータ ---
+        pub has_normal_tex: f32,
+        pub normal_scale: f32,
+        pub gi_equalization_factor: f32,
+        /// outlineWidthTexture 参照チャネル（0.0=R, 1.0=G, 2.0=B）
+        pub outline_width_channel: f32,
+        pub normal_uv_a: glam::Vec4,
+        pub normal_uv_b: glam::Vec4,
+        /// uvAnimationMaskTexture 参照チャネル（0.0=R, 1.0=G, 2.0=B）
+        pub uv_anim_mask_channel: f32,
+        // encase auto-pads 3 x f32 to align next vec4
+        // --- matcapTexture UV パラメータ（KHR_texture_transform）---
+        pub matcap_uv_a: glam::Vec4,
+        pub matcap_uv_b: glam::Vec4,
+    }
 }
+pub use encase_uniforms::{CameraUniform, MaterialUniform};
 
 /// MMD 材質 uniform バッファ
 #[repr(C)]
@@ -120,68 +189,6 @@ pub struct MmdMaterialUniform {
     pub edge_size: f32,
     /// PMX/PMD 自己発光色（Bloom 用、derive_pmx_bloom で算出）
     pub bloom_emissive: [f32; 3],
-}
-
-/// 材質 uniform バッファ（MToon パラメータ含む）
-#[derive(Clone, encase::ShaderType)]
-pub struct MaterialUniform {
-    pub diffuse: glam::Vec4,
-    pub shade_color: glam::Vec3,
-    pub is_mtoon: f32,
-    pub shading_toony: f32,
-    pub shading_shift: f32,
-    pub outline_width: f32,
-    pub outline_mode: f32, // 0=none, 1=world, 2=screen
-    pub outline_color: glam::Vec4,
-    pub outline_lighting_mix: f32,
-    pub rim_fresnel_power: f32,
-    pub rim_lift: f32,
-    pub rim_lighting_mix: f32,
-    pub rim_color: glam::Vec3,
-    pub has_matcap: f32,
-    pub matcap_factor: glam::Vec3,
-    pub has_shade_multiply_tex: f32,
-    pub has_shading_shift_tex: f32,
-    pub shading_shift_tex_scale: f32,
-    pub has_rim_multiply_tex: f32,
-    pub uv_anim_scroll_x: f32,
-    pub uv_anim_scroll_y: f32,
-    pub uv_anim_rotation: f32,
-    pub has_uv_anim_mask: f32,
-    /// MASK モード時の alphaCutoff（0.0 = 無効）
-    pub alpha_cutoff: f32,
-    // --- テクスチャ UV パラメータ（texCoord + KHR_texture_transform）---
-    // 各テクスチャ: [tex_coord, offset.x, offset.y, rotation] + [scale.x, scale.y, 0, 0]
-    pub base_uv_a: glam::Vec4,
-    pub base_uv_b: glam::Vec4,
-    pub shade_uv_a: glam::Vec4,
-    pub shade_uv_b: glam::Vec4,
-    pub shift_uv_a: glam::Vec4,
-    pub shift_uv_b: glam::Vec4,
-    pub rim_uv_a: glam::Vec4,
-    pub rim_uv_b: glam::Vec4,
-    pub outline_uv_a: glam::Vec4,
-    pub outline_uv_b: glam::Vec4,
-    pub uv_mask_uv_a: glam::Vec4,
-    pub uv_mask_uv_b: glam::Vec4,
-    pub emissive_factor: glam::Vec3,
-    pub has_emissive_tex: f32,
-    pub emissive_uv_a: glam::Vec4,
-    pub emissive_uv_b: glam::Vec4,
-    // --- 法線マップパラメータ ---
-    pub has_normal_tex: f32,
-    pub normal_scale: f32,
-    pub gi_equalization_factor: f32,
-    /// outlineWidthTexture 参照チャネル（0.0=R, 1.0=G, 2.0=B）
-    pub outline_width_channel: f32,
-    pub normal_uv_a: glam::Vec4,
-    pub normal_uv_b: glam::Vec4,
-    /// uvAnimationMaskTexture 参照チャネル（0.0=R, 1.0=G, 2.0=B）
-    pub uv_anim_mask_channel: f32,
-    // encase auto-pads 3 x f32 to align next vec4
-    // --- matcapTexture UV パラメータ（KHR_texture_transform）---
-    pub matcap_uv_a: glam::Vec4,
-    pub matcap_uv_b: glam::Vec4,
 }
 
 /// 頂点フォーマット

@@ -215,7 +215,8 @@ fn show_confirm_save_tex_history(ctx: &egui::Context, app: &mut ViewerApp) {
     egui::Window::new("テクスチャ履歴の上書き")
         .collapsible(false)
         .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .default_pos(ctx.screen_rect().center())
+        .pivot(egui::Align2::CENTER_CENTER)
         .show(ctx, |ui| {
             ui.label("このモデルのテクスチャ履歴が既に存在します。");
             ui.label("上書き保存しますか？");
@@ -258,7 +259,8 @@ fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .default_pos(ctx.screen_rect().center())
+        .pivot(egui::Align2::CENTER_CENTER)
         .show(ctx, |ui| {
             ui.label(format!("\"{}\"", file_name));
             ui.label("モデルとアニメーションの両方が含まれています。");
@@ -314,7 +316,8 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .default_pos(ctx.screen_rect().center())
+        .pivot(egui::Align2::CENTER_CENTER)
         .show(ctx, |ui| {
             ui.label(".unitypackage 内に複数のモデルが見つかりました。");
             ui.label("読み込むファイルを選択してください。");
@@ -380,7 +383,8 @@ fn show_archive_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .default_pos(ctx.screen_rect().center())
+        .pivot(egui::Align2::CENTER_CENTER)
         .show(ctx, |ui| {
             ui.label("アーカイブ内に複数のモデルが見つかりました。");
             ui.label("読み込むファイルを選択してください。");
