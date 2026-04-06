@@ -8,7 +8,7 @@ use crate::convert::coord::{
     gltf_normal_to_pmx, gltf_normal_to_pmx_v0, gltf_pos_to_pmx, gltf_pos_to_pmx_v0,
 };
 use crate::convert::material::ir_material_to_pmx;
-use crate::intermediate::types::{CullMode, IrModel, IrMorphKind, RigidShape};
+use crate::intermediate::types::{CullMode, IrModel, IrMorphKind, IrTexture, RigidShape};
 use crate::pmx::types::*;
 
 /// インデックスサイズ自動決定（頂点：符号なし）
@@ -57,12 +57,15 @@ impl Default for PmxBuildOptions {
     }
 }
 
-pub fn build_pmx_model(ir: &IrModel) -> Result<PmxModel> {
+pub fn build_pmx_model(ir: &IrModel) -> Result<(PmxModel, Vec<IrTexture>)> {
     build_pmx_model_with_options(ir, &PmxBuildOptions::default())
 }
 
 #[allow(clippy::field_reassign_with_default)]
-pub fn build_pmx_model_with_options(ir: &IrModel, options: &PmxBuildOptions) -> Result<PmxModel> {
+pub fn build_pmx_model_with_options(
+    ir: &IrModel,
+    options: &PmxBuildOptions,
+) -> Result<(PmxModel, Vec<IrTexture>)> {
     log::info!("=== PMX model build start ===");
     log::info!("Model name: {}", ir.name);
     log::info!("Source format: {}", ir.source_format.label());
@@ -119,13 +122,39 @@ pub fn build_pmx_model_with_options(ir: &IrModel, options: &PmxBuildOptions) -> 
         .map(|m| m.texture_index.map(|i| i as i32))
         .collect();
 
-    // 材質
+    // 材質（トゥーンテクスチャ生成込み）
+    // 既存テクスチャ名を収集（トゥーン名との衝突回避用）
+    let base_tex_count = ir.textures.len();
+    let mut used_names: std::collections::HashSet<String> =
+        ir.textures.iter().map(|t| t.filename.clone()).collect();
+    let mut toon_textures: Vec<IrTexture> = Vec::new();
     model.materials = ir
         .materials
         .iter()
         .enumerate()
-        .map(|(i, m)| ir_material_to_pmx(m, mat_to_tex[i]))
+        .map(|(i, m)| {
+            ir_material_to_pmx(
+                m,
+                mat_to_tex[i],
+                &mut toon_textures,
+                base_tex_count,
+                &mut used_names,
+            )
+        })
         .collect();
+
+    // 生成トゥーンテクスチャをテクスチャリストに追加
+    if !toon_textures.is_empty() {
+        log::info!(
+            "Generated {} toon textures (indices {}..{})",
+            toon_textures.len(),
+            base_tex_count,
+            base_tex_count + toon_textures.len() - 1
+        );
+        for tex in &toon_textures {
+            model.textures.push(format!("textures\\{}", tex.filename));
+        }
+    }
 
     // 材質詳細ログ
     log::debug!("--- Material list ---");
@@ -291,7 +320,7 @@ pub fn build_pmx_model_with_options(ir: &IrModel, options: &PmxBuildOptions) -> 
         rigid_body_index_size: idx_size(model.rigid_bodies.len()),
     };
 
-    Ok(model)
+    Ok((model, toon_textures))
 }
 
 fn find_bone_idx(bones: &[PmxBone], name: &str) -> Option<i32> {

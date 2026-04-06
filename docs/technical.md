@@ -141,7 +141,7 @@
     - [reload_unitypackage Texture Restoration](#reload_unitypackage-texture-restoration)
     - [IrTexture Deduplication in assign_texture_source_to_material](#irtexture-deduplication-in-assign_texture_source_to_material)
   - [Shader-Aware PMX Material Conversion](#shader-aware-pmx-material-conversion)
-    - [select_toon()](#select_toon)
+    - [generate_toon() (v0.2.32, replaces select_toon)](#generate_toon-v0232-replaces-select_toon)
     - [MToon ambient/specular Correction](#mtoon-ambientspecular-correction)
     - [UTS2 (Unity-Chan Toon Shader Ver.2) Approximate Conversion](#uts2-unity-chan-toon-shader-ver2-approximate-conversion)
   - [A-Stance Conversion Result Management](#a-stance-conversion-result-management)
@@ -419,13 +419,15 @@ Lower body
 
 ### Coordinate Conversion
 
-| Format | Assumed Unit | Assumed Coordinate System | Conversion |
+| Format | Default Unit | Default Coordinate System | Default Conversion |
 |--------|-------------|--------------------------|------------|
 | OBJ | cm | Y-Up right-hand | ÷100 (cm → m) only. No axis conversion |
 | STL | mm | Z-Up | ÷1000 (mm → m) + Y↔Z swap + face winding reversal (b↔c swap) |
 
 - Y↔Z swap has determinant = -1 → face winding reverses, requiring b↔c swap
 - After conversion: glTF space (Y-Up right-hand, meters) → viewer applies `gltf_pos_to_pmx` (×12.5) for PMX units
+
+**Import options dialog (v0.2.32)**: The viewer now shows an import settings dialog for OBJ/STL files, allowing the user to select the coordinate unit (mm / cm / m / inch → scale factors 0.001 / 0.01 / 1.0 / 0.0254) and Z-Up → Y-Up conversion toggle. `load_obj_with_params` / `load_stl_with_params` accept `scale: f32` and `z_up: bool` parameters. CLI retains the default behavior. The `ImportUnit` enum and `PendingImportOptions` struct are defined in `viewer/app/pending.rs`
 
 ### IrModel Construction
 
@@ -2098,19 +2100,21 @@ let tex_idx = loaded.ir.textures.iter()
 
 ## Shader-Aware PMX Material Conversion
 
-### select_toon()
+### generate_toon() (v0.2.32, replaces select_toon)
 
-Selects toon texture based on shade_color/diffuse luminance ratio for MToon materials. Uses Rec. 709 luminance coefficients `(0.2126, 0.7152, 0.0722)`.
+Generates per-material toon gradient textures (256×16 PNG) from `shade_color` → `diffuse` for MToon/UTS2 materials. Replaces the Phase 1 `select_toon()` which mapped to shared toon01–toon10.
 
-| shade/diffuse Luminance Ratio | Toon | Description |
-|-------------------------------|------|-------------|
-| < 0.25 | Shared(0) = toon01 | Hard shadow (shade << diffuse) |
-| 0.25–0.45 | Shared(1) = toon02 | Moderately hard |
-| 0.45–0.65 | Shared(2) = toon03 | Medium |
-| 0.65–0.85 | Shared(4) = toon05 | Soft |
-| ≥ 0.85 | Shared(6) = toon07 | Softest (shade ≈ diffuse) |
+**Gradient generation** (`generate_toon_gradient`): left edge = `shade_color`, right edge = `diffuse`, linear interpolation across 256 pixels, 16 rows. Output as PNG via `image::codecs::png::PngEncoder`.
 
-Non-MToon retains `Shared(0)` (regression prevention). When shade_color is absent, defaults to `Shared(2)` (medium).
+**Filename collision avoidance**: a `HashSet<String>` of existing texture filenames is passed to `generate_toon()`. If the generated name (e.g., `toon_body_000.png`) already exists, a `_1`, `_2`, ... suffix is appended until unique.
+
+**PMX integration**: generated toon textures are appended to `model.textures` after existing textures, with `PmxToonRef::Texture(base_tex_count + idx)`. After `write_all_textures_from_ir()`, PMX paths are corrected with actual filenames.
+
+| Material Type | Toon Reference |
+|---------------|---------------|
+| MToon/UTS2 with shade_color | `Texture(index)` — per-material gradient PNG |
+| MToon/UTS2 without shade_color | `Shared(2)` = toon03 (medium) |
+| Non-MToon | `Shared(0)` = toon01 (unchanged) |
 
 ### MToon ambient/specular Correction
 

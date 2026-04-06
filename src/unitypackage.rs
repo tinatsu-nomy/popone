@@ -465,11 +465,7 @@ pub fn embed_textures_into_ir_with_label(
         if let Some(ref key) = found_key {
             if let Some(data) = tex_map.get(key) {
                 let tex_idx = ir.textures.len();
-                let ext = std::path::Path::new(key.as_str())
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
+                let ext = crate::path_ext_lower(std::path::Path::new(key.as_str()));
                 let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                 ir.textures.push(crate::intermediate::types::IrTexture {
                     filename: key.clone(),
@@ -2001,11 +1997,8 @@ fn apply_resolved_textures(
                 );
             } else if let Some(pkg_tex) = tex_by_guid.get(tex_guid.as_ref()) {
                 let tex_idx = ir_textures.len();
-                let ext = std::path::Path::new(pkg_tex.display_name.as_ref())
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
+                let ext =
+                    crate::path_ext_lower(std::path::Path::new(pkg_tex.display_name.as_ref()));
                 let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                 ir_textures.push(crate::intermediate::types::IrTexture {
                     filename: pkg_tex.display_name.to_string(),
@@ -2050,11 +2043,8 @@ fn apply_resolved_textures(
                 );
             } else if let Some(pkg_tex) = tex_by_guid.get(normal_guid.as_ref()) {
                 let tex_idx = ir_textures.len();
-                let ext = std::path::Path::new(pkg_tex.display_name.as_ref())
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
+                let ext =
+                    crate::path_ext_lower(std::path::Path::new(pkg_tex.display_name.as_ref()));
                 let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                 ir_textures.push(crate::intermediate::types::IrTexture {
                     filename: pkg_tex.display_name.to_string(),
@@ -2113,11 +2103,8 @@ fn apply_resolved_textures(
                     );
                 } else if let Some(pkg_tex) = tex_by_guid.get(em_guid.as_ref()) {
                     let tex_idx = ir_textures.len();
-                    let ext = std::path::Path::new(pkg_tex.display_name.as_ref())
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
+                    let ext =
+                        crate::path_ext_lower(std::path::Path::new(pkg_tex.display_name.as_ref()));
                     let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                     ir_textures.push(crate::intermediate::types::IrTexture {
                         filename: pkg_tex.display_name.to_string(),
@@ -2346,11 +2333,7 @@ pub fn embed_textures_with_prefab(
                 }
 
                 let tex_idx = ir.textures.len();
-                let ext = std::path::Path::new(key.as_str())
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
+                let ext = crate::path_ext_lower(std::path::Path::new(key.as_str()));
                 let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                 ir.textures.push(crate::intermediate::types::IrTexture {
                     filename: pkg_tex.display_name.to_string(),

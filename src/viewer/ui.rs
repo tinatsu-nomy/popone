@@ -187,6 +187,9 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
     // FBX読み込み方法選択ダイアログ
     show_fbx_choice_dialog(ctx, app);
 
+    // OBJ/STL インポートオプションダイアログ
+    show_import_options_dialog(ctx, app);
+
     // unitypackage モデル選択ダイアログ
     show_fbx_select_dialog(ctx, app);
 
@@ -296,6 +299,77 @@ fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         app.execute_fbx_choice(choice);
     } else if cancelled || !open {
         app.pending.fbx_choice = None;
+    }
+}
+
+/// OBJ/STL インポートオプション選択ダイアログ
+fn show_import_options_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
+    use super::app::pending::ImportUnit;
+
+    let Some(ref mut pending) = app.pending.import_options else {
+        return;
+    };
+
+    let file_name = pending
+        .path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let format_label = match pending.format {
+        super::app::file_io::FileFormat::Obj => "OBJ",
+        super::app::file_io::FileFormat::Stl => "STL",
+        _ => "?",
+    };
+
+    let mut confirmed = false;
+    let mut cancelled = false;
+    let mut open = true;
+
+    egui::Window::new(format!("{format_label} インポート設定"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .default_pos(ctx.screen_rect().center())
+        .pivot(egui::Align2::CENTER_CENTER)
+        .show(ctx, |ui| {
+            ui.label(format!("\"{}\"", file_name));
+            ui.separator();
+
+            ui.horizontal(|ui| {
+                ui.label("単位:");
+                for unit in [
+                    ImportUnit::Mm,
+                    ImportUnit::Cm,
+                    ImportUnit::M,
+                    ImportUnit::Inch,
+                ] {
+                    ui.radio_value(&mut pending.unit, unit, unit.label());
+                }
+            });
+            ui.add_space(4.0);
+            ui.checkbox(&mut pending.z_up, "Z-Up → Y-Up 変換");
+            ui.separator();
+
+            ui.horizontal(|ui| {
+                if ui.button("OK").clicked() {
+                    confirmed = true;
+                }
+                if ui.button("キャンセル").clicked() {
+                    cancelled = true;
+                }
+            });
+        });
+
+    if confirmed {
+        let opts = app
+            .pending
+            .import_options
+            .take()
+            .expect("pending.import_options は Some 確認済み");
+        app.execute_import_with_options(opts);
+    } else if cancelled || !open {
+        app.pending.import_options = None;
     }
 }
 

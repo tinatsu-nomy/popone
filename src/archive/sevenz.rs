@@ -7,11 +7,7 @@ use super::{normalize_archive_path, ArchiveEntry, MODEL_EXTENSIONS, TEXTURE_EXTE
 
 /// 展開対象の拡張子かどうか
 fn should_extract(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
+    let ext = crate::path_ext_lower(path);
     MODEL_EXTENSIONS.contains(&ext.as_str())
         || TEXTURE_EXTENSIONS.contains(&ext.as_str())
         || ext == "txt"

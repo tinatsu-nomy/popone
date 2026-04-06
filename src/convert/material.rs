@@ -1,35 +1,108 @@
+use std::collections::HashSet;
+
 use glam::Vec3;
 
-use crate::intermediate::types::{IrMaterial, ShaderFamily};
+use crate::intermediate::types::{IrMaterial, IrTexture, ShaderFamily, TextureData};
 use crate::pmx::types::{PmxMaterial, PmxToonRef};
 
-/// Rec. 709 に基づく相対輝度
-fn luminance(v: Vec3) -> f32 {
-    v.x * 0.2126 + v.y * 0.7152 + v.z * 0.0722
+/// shade→diffuse のグラデーション画像（256×16）を PNG バイト列で返す。
+/// 左端が shade_color、右端が diffuse_color。
+fn generate_toon_gradient(shade: Vec3, diffuse: Vec3) -> Vec<u8> {
+    const W: u32 = 256;
+    const H: u32 = 16;
+    let mut pixels = Vec::with_capacity((W * H * 4) as usize);
+    for _ in 0..H {
+        for x in 0..W {
+            let t = x as f32 / (W - 1) as f32;
+            let r = (shade.x + (diffuse.x - shade.x) * t).clamp(0.0, 1.0);
+            let g = (shade.y + (diffuse.y - shade.y) * t).clamp(0.0, 1.0);
+            let b = (shade.z + (diffuse.z - shade.z) * t).clamp(0.0, 1.0);
+            pixels.push((r * 255.0 + 0.5) as u8);
+            pixels.push((g * 255.0 + 0.5) as u8);
+            pixels.push((b * 255.0 + 0.5) as u8);
+            pixels.push(255u8);
+        }
+    }
+    // PNG エンコード
+    let mut png_buf = Vec::new();
+    {
+        let encoder = image::codecs::png::PngEncoder::new(&mut png_buf);
+        image::ImageEncoder::write_image(encoder, &pixels, W, H, image::ExtendedColorType::Rgba8)
+            .expect("PNG encode should not fail for valid RGBA data");
+    }
+    png_buf
 }
 
-/// shade/diffuse 輝度比に基づいてトゥーンテクスチャを選択する。
-/// 非 MToon は Shared(0) を維持（回帰防止）。
-fn select_toon(ir: &IrMaterial) -> PmxToonRef {
+/// MToon 材質のトゥーンテクスチャを生成する。
+/// `toon_textures` に生成テクスチャを追加し、`PmxToonRef::Texture(index)` を返す。
+/// `base_tex_count` は元のテクスチャ数（オフセット計算用）。
+/// `used_names` には既存テクスチャ名 + 既に生成済みトゥーン名が含まれる（衝突回避用）。
+/// 非 MToon / shade_color 無しは `PmxToonRef::Shared` を返す。
+pub fn generate_toon(
+    ir: &IrMaterial,
+    toon_textures: &mut Vec<IrTexture>,
+    base_tex_count: usize,
+    used_names: &mut HashSet<String>,
+) -> PmxToonRef {
     if !ir.is_mtoon() {
-        return PmxToonRef::Shared(0); // 非MToon: 現行動作を維持
+        return PmxToonRef::Shared(0);
     }
     let Some(shade) = ir.mtoon().shade_color else {
-        return PmxToonRef::Shared(2); // shade_color無し: toon03（中間）
+        return PmxToonRef::Shared(2);
     };
-    // shade/diffuse 輝度比でトゥーンの硬さを決定
-    let base = ir.diffuse.truncate(); // Vec4 → Vec3 (RGB)
-    let ratio = (luminance(shade) / luminance(base).max(0.05)).clamp(0.0, 1.2);
-    match () {
-        _ if ratio < 0.25 => PmxToonRef::Shared(0), // toon01: 硬い影（shade << diffuse）
-        _ if ratio < 0.45 => PmxToonRef::Shared(1), // toon02
-        _ if ratio < 0.65 => PmxToonRef::Shared(2), // toon03: 中間
-        _ if ratio < 0.85 => PmxToonRef::Shared(4), // toon05: 柔らかめ
-        _ => PmxToonRef::Shared(6),                 // toon07: 最も柔らかい（shade ≈ diffuse）
+    let diffuse = ir.diffuse.truncate();
+
+    // グラデーション PNG 生成
+    let png_data = generate_toon_gradient(shade, diffuse);
+
+    // ファイル名: toon_{材質名}_{連番}.png（非ASCII安全のため連番付き）
+    // 既存テクスチャ名との衝突を回避
+    let idx = toon_textures.len();
+    let safe_name = ir
+        .name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(32)
+        .collect::<String>();
+    let base_name = if safe_name.is_empty() {
+        format!("toon_{idx:03}")
+    } else {
+        format!("toon_{safe_name}_{idx:03}")
+    };
+    let mut filename = format!("{base_name}.png");
+    let mut suffix = 1u32;
+    while used_names.contains(&filename) {
+        filename = format!("{base_name}_{suffix}.png");
+        suffix += 1;
     }
+    used_names.insert(filename.clone());
+
+    let tex = IrTexture {
+        filename: filename.clone(),
+        data: TextureData::Encoded(png_data),
+        mime_type: "image/png".to_string(),
+        source_path: format!("generated(toon: {})", ir.name),
+        mip_chain: None,
+    };
+    toon_textures.push(tex);
+
+    let texture_index = (base_tex_count + idx) as i32;
+    log::info!(
+        "Toon texture generated: {} (index={}, shade=({:.2},{:.2},{:.2}), diffuse=({:.2},{:.2},{:.2}))",
+        filename, texture_index,
+        shade.x, shade.y, shade.z,
+        diffuse.x, diffuse.y, diffuse.z
+    );
+    PmxToonRef::Texture(texture_index)
 }
 
-pub fn ir_material_to_pmx(ir: &IrMaterial, texture_index: Option<i32>) -> PmxMaterial {
+pub fn ir_material_to_pmx(
+    ir: &IrMaterial,
+    texture_index: Option<i32>,
+    toon_textures: &mut Vec<IrTexture>,
+    base_tex_count: usize,
+    used_names: &mut HashSet<String>,
+) -> PmxMaterial {
     let draw_flags: u8 = {
         let mut f = 0u8;
         if ir.cull_mode != crate::intermediate::types::CullMode::Back {
@@ -79,7 +152,7 @@ pub fn ir_material_to_pmx(ir: &IrMaterial, texture_index: Option<i32>) -> PmxMat
         texture_index,
         sphere_texture_index: None,
         sphere_mode: 0,
-        toon_ref: select_toon(ir),
+        toon_ref: generate_toon(ir, toon_textures, base_tex_count, used_names),
         memo: String::new(),
         face_count: 0, // build.rsで設定
     }
@@ -92,7 +165,7 @@ mod tests {
 
     fn make_test_material() -> IrMaterial {
         IrMaterial {
-            name: "テスト材質".to_string(),
+            name: "test_mat".to_string(),
             diffuse: Vec4::new(1.0, 0.8, 0.6, 1.0),
             specular: glam::Vec3::new(0.5, 0.5, 0.5),
             specular_power: 10.0,
@@ -107,19 +180,26 @@ mod tests {
         }
     }
 
+    /// テスト用ヘルパー: ir_material_to_pmx をテスト向けデフォルト引数で呼ぶ
+    fn to_pmx(ir: &IrMaterial, tex_idx: Option<i32>) -> PmxMaterial {
+        let mut toon_textures = Vec::new();
+        let mut used_names = HashSet::new();
+        ir_material_to_pmx(ir, tex_idx, &mut toon_textures, 0, &mut used_names)
+    }
+
     #[test]
     fn test_basic_material_conversion() {
         let ir = make_test_material();
-        let pmx = ir_material_to_pmx(&ir, Some(0));
-        assert_eq!(pmx.name, "テスト材質");
+        let pmx = to_pmx(&ir, Some(0));
+        assert_eq!(pmx.name, "test_mat");
         assert_eq!(pmx.texture_index, Some(0));
-        assert_eq!(pmx.face_count, 0); // build.rs で後から設定
+        assert_eq!(pmx.face_count, 0);
     }
 
     #[test]
     fn test_double_sided_flag() {
         let ir = make_test_material();
-        let pmx = ir_material_to_pmx(&ir, None);
+        let pmx = to_pmx(&ir, None);
         assert_ne!(pmx.draw_flags & 0x01, 0, "両面描画フラグが立つべき");
     }
 
@@ -127,14 +207,14 @@ mod tests {
     fn test_single_sided_no_flag() {
         let mut ir = make_test_material();
         ir.cull_mode = crate::intermediate::types::CullMode::Back;
-        let pmx = ir_material_to_pmx(&ir, None);
+        let pmx = to_pmx(&ir, None);
         assert_eq!(pmx.draw_flags & 0x01, 0, "片面描画はフラグなし");
     }
 
     #[test]
     fn test_edge_flag_when_edge_size_positive() {
         let ir = make_test_material();
-        let pmx = ir_material_to_pmx(&ir, None);
+        let pmx = to_pmx(&ir, None);
         assert_ne!(
             pmx.draw_flags & 0x10,
             0,
@@ -146,7 +226,7 @@ mod tests {
     fn test_no_edge_flag_when_edge_size_zero() {
         let mut ir = make_test_material();
         ir.edge_size = 0.0;
-        let pmx = ir_material_to_pmx(&ir, None);
+        let pmx = to_pmx(&ir, None);
         assert_eq!(
             pmx.draw_flags & 0x10,
             0,
@@ -158,7 +238,7 @@ mod tests {
     fn test_edge_size_clamped_to_max_1() {
         let mut ir = make_test_material();
         ir.edge_size = 5.0;
-        let pmx = ir_material_to_pmx(&ir, None);
+        let pmx = to_pmx(&ir, None);
         assert!(
             (pmx.edge_size - 1.0).abs() < 1e-6,
             "edge_size は最大 1.0 にクランプ"
@@ -168,30 +248,109 @@ mod tests {
     #[test]
     fn test_no_texture_index() {
         let ir = make_test_material();
-        let pmx = ir_material_to_pmx(&ir, None);
+        let pmx = to_pmx(&ir, None);
         assert_eq!(pmx.texture_index, None);
     }
 
     #[test]
-    fn test_select_toon_shade_diffuse_ratio() {
+    fn test_generate_toon_mtoon_produces_texture() {
         let mut mat = make_test_material();
         mat.diffuse = Vec4::new(0.8, 0.8, 0.8, 1.0);
+        mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.2, 0.2, 0.2));
 
-        // shade << diffuse → 硬い影 (Shared(0))
-        mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.1, 0.1, 0.1));
-        assert_eq!(select_toon(&mat), PmxToonRef::Shared(0));
+        let mut toon_textures = Vec::new();
+        let mut used_names = HashSet::new();
+        let toon_ref = generate_toon(&mat, &mut toon_textures, 10, &mut used_names);
 
-        // shade ≈ diffuse → 柔らかい影 (Shared(6))
-        mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.75, 0.75, 0.75));
-        assert_eq!(select_toon(&mat), PmxToonRef::Shared(6));
+        // MToon + shade_color あり → Texture 参照
+        assert!(matches!(toon_ref, PmxToonRef::Texture(10)));
+        assert_eq!(toon_textures.len(), 1);
+        assert!(toon_textures[0].filename.starts_with("toon_"));
+        assert!(toon_textures[0].filename.ends_with(".png"));
+        // PNG データが生成されていること
+        assert!(!toon_textures[0].data.is_empty());
+    }
 
-        // shade_color 中間 → 中間トゥーン
-        mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.4, 0.4, 0.4));
-        assert_eq!(select_toon(&mat), PmxToonRef::Shared(2));
-
-        // 非MToon → Shared(0)（現行動作維持）
+    #[test]
+    fn test_generate_toon_non_mtoon_shared() {
+        let mut mat = make_test_material();
         mat.mtoon = None;
-        assert_eq!(select_toon(&mat), PmxToonRef::Shared(0));
+
+        let mut toon_textures = Vec::new();
+        let mut used_names = HashSet::new();
+        let toon_ref = generate_toon(&mat, &mut toon_textures, 5, &mut used_names);
+
+        assert_eq!(toon_ref, PmxToonRef::Shared(0));
+        assert!(toon_textures.is_empty());
+    }
+
+    #[test]
+    fn test_generate_toon_no_shade_color_shared() {
+        let mut mat = make_test_material();
+        mat.mtoon_mut().shade_color = None;
+
+        let mut toon_textures = Vec::new();
+        let mut used_names = HashSet::new();
+        let toon_ref = generate_toon(&mat, &mut toon_textures, 5, &mut used_names);
+
+        assert_eq!(toon_ref, PmxToonRef::Shared(2));
+        assert!(toon_textures.is_empty());
+    }
+
+    #[test]
+    fn test_generate_toon_multiple_materials() {
+        let mut mat1 = make_test_material();
+        mat1.name = "mat_a".to_string();
+        mat1.diffuse = Vec4::new(0.9, 0.9, 0.9, 1.0);
+        mat1.mtoon_mut().shade_color = Some(glam::Vec3::new(0.3, 0.1, 0.1));
+
+        let mut mat2 = make_test_material();
+        mat2.name = "mat_b".to_string();
+        mat2.diffuse = Vec4::new(0.5, 0.5, 0.8, 1.0);
+        mat2.mtoon_mut().shade_color = Some(glam::Vec3::new(0.1, 0.1, 0.4));
+
+        let mut toon_textures = Vec::new();
+        let mut used_names = HashSet::new();
+        let ref1 = generate_toon(&mat1, &mut toon_textures, 10, &mut used_names);
+        let ref2 = generate_toon(&mat2, &mut toon_textures, 10, &mut used_names);
+
+        assert_eq!(ref1, PmxToonRef::Texture(10));
+        assert_eq!(ref2, PmxToonRef::Texture(11));
+        assert_eq!(toon_textures.len(), 2);
+    }
+
+    #[test]
+    fn test_generate_toon_name_collision_avoidance() {
+        let mut mat = make_test_material();
+        mat.diffuse = Vec4::new(0.8, 0.8, 0.8, 1.0);
+        mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.2, 0.2, 0.2));
+
+        let mut toon_textures = Vec::new();
+        // 既存テクスチャに同名ファイルがある場合、サフィックス付きで回避
+        let mut used_names: HashSet<String> =
+            ["toon_test_mat_000.png".to_string()].into_iter().collect();
+        let toon_ref = generate_toon(&mat, &mut toon_textures, 5, &mut used_names);
+
+        assert!(matches!(toon_ref, PmxToonRef::Texture(5)));
+        assert_eq!(toon_textures.len(), 1);
+        // 衝突回避で _1 サフィックスが付くこと
+        assert_eq!(toon_textures[0].filename, "toon_test_mat_000_1.png");
+    }
+
+    #[test]
+    fn test_generate_toon_gradient_png_valid() {
+        let shade = Vec3::new(0.2, 0.1, 0.3);
+        let diffuse = Vec3::new(0.9, 0.8, 0.7);
+        let png_data = generate_toon_gradient(shade, diffuse);
+
+        // PNG ヘッダチェック
+        assert!(png_data.len() > 8);
+        assert_eq!(&png_data[0..4], &[0x89, b'P', b'N', b'G']);
+
+        // デコード可能であること
+        let img = image::load_from_memory(&png_data).expect("PNG decode");
+        assert_eq!(img.width(), 256);
+        assert_eq!(img.height(), 16);
     }
 
     #[test]
@@ -199,8 +358,7 @@ mod tests {
         let mut mat = make_test_material();
         mat.specular = glam::Vec3::ONE;
         mat.specular_power = 25.0;
-        let pmx = ir_material_to_pmx(&mat, None);
-        // MToon: diffuse RGB × 0.2 のスペキュラーでライト反応
+        let pmx = to_pmx(&mat, None);
         let expected = mat.diffuse.truncate() * 0.2;
         assert!((pmx.specular - expected).length() < 1e-5);
         assert!((pmx.specular_power - 10.0).abs() < 1e-5);
@@ -213,8 +371,7 @@ mod tests {
         mat.specular = glam::Vec3::new(0.5, 0.5, 0.5);
         mat.specular_power = 25.0;
         mat.ambient = glam::Vec3::new(0.3, 0.3, 0.3);
-        let pmx = ir_material_to_pmx(&mat, None);
-        // 非 MToon は ambient/specular/toon すべて変更なし
+        let pmx = to_pmx(&mat, None);
         assert_eq!(pmx.specular, mat.specular);
         assert_eq!(pmx.specular_power, mat.specular_power);
         assert_eq!(pmx.ambient, mat.ambient);
@@ -225,10 +382,8 @@ mod tests {
     fn test_mtoon_no_shade_color() {
         let mut mat = make_test_material();
         mat.mtoon_mut().shade_color = None;
-        let pmx = ir_material_to_pmx(&mat, None);
-        // shade_color無し → toon03（中間）
+        let pmx = to_pmx(&mat, None);
         assert_eq!(pmx.toon_ref, PmxToonRef::Shared(2));
-        // ambient は diffuse ベース
         let expected_amb = glam::Vec3::new(
             mat.diffuse.x * 0.4,
             mat.diffuse.y * 0.4,
@@ -244,33 +399,33 @@ mod tests {
         mat.specular = glam::Vec3::new(0.8, 0.6, 0.4);
         mat.specular_power = 15.0;
         mat.ambient = glam::Vec3::new(0.2, 0.15, 0.1);
-        let pmx = ir_material_to_pmx(&mat, None);
-        // UTS2: specular/ambient がそのまま保持されること
+        let pmx = to_pmx(&mat, None);
         assert_eq!(pmx.specular, mat.specular);
         assert_eq!(pmx.specular_power, mat.specular_power);
         assert_eq!(pmx.ambient, mat.ambient);
     }
 
     #[test]
-    fn test_uts2_toon_selection() {
+    fn test_uts2_toon_generates_texture() {
         let mut mat = make_test_material();
         mat.shader_family = crate::intermediate::types::ShaderFamily::Uts2;
         mat.diffuse = Vec4::new(0.8, 0.8, 0.8, 1.0);
-        // UTS2 も mtoon.shade_color ベースで toon 選択される
         mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.1, 0.1, 0.1));
-        assert_eq!(select_toon(&mat), PmxToonRef::Shared(0)); // 硬い影
-        mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.75, 0.75, 0.75));
-        assert_eq!(select_toon(&mat), PmxToonRef::Shared(6)); // 柔らかい影
+
+        let mut toon_textures = Vec::new();
+        let mut used_names = HashSet::new();
+        let toon_ref = generate_toon(&mat, &mut toon_textures, 5, &mut used_names);
+        assert!(matches!(toon_ref, PmxToonRef::Texture(5)));
+        assert_eq!(toon_textures.len(), 1);
     }
 
     #[test]
     fn test_mtoon_specular_light_reactive_explicit_family() {
-        // MToon 回帰テスト: ShaderFamily::Mtoon でもライト反応スペキュラーが付与されること
         let mut mat = make_test_material();
         mat.shader_family = crate::intermediate::types::ShaderFamily::Mtoon;
         mat.specular = glam::Vec3::ONE;
         mat.specular_power = 25.0;
-        let pmx = ir_material_to_pmx(&mat, None);
+        let pmx = to_pmx(&mat, None);
         let expected = mat.diffuse.truncate() * 0.2;
         assert!((pmx.specular - expected).length() < 1e-5);
         assert!((pmx.specular_power - 10.0).abs() < 1e-5);

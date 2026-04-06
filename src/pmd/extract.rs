@@ -284,11 +284,7 @@ fn extract_textures(
                 .map(|f| f.to_string_lossy().into_owned())
                 .unwrap_or_else(|| normalized.clone());
 
-            let ext = Path::new(&normalized)
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.to_lowercase())
-                .unwrap_or_default();
+            let ext = crate::path_ext_lower(Path::new(&normalized));
             let mime = match ext.as_str() {
                 "png" => "image/png",
                 "jpg" | "jpeg" => "image/jpeg",

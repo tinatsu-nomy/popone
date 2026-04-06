@@ -6,7 +6,7 @@ VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x を 3D 表示します。
 
 ## ダウンロード
 
-最新リリース: **[popone-v0.2.31.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.31/popone-v0.2.31.exe)**
+最新リリース: **[popone-v0.2.32.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.32/popone-v0.2.32.exe)**
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 

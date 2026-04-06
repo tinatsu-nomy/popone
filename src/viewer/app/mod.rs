@@ -987,6 +987,32 @@ impl ViewerApp {
         }
     }
 
+    /// ロード済みモデルの bbox でカメラをリセットする
+    fn camera_reset_to_model(&mut self) {
+        if let Some(ref loaded) = self.loaded {
+            let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
+            self.camera.reset_to_bbox_with_margin(
+                bbox_min,
+                bbox_max,
+                self.last_viewport_width,
+                self.last_viewport_height,
+            );
+        }
+    }
+
+    /// ロード済みモデルの bbox にカメラをフィットさせる
+    fn camera_fit_to_model(&mut self) {
+        if let Some(ref loaded) = self.loaded {
+            let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
+            self.camera.fit_to_bbox_with_margin(
+                bbox_min,
+                bbox_max,
+                self.last_viewport_width,
+                self.last_viewport_height,
+            );
+        }
+    }
+
     /// 材質ごとのデフォルト表示状態を生成（HDR emissive は Bloom OFF）
     fn default_material_display(ir: &IrModel) -> Vec<MaterialDisplayState> {
         ir.materials
@@ -1297,29 +1323,13 @@ impl eframe::App for ViewerApp {
                             .on_hover_text("カメラをリセット")
                             .clicked()
                         {
-                            if let Some(ref loaded) = self.loaded {
-                                let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
-                                self.camera.reset_to_bbox_with_margin(
-                                    bbox_min,
-                                    bbox_max,
-                                    self.last_viewport_width,
-                                    self.last_viewport_height,
-                                );
-                            }
+                            self.camera_reset_to_model();
                         }
                         if menu_btn(ui, "フィット(F)")
                             .on_hover_text("モデルにフィット")
                             .clicked()
                         {
-                            if let Some(ref loaded) = self.loaded {
-                                let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
-                                self.camera.fit_to_bbox_with_margin(
-                                    bbox_min,
-                                    bbox_max,
-                                    self.last_viewport_width,
-                                    self.last_viewport_height,
-                                );
-                            }
+                            self.camera_fit_to_model();
                         }
                     });
                 });
@@ -1427,15 +1437,7 @@ impl eframe::App for ViewerApp {
 
                 // ダブルクリック: モデルにフィット
                 if response.double_clicked() {
-                    if let Some(ref loaded) = self.loaded {
-                        let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
-                        self.camera.fit_to_bbox_with_margin(
-                            bbox_min,
-                            bbox_max,
-                            self.last_viewport_width,
-                            self.last_viewport_height,
-                        );
-                    }
+                    self.camera_fit_to_model();
                 }
 
                 // モーフウェイト変更検知 → 頂点バッファ更新
@@ -1567,15 +1569,7 @@ impl eframe::App for ViewerApp {
                 // 初回ロード時の refit（ビューポートサイズ確定後）
                 if self.pending.refit {
                     self.pending.refit = false;
-                    if let Some(ref loaded) = self.loaded {
-                        let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
-                        self.camera.reset_to_bbox_with_margin(
-                            bbox_min,
-                            bbox_max,
-                            self.last_viewport_width,
-                            self.last_viewport_height,
-                        );
-                    }
+                    self.camera_reset_to_model();
                 }
 
                 // カメラ情報（左上、テキスト直接描画）

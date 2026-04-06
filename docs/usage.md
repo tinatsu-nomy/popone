@@ -32,8 +32,8 @@
 | FBX Binary (`.fbx`) | Custom parser. Auto-detects Mixamo / Blender / VRoid / Unreal rigs. Namespace prefixes (`Model::`, etc.) supported |
 | PMX 2.0 / 2.1 (`.pmx`) | MikuMikuDance model format. Viewer display + UV map export |
 | PMD (`.pmd`) | MikuMikuDance model format. Shift_JIS support |
-| OBJ (`.obj`) | Wavefront OBJ format. Auto-loads MTL material files and textures. Coordinates assumed as cm units |
-| STL (`.stl`) | STL format (ASCII and binary). Coordinates assumed as mm units with Z-Up, auto-converted to Y-Up |
+| OBJ (`.obj`) | Wavefront OBJ format. Auto-loads MTL material files and textures. Import options dialog allows unit selection (mm/cm/m/inch) and Z-Up toggle (default: cm, Y-Up) |
+| STL (`.stl`) | STL format (ASCII and binary). Import options dialog allows unit selection and Z-Up toggle (default: mm, Z-Up → Y-Up) |
 | DirectX text (`.x`) | DirectX text format. Supports static meshes for MMD accessories and stages. Frame hierarchy transforms, material references, and DDS textures |
 | UnityPackage (`.unitypackage`) | Extracts Prefab / VRM / FBX + textures from tar.gz archive. Prefab-based texture and normal map auto-mapping supported |
 | ZIP (`.zip`) | Auto-detects and extracts VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage from archive |

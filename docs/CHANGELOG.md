@@ -3,24 +3,27 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.31](#v0231)
+  - [v0.2.32](#v0232)
     - [New Features](#new-features)
+    - [Code Quality & Performance Improvements](#code-quality--performance-improvements)
+  - [v0.2.31](#v0231)
+    - [New Features](#new-features-1)
     - [Improvements](#improvements)
   - [v0.2.30](#v0230)
     - [Bug Fixes](#bug-fixes)
     - [Improvements](#improvements-1)
   - [v0.2.29](#v0229)
     - [Bug Fixes](#bug-fixes-1)
-    - [Code Quality & Performance Improvements](#code-quality--performance-improvements)
+    - [Code Quality & Performance Improvements](#code-quality--performance-improvements-1)
   - [v0.2.28](#v0228)
     - [Bug Fixes](#bug-fixes-2)
-    - [Code Quality & Performance Improvements](#code-quality--performance-improvements-1)
-  - [v0.2.27](#v0227)
-    - [New Features](#new-features-1)
-    - [Bug Fixes](#bug-fixes-3)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements-2)
-  - [v0.2.26](#v0226)
+  - [v0.2.27](#v0227)
     - [New Features](#new-features-2)
+    - [Bug Fixes](#bug-fixes-3)
+    - [Code Quality & Performance Improvements](#code-quality--performance-improvements-3)
+  - [v0.2.26](#v0226)
+    - [New Features](#new-features-3)
     - [Bug Fixes](#bug-fixes-4)
     - [Code Quality & Performance](#code-quality--performance)
 
@@ -29,6 +32,20 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.2.32
+
+### New Features
+
+- **Individual toon texture generation (Phase 2)** — MToon/UTS2 materials now generate per-material toon gradient textures (256×16 PNG) from `shade_color` → `diffuse` instead of using shared toon01–toon10. The generated images are written to `textures/` and referenced via `PmxToonRef::Texture(index)`. Non-MToon materials retain `Shared(0)` and materials without `shade_color` retain `Shared(2)`. Filename collision with existing model textures is prevented via a `used_names` set, and PMX texture paths are corrected after file write
+- **OBJ/STL import options dialog** — OBJ and STL files now show an import settings dialog when opened in the viewer, allowing the user to select the coordinate unit (mm / cm / m / inch) and Z-Up → Y-Up conversion toggle. Default values match the previous hardcoded behavior (OBJ: cm/Y-Up, STL: mm/Z-Up). CLI retains the default behavior without dialog
+
+### Code Quality & Performance Improvements
+
+- **`path_ext_lower()` utility** — Extracted the `.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase()` pattern (repeated 35+ times) into a single `path_ext_lower()` function at crate root, accessible from both viewer and non-viewer builds
+- **Camera bbox helper consolidation** — Unified 4 identical bbox → camera method call patterns into `camera_reset_to_model()` and `camera_fit_to_model()` helper methods
+- **`is_temp_path` cache** — Cached `temp_dir()` canonicalization and lowercase string in `OnceLock`, eliminating redundant computation across 19 call sites
+- **anyhow chain cleanup** — Unified `ok_or_else(|| anyhow!(...))` patterns to `.context()` / `.with_context()` for consistency across `file_io.rs`, `main.rs`, and `texture.rs`
 
 ## v0.2.31
 

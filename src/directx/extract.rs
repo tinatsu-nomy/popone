@@ -169,11 +169,12 @@ fn x_to_ir(
                         Some(idx)
                     } else {
                         let data = resolve_texture(aux, base_dir, tex_name)?;
-                        let ext = Path::new(tex_name)
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("png")
-                            .to_lowercase();
+                        let ext_raw = crate::path_ext_lower(Path::new(tex_name));
+                        let ext = if ext_raw.is_empty() {
+                            "png".to_string()
+                        } else {
+                            ext_raw
+                        };
                         let mime = crate::intermediate::types::mime_for_ext(&ext);
                         let idx = ir_textures.len();
                         // ファイル名のみ保持（"../shared/body.png" → "body.png"）

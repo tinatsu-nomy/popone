@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::Context;
 use eframe::egui;
 
 use crate::intermediate::types::{IrModel, TextureData};
@@ -437,11 +438,7 @@ impl ViewerApp {
 
         let path = dispatch.path;
         let append = dispatch.append;
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = crate::path_ext_lower(&path);
         let format = detect_format(&ext);
 
         // 先に dispatch 種別を判定する。
@@ -691,11 +688,7 @@ impl ViewerApp {
     #[allow(dead_code)]
     pub(super) fn load_file(&mut self, path: PathBuf) {
         log::info!("Open file: {}", path.display());
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = crate::path_ext_lower(&path);
         let format = detect_format(&ext);
 
         // 読み込み時はプレビュー中の bind group を復元してからクリア
@@ -754,6 +747,25 @@ impl ViewerApp {
             // メッシュのみ or どちらもなし → モデルとして読み込み（下へ続行）
         }
 
+        // OBJ/STL: インポートオプションダイアログを表示
+        if format == FileFormat::Obj || format == FileFormat::Stl {
+            use super::pending::{ImportUnit, PendingImportOptions};
+            let (default_unit, default_z_up) = match format {
+                FileFormat::Obj => (ImportUnit::Cm, false),
+                FileFormat::Stl => (ImportUnit::Mm, true),
+                _ => unreachable!(),
+            };
+            self.pending.import_options = Some(PendingImportOptions {
+                path,
+                format,
+                append: false,
+                preloaded: self.preloaded.take(),
+                unit: default_unit,
+                z_up: default_z_up,
+            });
+            return;
+        }
+
         self.load_file_as_model(path);
     }
 
@@ -763,11 +775,7 @@ impl ViewerApp {
         self.normalize_pose = false;
         self.normalize_to_tstance = false;
 
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = crate::path_ext_lower(&path);
         let format = detect_format(&ext);
 
         let result = match format {
@@ -815,6 +823,30 @@ impl ViewerApp {
                 );
                 self.convert_message = Some(ConvertMessage::failure(user_msg));
             }
+        }
+    }
+
+    /// OBJ/STL インポートオプションダイアログの結果を実行
+    pub fn execute_import_with_options(&mut self, opts: super::pending::PendingImportOptions) {
+        let scale = opts.unit.scale();
+        let z_up = opts.z_up;
+        let path = opts.path;
+        self.preloaded = opts.preloaded;
+
+        // スタンスのみ事前リセット
+        self.normalize_pose = false;
+        self.normalize_to_tstance = false;
+
+        let result = match opts.format {
+            FileFormat::Obj => self.try_load_obj_with_params(&path, scale, z_up),
+            FileFormat::Stl => self.try_load_stl_with_params(&path, scale, z_up),
+            _ => Err(anyhow::anyhow!(
+                "Unexpected format for import options: {:?}",
+                opts.format
+            )),
+        };
+        if let Err(e) = result {
+            self.convert_message = Some(ConvertMessage::failure(format!("読み込み失敗: {e}")));
         }
     }
 
@@ -1069,13 +1101,9 @@ impl ViewerApp {
             is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path);
         let archive_data: Arc<[u8]> = self.read_or_preloaded(path)?;
 
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = crate::path_ext_lower(&path);
         let format = crate::archive::archive_format_from_ext(&ext)
-            .ok_or_else(|| anyhow::anyhow!("未対応のアーカイブ形式: {ext}"))?;
+            .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
 
         let contents = crate::archive::list_models(&archive_data, format)?;
 
@@ -1401,13 +1429,9 @@ impl ViewerApp {
             &owned
         };
 
-        let ext = original_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = crate::path_ext_lower(&original_path);
         let format = crate::archive::archive_format_from_ext(&ext)
-            .ok_or_else(|| anyhow::anyhow!("未対応のアーカイブ形式: {ext}"))?;
+            .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
 
         let contents = crate::archive::list_models(data, format)?;
 
@@ -1439,13 +1463,9 @@ impl ViewerApp {
             &owned
         };
 
-        let ext = original_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = crate::path_ext_lower(&original_path);
         let format = crate::archive::archive_format_from_ext(&ext)
-            .ok_or_else(|| anyhow::anyhow!("未対応のアーカイブ形式: {ext}"))?;
+            .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
 
         let contents = crate::archive::list_models(data, format)?;
 
@@ -1852,7 +1872,7 @@ impl ViewerApp {
     ) -> anyhow::Result<()> {
         let pkg = pkg_index
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Prefab ロードには pkg_index が必要です"))?;
+            .context("Prefab ロードには pkg_index が必要です")?;
 
         // Prefab から全 FBX GUID とマテリアル解決結果を取得
         let resolve_result = crate::unitypackage::resolve_single_prefab(pkg, prefab_index)?;
@@ -1980,7 +2000,7 @@ impl ViewerApp {
             }
         }
 
-        let ir = base_ir.ok_or_else(|| anyhow::anyhow!("Prefab に有効な FBX が見つかりません"))?;
+        let ir = base_ir.context("Prefab に有効な FBX が見つかりません")?;
 
         // テクスチャをアプリ状態に保持
         if !legacy_textures.is_empty() {
@@ -2054,11 +2074,7 @@ impl ViewerApp {
 
     /// 拡張子に基づいてアニメーションファイルを読み込む
     pub fn load_animation_file(&mut self, path: &std::path::Path) {
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = crate::path_ext_lower(&path);
         match ext.as_str() {
             "glb" | "gltf" => self.try_load_gltf_animation(path),
             "fbx" => self.try_load_fbx_animation(path),
@@ -2435,14 +2451,29 @@ impl ViewerApp {
     }
 
     fn try_load_obj(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
+        self.try_load_obj_with_params(path, 0.01, false)
+    }
+
+    fn try_load_obj_with_params(
+        &mut self,
+        path: &std::path::Path,
+        scale: f32,
+        z_up: bool,
+    ) -> anyhow::Result<()> {
         let source =
             if is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path) {
                 let main_data: Arc<[u8]> = self.read_or_preloaded(path)?;
                 let obj_dir = path.parent().unwrap_or(Path::new("."));
                 let aux = self.take_or_collect_aux(path);
                 let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
-                let ir =
-                    crate::obj::extract::load_obj_from_data(&main_data, name, obj_dir, Some(&aux))?;
+                let ir = crate::obj::extract::load_obj_from_data_with_params(
+                    &main_data,
+                    name,
+                    obj_dir,
+                    Some(&aux),
+                    scale,
+                    z_up,
+                )?;
 
                 let source = ReloadableSource::Snapshot {
                     original_path: path.to_path_buf(),
@@ -2454,28 +2485,39 @@ impl ViewerApp {
                 ReloadableSource::File(path.to_path_buf())
             };
 
-        let ir = crate::obj::extract::load_obj(path)?;
+        let ir = crate::obj::extract::load_obj_with_params(path, scale, z_up)?;
         self.finish_load(ir, source)
     }
 
     fn try_load_stl(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
-        let source =
-            if is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path) {
-                let main_data: Arc<[u8]> = self.read_or_preloaded(path)?;
-                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
-                let ir = crate::stl::extract::load_stl_from_data(&main_data, name)?;
+        self.try_load_stl_with_params(path, 0.001, true)
+    }
 
-                let source = ReloadableSource::Snapshot {
-                    original_path: path.to_path_buf(),
-                    main_bytes: main_data,
-                    aux_files: HashMap::new(),
-                };
-                return self.finish_load(ir, source);
-            } else {
-                ReloadableSource::File(path.to_path_buf())
+    fn try_load_stl_with_params(
+        &mut self,
+        path: &std::path::Path,
+        scale: f32,
+        z_up: bool,
+    ) -> anyhow::Result<()> {
+        let source = if is_temp_path(path)
+            || self.preloaded.as_ref().is_some_and(|pl| pl.path == path)
+        {
+            let main_data: Arc<[u8]> = self.read_or_preloaded(path)?;
+            let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
+            let ir =
+                crate::stl::extract::load_stl_from_data_with_params(&main_data, name, scale, z_up)?;
+
+            let source = ReloadableSource::Snapshot {
+                original_path: path.to_path_buf(),
+                main_bytes: main_data,
+                aux_files: HashMap::new(),
             };
+            return self.finish_load(ir, source);
+        } else {
+            ReloadableSource::File(path.to_path_buf())
+        };
 
-        let ir = crate::stl::extract::load_stl(path)?;
+        let ir = crate::stl::extract::load_stl_with_params(path, scale, z_up)?;
         self.finish_load(ir, source)
     }
 
@@ -2505,11 +2547,7 @@ impl ViewerApp {
 
     fn try_load_vrm(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         // .gltf は外部バッファ参照を持つためスナップショット化しない（.glb/.vrm のみ対象）
-        let ext_lower = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext_lower = crate::path_ext_lower(&path);
         let source = if (is_temp_path(path)
             || self.preloaded.as_ref().is_some_and(|pl| pl.path == path))
             && ext_lower != "gltf"
@@ -2813,11 +2851,7 @@ impl ViewerApp {
         let result: anyhow::Result<()> = (|| {
             match &source_clone {
                 ReloadableSource::File(path) => {
-                    let ext = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
+                    let ext = crate::path_ext_lower(&path);
                     match detect_format(&ext) {
                         FileFormat::Fbx => self.try_load_fbx(path),
                         FileFormat::Pmx => self.try_load_pmx(path),
@@ -2833,11 +2867,7 @@ impl ViewerApp {
                     main_bytes,
                     aux_files,
                 } => {
-                    let ext = original_path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
+                    let ext = crate::path_ext_lower(&original_path);
                     match detect_format(&ext) {
                         FileFormat::Fbx => {
                             // 外部テクスチャがある場合、ユニーク名の一時ディレクトリに復元（TempDir の Drop で自動削除）。
@@ -3037,11 +3067,7 @@ impl ViewerApp {
         let ir_result: anyhow::Result<IrModel> = (|| -> anyhow::Result<IrModel> {
             match &source_clone {
                 ReloadableSource::File(path) => {
-                    let ext = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
+                    let ext = crate::path_ext_lower(&path);
                     match detect_format(&ext) {
                         FileFormat::Fbx => {
                             let ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
@@ -3094,11 +3120,7 @@ impl ViewerApp {
                     main_bytes,
                     aux_files,
                 } => {
-                    let ext = original_path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
+                    let ext = crate::path_ext_lower(&original_path);
                     match detect_format(&ext) {
                         FileFormat::Fbx => {
                             // 固定名だと BG ロード並行時にディレクトリが衝突するため、tempfile で毎回ユニーク名を生成する。
@@ -3472,11 +3494,7 @@ impl ViewerApp {
                                 }
                             }
                         } else {
-                            let ext = std::path::Path::new(tex_name)
-                                .extension()
-                                .and_then(|e| e.to_str())
-                                .unwrap_or("")
-                                .to_lowercase();
+                            let ext = crate::path_ext_lower(std::path::Path::new(tex_name));
                             let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                             (data.to_vec(), tex_name.clone(), mime)
                         };
@@ -3603,11 +3621,7 @@ impl ViewerApp {
                             }
                         }
                     } else {
-                        let ext = std::path::Path::new(tex_name)
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("")
-                            .to_lowercase();
+                        let ext = crate::path_ext_lower(std::path::Path::new(tex_name));
                         let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                         (data.to_vec(), tex_name.clone(), mime)
                     };
@@ -3749,13 +3763,9 @@ impl ViewerApp {
             &owned
         };
 
-        let ext = original_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = crate::path_ext_lower(&original_path);
         let format = crate::archive::archive_format_from_ext(&ext)
-            .ok_or_else(|| anyhow::anyhow!("未対応のアーカイブ形式: {ext}"))?;
+            .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
 
         let contents = crate::archive::list_models(data, format)?;
 
@@ -3907,11 +3917,7 @@ impl ViewerApp {
                             }
                         }
                     } else {
-                        let ext = std::path::Path::new(tex_name)
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("")
-                            .to_lowercase();
+                        let ext = crate::path_ext_lower(std::path::Path::new(tex_name));
                         let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                         (data.to_vec(), tex_name.clone(), mime)
                     };
@@ -4040,11 +4046,7 @@ impl ViewerApp {
     /// モデルを既存モデルに追加（マージ）
     pub(super) fn append_model(&mut self, path: PathBuf) {
         log::info!("Append file: {}", path.display());
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = crate::path_ext_lower(&path);
 
         if ext == "unitypackage" {
             match self.try_load_unitypackage_for_append(&path) {
@@ -4693,11 +4695,7 @@ impl ViewerApp {
             let mut image_files: Vec<PathBuf> = Vec::new();
             let mut model_file: Option<PathBuf> = None;
             for path in dropped_files {
-                let ext = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
+                let ext = crate::path_ext_lower(&path);
                 if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
                     image_files.push(path);
                 } else {
@@ -4708,11 +4706,7 @@ impl ViewerApp {
             let has_loaded_model = self.loaded.is_some();
 
             if let Some(model_path) = model_file {
-                let append_ext = model_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
+                let append_ext = crate::path_ext_lower(&model_path);
                 let is_appendable = matches!(
                     append_ext.as_str(),
                     "vrm"

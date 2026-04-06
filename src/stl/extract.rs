@@ -8,19 +8,34 @@ use std::path::Path;
 
 use super::reader;
 
-/// STL ファイルを読み込んで IrModel に変換する
+/// STL ファイルを読み込んで IrModel に変換する（デフォルト: mm, Z-Up）
 pub fn load_stl(path: &Path) -> Result<IrModel> {
+    load_stl_with_params(path, 0.001, true)
+}
+
+/// STL ファイルを読み込んで IrModel に変換する（カスタムパラメータ）
+pub fn load_stl_with_params(path: &Path, scale: f32, z_up: bool) -> Result<IrModel> {
     let stl = reader::read_stl(path)?;
-    stl_to_ir(&stl)
+    stl_to_ir(&stl, scale, z_up)
 }
 
-/// STL データをメモリから読み込んで IrModel に変換する
+/// STL データをメモリから読み込んで IrModel に変換する（デフォルト: mm, Z-Up）
 pub fn load_stl_from_data(data: &[u8], name: &str) -> Result<IrModel> {
-    let stl = reader::read_stl_from_data(data, name)?;
-    stl_to_ir(&stl)
+    load_stl_from_data_with_params(data, name, 0.001, true)
 }
 
-fn stl_to_ir(stl: &reader::StlModel) -> Result<IrModel> {
+/// STL データをメモリから読み込んで IrModel に変換する（カスタムパラメータ）
+pub fn load_stl_from_data_with_params(
+    data: &[u8],
+    name: &str,
+    scale: f32,
+    z_up: bool,
+) -> Result<IrModel> {
+    let stl = reader::read_stl_from_data(data, name)?;
+    stl_to_ir(&stl, scale, z_up)
+}
+
+fn stl_to_ir(stl: &reader::StlModel, scale: f32, z_up: bool) -> Result<IrModel> {
     let root_bone = IrBone {
         name: "全ての親".to_string(),
         name_en: "Root".to_string(),
@@ -46,21 +61,31 @@ fn stl_to_ir(stl: &reader::StlModel) -> Result<IrModel> {
     let mut vertices = Vec::with_capacity(stl.triangles.len() * 3);
     let mut indices = Vec::with_capacity(stl.triangles.len() * 3);
 
-    // STL の座標を mm 単位・Z-Up と仮定し、glTF 空間（Y-Up、メートル）に正規化。
-    // 3Dプリンタ系ツールの慣習: mm → m (÷1000)、Z-Up → Y-Up (Y↔Z入替)
-    const MM_TO_M: f32 = 0.001;
-    let pos_to_gltf = |v: Vec3| Vec3::new(v.x * MM_TO_M, v.z * MM_TO_M, v.y * MM_TO_M);
+    // 座標変換: ユーザー指定の単位スケールと Z-Up 変換を適用
+    let pos_to_gltf: fn(Vec3, f32) -> Vec3 = if z_up {
+        |v: Vec3, s: f32| Vec3::new(v.x * s, v.z * s, v.y * s)
+    } else {
+        |v: Vec3, s: f32| Vec3::new(v.x * s, v.y * s, v.z * s)
+    };
 
     for (i, tri) in stl.triangles.iter().enumerate() {
         let base = (i * 3) as u32;
-        // ゼロ法線・不正法線の場合は面法線を再計算
-        let raw_normal = Vec3::new(tri.normal.x, tri.normal.z, tri.normal.y);
+        // 法線: Z-Up の場合は Y↔Z 入替
+        let raw_normal = if z_up {
+            Vec3::new(tri.normal.x, tri.normal.z, tri.normal.y)
+        } else {
+            Vec3::new(tri.normal.x, tri.normal.y, tri.normal.z)
+        };
         let face_normal = if raw_normal.length_squared() < 1e-8 {
-            let p0 = pos_to_gltf(tri.vertices[0]);
-            let p1 = pos_to_gltf(tri.vertices[1]);
-            let p2 = pos_to_gltf(tri.vertices[2]);
-            // b↔c swap 後の巻き順に合わせて法線を計算
-            (p2 - p0).cross(p1 - p0).normalize_or_zero()
+            let p0 = pos_to_gltf(tri.vertices[0], scale);
+            let p1 = pos_to_gltf(tri.vertices[1], scale);
+            let p2 = pos_to_gltf(tri.vertices[2], scale);
+            if z_up {
+                // b↔c swap 後の巻き順に合わせて法線を計算
+                (p2 - p0).cross(p1 - p0).normalize_or_zero()
+            } else {
+                (p1 - p0).cross(p2 - p0).normalize_or_zero()
+            }
         } else {
             raw_normal.normalize_or_zero()
         };
@@ -71,7 +96,7 @@ fn stl_to_ir(stl: &reader::StlModel) -> Result<IrModel> {
         };
         for v in &tri.vertices {
             vertices.push(IrVertex {
-                position: pos_to_gltf(*v),
+                position: pos_to_gltf(*v, scale),
                 normal,
                 uv: Vec2::ZERO,
                 tangent: Vec4::new(1.0, 0.0, 0.0, 1.0),
@@ -80,10 +105,16 @@ fn stl_to_ir(stl: &reader::StlModel) -> Result<IrModel> {
                 edge_scale: 1.0,
             });
         }
-        // Y↔Z 入替は行列式 -1 → 面の巻き順を反転 (b↔c swap)
-        indices.push(base);
-        indices.push(base + 2);
-        indices.push(base + 1);
+        if z_up {
+            // Y↔Z 入替は行列式 -1 → 面の巻き順を反転 (b↔c swap)
+            indices.push(base);
+            indices.push(base + 2);
+            indices.push(base + 1);
+        } else {
+            indices.push(base);
+            indices.push(base + 1);
+            indices.push(base + 2);
+        }
     }
 
     let mesh = IrMesh {

@@ -330,11 +330,7 @@ fn run_main(mut args: Args) -> Result<()> {
     // unwrap 安全: 上で is_none() チェック済み
     let input = args.input.take().expect("input は is_none チェック済み");
 
-    let ext = input
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
+    let ext = popone::path_ext_lower(&input);
 
     // --list-models が非アーカイブファイルに使われた場合はエラー
     if args.list_models && !matches!(ext.as_str(), "zip" | "7z") {
@@ -346,7 +342,7 @@ fn run_main(mut args: Args) -> Result<()> {
         let data = std::fs::read(&input)
             .with_context(|| format!("アーカイブ読み込み失敗: {}", input.display()))?;
         let format = popone::archive::archive_format_from_ext(&ext)
-            .ok_or_else(|| anyhow::anyhow!("未対応のアーカイブ形式: {ext}"))?;
+            .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
         let contents = popone::archive::list_models(&data, format)
             .context("アーカイブ内モデル一覧取得失敗")?;
         if contents.models.is_empty() {
@@ -575,12 +571,23 @@ fn run_main(mut args: Args) -> Result<()> {
         raw_structure: args.raw_structure,
         scale: args.scale,
     };
-    let mut pmx_model = pmx::build::build_pmx_model_with_options(&ir, &build_options)
-        .context("PMXモデル構築失敗")?;
+    let (mut pmx_model, toon_textures) =
+        pmx::build::build_pmx_model_with_options(&ir, &build_options)
+            .context("PMXモデル構築失敗")?;
     // PSD→PNG 変換でファイル名が変わった場合、PMX テクスチャパスを補正
     for (i, name) in written_filenames.iter().enumerate() {
         if i < pmx_model.textures.len() {
             pmx_model.textures[i] = format!("textures\\{}", name);
+        }
+    }
+    // 生成トゥーンテクスチャをディスクに書き出し、PMX パスを補正
+    let base_tex_count = ir.textures.len();
+    let toon_written =
+        popone::convert::texture::write_all_textures_from_ir(&toon_textures, &tex_dir)?;
+    for (i, name) in toon_written.iter().enumerate() {
+        let pmx_idx = base_tex_count + i;
+        if pmx_idx < pmx_model.textures.len() {
+            pmx_model.textures[pmx_idx] = format!("textures\\{}", name);
         }
     }
 
@@ -623,7 +630,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
     let data = std::fs::read(input)
         .with_context(|| format!("アーカイブ読み込み失敗: {}", input.display()))?;
     let format = popone::archive::archive_format_from_ext(ext)
-        .ok_or_else(|| anyhow::anyhow!("未対応のアーカイブ形式: {ext}"))?;
+        .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
     let contents =
         popone::archive::list_models(&data, format).context("アーカイブ内モデル一覧取得失敗")?;
 
@@ -929,12 +936,22 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         raw_structure: args.raw_structure,
         scale: args.scale,
     };
-    let mut pmx_model = pmx::build::build_pmx_model_with_options(&ir, &build_options)
-        .context("PMXモデル構築失敗")?;
+    let (mut pmx_model, toon_textures) =
+        pmx::build::build_pmx_model_with_options(&ir, &build_options)
+            .context("PMXモデル構築失敗")?;
     // PSD→PNG 変換でファイル名が変わった場合、PMX テクスチャパスを補正
     for (i, name) in written_filenames.iter().enumerate() {
         if i < pmx_model.textures.len() {
             pmx_model.textures[i] = format!("textures\\{}", name);
+        }
+    }
+    let base_tex_count = ir.textures.len();
+    let toon_written =
+        popone::convert::texture::write_all_textures_from_ir(&toon_textures, &tex_dir)?;
+    for (i, name) in toon_written.iter().enumerate() {
+        let pmx_idx = base_tex_count + i;
+        if pmx_idx < pmx_model.textures.len() {
+            pmx_model.textures[pmx_idx] = format!("textures\\{}", name);
         }
     }
     let output_file = std::fs::File::create(output)

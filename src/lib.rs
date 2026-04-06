@@ -17,6 +17,16 @@ pub mod vrm;
 #[cfg(feature = "viewer")]
 pub mod viewer;
 
+use std::path::Path;
+
+/// パスの拡張子を小文字で返す（拡張子なし・非UTF-8の場合は空文字列）
+pub fn path_ext_lower(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase()
+}
+
 /// ログメモリバッファ（上限付き、累計オフセット追跡）
 pub struct LogBuffer {
     pub data: Vec<u8>,
@@ -58,7 +68,6 @@ pub type SharedLogBuffer = std::sync::Arc<std::sync::Mutex<LogBuffer>>;
 use error::Result;
 use pmx::build::PmxBuildOptions;
 use serde::Serialize;
-use std::path::Path;
 
 #[derive(Serialize, Debug)]
 pub struct ConvertStats {
@@ -128,7 +137,17 @@ pub fn convert_vrm_to_pmx(
         raw_structure: options.raw_structure,
         scale: options.scale,
     };
-    let pmx_model = pmx::build::build_pmx_model_with_options(&ir, &build_options)?;
+    let (mut pmx_model, toon_textures) =
+        pmx::build::build_pmx_model_with_options(&ir, &build_options)?;
+    let toon_written = convert::texture::write_all_textures_from_ir(&toon_textures, &tex_dir)?;
+    // 生成トゥーンテクスチャの実ファイル名で PMX パスを補正
+    let base_tex_count = ir.textures.len();
+    for (i, name) in toon_written.iter().enumerate() {
+        let pmx_idx = base_tex_count + i;
+        if pmx_idx < pmx_model.textures.len() {
+            pmx_model.textures[pmx_idx] = format!("textures\\{}", name);
+        }
+    }
     write_pmx_and_stats(&pmx_model, output_path, &tex_dir)
 }
 
@@ -213,11 +232,20 @@ pub fn convert_ir_to_pmx(
     let tex_dir = output_dir.join("textures");
     let written_filenames = convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)?;
 
-    let mut pmx_model = pmx::build::build_pmx_model_with_options(ir, options)?;
+    let (mut pmx_model, toon_textures) = pmx::build::build_pmx_model_with_options(ir, options)?;
     // PSD→PNG 変換でファイル名が変わった場合、PMX テクスチャパスを補正
     for (i, name) in written_filenames.iter().enumerate() {
         if i < pmx_model.textures.len() {
             pmx_model.textures[i] = format!("textures\\{}", name);
+        }
+    }
+    // 生成トゥーンテクスチャをディスクに書き出し、PMX パスを補正
+    let base_tex_count = ir.textures.len();
+    let toon_written = convert::texture::write_all_textures_from_ir(&toon_textures, &tex_dir)?;
+    for (i, name) in toon_written.iter().enumerate() {
+        let pmx_idx = base_tex_count + i;
+        if pmx_idx < pmx_model.textures.len() {
+            pmx_model.textures[pmx_idx] = format!("textures\\{}", name);
         }
     }
     write_pmx_and_stats(&pmx_model, output_path, &tex_dir)
@@ -320,15 +348,12 @@ pub fn convert_to_pmx(
     output_path: &Path,
     options: &VrmConvertOptions,
 ) -> Result<ConvertStats> {
-    let ext = input_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase());
-    match ext.as_deref() {
-        Some("fbx") => convert_fbx_to_pmx(input_path, output_path, options),
-        Some("obj") => convert_obj_to_pmx(input_path, output_path, options),
-        Some("stl") => convert_stl_to_pmx(input_path, output_path, options),
-        Some("x") => convert_x_to_pmx(input_path, output_path, options),
+    let ext = path_ext_lower(input_path);
+    match ext.as_str() {
+        "fbx" => convert_fbx_to_pmx(input_path, output_path, options),
+        "obj" => convert_obj_to_pmx(input_path, output_path, options),
+        "stl" => convert_stl_to_pmx(input_path, output_path, options),
+        "x" => convert_x_to_pmx(input_path, output_path, options),
         _ => convert_vrm_to_pmx(input_path, output_path, options),
     }
 }

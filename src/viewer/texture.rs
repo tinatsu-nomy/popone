@@ -1,6 +1,6 @@
 use crate::color::{linear_f32_to_rgba8, rgba8_to_linear_f32};
 use crate::intermediate::types::IrModel;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use eframe::wgpu;
 
 /// sRGB RGBA バイト列を linear 空間で縮小し、sRGB に戻して返す
@@ -313,8 +313,7 @@ pub fn decode_image_to_rgba_with_hint(
 /// バイト列からサムネイル RGBA を生成（デコード→縮小）
 pub fn create_thumbnail_rgba(data: &[u8], is_psd: bool, thumb_size: u32) -> Result<Vec<u8>> {
     let (rgba, w, h) = decode_image_to_rgba(data, is_psd)?;
-    let img = image::RgbaImage::from_raw(w, h, rgba)
-        .ok_or_else(|| anyhow::anyhow!("RgbaImage構築失敗"))?;
+    let img = image::RgbaImage::from_raw(w, h, rgba).context("RgbaImage構築失敗")?;
     let resized = image::imageops::resize(
         &img,
         thumb_size,

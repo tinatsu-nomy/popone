@@ -40,11 +40,7 @@ impl ReloadableSource {
 
     /// 拡張子を小文字で返す
     pub fn extension_lower(&self) -> String {
-        self.display_path()
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase()
+        crate::path_ext_lower(self.display_path())
     }
 
     /// キャッシュ済みかどうか
@@ -81,22 +77,35 @@ impl TextureSource {
     }
 }
 
-/// 一時ディレクトリ配下かどうかを検出する
+/// キャッシュ済みの一時ディレクトリ情報（canonicalize + 小文字文字列）
+fn cached_temp_dir() -> &'static (Option<PathBuf>, String) {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<(Option<PathBuf>, String)> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let raw = std::env::temp_dir();
+        let canonical = raw.canonicalize().ok();
+        let mut lower = raw.to_string_lossy().to_lowercase();
+        if !lower.ends_with(std::path::MAIN_SEPARATOR) {
+            lower.push(std::path::MAIN_SEPARATOR);
+        }
+        (canonical, lower)
+    })
+}
+
+/// 一時ディレクト���配下かどうかを検出する
 pub fn is_temp_path(path: &Path) -> bool {
-    // canonicalize ベース（ファイル存在時）
-    if let (Ok(temp), Ok(target)) = (std::env::temp_dir().canonicalize(), path.canonicalize()) {
-        if target.starts_with(&temp) {
-            return true;
+    let (canonical_temp, lower_temp) = cached_temp_dir();
+    // canonicalize ベース���ファイル存在時）
+    if let Some(ref temp) = canonical_temp {
+        if let Ok(target) = path.canonicalize() {
+            if target.starts_with(temp) {
+                return true;
+            }
         }
     }
-    // フォールバック: 文字列ベース（ファイル消失後でも機能）
+    // フォールバック: 文字列ベース（ファイル消失後で���機能）
     let path_str = path.to_string_lossy().to_lowercase();
-    let mut temp_str = std::env::temp_dir().to_string_lossy().to_lowercase();
-    // パス境界を保証: TempBackup 等の誤検出を防止
-    if !temp_str.ends_with(std::path::MAIN_SEPARATOR) {
-        temp_str.push(std::path::MAIN_SEPARATOR);
-    }
-    path_str.starts_with(&*temp_str)
+    path_str.starts_with(lower_temp.as_str())
 }
 
 /// FBX 外部テクスチャ用: 指定ディレクトリ以下の画像ファイルを再帰的に収集する
@@ -113,8 +122,8 @@ pub fn collect_image_files_recursive(
         let ep = entry.path();
         if ep.is_dir() {
             collect_image_files_recursive(base_dir, &ep, out);
-        } else if let Some(ext) = ep.extension().and_then(|e| e.to_str()) {
-            let ext_low = ext.to_lowercase();
+        } else {
+            let ext_low = crate::path_ext_lower(&ep);
             if matches!(
                 ext_low.as_str(),
                 "png" | "jpg" | "jpeg" | "tga" | "bmp" | "tif" | "tiff" | "dds" | "mtl"

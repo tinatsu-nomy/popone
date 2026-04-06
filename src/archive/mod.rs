@@ -211,10 +211,10 @@ fn find_models_from_entries(
 }
 
 fn path_to_model_kind(path: &Path) -> Option<ArchiveModelKind> {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())?;
+    let ext = crate::path_ext_lower(path);
+    if ext.is_empty() {
+        return None;
+    }
     ArchiveModelKind::from_ext(&ext)
 }
 
@@ -549,11 +549,7 @@ fn collect_needed_paths<'a>(
     }
     // .txt ファイルも収集（PMD/PMX の readme 等）
     for &ap in &archive_paths {
-        let ext = ap
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = crate::path_ext_lower(ap);
         if ext == "txt" && (ap.starts_with(model_dir) || model_dir == Path::new("")) {
             needed.push(ap.clone());
         }
@@ -590,12 +586,7 @@ fn build_aux_from_entries_pmx(
     let mut aux = HashMap::new();
 
     for entry in entries {
-        let ext = entry
-            .path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = crate::path_ext_lower(&entry.path);
 
         let is_needed = if ext == "txt" {
             entry.path.starts_with(model_dir) || model_dir == Path::new("")
@@ -641,11 +632,7 @@ fn build_aux_from_entries_pmx(
 /// 指定拡張子のサイドカーファイルがスコープ内にあるか
 /// model_dir の親ディレクトリまで許容（"../shared/materials.mtl" 等の参照用）
 fn is_sidecar_in_scope(path: &Path, model_dir: &Path, ext: &str) -> bool {
-    let file_ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
+    let file_ext = crate::path_ext_lower(path);
     if file_ext != ext {
         return false;
     }
@@ -656,11 +643,7 @@ fn is_sidecar_in_scope(path: &Path, model_dir: &Path, ext: &str) -> bool {
 /// テクスチャ拡張子かつモデルの親ディレクトリ以下にあるか判定
 /// model_dir の1段上まで許容し、アーカイブ全体の無関係テクスチャを除外する
 fn is_texture_near_model(path: &Path, model_dir: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
+    let ext = crate::path_ext_lower(path);
     if !TEXTURE_EXTENSIONS.contains(&ext.as_str()) {
         return false;
     }
@@ -670,11 +653,7 @@ fn is_texture_near_model(path: &Path, model_dir: &Path) -> bool {
 }
 
 fn is_texture_in_scope(path: &Path, model_dir: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
+    let ext = crate::path_ext_lower(path);
     if !TEXTURE_EXTENSIONS.contains(&ext.as_str()) {
         return false;
     }

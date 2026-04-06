@@ -8,8 +8,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// OBJ ファイルをパスから読み込んで IrModel に変換する
+/// OBJ ファイルをパスから読み込んで IrModel に変換する（デフォルト: cm, Y-Up）
 pub fn load_obj(path: &Path) -> Result<IrModel> {
+    load_obj_with_params(path, 0.01, false)
+}
+
+/// OBJ ファイルをパスから読み込んで IrModel に変換する（カスタムパラメータ）
+/// - `scale`: glTF 空間（メートル）へのスケール係数
+/// - `z_up`: true の場合 Z-Up → Y-Up 変換を行う
+pub fn load_obj_with_params(path: &Path, scale: f32, z_up: bool) -> Result<IrModel> {
     let (models, materials_result) = tobj::load_obj(path, &tobj::GPU_LOAD_OPTIONS)
         .map_err(|e| PoponeError::ObjParse(format!("{}", e)))?;
 
@@ -28,15 +35,28 @@ pub fn load_obj(path: &Path) -> Result<IrModel> {
         .unwrap_or("OBJ Model")
         .to_string();
 
-    build_ir_model(&name, &models, &materials, base_dir, None)
+    build_ir_model(&name, &models, &materials, base_dir, None, scale, z_up)
 }
 
 /// OBJ データをメモリから読み込んで IrModel に変換する
+/// OBJ データをメモリから読み込んで IrModel に変換する（デフォルト: cm, Y-Up）
 pub fn load_obj_from_data(
     data: &[u8],
     name: &str,
     base_dir: &Path,
     aux: Option<&HashMap<PathBuf, Arc<[u8]>>>,
+) -> Result<IrModel> {
+    load_obj_from_data_with_params(data, name, base_dir, aux, 0.01, false)
+}
+
+/// OBJ データをメモリから読み込んで IrModel に変換する（カスタムパラメータ）
+pub fn load_obj_from_data_with_params(
+    data: &[u8],
+    name: &str,
+    base_dir: &Path,
+    aux: Option<&HashMap<PathBuf, Arc<[u8]>>>,
+    scale: f32,
+    z_up: bool,
 ) -> Result<IrModel> {
     let mut reader = std::io::BufReader::new(std::io::Cursor::new(data));
 
@@ -67,7 +87,7 @@ pub fn load_obj_from_data(
         }
     };
 
-    build_ir_model(name, &models, &materials, base_dir, aux)
+    build_ir_model(name, &models, &materials, base_dir, aux, scale, z_up)
 }
 
 /// aux_files またはディスクからサイドカーファイルを解決する
@@ -148,6 +168,8 @@ fn build_ir_model(
     materials: &[tobj::Material],
     base_dir: &Path,
     aux: Option<&HashMap<PathBuf, Arc<[u8]>>>,
+    scale: f32,
+    z_up: bool,
 ) -> Result<IrModel> {
     let root_bone = IrBone {
         name: "全ての親".to_string(),
@@ -184,11 +206,12 @@ fn build_ir_model(
                 // テクスチャをバイト列として読み込み
                 let tex_path = Path::new(tex_name);
                 let data = resolve_sidecar(aux, base_dir, tex_path)?;
-                let ext = tex_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("png")
-                    .to_lowercase();
+                let ext_raw = crate::path_ext_lower(tex_path);
+                let ext = if ext_raw.is_empty() {
+                    "png".to_string()
+                } else {
+                    ext_raw
+                };
                 let mime = crate::intermediate::types::mime_for_ext(&ext);
                 let idx = ir_textures.len();
                 ir_textures.push(IrTexture {
@@ -229,11 +252,14 @@ fn build_ir_model(
         });
     }
 
-    // OBJ の座標を cm 単位と仮定し、glTF 空間（メートル）に正規化。
-    // FBX と同じ変換: cm → m (÷100)
+    // 座標変換: ユーザー指定の単位スケールと Z-Up 変換を適用
     // ビューア描画時に gltf_pos_to_pmx (×12.5) で PMX 単位に変換される。
-    const CM_TO_M: f32 = 0.01;
-    let pos_to_gltf = |v: Vec3| Vec3::new(v.x * CM_TO_M, v.y * CM_TO_M, v.z * CM_TO_M);
+    let pos_to_gltf = if z_up {
+        // Z-Up → Y-Up: (x, y, z) → (x * scale, z * scale, y * scale)
+        |v: Vec3, s: f32| Vec3::new(v.x * s, v.z * s, v.y * s)
+    } else {
+        |v: Vec3, s: f32| Vec3::new(v.x * s, v.y * s, v.z * s)
+    };
 
     // メッシュ変換
     let mut ir_meshes: Vec<IrMesh> = Vec::new();
@@ -266,7 +292,7 @@ fn build_ir_model(
             };
 
             vertices.push(IrVertex {
-                position: pos_to_gltf(Vec3::new(px, py, pz)),
+                position: pos_to_gltf(Vec3::new(px, py, pz), scale),
                 normal,
                 uv,
                 tangent: Vec4::new(1.0, 0.0, 0.0, 1.0),

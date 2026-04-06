@@ -211,6 +211,45 @@ impl BackgroundLoadState {
     }
 }
 
+/// OBJ/STL インポート時の単位選択
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ImportUnit {
+    Mm,
+    Cm,
+    M,
+    Inch,
+}
+
+impl ImportUnit {
+    /// glTF 空間（メートル）へのスケール係数
+    pub fn scale(self) -> f32 {
+        match self {
+            ImportUnit::Mm => 0.001,
+            ImportUnit::Cm => 0.01,
+            ImportUnit::M => 1.0,
+            ImportUnit::Inch => 0.0254,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            ImportUnit::Mm => "ミリメートル (mm)",
+            ImportUnit::Cm => "センチメートル (cm)",
+            ImportUnit::M => "メートル (m)",
+            ImportUnit::Inch => "インチ (inch)",
+        }
+    }
+}
+
+/// OBJ/STL インポートオプション選択待ち状態
+pub struct PendingImportOptions {
+    pub path: PathBuf,
+    pub format: FileFormat,
+    pub append: bool,
+    pub preloaded: Option<PreloadedData>,
+    pub unit: ImportUnit,
+    pub z_up: bool,
+}
+
 /// 遅延処理（ペンディング）の集約状態
 pub struct PendingState {
     /// FBX読み込み方法選択待ち（モデル+アニメ両方含む場合）
@@ -236,8 +275,10 @@ pub struct PendingState {
     pub refit: bool,
     /// テクスチャ履歴の上書き保存確認ダイアログ表示フラグ
     pub confirm_save_tex_history: bool,
-    /// 非同期ファ��ルダイアログ（種別, 結果受信チャネル）
+    /// 非同期ファイルダイアログ（種別, 結果受信チャネル）
     pub file_dialog: Option<(FileDialogKind, std::sync::mpsc::Receiver<Option<PathBuf>>)>,
+    /// OBJ/STL インポートオプション選択待ち
+    pub import_options: Option<PendingImportOptions>,
 }
 
 impl Default for PendingState {
@@ -255,6 +296,7 @@ impl Default for PendingState {
             refit: false,
             confirm_save_tex_history: false,
             file_dialog: None,
+            import_options: None,
         }
     }
 }
