@@ -3,23 +3,40 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
-  - [v0.2.28](#v0228)
+  - [v0.2.29](#v0229)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84)
-  - [v0.2.27](#v0227)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
+  - [v0.2.28](#v0228)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-1)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-1)
-  - [v0.2.26](#v0226)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
+  - [v0.2.27](#v0227)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-2)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-2)
+  - [v0.2.26](#v0226)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
+    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-3)
+    - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-3)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.2.29
+
+### バグ修正
+
+- **Nearest フィルタ使用時の異方性フィルタリングによるクラッシュ** — glTF サンプラーが `Nearest` フィルタリングを指定しているモデルのロード時にパニック（`Invalid filter mode for mipmapFilter: Nearest. When anisotropic clamp is not 1, all filter modes must be linear`）が発生する問題を修正。`anisotropy_clamp: 16` は 3 つのフィルタモード（mag, min, mipmap）が全て `Linear` の場合のみ適用し、それ以外は 1（デフォルト）にフォールバック
+
+### コード品質・パフォーマンス改善
+
+- **異方性テクスチャフィルタリング** — テクスチャサンプラー（`default_sampler`、`create_sampler_from_info`、`ensure_sampler`）に `anisotropy_clamp: 16` を追加。ミップマップ（v0.2.26）と組み合わせて斜め面のテクスチャシャープネスを向上。ハードウェア上限を超えた場合は GPU ドライバが自動クランプ
+- **`TextureData` enum 化** — `IrTexture.data: Vec<u8>` + `mime_type == "image/x-raw-rgba8"` の文字列判定を型安全な `TextureData` enum（`Encoded(Vec<u8>)` / `RawRgba { pixels, width, height }`）に置換。`raw_dims: Option<(u32, u32)>` フィールドは `RawRgba` バリアントに吸収して除去。`is_raw_rgba()` メソッドは `matches!` ベースに変更。`TextureData` に `as_bytes()`、`len()`、`is_empty()` メソッドを追加し呼び出し側の変更を最小化
+- **`CpuParseInput` enum 化** — `cpu_parse_model` の散在引数（`path`、`format`、`preloaded`）を `CpuParseInput::File { path, format, preloaded }` に集約し、関数名を `cpu_parse_source` にリネーム。将来のアーカイブ内パース BG 化に備えた `ArchiveEntry` / `Reload` バリアント拡張を想定した設計
+- **ログのオンメモリ化** — ビューアのログ出力先を毎行のファイル I/O から `LogBuffer` 構造体（`data: Vec<u8>` + 累計カウンタ `total_written: usize` を `Arc<Mutex<…>>` で共有）に変更。バッファは 16MB 上限で先頭を切り詰め、`total_written` により drain 後も PMX 変換ログのオフセット整合性を保証。バッファは正常終了時およびパニック時にファイルにフラッシュ。CLI 変換は従来どおりファイル直書き
+- **`encase` uniform バッファ移行** — `CameraUniform` と `MaterialUniform` を `bytemuck`（`#[repr(C)] #[derive(Pod, Zeroable)]`）から `encase::ShaderType` に移行。フィールド型を `[f32; 3/4]` / `[[f32; 4]; 4]` から `glam::Vec3/Vec4/Mat4` に変更。手動 `_pad` フィールド 8 個（`CameraUniform` 5 個、`MaterialUniform` 3 個）と対応する WGSL 宣言を除去。バッファシリアライズに `bytemuck::bytes_of` の代わりに `encase::UniformBuffer` を使用し、`GpuRenderer` 上の再利用 `Vec<u8>` で毎フレームの heap allocation を回避。`MmdMaterialUniform` と `Vertex` は `bytemuck` のまま維持（パディングフィールドなし、移行不要）
 
 ## v0.2.28
 

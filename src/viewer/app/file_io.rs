@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use eframe::egui;
 
-use crate::intermediate::types::IrModel;
+use crate::intermediate::types::{IrModel, TextureData};
 use crate::unitypackage::UnityPackageIndex;
 
 use super::MaterialDisplayState;
@@ -72,18 +72,34 @@ pub(super) fn detect_format(ext: &str) -> FileFormat {
     }
 }
 
+/// バックグラウンドロードの入力ソースを表す enum。
+/// 将来 `ArchiveEntry` / `Reload` バリアントを追加して
+/// アーカイブ内パースやリロードの BG 化を統一する。
+pub(super) enum CpuParseInput {
+    /// 通常のファイルロード（temp ファイルの場合は preloaded 付き）
+    File {
+        path: PathBuf,
+        format: FileFormat,
+        preloaded: Option<super::helpers::PreloadedData>,
+    },
+}
+
 /// バックグラウンドスレッドで実行する CPU パース（`&self` 不要のフリー関数）。
 /// ファイル読込 + パース → `(IrModel, ReloadableSource)` を返す。
 /// GPU リソース構築は行わない。
-pub(super) fn cpu_parse_model(
-    path: &Path,
-    format: FileFormat,
+pub(super) fn cpu_parse_source(
+    input: CpuParseInput,
     normalize_pose: bool,
     normalize_to_tstance: bool,
-    preloaded: Option<super::helpers::PreloadedData>,
     cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<(IrModel, super::helpers::ReloadableSource)> {
     use super::helpers::ReloadableSource;
+
+    let CpuParseInput::File {
+        ref path,
+        format,
+        ref preloaded,
+    } = input;
 
     // キャンセルチェック：関数冒頭、各フォーマット分岐の直前、重い I/O の後、extract 呼び出しの前後、
     // そして関数末尾で粗く行う。パーサ本体（VRM/FBX/PMX extract）の内部までは潜らせず、
@@ -608,14 +624,12 @@ impl ViewerApp {
 
         let path_clone = path.clone();
         std::thread::spawn(move || {
-            let result = cpu_parse_model(
-                &path_clone,
+            let input = CpuParseInput::File {
+                path: path_clone.clone(),
                 format,
-                normalize_pose,
-                normalize_to_tstance,
                 preloaded,
-                &cancel,
-            );
+            };
+            let result = cpu_parse_source(input, normalize_pose, normalize_to_tstance, &cancel);
             let result = result.map(|(ir, source)| super::pending::BgLoadResult {
                 ir,
                 source,
@@ -3425,10 +3439,9 @@ impl ViewerApp {
                         let idx = ir.textures.len();
                         ir.textures.push(crate::intermediate::types::IrTexture {
                             filename: ir_filename,
-                            data: ir_data,
+                            data: TextureData::Encoded(ir_data),
                             mime_type: ir_mime,
                             source_path: format!("unitypackage: {}", tex_name),
-                            raw_dims: None,
                             mip_chain: None,
                         });
                         name_to_ir.insert(tex_name.clone(), idx);
@@ -3557,10 +3570,9 @@ impl ViewerApp {
                     let idx = ir.textures.len();
                     ir.textures.push(crate::intermediate::types::IrTexture {
                         filename: ir_filename,
-                        data: ir_data,
+                        data: TextureData::Encoded(ir_data),
                         mime_type: ir_mime,
                         source_path: format!("unitypackage: {}", tex_name),
-                        raw_dims: None,
                         mip_chain: None,
                     });
                     name_to_ir.insert(tex_name.clone(), idx);
@@ -3852,10 +3864,9 @@ impl ViewerApp {
                     let idx = ir.textures.len();
                     ir.textures.push(crate::intermediate::types::IrTexture {
                         filename: ir_filename,
-                        data: ir_data,
+                        data: TextureData::Encoded(ir_data),
                         mime_type: ir_mime,
                         source_path: format!("unitypackage: {}", tex_name),
-                        raw_dims: None,
                         mip_chain: None,
                     });
                     name_to_ir.insert(tex_name.clone(), idx);

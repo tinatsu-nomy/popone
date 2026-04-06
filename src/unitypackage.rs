@@ -1,7 +1,7 @@
 //! .unitypackage (tar.gz) からアセットを抽出するモジュール
 
 use crate::error::{PoponeError, Result, ResultExt};
-use crate::intermediate::types::SourceMaterialRef;
+use crate::intermediate::types::{SourceMaterialRef, TextureData};
 use flate2::read::GzDecoder;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
@@ -467,10 +467,9 @@ pub fn embed_textures_into_ir_with_label(
                 let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                 ir.textures.push(crate::intermediate::types::IrTexture {
                     filename: key.clone(),
-                    data: data.to_vec(),
+                    data: TextureData::Encoded(data.to_vec()),
                     mime_type: mime,
                     source_path: format!("{}: {}", source_label, key),
-                    raw_dims: None,
                     mip_chain: None,
                 });
                 mat.texture_index = Some(tex_idx);
@@ -2039,10 +2038,9 @@ pub fn embed_textures_with_prefab(
                             let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                             ir.textures.push(crate::intermediate::types::IrTexture {
                                 filename: pkg_tex.display_name.to_string(),
-                                data: pkg_tex.data.to_vec(),
+                                data: TextureData::Encoded(pkg_tex.data.to_vec()),
                                 mime_type: mime,
                                 source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
-                                raw_dims: None,
                                 mip_chain: None,
                             });
                             mat.texture_index = Some(tex_idx);
@@ -2087,10 +2085,9 @@ pub fn embed_textures_with_prefab(
                             let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                             ir.textures.push(crate::intermediate::types::IrTexture {
                                 filename: pkg_tex.display_name.to_string(),
-                                data: pkg_tex.data.to_vec(),
+                                data: TextureData::Encoded(pkg_tex.data.to_vec()),
                                 mime_type: mime,
                                 source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
-                                raw_dims: None,
                                 mip_chain: None,
                             });
                             mat.normal_texture = Some(
@@ -2153,10 +2150,9 @@ pub fn embed_textures_with_prefab(
                                     crate::intermediate::types::mime_for_ext(&ext).to_string();
                                 ir.textures.push(crate::intermediate::types::IrTexture {
                                     filename: pkg_tex.display_name.to_string(),
-                                    data: pkg_tex.data.to_vec(),
+                                    data: TextureData::Encoded(pkg_tex.data.to_vec()),
                                     mime_type: mime,
                                     source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
-                                    raw_dims: None,
                                     mip_chain: None,
                                 });
                                 mat.emissive_texture = Some(
@@ -2248,10 +2244,9 @@ pub fn embed_textures_with_prefab(
                 let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                 ir.textures.push(crate::intermediate::types::IrTexture {
                     filename: pkg_tex.display_name.to_string(),
-                    data: pkg_tex.data.to_vec(),
+                    data: TextureData::Encoded(pkg_tex.data.to_vec()),
                     mime_type: mime,
                     source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
-                    raw_dims: None,
                     mip_chain: None,
                 });
                 mat.texture_index = Some(tex_idx);
@@ -2593,10 +2588,9 @@ Material:
         ir.materials.push(mat);
         ir.textures.push(crate::intermediate::types::IrTexture {
             filename: "base.png".into(),
-            data: vec![0u8; 4],
+            data: TextureData::Encoded(vec![0u8; 4]),
             mime_type: "image/png".into(),
             source_path: String::new(),
-            raw_dims: None,
             mip_chain: None,
         });
 
@@ -2676,10 +2670,9 @@ Material:
         }
         ir.textures.push(crate::intermediate::types::IrTexture {
             filename: "base.png".into(),
-            data: vec![0u8; 4],
+            data: TextureData::Encoded(vec![0u8; 4]),
             mime_type: "image/png".into(),
             source_path: String::new(),
-            raw_dims: None,
             mip_chain: None,
         });
 

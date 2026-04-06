@@ -2,7 +2,7 @@ use crate::error::Result;
 use image::RgbaImage;
 use std::path::Path;
 
-use crate::intermediate::types::IrTexture;
+use crate::intermediate::types::{IrTexture, TextureData};
 
 /// テクスチャをPNGとして書き出す
 pub fn write_texture(
@@ -15,13 +15,14 @@ pub fn write_texture(
 
     // 生ピクセルデータ（gltf::image::Data.pixels）はRGB8またはRGBA8
     // widthとheightが必要
-    if tex.data.len() == (width * height * 4) as usize {
+    let bytes = tex.data.as_bytes();
+    if bytes.len() == (width * height * 4) as usize {
         // RGBA8 — スライス参照から直接保存（clone 回避）
-        image::save_buffer(&out_path, &tex.data, width, height, image::ColorType::Rgba8)?;
-    } else if tex.data.len() == (width * height * 3) as usize {
+        image::save_buffer(&out_path, bytes, width, height, image::ColorType::Rgba8)?;
+    } else if bytes.len() == (width * height * 3) as usize {
         // RGB8 → RGBA8変換
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
-        for chunk in tex.data.chunks(3) {
+        for chunk in bytes.chunks(3) {
             rgba.push(chunk[0]);
             rgba.push(chunk[1]);
             rgba.push(chunk[2]);
@@ -33,7 +34,7 @@ pub fn write_texture(
         log::warn!(
             "Texture '{}' size mismatch (data={}, expected={}x{})",
             tex.filename,
-            tex.data.len(),
+            bytes.len(),
             width,
             height
         );
@@ -82,7 +83,7 @@ pub fn write_all_textures_from_ir(
     for tex in textures {
         if crate::psd::is_psd_filename(&tex.filename) {
             // PSD → PNG 変換
-            match crate::psd::psd_to_png(&tex.data) {
+            match crate::psd::psd_to_png(tex.data.as_bytes()) {
                 Ok(png_data) => {
                     let stem = std::path::Path::new(&tex.filename)
                         .file_stem()
@@ -133,7 +134,7 @@ pub fn write_all_textures_from_ir(
                     }
                     used_names.insert(out_name.to_lowercase());
                     let out_path = output_dir.join(&out_name);
-                    std::fs::write(&out_path, &tex.data)?;
+                    std::fs::write(&out_path, tex.data.as_bytes())?;
                     filenames.push(out_name);
                 }
             }
@@ -164,23 +165,29 @@ pub fn write_all_textures_from_ir(
             }
             used_names.insert(out_name.to_lowercase());
             let out_path = output_dir.join(&out_name);
-            if tex.is_raw_rgba() {
-                // 生 RGBA は PNG エンコードして書き出す
-                let (w, h) = tex.raw_dims.expect("is_raw_rgba で確認済み");
-                if let Some(img) = image::RgbaImage::from_raw(w, h, tex.data.clone()) {
-                    img.save(&out_path)?;
-                } else {
-                    log::warn!(
-                        "Raw RGBA texture size mismatch: {} ({}x{}, data={})",
-                        tex.filename,
-                        w,
-                        h,
-                        tex.data.len()
-                    );
-                    RgbaImage::new(1, 1).save(&out_path)?;
+            match &tex.data {
+                TextureData::RawRgba {
+                    pixels,
+                    width,
+                    height,
+                } => {
+                    // 生 RGBA は PNG エンコードして書き出す
+                    if let Some(img) = image::RgbaImage::from_raw(*width, *height, pixels.clone()) {
+                        img.save(&out_path)?;
+                    } else {
+                        log::warn!(
+                            "Raw RGBA texture size mismatch: {} ({}x{}, data={})",
+                            tex.filename,
+                            width,
+                            height,
+                            pixels.len()
+                        );
+                        RgbaImage::new(1, 1).save(&out_path)?;
+                    }
                 }
-            } else {
-                std::fs::write(&out_path, &tex.data)?;
+                TextureData::Encoded(bytes) => {
+                    std::fs::write(&out_path, bytes)?;
+                }
             }
             log::info!("Texture export: {}", out_path.display());
             filenames.push(out_name);

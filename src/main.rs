@@ -68,10 +68,51 @@ struct Args {
     scale: f32,
 }
 
+use popone::SharedLogBuffer;
+
+/// fern に接続するための `Write` ラッパー
+struct SharedLogBufferWriter(SharedLogBuffer);
+
+/// ログバッファの最大サイズ（16MB）。超過時は先頭を切り詰める。
+const LOG_BUFFER_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+impl std::io::Write for SharedLogBufferWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Ok(mut lb) = self.0.lock() {
+            lb.data.extend_from_slice(buf);
+            lb.total_written += buf.len();
+            // 上限超過時は先頭を切り詰め（直近ログを優先保持）
+            if lb.data.len() > LOG_BUFFER_MAX_BYTES {
+                let excess = lb.data.len() - LOG_BUFFER_MAX_BYTES;
+                lb.data.drain(..excess);
+            }
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// メモリバッファの内容をファイルに一括書き出す
+#[cfg(feature = "viewer")]
+fn flush_log_buffer(buffer: &SharedLogBuffer, path: &std::path::Path) {
+    if let Ok(lb) = buffer.lock() {
+        if !lb.data.is_empty() {
+            let _ = std::fs::write(path, &lb.data);
+        }
+    }
+}
+
 /// ロガーセットアップ。
 /// stderr には `stderr_level` までのログを出力する。
 /// `log_file` が Some の場合、そのパスに DEBUG レベルまで全て書き出す。
-fn setup_logging(stderr_level: log::LevelFilter, log_file: Option<&std::path::Path>) -> Result<()> {
+/// `log_buffer` が Some の場合、ファイル I/O の代わりにメモリバッファに書き出す（ビューアモード用）。
+fn setup_logging(
+    stderr_level: log::LevelFilter,
+    log_file: Option<&std::path::Path>,
+    log_buffer: Option<SharedLogBuffer>,
+) -> Result<()> {
     let mut base = fern::Dispatch::new().level(log::LevelFilter::Debug); // グローバル最小フィルター
 
     // stderr: ユーザー指定レベル
@@ -85,8 +126,18 @@ fn setup_logging(stderr_level: log::LevelFilter, log_file: Option<&std::path::Pa
             .chain(std::io::stderr()),
     );
 
-    // ファイル: DEBUG まで全件（上書き）
-    if let Some(path) = log_file {
+    // DEBUG 出力先: メモリバッファ（ビューア）またはファイル（CLI）
+    if let Some(buffer) = log_buffer {
+        base = base.chain(
+            fern::Dispatch::new()
+                .level(log::LevelFilter::Debug)
+                .format(|out, msg, rec| {
+                    let now = chrono::Local::now().format("%H:%M:%S%.3f");
+                    out.finish(format_args!("[{}][{}] {}", now, rec.level(), msg))
+                })
+                .chain(Box::new(SharedLogBufferWriter(buffer)) as Box<dyn std::io::Write + Send>),
+        );
+    } else if let Some(path) = log_file {
         let file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -344,7 +395,7 @@ fn run_main(mut args: Args) -> Result<()> {
     } else {
         Some(output.with_extension("log"))
     };
-    setup_logging(log_level, log_path.as_deref()).context("ロガー初期化失敗")?;
+    setup_logging(log_level, log_path.as_deref(), None).context("ロガー初期化失敗")?;
     if let Some(ref p) = log_path {
         log::info!("Log file: {}", p.display());
     }
@@ -565,7 +616,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
     } else {
         Some(output.with_extension("log"))
     };
-    setup_logging(log_level, log_path.as_deref()).context("ロガー初期化失敗")?;
+    setup_logging(log_level, log_path.as_deref(), None).context("ロガー初期化失敗")?;
 
     log::info!("Input file (archive): {}", input.display());
 
@@ -941,18 +992,19 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
 
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
     let log_path = logs_dir.join(format!("popone_{timestamp}.log"));
-    setup_logging(log::LevelFilter::Debug, Some(&log_path))?;
+    let log_buffer: SharedLogBuffer =
+        std::sync::Arc::new(std::sync::Mutex::new(popone::LogBuffer::new()));
+    setup_logging(log::LevelFilter::Debug, None, Some(log_buffer.clone()))?;
 
     {
         let panic_log = log_path.clone();
+        let panic_buffer = log_buffer.clone();
         std::panic::set_hook(Box::new(move |info| {
             let bt = std::backtrace::Backtrace::force_capture();
             let msg = format!("[PANIC] {info}\n{bt}");
             log::error!("{msg}");
-            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&panic_log) {
-                use std::io::Write;
-                let _ = writeln!(f, "\n{msg}");
-            }
+            // メモリバッファをファイルにフラッシュ
+            flush_log_buffer(&panic_buffer, &panic_log);
             // パニックログを panic_yyyymmdd_hhmmss.log としてコピー
             if let Some(name) = panic_log.file_name().and_then(|n| n.to_str()) {
                 if let Some(rest) = name.strip_prefix("popone_") {
@@ -1033,6 +1085,7 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
         options,
         logs_dir,
         log_path,
+        log_buffer,
         initial_file,
         exe_dir,
         app_config,
@@ -1044,6 +1097,7 @@ fn run_viewer_inner(
     options: eframe::NativeOptions,
     logs_dir: PathBuf,
     log_path: PathBuf,
+    log_buffer: SharedLogBuffer,
     initial_file: Option<PathBuf>,
     exe_dir: PathBuf,
     app_config: Option<popone::viewer::app::persistence::AppConfig>,
@@ -1052,8 +1106,9 @@ fn run_viewer_inner(
         "Viewer",
         options,
         Box::new(move |cc| {
-            let mut app =
-                popone::viewer::app::ViewerApp::new(cc, logs_dir, log_path, exe_dir, app_config);
+            let mut app = popone::viewer::app::ViewerApp::new(
+                cc, logs_dir, log_path, log_buffer, exe_dir, app_config,
+            );
             if let Some(path) = initial_file {
                 app.pending.bg_state.submit_dispatch(
                     popone::viewer::app::pending::PendingLoadDispatch {

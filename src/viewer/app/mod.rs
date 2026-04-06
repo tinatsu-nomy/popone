@@ -423,6 +423,8 @@ pub struct ViewerApp {
     pub logs_dir: PathBuf,
     /// 現在のログファイルパス
     pub log_path: PathBuf,
+    /// ログメモリバッファ（ビューアモード用）
+    pub log_buffer: crate::SharedLogBuffer,
     /// 最後にモデルファイルを開いたディレクトリ（ダイアログ経由のみ）
     pub last_model_dir: Option<PathBuf>,
     /// unitypackage 内で選択された FBX ファイル名（reload 時の照合用）
@@ -483,6 +485,7 @@ impl ViewerApp {
         cc: &eframe::CreationContext,
         logs_dir: PathBuf,
         log_path: PathBuf,
+        log_buffer: crate::SharedLogBuffer,
         exe_dir: PathBuf,
         app_config: Option<persistence::AppConfig>,
     ) -> Self {
@@ -565,6 +568,7 @@ impl ViewerApp {
             ipc_receiver,
             logs_dir,
             log_path,
+            log_buffer,
             last_model_dir,
             selected_fbx_name: None,
             selected_pkg_model: None,
@@ -998,16 +1002,18 @@ impl ViewerApp {
 
     /// VRM の IrTexture（raw ピクセル）を PNG エンコード済みに変換
     pub(crate) fn encode_ir_textures_as_png(ir: &mut IrModel, images: &[gltf::image::Data]) {
+        use crate::intermediate::types::TextureData;
         use image::ImageEncoder;
         for (i, tex) in ir.textures.iter_mut().enumerate() {
             if let Some(img_data) = images.get(i) {
                 let (w, h) = (img_data.width, img_data.height);
+                let bytes = tex.data.as_bytes();
                 // RGBA 画像を構築
-                let rgba_img: Option<image::RgbaImage> = if tex.data.len() == (w * h * 4) as usize {
-                    image::ImageBuffer::from_raw(w, h, tex.data.clone())
-                } else if tex.data.len() == (w * h * 3) as usize {
+                let rgba_img: Option<image::RgbaImage> = if bytes.len() == (w * h * 4) as usize {
+                    image::ImageBuffer::from_raw(w, h, bytes.to_vec())
+                } else if bytes.len() == (w * h * 3) as usize {
                     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-                    for chunk in tex.data.chunks(3) {
+                    for chunk in bytes.chunks(3) {
                         rgba.extend_from_slice(chunk);
                         rgba.push(255);
                     }
@@ -1021,7 +1027,7 @@ impl ViewerApp {
                         .write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgba8)
                         .is_ok()
                     {
-                        tex.data = png_data;
+                        tex.data = TextureData::Encoded(png_data);
                         if !tex.filename.ends_with(".png") {
                             tex.filename = tex
                                 .filename
@@ -1032,7 +1038,6 @@ impl ViewerApp {
                             }
                         }
                         tex.mime_type = "image/png".to_string();
-                        tex.raw_dims = None;
                     }
                 }
             }
@@ -1711,6 +1716,13 @@ impl eframe::App for ViewerApp {
     }
 
     fn on_exit(&mut self) {
+        // ログバッファをファイルにフラッシュ
+        if let Ok(lb) = self.log_buffer.lock() {
+            if !lb.data.is_empty() {
+                let _ = std::fs::write(&self.log_path, &lb.data);
+            }
+        }
+
         // ディレクトリパスを config に反映
         self.app_config.directory.last_model = self
             .last_model_dir

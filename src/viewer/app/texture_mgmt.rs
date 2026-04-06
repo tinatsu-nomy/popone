@@ -9,6 +9,7 @@ use eframe::wgpu;
 
 use super::helpers::{is_temp_path, TextureSource};
 use super::{ConvertMessage, GpuModel, ViewerApp};
+use crate::intermediate::types::TextureData;
 
 /// テクスチャ割り当て・パッケージテクスチャ関連の状態
 pub struct TextureState {
@@ -332,7 +333,9 @@ impl ViewerApp {
             .textures
             .iter()
             .position(|t| {
-                t.filename == ir_filename && t.data.len() == ir_data.len() && t.data == ir_data
+                t.filename == ir_filename
+                    && t.data.len() == ir_data.len()
+                    && t.data.as_bytes() == ir_data
             })
             .unwrap_or_else(|| {
                 let idx = loaded.ir.textures.len();
@@ -341,10 +344,9 @@ impl ViewerApp {
                     .textures
                     .push(crate::intermediate::types::IrTexture {
                         filename: ir_filename,
-                        data: ir_data,
+                        data: TextureData::Encoded(ir_data),
                         mime_type: ir_mime,
                         source_path: display_name.clone(),
-                        raw_dims: None,
                         mip_chain: None,
                     });
                 idx
@@ -492,7 +494,7 @@ impl ViewerApp {
             .ir
             .textures
             .iter()
-            .position(|t| t.filename == ir_filename && t.data == ir_data)
+            .position(|t| t.filename == ir_filename && t.data.as_bytes() == ir_data)
             .unwrap_or_else(|| {
                 let idx = loaded.ir.textures.len();
                 loaded
@@ -500,10 +502,9 @@ impl ViewerApp {
                     .textures
                     .push(crate::intermediate::types::IrTexture {
                         filename: ir_filename,
-                        data: ir_data,
+                        data: TextureData::Encoded(ir_data),
                         mime_type: ir_mime,
                         source_path: tex_name.to_string(),
-                        raw_dims: None,
                         mip_chain: None,
                     });
                 idx
@@ -847,10 +848,9 @@ impl ViewerApp {
             .textures
             .push(crate::intermediate::types::IrTexture {
                 filename: ir_filename,
-                data: ir_data,
+                data: TextureData::Encoded(ir_data),
                 mime_type: ir_mime,
                 source_path: path.display().to_string(),
-                raw_dims: None,
                 mip_chain: None,
             });
 

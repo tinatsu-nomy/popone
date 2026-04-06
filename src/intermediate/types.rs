@@ -972,21 +972,53 @@ impl Default for IrMaterial {
     }
 }
 
+/// テクスチャの実データ
+#[derive(Debug, Clone)]
+pub enum TextureData {
+    /// PNG/JPEG/TGA 等のエンコード済みバイナリ
+    Encoded(Vec<u8>),
+    /// デコード済み生 RGBA ピクセル（GPU アップロード時にデコード不要）
+    RawRgba {
+        pixels: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
+}
+
+impl TextureData {
+    /// バイト列への参照を返す
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Encoded(v) => v,
+            Self::RawRgba { pixels, .. } => pixels,
+        }
+    }
+
+    /// データ長を返す
+    pub fn len(&self) -> usize {
+        self.as_bytes().len()
+    }
+
+    /// データが空かどうか
+    pub fn is_empty(&self) -> bool {
+        self.as_bytes().is_empty()
+    }
+}
+
 /// 中間テクスチャ
 #[derive(Debug, Clone)]
 pub struct IrTexture {
-    /// ファイル名（出力時に使用）
+    /// ファイル名（���力時に使用）
     pub filename: String,
-    /// 生データ（PNG/JPEG または mime_type == "image/x-raw-rgba8" の場合は生 RGBA）
-    pub data: Vec<u8>,
+    /// テクスチャデータ（エンコード済みまたは生 RGBA）
+    pub data: TextureData,
+    /// MIME タイプ（エンコード済みデータのフォーマットヒント、ログ用）
     pub mime_type: String,
-    /// テクスチャの出自パス（トラブルシュート用ログ表示）
-    /// embedded/アーカイブ内パス/外部ファイルパス等
+    /// ��クスチャの出自パス（トラブルシュート用ログ表示）
+    /// embedded/アーカイブ内パス/外部ファイ���パス等
     pub source_path: String,
-    /// 生 RGBA データの場合の寸法（mime_type == "image/x-raw-rgba8" のとき有効）
-    pub raw_dims: Option<(u32, u32)>,
     /// ミップチェーン（レベル1以降のダウンサンプル済みRGBA）。
-    /// バックグラウンドスレッドで事前生成することでメインスレッドの GPU 構築を高速化する。
+    /// バックグラウンド��レッドで事前���成することでメインスレッドの GPU 構築を高速化する。
     /// Vec<(width, height, RGBA bytes)>
     pub mip_chain: Option<Vec<(u32, u32, Vec<u8>)>>,
 }
@@ -994,7 +1026,15 @@ pub struct IrTexture {
 impl IrTexture {
     /// `data` が生 RGBA バイト列（PNG デコード不要）かどうか
     pub fn is_raw_rgba(&self) -> bool {
-        self.mime_type == "image/x-raw-rgba8" && self.raw_dims.is_some()
+        matches!(self.data, TextureData::RawRgba { .. })
+    }
+
+    /// 生 RGBA の場合の寸法を返す（後方互換ヘルパー）
+    pub fn raw_dims(&self) -> Option<(u32, u32)> {
+        match &self.data {
+            TextureData::RawRgba { width, height, .. } => Some((*width, *height)),
+            _ => None,
+        }
     }
 }
 
@@ -1385,10 +1425,9 @@ mod tests {
             }],
             textures: vec![IrTexture {
                 filename: "host_tex.png".into(),
-                data: vec![0],
+                data: TextureData::Encoded(vec![0]),
                 mime_type: "image/png".into(),
                 source_path: String::new(),
-                raw_dims: None,
                 mip_chain: None,
             }],
             ..Default::default()
@@ -1413,10 +1452,9 @@ mod tests {
             }],
             textures: vec![IrTexture {
                 filename: "other_tex.png".into(),
-                data: vec![1],
+                data: TextureData::Encoded(vec![1]),
                 mime_type: "image/png".into(),
                 source_path: String::new(),
-                raw_dims: None,
                 mip_chain: None,
             }],
             ..Default::default()

@@ -41,7 +41,7 @@
   - [Asynchronous Model Loading (v0.2.27, cancellation/generation tracking added in v0.2.28)](#asynchronous-model-loading-v0227-cancellationgeneration-tracking-added-in-v0228)
     - [Data Flow](#data-flow)
     - [Key Types (pending.rs)](#key-types-pendingrs)
-    - [`cpu_parse_model` Free Function (file_io.rs)](#cpu_parse_model-free-function-file_iors)
+    - [`cpu_parse_source` Free Function (file_io.rs)](#cpu_parse_source-free-function-file_iors)
     - [`route_load_dispatch` Method](#route_load_dispatch-method)
     - [`apply_bg_load_result` Method](#apply_bg_load_result-method)
     - [Multi-thread Safety](#multi-thread-safety)
@@ -534,6 +534,7 @@ GPU textures are uploaded with a full mipmap chain. The number of mip levels is 
 - **NPOT support** — Each level dimension is `max(1, dim >> level)`, supporting non-power-of-two textures
 - **GPU max size** — Textures exceeding `max_texture_dimension_2d` are pre-downscaled using the same sRGB-correct resize before mip generation
 - **Sampler** — `mipmap_filter: Linear` was already set, now effective with multiple mip levels
+- **Anisotropic filtering (v0.2.29)** — `anisotropy_clamp: 16` added to all texture samplers (`default_sampler`, `create_sampler_from_info`, `ensure_sampler`). Improves texture sharpness on oblique surfaces. Applied only when all three filter modes (mag, min, mipmap) are `Linear` (wgpu/WebGPU spec requirement); samplers with `Nearest` filters use `anisotropy_clamp: 1`
 - **Background pre-generation (v0.2.27)** — For VRM/GLB, the mip chain is pre-generated on a background thread via `vrm::extract::generate_mip_chain()` and stored in `IrTexture.mip_chain: Option<Vec<(u32, u32, Vec<u8>)>>`. The main thread's `upload_rgba_to_gpu_with_mips` simply transfers each level via `queue.write_texture`. For KizunaAI_KAMATTE.vrm (26 × 4K textures), `upload_textures_from_ir` execution time drops from 7.3s to 197ms
 
 ## Asynchronous Model Loading (v0.2.27, cancellation/generation tracking added in v0.2.28)
@@ -581,9 +582,9 @@ Model parsing and GPU resource construction are split into a CPU phase (backgrou
 | `BgLoadKind::Initial { format, auto_fbx_anim }` | Regular load |
 | `BgLoadKind::Append` | Append load |
 
-### `cpu_parse_model` Free Function (file_io.rs)
+### `cpu_parse_source` Free Function (file_io.rs)
 
-A pure function that doesn't take `&self`, safe to call from background threads. Provides unified parsing logic for each format (VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x), returning `(IrModel, ReloadableSource)`. Takes `preloaded: Option<PreloadedData>` parameter to use D&D prefetch data. Since v0.2.28, also takes a `cancel: &Arc<AtomicBool>` argument and checks the cancel flag at the function entry, bailing out immediately with `anyhow::bail!("bg load cancelled")` if set. The check is performed only at the dispatch boundary, not inside the parser bodies (`vrm::extract` / `fbx::extract` etc.), to keep the implementation simple.
+A pure function that doesn't take `&self`, safe to call from background threads. Provides unified parsing logic for each format (VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x), returning `(IrModel, ReloadableSource)`. Since v0.2.29, takes a `CpuParseInput` enum as the first argument instead of separate `path` / `format` / `preloaded` parameters. Currently only `CpuParseInput::File { path, format, preloaded }` is implemented; `ArchiveEntry` / `Reload` variants are planned for future background archive parsing. Also takes a `cancel: &Arc<AtomicBool>` argument (v0.2.28) and checks the cancel flag at multiple points within each format arm.
 
 ### `route_load_dispatch` Method
 
@@ -602,10 +603,10 @@ Post-processes BG results on the main thread:
 ### Multi-thread Safety
 
 - **Send boundary**: `IrModel` / `ReloadableSource` / `PreloadedData` are all `Send` (POD + `Arc<[u8]>`)
-- **GPU access restriction**: `cpu_parse_model` is a free function that never references `wgpu::Device` / `Queue`. GPU operations only happen in `finish_load` on the main thread
+- **GPU access restriction**: `cpu_parse_source` is a free function that never references `wgpu::Device` / `Queue`. GPU operations only happen in `finish_load` on the main thread
 - **egui::Context thread safety**: egui 0.31's `Context` is implemented as `Arc<RwLock<ContextImpl>>` and is `Send + Sync`. `ctx.request_repaint()` is callable from BG threads
 - **Double load (v0.2.27)**: When a new `load_dispatch` is submitted, the old `bg_load` receiver is dropped. The thread runs to completion but `tx.send()` returns `Err` and the result is discarded. The initial v0.2.27 implementation used a stopgap "reject new dispatches while a prior load is in progress" rule
-- **Double load cancellation (v0.2.28)**: `route_load_dispatch` was switched from "reject" to "cancel and accept". It sets the old `BgLoadHandle.cancel: Arc<AtomicBool>` to `true` and then calls `spawn_bg_load` for the new request. The old thread bails out at its next cancel check point (currently the start of `cpu_parse_model`) with `"bg load cancelled"`, and the receive side logs it via `log::info!` only (not surfaced to the UI) since cancellation is intentional
+- **Double load cancellation (v0.2.28)**: `route_load_dispatch` was switched from "reject" to "cancel and accept". It sets the old `BgLoadHandle.cancel: Arc<AtomicBool>` to `true` and then calls `spawn_bg_load` for the new request. The old thread bails out at its next cancel check point (currently the start of `cpu_parse_source`) with `"bg load cancelled"`, and the receive side logs it via `log::info!` only (not surfaced to the UI) since cancellation is intentional
 - **Generation tracking (v0.2.28)**: `ViewerApp.next_request_id: u64` is monotonically incremented (via `wrapping_add(1)`) by each `spawn_bg_load` call, and the id is embedded in both `BgLoadHandle.request_id` and `BgLoadResult.request_id`. The receiver verifies `handle.request_id == result.request_id`, discarding the result as stale if they differ (while keeping the handle so the current-generation result is still awaited). This prevents the race where an old thread manages to send its result just before cancellation takes effect, which would otherwise overwrite the current-generation model
 - **FBX reload temp directory (v0.2.28)**: The Snapshot-reload path that writes FBX external textures back to disk previously used a fixed name `%TEMP%\popone_fbx_reload`, which collided during concurrent reloads. v0.2.28 replaces it with `tempfile::Builder::new().prefix("popone_fbx_reload_").tempdir()?` so each invocation gets a unique name. `TempDir::Drop` handles automatic cleanup, eliminating the explicit `remove_dir_all` call
 
@@ -613,10 +614,11 @@ Post-processes BG results on the main thread:
 
 Optimization to avoid PNG encode/decode roundtrip during VRM/GLB load.
 
-- **`vrm::extract::extract_textures`**: Stores raw gltf pixels (with RGB → RGBA conversion) directly in `IrTexture.data`. Identified by `mime_type = "image/x-raw-rgba8"` and `raw_dims = Some((width, height))`
-- **`IrTexture::is_raw_rgba()`**: Helper that checks both mime_type and raw_dims
-- **`upload_textures_from_ir`**: If `tex.is_raw_rgba()` is true, skips PNG decoding and uploads `tex.data` directly as RGBA to GPU
-- **`write_all_textures_from_ir` (PMX export)**: If `is_raw_rgba()` is true, encodes to PNG via `image::RgbaImage::save` before writing
+- **`TextureData` enum (v0.2.29)**: `IrTexture.data` is now a `TextureData` enum with two variants: `Encoded(Vec<u8>)` for PNG/JPEG/TGA etc., and `RawRgba { pixels, width, height }` for decoded VRM/GLB pixels. This replaces the previous `mime_type == "image/x-raw-rgba8"` string check and the separate `raw_dims: Option<(u32, u32)>` field. `TextureData` provides `as_bytes()`, `len()`, `is_empty()` methods for transparent access
+- **`IrTexture::is_raw_rgba()`**: Uses `matches!(self.data, TextureData::RawRgba { .. })`
+- **`IrTexture::raw_dims()`**: Returns `Some((width, height))` for `RawRgba`, `None` for `Encoded`
+- **`upload_textures_from_ir`**: Matches on `TextureData::RawRgba` directly, uploading pixels to GPU without decoding
+- **`write_all_textures_from_ir` (PMX export)**: Matches on `TextureData::RawRgba` to encode to PNG via `image::RgbaImage::save`
 
 ## MMD Rendering
 
@@ -1758,7 +1760,7 @@ FBX selection dialog path:
 
 Background load path:
   route_load_dispatch() → spawn_bg_load(dispatch, format)
-  → std::thread::spawn runs cpu_parse_model(path, format, ..., preloaded)
+  → std::thread::spawn runs cpu_parse_source(path, format, ..., preloaded)
   → PreloadedData ownership is moved to the thread (main_bytes is Arc<[u8]>, shared cheaply)
 ```
 

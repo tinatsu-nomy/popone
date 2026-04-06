@@ -414,12 +414,17 @@ fn ir_min_filter_to_wgpu(mode: IrMinFilter) -> (wgpu::FilterMode, wgpu::FilterMo
 /// IrSamplerInfo から wgpu::Sampler を作成（プレビュー等で単発使用）
 pub fn create_sampler_from_info(device: &wgpu::Device, info: &IrSamplerInfo) -> wgpu::Sampler {
     let (min_filter, mipmap_filter) = ir_min_filter_to_wgpu(info.min_filter);
+    let mag_filter = match info.mag_filter {
+        IrMagFilter::Nearest => wgpu::FilterMode::Nearest,
+        IrMagFilter::Linear => wgpu::FilterMode::Linear,
+    };
+    // anisotropy_clamp > 1 は全フィルタが Linear の場合のみ有効（wgpu/WebGPU 仕様）
+    let all_linear = mag_filter == wgpu::FilterMode::Linear
+        && min_filter == wgpu::FilterMode::Linear
+        && mipmap_filter == wgpu::FilterMode::Linear;
     device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("preview_sampler"),
-        mag_filter: match info.mag_filter {
-            IrMagFilter::Nearest => wgpu::FilterMode::Nearest,
-            IrMagFilter::Linear => wgpu::FilterMode::Linear,
-        },
+        mag_filter,
         min_filter,
         mipmap_filter,
         address_mode_u: match info.wrap_u {
@@ -432,6 +437,7 @@ pub fn create_sampler_from_info(device: &wgpu::Device, info: &IrSamplerInfo) -> 
             IrWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
             IrWrapMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
         },
+        anisotropy_clamp: if all_linear { 16 } else { 1 },
         ..Default::default()
     })
 }
@@ -444,12 +450,16 @@ fn ensure_sampler<'a>(
 ) -> &'a wgpu::Sampler {
     cache.entry(*info).or_insert_with(|| {
         let (min_filter, mipmap_filter) = ir_min_filter_to_wgpu(info.min_filter);
+        let mag_filter = match info.mag_filter {
+            IrMagFilter::Nearest => wgpu::FilterMode::Nearest,
+            IrMagFilter::Linear => wgpu::FilterMode::Linear,
+        };
+        let all_linear = mag_filter == wgpu::FilterMode::Linear
+            && min_filter == wgpu::FilterMode::Linear
+            && mipmap_filter == wgpu::FilterMode::Linear;
         device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("ir_sampler"),
-            mag_filter: match info.mag_filter {
-                IrMagFilter::Nearest => wgpu::FilterMode::Nearest,
-                IrMagFilter::Linear => wgpu::FilterMode::Linear,
-            },
+            mag_filter,
             min_filter,
             mipmap_filter,
             address_mode_u: match info.wrap_u {
@@ -462,6 +472,7 @@ fn ensure_sampler<'a>(
                 IrWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
                 IrWrapMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
             },
+            anisotropy_clamp: if all_linear { 16 } else { 1 },
             ..Default::default()
         })
     })

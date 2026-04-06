@@ -3,16 +3,19 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.28](#v0228)
+  - [v0.2.29](#v0229)
     - [Bug Fixes](#bug-fixes)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements)
-  - [v0.2.27](#v0227)
-    - [New Features](#new-features)
+  - [v0.2.28](#v0228)
     - [Bug Fixes](#bug-fixes-1)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements-1)
+  - [v0.2.27](#v0227)
+    - [New Features](#new-features)
+    - [Bug Fixes](#bug-fixes-2)
+    - [Code Quality & Performance Improvements](#code-quality--performance-improvements-2)
   - [v0.2.26](#v0226)
     - [New Features](#new-features-1)
-    - [Bug Fixes](#bug-fixes-2)
+    - [Bug Fixes](#bug-fixes-3)
     - [Code Quality & Performance](#code-quality--performance)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -20,6 +23,20 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.2.29
+
+### Bug Fixes
+
+- **Anisotropic filtering crash with Nearest filter** — Fixed a panic (`Invalid filter mode for mipmapFilter: Nearest. When anisotropic clamp is not 1, all filter modes must be linear`) when loading models whose glTF samplers specify `Nearest` filtering. `anisotropy_clamp: 16` is now applied only when all three filter modes (mag, min, mipmap) are `Linear`; otherwise it falls back to 1
+
+### Code Quality & Performance Improvements
+
+- **Anisotropic texture filtering** — Added `anisotropy_clamp: 16` to texture samplers (`default_sampler`, `create_sampler_from_info`, `ensure_sampler`), improving texture sharpness on oblique surfaces when combined with mipmaps (v0.2.26). The value is auto-clamped by the GPU driver if it exceeds the hardware limit
+- **`TextureData` enum** — Replaced `IrTexture.data: Vec<u8>` + `mime_type == "image/x-raw-rgba8"` string check with a type-safe `TextureData` enum (`Encoded(Vec<u8>)` / `RawRgba { pixels, width, height }`). The `raw_dims: Option<(u32, u32)>` field was absorbed into the `RawRgba` variant and removed from `IrTexture`. The `is_raw_rgba()` method now uses `matches!` instead of string comparison. Convenience methods `as_bytes()`, `len()`, `is_empty()` on `TextureData` minimize call-site changes
+- **`CpuParseInput` enum** — Grouped `cpu_parse_model`'s scattered parameters (`path`, `format`, `preloaded`) into `CpuParseInput::File { path, format, preloaded }`, and renamed the function to `cpu_parse_source`. Designed for future extensibility (`ArchiveEntry` / `Reload` variants for background archive parsing)
+- **In-memory log buffer** — Viewer log output now writes to `LogBuffer` (a struct with `data: Vec<u8>` + `total_written: usize` monotonic counter, wrapped in `Arc<Mutex<…>>`) instead of per-line file I/O. The buffer is capped at 16MB with front-drain on overflow, and `total_written` ensures PMX conversion log offsets remain valid even after drain. The buffer is flushed to disk on normal exit and on panic. CLI conversion retains direct file logging
+- **`encase` uniform buffer migration** — Migrated `CameraUniform` and `MaterialUniform` from `bytemuck` (`#[repr(C)] #[derive(Pod, Zeroable)]`) to `encase::ShaderType`. Field types changed from `[f32; 3/4]` / `[[f32; 4]; 4]` to `glam::Vec3/Vec4/Mat4`. Removed 8 manual `_pad` fields (5 in `CameraUniform`, 3 in `MaterialUniform`) and their corresponding WGSL declarations. Buffer serialization uses `encase::UniformBuffer` with a reusable `Vec<u8>` work buffer on `GpuRenderer` to avoid per-frame heap allocations. `MmdMaterialUniform` and `Vertex` remain on `bytemuck` (no padding fields, no migration needed)
 
 ## v0.2.28
 

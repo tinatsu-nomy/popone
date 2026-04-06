@@ -367,34 +367,39 @@ pub fn upload_textures_from_ir(
             continue;
         }
         // 生 RGBA バイパス（VRM BG ロードパスで PNG エンコード/デコードの往復を回避）
-        if tex.is_raw_rgba() {
-            let (w, h) = tex.raw_dims.expect("is_raw_rgba で確認済み");
+        if let crate::intermediate::types::TextureData::RawRgba {
+            ref pixels,
+            width,
+            height,
+        } = tex.data
+        {
             let label = format!("texture_{i}");
             views.push(upload_rgba_to_gpu_with_mips(
                 device,
                 queue,
-                &tex.data,
-                w,
-                h,
+                pixels,
+                width,
+                height,
                 Some(&label),
                 tex.mip_chain.as_deref(),
             ));
             continue;
         }
-        let decoded = match decode_image_to_rgba_with_hint(&tex.data, is_psd, Some(&tex.mime_type))
-        {
-            Ok(d) => d,
-            Err(e) => {
-                log::warn!(
-                    "Texture '{}' decode failed: {} (index {}, {} bytes)",
-                    tex.filename,
-                    e,
-                    i,
-                    tex.data.len()
-                );
-                (vec![255, 0, 255, 255], 1, 1)
-            }
-        };
+        let decoded =
+            match decode_image_to_rgba_with_hint(tex.data.as_bytes(), is_psd, Some(&tex.mime_type))
+            {
+                Ok(d) => d,
+                Err(e) => {
+                    log::warn!(
+                        "Texture '{}' decode failed: {} (index {}, {} bytes)",
+                        tex.filename,
+                        e,
+                        i,
+                        tex.data.len()
+                    );
+                    (vec![255, 0, 255, 255], 1, 1)
+                }
+            };
 
         let (rgba_data, width, height) = decoded;
         let label = format!("texture_{i}");

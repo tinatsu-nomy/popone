@@ -71,19 +71,18 @@ pub fn create_texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGrou
 }
 
 /// カメラ uniform バッファ
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
+#[derive(Clone, encase::ShaderType)]
 pub struct CameraUniform {
-    pub view_proj: [[f32; 4]; 4],
-    pub light_dir: [f32; 3],
+    pub view_proj: glam::Mat4,
+    pub light_dir: glam::Vec3,
     pub light_intensity: f32,
-    pub ambient: [f32; 3],
+    pub ambient: glam::Vec3,
     pub shader_mode: u32, // ShaderOverride as u32
-    pub camera_pos: [f32; 3],
+    pub camera_pos: glam::Vec3,
     pub mmd_edge_thickness: f32,
-    pub view_row0: [f32; 3],
-    pub _pad1: f32,
-    pub view_row1: [f32; 3],
+    pub view_row0: glam::Vec3,
+    // encase auto-pads vec3 trailing 4 bytes
+    pub view_row1: glam::Vec3,
     pub mmd_ambient_scale: f32,
     /// 累積時間（秒、UVアニメーション用）
     pub time: f32,
@@ -91,20 +90,20 @@ pub struct CameraUniform {
     pub aspect: f32,
     /// 射影行列 [1][1] = 1/tan(halfFov)（MToon アウトライン距離クランプ用）
     pub proj_11: f32,
-    pub _pad2: f32,
+    // encase auto-pads to align next vec3
     /// SH ベース GI の均一化値: (rawGi(up) + rawGi(down)) / 2（CPU 事前計算）
-    pub gi_equalized: [f32; 3],
+    pub gi_equalized: glam::Vec3,
     /// 透視投影フラグ（1.0 = 透視, 0.0 = 正射影）
     pub is_perspective: f32,
     /// カメラ前方ベクトル（正射影時の view direction 用）
-    pub camera_forward: [f32; 3],
-    pub _pad3: f32,
+    pub camera_forward: glam::Vec3,
+    // encase auto-pads vec3 trailing 4 bytes
     /// ライト色 RGB (linear)
-    pub light_color: [f32; 3],
-    pub _pad4: f32,
+    pub light_color: glam::Vec3,
+    // encase auto-pads vec3 trailing 4 bytes
     /// 環境光 Ground 色 RGB (linear, 半球 ambient 補間用)
-    pub ambient_ground: [f32; 3],
-    pub _pad5: f32,
+    pub ambient_ground: glam::Vec3,
+    // encase auto-pads vec3 trailing 4 bytes (struct tail)
 }
 
 /// MMD 材質 uniform バッファ
@@ -124,24 +123,23 @@ pub struct MmdMaterialUniform {
 }
 
 /// 材質 uniform バッファ（MToon パラメータ含む）
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
+#[derive(Clone, encase::ShaderType)]
 pub struct MaterialUniform {
-    pub diffuse: [f32; 4],
-    pub shade_color: [f32; 3],
+    pub diffuse: glam::Vec4,
+    pub shade_color: glam::Vec3,
     pub is_mtoon: f32,
     pub shading_toony: f32,
     pub shading_shift: f32,
     pub outline_width: f32,
     pub outline_mode: f32, // 0=none, 1=world, 2=screen
-    pub outline_color: [f32; 4],
+    pub outline_color: glam::Vec4,
     pub outline_lighting_mix: f32,
     pub rim_fresnel_power: f32,
     pub rim_lift: f32,
     pub rim_lighting_mix: f32,
-    pub rim_color: [f32; 3],
+    pub rim_color: glam::Vec3,
     pub has_matcap: f32,
-    pub matcap_factor: [f32; 3],
+    pub matcap_factor: glam::Vec3,
     pub has_shade_multiply_tex: f32,
     pub has_shading_shift_tex: f32,
     pub shading_shift_tex_scale: f32,
@@ -154,38 +152,36 @@ pub struct MaterialUniform {
     pub alpha_cutoff: f32,
     // --- テクスチャ UV パラメータ（texCoord + KHR_texture_transform）---
     // 各テクスチャ: [tex_coord, offset.x, offset.y, rotation] + [scale.x, scale.y, 0, 0]
-    pub base_uv_a: [f32; 4],
-    pub base_uv_b: [f32; 4],
-    pub shade_uv_a: [f32; 4],
-    pub shade_uv_b: [f32; 4],
-    pub shift_uv_a: [f32; 4],
-    pub shift_uv_b: [f32; 4],
-    pub rim_uv_a: [f32; 4],
-    pub rim_uv_b: [f32; 4],
-    pub outline_uv_a: [f32; 4],
-    pub outline_uv_b: [f32; 4],
-    pub uv_mask_uv_a: [f32; 4],
-    pub uv_mask_uv_b: [f32; 4],
-    pub emissive_factor: [f32; 3],
+    pub base_uv_a: glam::Vec4,
+    pub base_uv_b: glam::Vec4,
+    pub shade_uv_a: glam::Vec4,
+    pub shade_uv_b: glam::Vec4,
+    pub shift_uv_a: glam::Vec4,
+    pub shift_uv_b: glam::Vec4,
+    pub rim_uv_a: glam::Vec4,
+    pub rim_uv_b: glam::Vec4,
+    pub outline_uv_a: glam::Vec4,
+    pub outline_uv_b: glam::Vec4,
+    pub uv_mask_uv_a: glam::Vec4,
+    pub uv_mask_uv_b: glam::Vec4,
+    pub emissive_factor: glam::Vec3,
     pub has_emissive_tex: f32,
-    pub emissive_uv_a: [f32; 4],
-    pub emissive_uv_b: [f32; 4],
+    pub emissive_uv_a: glam::Vec4,
+    pub emissive_uv_b: glam::Vec4,
     // --- 法線マップパラメータ ---
     pub has_normal_tex: f32,
     pub normal_scale: f32,
     pub gi_equalization_factor: f32,
     /// outlineWidthTexture 参照チャネル（0.0=R, 1.0=G, 2.0=B）
     pub outline_width_channel: f32,
-    pub normal_uv_a: [f32; 4],
-    pub normal_uv_b: [f32; 4],
+    pub normal_uv_a: glam::Vec4,
+    pub normal_uv_b: glam::Vec4,
     /// uvAnimationMaskTexture 参照チャネル（0.0=R, 1.0=G, 2.0=B）
     pub uv_anim_mask_channel: f32,
-    pub _pad_ch1: f32,
-    pub _pad_ch2: f32,
-    pub _pad_ch3: f32,
+    // encase auto-pads 3 x f32 to align next vec4
     // --- matcapTexture UV パラメータ（KHR_texture_transform）---
-    pub matcap_uv_a: [f32; 4],
-    pub matcap_uv_b: [f32; 4],
+    pub matcap_uv_a: glam::Vec4,
+    pub matcap_uv_b: glam::Vec4,
 }
 
 /// 頂点フォーマット
@@ -318,21 +314,16 @@ macro_rules! wgsl_camera_uniform {
     camera_pos: vec3<f32>,
     mmd_edge_thickness: f32,
     view_row0: vec3<f32>,
-    _pad1: f32,
     view_row1: vec3<f32>,
     mmd_ambient_scale: f32,
     time: f32,
     aspect: f32,
     proj_11: f32,
-    _pad2: f32,
     gi_equalized: vec3<f32>,
     is_perspective: f32,
     camera_forward: vec3<f32>,
-    _pad3: f32,
     light_color: vec3<f32>,
-    _pad4: f32,
     ambient_ground: vec3<f32>,
-    _pad5: f32,
 };"#
     };
 }
@@ -412,9 +403,6 @@ macro_rules! wgsl_material_uniform {
     normal_uv_a: vec4<f32>,
     normal_uv_b: vec4<f32>,
     uv_anim_mask_channel: f32,
-    _pad_ch1: f32,
-    _pad_ch2: f32,
-    _pad_ch3: f32,
     matcap_uv_a: vec4<f32>,
     matcap_uv_b: vec4<f32>,
 };"#
@@ -1637,6 +1625,8 @@ pub struct GpuRenderer {
     cache_sort_vert_ptr: usize,
     /// 半透明ソート強制再計算フラグ
     sort_dirty: bool,
+    /// encase uniform シリアライズ用再利用バッファ（毎フレーム heap allocation 回避）
+    encase_work: Vec<u8>,
     // MMD リソース
     mmd_material_bgl: wgpu::BindGroupLayout,
     mmd_aux_bgl: wgpu::BindGroupLayout,
@@ -1696,7 +1686,9 @@ impl GpuRenderer {
         // Camera uniform buffer
         let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera_uniform"),
-            size: std::mem::size_of::<CameraUniform>() as u64,
+            size: <CameraUniform as encase::ShaderType>::METADATA
+                .min_size()
+                .get() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1949,6 +1941,7 @@ impl GpuRenderer {
             mipmap_filter: wgpu::FilterMode::Linear,
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
+            anisotropy_clamp: 16,
             ..Default::default()
         });
 
@@ -2024,6 +2017,7 @@ impl GpuRenderer {
             cache_sort_draw_count: 0,
             cache_sort_vert_ptr: 0,
             sort_dirty: true,
+            encase_work: Vec::with_capacity(512),
             mmd_material_bgl,
             mmd_aux_bgl,
             shared_toon_textures,
@@ -3429,9 +3423,12 @@ impl GpuRenderer {
             .as_ref()
             .expect("ensure_offscreen で初期化済み");
 
-        // カメラユニフォーム更新
+        // カメラユニフォーム更新（再利用バッファで heap allocation 回避）
         let cam_uniform = Self::build_camera_uniform(params);
-        queue.write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&cam_uniform));
+        self.encase_work.clear();
+        let mut encase_buf = encase::UniformBuffer::new(&mut self.encase_work);
+        encase_buf.write(&cam_uniform).expect("encase write");
+        queue.write_buffer(&self.camera_buf, 0, encase_buf.as_ref());
 
         // Encode
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -3684,16 +3681,15 @@ impl GpuRenderer {
         let s = &params.display.ambient_sky_color;
         let g = &params.display.ambient_ground_color;
         CameraUniform {
-            view_proj: params.camera.view_proj(aspect).to_cols_array_2d(),
-            light_dir: light_dir.to_array(),
+            view_proj: params.camera.view_proj(aspect),
+            light_dir: light_dir,
             light_intensity: params.display.light_intensity,
-            ambient: [s[0] * ai, s[1] * ai, s[2] * ai],
+            ambient: glam::Vec3::new(s[0] * ai, s[1] * ai, s[2] * ai),
             shader_mode: params.display.shader_override as u32,
-            camera_pos: params.camera.eye().to_array(),
+            camera_pos: params.camera.eye(),
             mmd_edge_thickness: params.display.mmd_edge_thickness,
-            view_row0: [view_mat.x_axis.x, view_mat.y_axis.x, view_mat.z_axis.x],
-            _pad1: 0.0,
-            view_row1: [view_mat.x_axis.y, view_mat.y_axis.y, view_mat.z_axis.y],
+            view_row0: glam::Vec3::new(view_mat.x_axis.x, view_mat.y_axis.x, view_mat.z_axis.x),
+            view_row1: glam::Vec3::new(view_mat.x_axis.y, view_mat.y_axis.y, view_mat.z_axis.y),
             mmd_ambient_scale: if params.display.use_mmd_path {
                 MMD_LIGHT_AMBIENT * (params.display.light_intensity / MMD_DEFAULT_LIGHT_INTENSITY)
             } else {
@@ -3702,21 +3698,15 @@ impl GpuRenderer {
             time: params.time,
             aspect,
             proj_11: params.camera.proj_11(),
-            _pad2: 0.0,
-            gi_equalized: [
+            gi_equalized: glam::Vec3::new(
                 (s[0] + g[0]) * 0.5 * ai,
                 (s[1] + g[1]) * 0.5 * ai,
                 (s[2] + g[2]) * 0.5 * ai,
-            ],
+            ),
             is_perspective: b2f(params.camera.perspective),
-            camera_forward: (params.camera.target - params.camera.eye())
-                .normalize()
-                .to_array(),
-            _pad3: 0.0,
-            light_color: params.display.light_color,
-            _pad4: 0.0,
-            ambient_ground: [g[0] * ai, g[1] * ai, g[2] * ai],
-            _pad5: 0.0,
+            camera_forward: (params.camera.target - params.camera.eye()).normalize(),
+            light_color: glam::Vec3::from(params.display.light_color),
+            ambient_ground: glam::Vec3::new(g[0] * ai, g[1] * ai, g[2] * ai),
         }
     }
 
@@ -4608,21 +4598,21 @@ pub fn create_material_bind_group(
 ) -> wgpu::BindGroup {
     let p = params;
     let uniform = MaterialUniform {
-        diffuse: p.diffuse,
-        shade_color: p.shade_color,
+        diffuse: p.diffuse.into(),
+        shade_color: p.shade_color.into(),
         is_mtoon: b2f(p.is_mtoon),
         shading_toony: p.shading_toony,
         shading_shift: p.shading_shift,
         outline_width: p.outline_width,
         outline_mode: p.outline_mode,
-        outline_color: p.outline_color,
+        outline_color: p.outline_color.into(),
         outline_lighting_mix: p.outline_lighting_mix,
-        rim_color: p.rim_color,
+        rim_color: p.rim_color.into(),
         rim_fresnel_power: p.rim_fresnel_power,
         rim_lift: p.rim_lift,
         rim_lighting_mix: p.rim_lighting_mix,
         has_matcap: b2f(p.has_matcap),
-        matcap_factor: p.matcap_factor,
+        matcap_factor: p.matcap_factor.into(),
         has_shade_multiply_tex: b2f(p.has_shade_multiply_tex),
         has_shading_shift_tex: b2f(p.has_shading_shift_tex),
         shading_shift_tex_scale: p.shading_shift_tex_scale,
@@ -4632,38 +4622,37 @@ pub fn create_material_bind_group(
         uv_anim_rotation: p.uv_anim_rotation,
         has_uv_anim_mask: b2f(p.has_uv_anim_mask),
         alpha_cutoff: p.alpha_cutoff,
-        base_uv_a: p.base_uv.0,
-        base_uv_b: p.base_uv.1,
-        shade_uv_a: p.shade_uv.0,
-        shade_uv_b: p.shade_uv.1,
-        shift_uv_a: p.shift_uv.0,
-        shift_uv_b: p.shift_uv.1,
-        rim_uv_a: p.rim_uv.0,
-        rim_uv_b: p.rim_uv.1,
-        outline_uv_a: p.outline_uv.0,
-        outline_uv_b: p.outline_uv.1,
-        uv_mask_uv_a: p.uv_mask_uv.0,
-        uv_mask_uv_b: p.uv_mask_uv.1,
-        emissive_factor: p.emissive_factor,
+        base_uv_a: p.base_uv.0.into(),
+        base_uv_b: p.base_uv.1.into(),
+        shade_uv_a: p.shade_uv.0.into(),
+        shade_uv_b: p.shade_uv.1.into(),
+        shift_uv_a: p.shift_uv.0.into(),
+        shift_uv_b: p.shift_uv.1.into(),
+        rim_uv_a: p.rim_uv.0.into(),
+        rim_uv_b: p.rim_uv.1.into(),
+        outline_uv_a: p.outline_uv.0.into(),
+        outline_uv_b: p.outline_uv.1.into(),
+        uv_mask_uv_a: p.uv_mask_uv.0.into(),
+        uv_mask_uv_b: p.uv_mask_uv.1.into(),
+        emissive_factor: p.emissive_factor.into(),
         has_emissive_tex: b2f(p.has_emissive_tex),
-        emissive_uv_a: p.emissive_uv.0,
-        emissive_uv_b: p.emissive_uv.1,
+        emissive_uv_a: p.emissive_uv.0.into(),
+        emissive_uv_b: p.emissive_uv.1.into(),
         has_normal_tex: b2f(p.has_normal_tex),
         normal_scale: p.normal_scale,
         gi_equalization_factor: p.gi_equalization_factor,
         outline_width_channel: p.outline_width_channel,
-        normal_uv_a: p.normal_uv.0,
-        normal_uv_b: p.normal_uv.1,
+        normal_uv_a: p.normal_uv.0.into(),
+        normal_uv_b: p.normal_uv.1.into(),
         uv_anim_mask_channel: p.uv_anim_mask_channel,
-        _pad_ch1: 0.0,
-        _pad_ch2: 0.0,
-        _pad_ch3: 0.0,
-        matcap_uv_a: p.matcap_uv.0,
-        matcap_uv_b: p.matcap_uv.1,
+        matcap_uv_a: p.matcap_uv.0.into(),
+        matcap_uv_b: p.matcap_uv.1.into(),
     };
+    let mut encase_buf = encase::UniformBuffer::new(Vec::new());
+    encase_buf.write(&uniform).expect("encase write");
     let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("material_uniform"),
-        contents: bytemuck::bytes_of(&uniform),
+        contents: encase_buf.as_ref(),
         usage: wgpu::BufferUsages::UNIFORM,
     });
 

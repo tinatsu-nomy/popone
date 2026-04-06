@@ -954,12 +954,12 @@ pub fn execute_conversion(app: &mut ViewerApp) {
     let output_path = std::path::PathBuf::from(&app.export.pmx_output_path);
     let log_path = output_path.with_extension("log");
 
-    // 変換前のビューアログファイルサイズを記録
-    let viewer_log_path = Some(app.log_path.clone());
-    let log_offset_before = viewer_log_path
-        .as_ref()
-        .and_then(|p| std::fs::metadata(p).ok())
-        .map(|m| m.len())
+    // 変換前の累計書き込みバイト数を記録（drain 耐性のある累計オフセット）
+    let log_offset_before = app
+        .log_buffer
+        .lock()
+        .ok()
+        .map(|lb| lb.total_written)
         .unwrap_or(0);
 
     // 法線が変更されている場合、IrModel に書き戻して変換（変換後に元の法線を復元）
@@ -1034,9 +1034,7 @@ pub fn execute_conversion(app: &mut ViewerApp) {
     let result = crate::convert_ir_to_pmx(ir_ref, &output_path, &options);
 
     if app.export.output_log {
-        let debug_logs = viewer_log_path
-            .as_ref()
-            .and_then(|p| read_log_from_offset(p, log_offset_before));
+        let debug_logs = read_log_buffer_from_offset(&app.log_buffer, log_offset_before);
 
         write_convert_log(&log_path, ir_ref, result.as_ref(), debug_logs.as_deref());
     }
@@ -3039,18 +3037,10 @@ fn show_meta_info(ui: &mut egui::Ui, comment: &str) {
     }
 }
 
-/// ビューアログファイルから指定オフセット以降を読み取る
-fn read_log_from_offset(path: &Path, offset: u64) -> Option<String> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path).ok()?;
-    file.seek(SeekFrom::Start(offset)).ok()?;
-    let mut buf = String::new();
-    file.read_to_string(&mut buf).ok()?;
-    if buf.is_empty() {
-        None
-    } else {
-        Some(buf)
-    }
+/// ログメモリバッファから累計オフセット以降を読み取る（drain 耐性あり）
+fn read_log_buffer_from_offset(buffer: &crate::SharedLogBuffer, offset: usize) -> Option<String> {
+    let lb = buffer.lock().ok()?;
+    lb.read_from_offset(offset)
 }
 
 /// 変換ログをファイルに書き出す

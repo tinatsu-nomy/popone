@@ -454,10 +454,17 @@ fn extract_textures(
                 Vec::new()
             }
         };
-        let (data, mime_type, raw_dims) = if rgba.is_empty() {
-            (Vec::new(), "image/png".to_string(), None)
+        let (data, mime_type) = if rgba.is_empty() {
+            (TextureData::Encoded(Vec::new()), "image/png".to_string())
         } else {
-            (rgba, "image/x-raw-rgba8".to_string(), Some((w, h)))
+            (
+                TextureData::RawRgba {
+                    pixels: rgba,
+                    width: w,
+                    height: h,
+                },
+                "image/x-raw-rgba8".to_string(),
+            )
         };
         let source_path = match document.images().nth(i).and_then(|img| match img.source() {
             gltf::image::Source::Uri { uri, .. } => Some(uri.to_string()),
@@ -466,10 +473,8 @@ fn extract_textures(
             Some(uri) => uri,
             None => "embedded".to_string(),
         };
-        // バックグラウンドスレッドでミップチェーンも事前生成
-        // （メインスレッドの GPU リソース構築時の CPU 負荷を削減）
-        let mip_chain = if let Some((w, h)) = raw_dims {
-            generate_mip_chain(&data, w, h)
+        let mip_chain = if let TextureData::RawRgba { width, height, .. } = &data {
+            generate_mip_chain(data.as_bytes(), *width, *height)
         } else {
             None
         };
@@ -478,7 +483,6 @@ fn extract_textures(
             data,
             mime_type,
             source_path,
-            raw_dims,
             mip_chain,
         });
     }

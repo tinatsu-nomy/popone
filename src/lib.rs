@@ -17,6 +17,44 @@ pub mod vrm;
 #[cfg(feature = "viewer")]
 pub mod viewer;
 
+/// ログメモリバッファ（上限付き、累計オフセット追跡）
+pub struct LogBuffer {
+    pub data: Vec<u8>,
+    /// 累計書き込みバイト数（drain しても減らない）
+    pub total_written: usize,
+}
+
+impl LogBuffer {
+    pub fn new() -> Self {
+        Self {
+            data: Vec::new(),
+            total_written: 0,
+        }
+    }
+
+    /// 累計オフセット `offset` 以降のデータを読み取る。
+    /// drain 済み範囲は切り捨て、残存データから可能な限り返す。
+    pub fn read_from_offset(&self, offset: usize) -> Option<String> {
+        let drained = self.total_written - self.data.len();
+        let start = if offset <= drained {
+            0 // 要求範囲が drain 済み → 残存データの先頭から
+        } else if offset >= self.total_written {
+            return None; // まだ何も書かれていない範囲
+        } else {
+            offset - drained
+        };
+        let slice = &self.data[start..];
+        if slice.is_empty() {
+            None
+        } else {
+            Some(String::from_utf8_lossy(slice).into_owned())
+        }
+    }
+}
+
+/// ログメモリバッファの共有型
+pub type SharedLogBuffer = std::sync::Arc<std::sync::Mutex<LogBuffer>>;
+
 use error::Result;
 use pmx::build::PmxBuildOptions;
 use serde::Serialize;

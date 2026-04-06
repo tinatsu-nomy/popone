@@ -353,7 +353,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intermediate::types::IrBone;
+    use crate::intermediate::types::{IrBone, TextureData};
     use glam::{Mat4, Vec2, Vec4};
 
     fn make_bone(name: &str) -> IrBone {
@@ -739,18 +739,16 @@ mod tests {
             textures: vec![
                 IrTexture {
                     filename: "tex0.png".into(),
-                    data: vec![0],
+                    data: TextureData::Encoded(vec![0]),
                     mime_type: "image/png".into(),
                     source_path: String::new(),
-                    raw_dims: None,
                     mip_chain: None,
                 },
                 IrTexture {
                     filename: "tex1.png".into(),
-                    data: vec![1],
+                    data: TextureData::Encoded(vec![1]),
                     mime_type: "image/png".into(),
                     source_path: String::new(),
-                    raw_dims: None,
                     mip_chain: None,
                 },
             ],
@@ -802,18 +800,16 @@ mod tests {
             textures: vec![
                 IrTexture {
                     filename: "tex0.png".into(),
-                    data: vec![0],
+                    data: TextureData::Encoded(vec![0]),
                     mime_type: "image/png".into(),
                     source_path: String::new(),
-                    raw_dims: None,
                     mip_chain: None,
                 },
                 IrTexture {
                     filename: "tex1.png".into(),
-                    data: vec![1],
+                    data: TextureData::Encoded(vec![1]),
                     mime_type: "image/png".into(),
                     source_path: String::new(),
-                    raw_dims: None,
                     mip_chain: None,
                 },
             ],

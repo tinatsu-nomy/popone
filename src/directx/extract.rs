@@ -1,7 +1,7 @@
 use crate::error::{PoponeError, Result};
 use crate::intermediate::types::{
     AStanceResult, IrBone, IrMaterial, IrMesh, IrModel, IrPhysics, IrTexture, IrVertex,
-    SourceFormat,
+    SourceFormat, TextureData,
 };
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use std::collections::HashMap;
@@ -185,10 +185,9 @@ fn x_to_ir(
                             .to_string();
                         ir_textures.push(IrTexture {
                             filename: safe_filename,
-                            data,
+                            data: TextureData::Encoded(data),
                             mime_type: mime.to_string(),
                             source_path: tex_name.clone(),
-                            raw_dims: None,
                             mip_chain: None,
                         });
                         texture_map.insert(tex_name.clone(), idx);

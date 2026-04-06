@@ -560,10 +560,9 @@ fn texture_to_ir(tex: &texture::TextureData, ir_textures: &mut Vec<IrTexture>) -
     let idx = ir_textures.len();
     ir_textures.push(IrTexture {
         filename: format!("{}.png", sanitize_filename(&tex.name)),
-        data: png_data,
+        data: TextureData::Encoded(png_data),
         mime_type: "image/png".to_string(),
         source_path: "embedded (FBX)".to_string(),
-        raw_dims: None,
         mip_chain: None,
     });
     Some(idx)
