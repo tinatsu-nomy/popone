@@ -1466,6 +1466,7 @@ impl ViewerApp {
         &mut self,
         source: &ReloadableSource,
         pkg_model_name: Option<&str>,
+        pkg_model: Option<&crate::unitypackage::PkgModelLocator>,
         saved_pkg_tex_assignments: &HashMap<usize, String>,
     ) {
         // Arc 参照で済むケースではコピーを避け、所有権が必要なパスのみ Vec を確保
@@ -1520,16 +1521,34 @@ impl ViewerApp {
             }
         };
 
-        // 保存されたモデル名で照合（なければ selected_fbx_name にフォールバック）
+        // pkg_model (GUID/パス) → pkg_model_name (basename) → selected_fbx_name (basename) の優先順で照合
         let fbx_list = crate::unitypackage::find_fbx_list(&assets);
         let vrm_list = crate::unitypackage::find_vrm_list(&assets);
 
-        let search_name = pkg_model_name.or(self.selected_fbx_name.as_deref());
-        let (model_index, model_type) = if let Some(prev_name) = search_name {
-            if let Some((idx, _)) = fbx_list.iter().find(|(_, name)| name == prev_name) {
-                (*idx, PkgModelType::Fbx)
-            } else if let Some((idx, _)) = vrm_list.iter().find(|(_, name)| name == prev_name) {
-                (*idx, PkgModelType::Vrm)
+        // 1. GUID/パスベースの正確な照合
+        let found_by_locator = pkg_model.and_then(|loc| {
+            crate::unitypackage::find_asset_by_pathname(&assets, &loc.pathname)
+                .map(|idx| (idx, loc.kind))
+        });
+
+        let (model_index, model_type) = if let Some(found) = found_by_locator {
+            found
+        } else {
+            // 2. basename フォールバック
+            let search_name = pkg_model_name.or(self.selected_fbx_name.as_deref());
+            if let Some(prev_name) = search_name {
+                if let Some((idx, _)) = fbx_list.iter().find(|(_, name)| name == prev_name) {
+                    (*idx, PkgModelType::Fbx)
+                } else if let Some((idx, _)) = vrm_list.iter().find(|(_, name)| name == prev_name) {
+                    (*idx, PkgModelType::Vrm)
+                } else if !fbx_list.is_empty() {
+                    (fbx_list[0].0, PkgModelType::Fbx)
+                } else if !vrm_list.is_empty() {
+                    (vrm_list[0].0, PkgModelType::Vrm)
+                } else {
+                    log::error!("No models found in unitypackage");
+                    return;
+                }
             } else if !fbx_list.is_empty() {
                 (fbx_list[0].0, PkgModelType::Fbx)
             } else if !vrm_list.is_empty() {
@@ -1538,13 +1557,6 @@ impl ViewerApp {
                 log::error!("No models found in unitypackage");
                 return;
             }
-        } else if !fbx_list.is_empty() {
-            (fbx_list[0].0, PkgModelType::Fbx)
-        } else if !vrm_list.is_empty() {
-            (vrm_list[0].0, PkgModelType::Vrm)
-        } else {
-            log::error!("No models found in unitypackage");
-            return;
         };
 
         // マージ前の材質オフセットを記録
@@ -1643,6 +1655,7 @@ impl ViewerApp {
             textures_legacy.len()
         );
         self.selected_fbx_name = Some(fbx_name.clone());
+        self.selected_pkg_model = pkg_textures_new.as_ref().map(|p| p.model.clone());
 
         let load_model = matches!(mode, FbxLoadMode::ModelOnly | FbxLoadMode::Both);
         let load_animation = matches!(mode, FbxLoadMode::AnimationOnly | FbxLoadMode::Both);
@@ -1776,6 +1789,8 @@ impl ViewerApp {
         source_path: &std::path::Path,
         source_override: Option<ReloadableSource>,
     ) -> anyhow::Result<()> {
+        // assets 消費前に pathname を取得（reload 時の正確な再選択用）
+        let vrm_pathname: Option<String> = assets.get(vrm_index).map(|a| a.pathname.clone());
         let (vrm_data, vrm_name) = crate::unitypackage::take_vrm(assets, vrm_index)?;
         log::info!(
             "VRM in unitypackage: {} ({}KB)",
@@ -1783,6 +1798,12 @@ impl ViewerApp {
             vrm_data.len() / 1024
         );
         self.selected_fbx_name = Some(vrm_name.clone());
+        // VRM は Prefab テクスチャマッピング対象外だが、reload 時のモデル再選択には pathname が必要
+        self.selected_pkg_model = vrm_pathname.map(|path| crate::unitypackage::PkgModelLocator {
+            guid: "".into(),
+            pathname: path.into(),
+            kind: crate::unitypackage::PkgModelType::Vrm,
+        });
 
         let glb = vrm::loader::load_glb_from_data(&vrm_data)?;
         let version = vrm::detect::detect_version(&glb.document);
@@ -1948,6 +1969,11 @@ impl ViewerApp {
                 let mat_count = ir.materials.len();
                 fbx_ranges.push((fbx_name.clone(), 0, mat_count));
                 self.selected_fbx_name = Some(fbx_name);
+                self.selected_pkg_model = Some(crate::unitypackage::PkgModelLocator {
+                    guid: fbx_entry_info.fbx_guid.as_str().into(),
+                    pathname: fbx_entry.pathname.as_str().into(),
+                    kind: crate::unitypackage::PkgModelType::Fbx,
+                });
                 all_unmatched = unmatched;
                 all_pkg_keys = keys;
                 base_ir = Some(ir);
@@ -2741,6 +2767,7 @@ impl ViewerApp {
                             self.reload_append_unitypackage(
                                 &appended.source,
                                 appended.pkg_model_name.as_deref(),
+                                appended.pkg_model.as_ref(),
                                 &snap.pkg_tex_assignments,
                             );
                         }
@@ -2749,6 +2776,7 @@ impl ViewerApp {
                             self.reload_append_unitypackage(
                                 &appended.source,
                                 appended.pkg_model_name.as_deref(),
+                                appended.pkg_model.as_ref(),
                                 &snap.pkg_tex_assignments,
                             );
                         }
@@ -2756,6 +2784,7 @@ impl ViewerApp {
                             self.append_model_from_source(
                                 &appended.source,
                                 appended.pkg_model_name.as_deref(),
+                                appended.pkg_model.as_ref(),
                             );
                         }
                     }
@@ -2994,11 +3023,12 @@ impl ViewerApp {
         &mut self,
         source: &ReloadableSource,
         pkg_model_name: Option<&str>,
+        pkg_model: Option<&crate::unitypackage::PkgModelLocator>,
     ) {
         // アーカイブ内 .unitypackage は専用パスで処理
         if let ReloadableSource::Archive { inner_kind, .. } = source {
             if *inner_kind == crate::archive::ArchiveModelKind::UnityPackage {
-                self.reload_append_unitypackage(source, pkg_model_name, &HashMap::new());
+                self.reload_append_unitypackage(source, pkg_model_name, pkg_model, &HashMap::new());
                 return;
             }
         }
@@ -3298,15 +3328,20 @@ impl ViewerApp {
             if vrm_list.is_empty() {
                 anyhow::bail!(".unitypackage 内に VRM ファイルが見つかりません");
             }
-            let vrm_idx = if let Some(ref prev_name) = self.selected_fbx_name {
-                vrm_list
-                    .iter()
-                    .find(|(_, name)| name == prev_name)
-                    .map(|(idx, _)| *idx)
-                    .unwrap_or(vrm_list[0].0)
-            } else {
-                vrm_list[0].0
-            };
+            // GUID/パスベース → basename フォールバック
+            let vrm_idx = self
+                .selected_pkg_model
+                .as_ref()
+                .and_then(|loc| crate::unitypackage::find_asset_by_pathname(&assets, &loc.pathname))
+                .or_else(|| {
+                    self.selected_fbx_name.as_ref().and_then(|prev_name| {
+                        vrm_list
+                            .iter()
+                            .find(|(_, name)| name == prev_name)
+                            .map(|(idx, _)| *idx)
+                    })
+                })
+                .unwrap_or(vrm_list[0].0);
             let source_override = snapshot.map(|snap| ReloadableSource::Snapshot {
                 original_path: path.to_path_buf(),
                 main_bytes: snap,
@@ -3326,27 +3361,35 @@ impl ViewerApp {
             anyhow::bail!(".unitypackage 内に FBX ファイルが見つかりません");
         }
 
-        let fbx_idx = if let Some(ref prev_name) = self.selected_fbx_name {
-            fbx_list
-                .iter()
-                .find(|(_, name)| name == prev_name)
-                .map(|(idx, _)| *idx)
-                .unwrap_or(fbx_list[0].0)
-        } else {
-            fbx_list[0].0
-        };
+        // GUID/パスベース → basename フォールバック
+        let fbx_idx = self
+            .selected_pkg_model
+            .as_ref()
+            .and_then(|loc| crate::unitypackage::find_asset_by_pathname(&assets, &loc.pathname))
+            .or_else(|| {
+                self.selected_fbx_name.as_ref().and_then(|prev_name| {
+                    fbx_list
+                        .iter()
+                        .find(|(_, name)| name == prev_name)
+                        .map(|(idx, _)| *idx)
+                })
+            })
+            .unwrap_or(fbx_list[0].0);
 
         if use_prefab_mapping {
             // Prefab 対応パス: UnityPackageIndex を構築し prepare_pkg_fbx で Prefab テクスチャ解決
             let pkg_index = std::sync::Arc::new(crate::unitypackage::build_unity_package_index(
                 &archive_data,
             )?);
-            // assets 内の FBX インデックスを pkg_index 内のインデックスに変換
-            let fbx_pathname = &assets[fbx_idx].pathname;
-            let pkg_fbx_idx = pkg_index
-                .by_path
-                .get(fbx_pathname.as_str())
-                .copied()
+            // selected_pkg_model の GUID → pkg_index 内インデックス → パス照合 → フォールバック
+            let pkg_fbx_idx = self
+                .selected_pkg_model
+                .as_ref()
+                .and_then(|loc| pkg_index.by_guid.get(loc.guid.as_ref()).copied())
+                .or_else(|| {
+                    let fbx_pathname = &assets[fbx_idx].pathname;
+                    pkg_index.by_path.get(fbx_pathname.as_str()).copied()
+                })
                 .unwrap_or(fbx_idx);
 
             let prepared = crate::unitypackage::prepare_pkg_fbx(&pkg_index, pkg_fbx_idx)?;
@@ -3760,15 +3803,20 @@ impl ViewerApp {
             if vrm_list.is_empty() {
                 anyhow::bail!(".unitypackage 内に VRM ファイルが見つかりません");
             }
-            let vrm_idx = if let Some(ref prev_name) = self.selected_fbx_name {
-                vrm_list
-                    .iter()
-                    .find(|(_, name)| name == prev_name)
-                    .map(|(idx, _)| *idx)
-                    .unwrap_or(vrm_list[0].0)
-            } else {
-                vrm_list[0].0
-            };
+            // GUID/パスベース → basename フォールバック
+            let vrm_idx = self
+                .selected_pkg_model
+                .as_ref()
+                .and_then(|loc| crate::unitypackage::find_asset_by_pathname(&assets, &loc.pathname))
+                .or_else(|| {
+                    self.selected_fbx_name.as_ref().and_then(|prev_name| {
+                        vrm_list
+                            .iter()
+                            .find(|(_, name)| name == prev_name)
+                            .map(|(idx, _)| *idx)
+                    })
+                })
+                .unwrap_or(vrm_list[0].0);
             return self.load_vrm_from_assets(
                 assets,
                 vrm_idx,
@@ -3782,15 +3830,20 @@ impl ViewerApp {
             anyhow::bail!(".unitypackage 内に FBX ファイルが見つかりません");
         }
 
-        let fbx_idx = if let Some(ref prev_name) = self.selected_fbx_name {
-            fbx_list
-                .iter()
-                .find(|(_, name)| name == prev_name)
-                .map(|(idx, _)| *idx)
-                .unwrap_or(fbx_list[0].0)
-        } else {
-            fbx_list[0].0
-        };
+        // GUID/パスベース → basename フォールバック
+        let fbx_idx = self
+            .selected_pkg_model
+            .as_ref()
+            .and_then(|loc| crate::unitypackage::find_asset_by_pathname(&assets, &loc.pathname))
+            .or_else(|| {
+                self.selected_fbx_name.as_ref().and_then(|prev_name| {
+                    fbx_list
+                        .iter()
+                        .find(|(_, name)| name == prev_name)
+                        .map(|(idx, _)| *idx)
+                })
+            })
+            .unwrap_or(fbx_list[0].0);
 
         let (fbx_data, fbx_name, textures) =
             crate::unitypackage::take_fbx_and_textures(assets, fbx_idx)?;
@@ -4265,6 +4318,8 @@ impl ViewerApp {
         let mut pkg_unmatched: Vec<usize> = Vec::new();
         let mut pkg_model_name: Option<String> = None;
         let mut pkg_textures_to_add: Vec<(String, Vec<u8>)> = Vec::new();
+        // PkgModelLocator 構築用: assets 消費前に pathname を取得
+        let asset_pathname: Option<String> = assets.get(model_index).map(|a| a.pathname.clone());
         let ir_result: anyhow::Result<IrModel> = (|| -> anyhow::Result<IrModel> {
             match model_type {
                 PkgModelType::Fbx => {
@@ -4336,11 +4391,25 @@ impl ViewerApp {
                     .as_ref()
                     .map(|l| l.ir.textures.len())
                     .unwrap_or(0);
+                // 安定キー構築（pathname ベース — GUID は ExtractedAsset 経路では利用不可）
+                let pkg_locator = asset_pathname.map(|path| {
+                    crate::unitypackage::PkgModelLocator {
+                        guid: "".into(), // ExtractedAsset 経由では GUID なし
+                        pathname: path.into(),
+                        kind: model_type,
+                    }
+                });
                 match source_override {
                     Some(source) => {
-                        self.finish_append_with_source(other_ir, source, pkg_model_name)
+                        self.finish_append_ext(other_ir, source, false, pkg_model_name, pkg_locator)
                     }
-                    None => self.finish_append_with_pkg_name(other_ir, source_path, pkg_model_name),
+                    None => self.finish_append_ext(
+                        other_ir,
+                        ReloadableSource::File(source_path.to_path_buf()),
+                        false,
+                        pkg_model_name,
+                        pkg_locator,
+                    ),
                 }
                 let appended_after = self
                     .loaded
@@ -4408,20 +4477,7 @@ impl ViewerApp {
             ReloadableSource::File(path.to_path_buf()),
             false,
             None,
-        );
-    }
-
-    fn finish_append_with_pkg_name(
-        &mut self,
-        other_ir: IrModel,
-        path: &Path,
-        pkg_model_name: Option<String>,
-    ) {
-        self.finish_append_ext(
-            other_ir,
-            ReloadableSource::File(path.to_path_buf()),
-            false,
-            pkg_model_name,
+            None,
         );
     }
 
@@ -4431,7 +4487,7 @@ impl ViewerApp {
         source: ReloadableSource,
         pkg_model_name: Option<String>,
     ) {
-        self.finish_append_ext(other_ir, source, false, pkg_model_name);
+        self.finish_append_ext(other_ir, source, false, pkg_model_name, None);
     }
 
     fn finish_append_ext(
@@ -4440,6 +4496,7 @@ impl ViewerApp {
         source: ReloadableSource,
         silent: bool,
         pkg_model_name: Option<String>,
+        #[allow(unused_variables)] pkg_locator: Option<crate::unitypackage::PkgModelLocator>,
     ) {
         let Some(ref mut loaded) = self.loaded else {
             return;
@@ -4531,7 +4588,7 @@ impl ViewerApp {
                 loaded.appended_models.push(AppendedModel {
                     source,
                     pkg_model_name: pkg_model_name.clone(),
-                    pkg_model: None,
+                    pkg_model: pkg_locator,
                 });
                 if let Some(dir) = display_path.parent() {
                     self.tex.last_dir = Some(dir.to_path_buf());

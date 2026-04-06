@@ -3,9 +3,12 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.2.31](#v0231)
+    - [New Features](#new-features)
+    - [Improvements](#improvements)
   - [v0.2.30](#v0230)
     - [Bug Fixes](#bug-fixes)
-    - [Improvements](#improvements)
+    - [Improvements](#improvements-1)
   - [v0.2.29](#v0229)
     - [Bug Fixes](#bug-fixes-1)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements)
@@ -13,11 +16,11 @@
     - [Bug Fixes](#bug-fixes-2)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements-1)
   - [v0.2.27](#v0227)
-    - [New Features](#new-features)
+    - [New Features](#new-features-1)
     - [Bug Fixes](#bug-fixes-3)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements-2)
   - [v0.2.26](#v0226)
-    - [New Features](#new-features-1)
+    - [New Features](#new-features-2)
     - [Bug Fixes](#bug-fixes-4)
     - [Code Quality & Performance](#code-quality--performance)
 
@@ -26,6 +29,20 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.2.31
+
+### New Features
+
+- **Prefab `source_material` matching (Strategy 1)** — FBX extraction now sets `SourceMaterialRef` (renderer_path + slot_index) on each material using `GeometryInstance`, enabling precise texture mapping that matches Prefab renderer paths without relying on material name heuristics. The three-stage fallback is: Strategy 1 (source_material) → Strategy 2 (material_name) → Strategy 3 (source_texture_name)
+
+### Improvements
+
+- **`link_same_name` scope restriction** — The "同名連動" (same-name linking) feature for texture assignment is now scoped to the same `MaterialGroup` (i.e., the same model instance). Previously, appending the same FBX twice and changing a texture on one would propagate to the other; this is no longer the case
+- **Reload stable key (`PkgModelLocator`)** — `.unitypackage` reload paths (`reload_archive_unitypackage`, `reload_append_unitypackage`) now use `selected_pkg_model` (GUID/pathname-based) for model re-selection instead of basename-only matching. This prevents misidentification when multiple models share the same filename (e.g., `Assets/A/Body.fbx` and `Assets/B/Body.fbx`). VRM and append models also store `PkgModelLocator` for accurate reload
+- **`resolve_pkg_model_for_cli`** — Added CLI model resolver that selects an FBX from the package using `--fbx-name` hint with pathname fuzzy matching, providing structured error messages with candidate lists
+- **`apply_resolved_textures` helper** — Extracted common texture application logic (base texture, normal map, emission) from `embed_textures_with_prefab` into a shared helper, reducing code duplication between Strategy 1 and Strategy 2
+- **`compute_geometry_world_transform` removal** — Replaced with `GeometryInstance.world_transform` from `FbxScene.geometry_instances()`, eliminating the duplicate world transform computation
 
 ## v0.2.30
 

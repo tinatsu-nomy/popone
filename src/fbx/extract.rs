@@ -7,7 +7,7 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 use crate::intermediate::types::*;
 
 use super::blendshape;
-use super::bone::{self, BoneHierarchy};
+use super::bone::BoneHierarchy;
 use super::humanoid;
 use super::mesh;
 use super::parser;
@@ -67,9 +67,9 @@ pub fn extract_ir_model_from_fbx_with_options(
     let mut ir_meshes: Vec<IrMesh> = Vec::new();
     let mut tex_search_cache = texture::TextureSearchCache::new();
     let mut ir_morphs: Vec<IrMorph> = Vec::new();
-    for geom_obj in scene.geometries() {
-        let geom = geom_obj.node;
-        let geom_id = geom_obj.id;
+    for inst in scene.geometry_instances() {
+        let geom = inst.geometry.node;
+        let geom_id = inst.geometry.id;
 
         let Some(positions) = mesh::extract_vertices(geom) else {
             continue;
@@ -82,8 +82,8 @@ pub fn extract_ir_model_from_fbx_with_options(
         let mat_per_polygon = mesh::extract_material_indices(geom);
         let (uvs, uv_indices, uv_mapping) = mesh::extract_uvs(geom);
 
-        // 親 Model のワールド変換（PreRotation 含む）
-        let model_transform = compute_geometry_world_transform(&scene, geom_id);
+        // 親 Model のワールド変換（GeometryInstance から取得）
+        let model_transform = inst.world_transform;
         let has_model_transform = model_transform != Mat4::IDENTITY;
         // 法線用: 逆転置行列（上位3x3）
         let normal_matrix = if has_model_transform {
@@ -92,11 +92,12 @@ pub fn extract_ir_model_from_fbx_with_options(
             Mat4::IDENTITY
         };
 
-        // 材質
-        let geom_materials = scene.materials_for_geometry(geom_id);
+        // 材質（GeometryInstance のスロット順で取得 — Prefab renderer path と整合）
+        let renderer_path: std::sync::Arc<str> = scene.model_hierarchy_path(inst.model.id).into();
         let mat_base = ir_materials.len();
 
-        for mat_obj in &geom_materials {
+        for slot in &inst.material_slots {
+            let mat_obj = slot.material;
             let diffuse = mesh::extract_diffuse_color(mat_obj.node);
             let props = mesh::extract_material_props(mat_obj.node);
 
@@ -128,6 +129,10 @@ pub fn extract_ir_model_from_fbx_with_options(
                 ambient: d * 0.5,
                 texture_index: tex_idx,
                 source_texture_name: source_tex_name,
+                source_material: Some(SourceMaterialRef {
+                    renderer_path: renderer_path.clone(),
+                    slot_index: slot.slot_index,
+                }),
                 ..Default::default()
             };
             if tex_idx.is_some() {
@@ -137,7 +142,7 @@ pub fn extract_ir_model_from_fbx_with_options(
         }
 
         // デフォルト材質
-        if geom_materials.is_empty() {
+        if inst.material_slots.is_empty() {
             ir_materials.push(IrMaterial {
                 name: "Default".to_string(),
                 ..IrMaterial::default()
@@ -193,7 +198,7 @@ pub fn extract_ir_model_from_fbx_with_options(
         }
 
         // 三角化（材質ごと）
-        let num_geom_mats = geom_materials.len().max(1);
+        let num_geom_mats = inst.material_slots.len().max(1);
         let mut mat_triangles: Vec<Vec<[u32; 3]>> = vec![Vec::new(); num_geom_mats];
 
         let mut polygon_start = 0usize;
@@ -293,7 +298,7 @@ pub fn extract_ir_model_from_fbx_with_options(
             global_vertex_offset += ir_vertices.len();
 
             let mut ir_mesh = IrMesh {
-                name: geom_obj.name.clone(),
+                name: inst.geometry.name.clone(),
                 vertices: ir_vertices,
                 indices,
                 material_index: mat_index,
@@ -566,59 +571,6 @@ fn texture_to_ir(tex: &texture::TextureData, ir_textures: &mut Vec<IrTexture>) -
         mip_chain: None,
     });
     Some(idx)
-}
-
-/// Geometry の親 Model ノードのワールド変換を計算
-/// Model 階層を辿り、各ノードの PreRotation * Rotation を含むローカル変換を累積
-fn compute_geometry_world_transform(scene: &FbxScene, geom_id: i64) -> Mat4 {
-    // Geometry → 親 Model を探す
-    let parent_model_id = scene
-        .parents_of(geom_id)
-        .iter()
-        .find(|&&pid| scene.objects.get(&pid).is_some_and(|o| o.class == "Model"))
-        .copied();
-
-    let Some(start_id) = parent_model_id else {
-        return Mat4::IDENTITY;
-    };
-
-    // Model 階層を root まで辿ってローカル変換を収集
-    let mut chain = Vec::new();
-    let mut current_id = start_id;
-    loop {
-        if let Some(obj) = scene.objects.get(&current_id) {
-            if obj.class == "Model" {
-                let local = compute_model_local_transform(obj.node);
-                chain.push(local);
-            }
-        }
-        // 親 Model を探す
-        let parent = scene
-            .parents_of(current_id)
-            .iter()
-            .find(|&&pid| scene.objects.get(&pid).is_some_and(|o| o.class == "Model"))
-            .copied();
-        match parent {
-            Some(pid) => current_id = pid,
-            None => break,
-        }
-    }
-
-    // root → leaf の順で累積
-    let mut world = Mat4::IDENTITY;
-    for local in chain.into_iter().rev() {
-        world *= local;
-    }
-    world
-}
-
-/// Model ノードのローカル変換行列（T * PreRotation * Rotation * S）
-fn compute_model_local_transform(node: &parser::FbxNode) -> Mat4 {
-    let (translation, rotation_euler, pre_rotation_euler, scale) = bone::extract_transform(node);
-    let pre_rot = bone::euler_deg_to_quat(pre_rotation_euler);
-    let rot = bone::euler_deg_to_quat(rotation_euler);
-    let combined = pre_rot * rot;
-    Mat4::from_scale_rotation_translation(scale, combined, translation)
 }
 
 fn sanitize_filename(name: &str) -> String {

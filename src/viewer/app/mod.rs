@@ -106,6 +106,33 @@ pub struct LoadedModel {
     pub prefab_entry_path: Option<String>,
 }
 
+impl LoadedModel {
+    /// 同名の sibling 材質インデックスを返す（同一 MaterialGroup 内に限定）
+    /// `link_same_name` のスコープ制限に使用
+    pub fn same_name_siblings(&self, mat_idx: usize) -> Vec<usize> {
+        let Some(target_mat) = self.ir.materials.get(mat_idx) else {
+            return Vec::new();
+        };
+        let target_name = &target_mat.name;
+        // mat_idx が属する MaterialGroup の範囲を特定
+        let group_range = self
+            .material_groups
+            .iter()
+            .find(|g| g.material_range.contains(&mat_idx))
+            .map(|g| g.material_range.clone());
+        let range = group_range.unwrap_or(0..self.ir.materials.len());
+        self.ir.materials[range.clone()]
+            .iter()
+            .enumerate()
+            .filter(|(i, m)| {
+                let abs_idx = range.start + i;
+                abs_idx != mat_idx && m.name == *target_name
+            })
+            .map(|(i, _)| range.start + i)
+            .collect()
+    }
+}
+
 /// 材質ごとの表示・描画状態（mat_idx でインデックス）
 #[derive(Clone, Debug)]
 pub struct MaterialDisplayState {

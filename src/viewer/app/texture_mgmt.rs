@@ -393,17 +393,9 @@ impl ViewerApp {
             .assignments
             .insert(material_index, tex_source.clone());
 
-        // 同一材質名への連動割り当て
+        // 同一材質名への連動割り当て（同一 MaterialGroup 内に限定）
         if self.tex.link_same_name {
-            let target_name = loaded.ir.materials[material_index].name.clone();
-            let siblings: Vec<usize> = loaded
-                .ir
-                .materials
-                .iter()
-                .enumerate()
-                .filter(|(i, m)| *i != material_index && m.name == target_name)
-                .map(|(i, _)| i)
-                .collect();
+            let siblings = loaded.same_name_siblings(material_index);
             for sib_idx in siblings {
                 let sib_mat = &mut loaded.ir.materials[sib_idx];
                 sib_mat.texture_index = Some(tex_idx);
@@ -429,7 +421,7 @@ impl ViewerApp {
                     &sib_sampler_info,
                 );
                 self.tex.assignments.insert(sib_idx, tex_source.clone());
-                log::info!("  Linked assignment: mat[{}] '{}'", sib_idx, target_name);
+                log::info!("  Linked assignment: mat[{}]", sib_idx);
             }
         }
 
@@ -552,17 +544,9 @@ impl ViewerApp {
             tex_name,
         );
 
-        // 同一材質名への連動割り当て
+        // 同一材質名への連動割り当て（同一 MaterialGroup 内に限定）
         if self.tex.link_same_name {
-            let target_name = loaded.ir.materials[material_index].name.clone();
-            let siblings: Vec<usize> = loaded
-                .ir
-                .materials
-                .iter()
-                .enumerate()
-                .filter(|(i, m)| *i != material_index && m.name == target_name)
-                .map(|(i, _)| i)
-                .collect();
+            let siblings = loaded.same_name_siblings(material_index);
             for sib_idx in siblings {
                 let sib_mat = &mut loaded.ir.materials[sib_idx];
                 sib_mat.texture_index = Some(tex_idx);
@@ -593,7 +577,7 @@ impl ViewerApp {
                         draw.mmd_texture_bind_group = None;
                     }
                 }
-                log::info!("  Linked assignment: mat[{}] '{}'", sib_idx, target_name);
+                log::info!("  Linked assignment: mat[{}]", sib_idx);
             }
         }
 
@@ -994,19 +978,15 @@ impl ViewerApp {
                 // テクスチャビュー取得（失敗時は既存プレビューを復元 — 同名兄弟含む）
                 let Some(Some(ref view)) = pending.texture_views.get(tex_idx) else {
                     if prev.is_some() {
-                        let fail_mat_name =
-                            loaded.ir.materials.get(mat_idx).map(|m| m.name.clone());
+                        let fail_targets: Vec<usize> = if self.tex.link_same_name {
+                            let mut t = vec![mat_idx];
+                            t.extend(loaded.same_name_siblings(mat_idx));
+                            t
+                        } else {
+                            vec![mat_idx]
+                        };
                         for (draw_idx, draw) in loaded.gpu_model.draws.iter_mut().enumerate() {
-                            let is_target = draw.material_index == mat_idx
-                                || (self.tex.link_same_name
-                                    && fail_mat_name.as_ref().is_some_and(|n| {
-                                        loaded
-                                            .ir
-                                            .materials
-                                            .get(draw.material_index)
-                                            .is_some_and(|m| m.name == *n)
-                                    }));
-                            if is_target {
+                            if fail_targets.contains(&draw.material_index) {
                                 if let Some((orig_tex, orig_mmd)) =
                                     pending.saved_binds.remove(&draw_idx)
                                 {
@@ -1020,21 +1000,11 @@ impl ViewerApp {
                     continue;
                 };
 
-                // link_same_name 時は同名材質にも横展開（確定適用と同じ範囲）
-                let mat_name = loaded.ir.materials.get(mat_idx).map(|m| m.name.clone());
+                // link_same_name 時は同名材質にも横展開（同一 MaterialGroup 内）
                 let target_mats: Vec<usize> = if self.tex.link_same_name {
-                    if let Some(ref name) = mat_name {
-                        loaded
-                            .ir
-                            .materials
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, m)| m.name == *name)
-                            .map(|(idx, _)| idx)
-                            .collect()
-                    } else {
-                        vec![mat_idx]
-                    }
+                    let mut targets = vec![mat_idx];
+                    targets.extend(loaded.same_name_siblings(mat_idx));
+                    targets
                 } else {
                     vec![mat_idx]
                 };
@@ -1073,21 +1043,11 @@ impl ViewerApp {
                     }
                 }
             } else {
-                // 選択解除 → 元の bind group を復元（同名材質含む）
-                let mat_name = loaded.ir.materials.get(mat_idx).map(|m| m.name.clone());
+                // 選択解除 → 元の bind group を復元（同一 MaterialGroup 内の同名材質含む）
                 let target_mats: Vec<usize> = if self.tex.link_same_name {
-                    if let Some(ref name) = mat_name {
-                        loaded
-                            .ir
-                            .materials
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, m)| m.name == *name)
-                            .map(|(idx, _)| idx)
-                            .collect()
-                    } else {
-                        vec![mat_idx]
-                    }
+                    let mut targets = vec![mat_idx];
+                    targets.extend(loaded.same_name_siblings(mat_idx));
+                    targets
                 } else {
                     vec![mat_idx]
                 };

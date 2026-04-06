@@ -131,14 +131,11 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     let data = tex_data.clone();
                     if app.assign_texture_data_to_material(mat_idx, &name, &data) {
                         app.tex.pkg_assignments.insert(mat_idx, name.clone());
-                        // 同名連動分もpkg割り当て履歴に記録
+                        // 同名連動分もpkg割り当て履歴に記録（同一 MaterialGroup 内に限定）
                         if app.tex.link_same_name {
                             if let Some(ref loaded) = app.loaded {
-                                let target_name = loaded.ir.materials[mat_idx].name.clone();
-                                for (i, m) in loaded.ir.materials.iter().enumerate() {
-                                    if i != mat_idx && m.name == target_name {
-                                        app.tex.pkg_assignments.insert(i, name.clone());
-                                    }
+                                for sib in loaded.same_name_siblings(mat_idx) {
+                                    app.tex.pkg_assignments.insert(sib, name.clone());
                                 }
                             }
                         }
@@ -785,12 +782,11 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             }
             app.tex.pkg_assignments.insert(*mat_idx, tex_name.clone());
             // link_same_name で横展開された兄弟材質も pkg_assignments に記録
+            // 同名連動分もpkg割り当て履歴に記録（同一 MaterialGroup 内に限定）
             if app.tex.link_same_name {
                 if let Some(ref loaded) = app.loaded {
-                    for (si, m) in loaded.ir.materials.iter().enumerate() {
-                        if si != *mat_idx && m.name == mat_name {
-                            app.tex.pkg_assignments.insert(si, tex_name.clone());
-                        }
+                    for sib in loaded.same_name_siblings(*mat_idx) {
+                        app.tex.pkg_assignments.insert(sib, tex_name.clone());
                     }
                 }
             }

@@ -134,6 +134,9 @@
     - [Always-On Material Grouping](#always-on-material-grouping)
     - [Prefab Reload (A/T Stance Conversion Support)](#prefab-reload-at-stance-conversion-support)
     - [FBX Direct Selection: Prefab-Aware Reload](#fbx-direct-selection-prefab-aware-reload)
+    - [GeometryInstance-Based source_material (v0.2.31)](#geometryinstance-based-source_material-v0231)
+    - [Reload Stable Key: PkgModelLocator (v0.2.31)](#reload-stable-key-pkgmodellocator-v0231)
+    - [link_same_name Scope Restriction (v0.2.31)](#link_same_name-scope-restriction-v0231)
   - [Reload Texture Normalization](#reload-texture-normalization)
     - [reload_unitypackage Texture Restoration](#reload_unitypackage-texture-restoration)
     - [IrTexture Deduplication in assign_texture_source_to_material](#irtexture-deduplication-in-assign_texture_source_to_material)
@@ -2029,6 +2032,35 @@ reload_current()
         5. Rebuild pkg_material_keys after finish_load()
       → No: Legacy path (embed_textures_into_ir)
 ```
+
+### GeometryInstance-Based source_material (v0.2.31)
+
+FBX extraction now uses `FbxScene::geometry_instances()` instead of `scene.geometries()` to iterate over meshes. Each `GeometryInstance` provides:
+- `model` — the parent Model node (for hierarchy path computation)
+- `world_transform` — pre-computed world transform (replaces `compute_geometry_world_transform`)
+- `material_slots` — Connection-ordered materials with `slot_index`
+
+For each material, `SourceMaterialRef { renderer_path, slot_index }` is set using `model_hierarchy_path(inst.model.id)`. This enables Strategy 1 (source_material matching) in `embed_textures_with_prefab`, where the resolver matches Prefab renderer paths to FBX Model hierarchy paths.
+
+**Three-stage fallback in `embed_textures_with_prefab`:**
+1. **source_material** — exact match via `SourceMaterialRef` (renderer_path + slot_index)
+2. **material_name** — name-based match with case-insensitive and suffix fallback
+3. **source_texture_name** — legacy filename-based match
+
+### Reload Stable Key: PkgModelLocator (v0.2.31)
+
+Reload paths now use `selected_pkg_model: Option<PkgModelLocator>` (GUID + pathname) for model re-selection, preventing misidentification when multiple models share the same basename.
+
+**Lookup priority:**
+1. `PkgModelLocator.guid` → `UnityPackageIndex.by_guid` (Prefab path)
+2. `PkgModelLocator.pathname` → `find_asset_by_pathname` (ExtractedAsset path)
+3. `selected_fbx_name` → basename match (legacy fallback)
+
+`AppendedModel.pkg_model` stores the locator for each appended model, ensuring reload re-selects the correct model.
+
+### link_same_name Scope Restriction (v0.2.31)
+
+`LoadedModel::same_name_siblings(mat_idx)` restricts same-name material linking to the `MaterialGroup` containing `mat_idx`. This prevents cross-instance propagation when the same FBX is appended multiple times.
 
 ## Reload Texture Normalization
 

@@ -268,6 +268,12 @@ fn build_unity_package_index_with_limit(
     })
 }
 
+/// フルパス（pathname）でアセットインデックスを検索
+/// `selected_pkg_model.pathname` を使った GUID/パスベースの正確な再選択に使用
+pub fn find_asset_by_pathname(assets: &[ExtractedAsset], pathname: &str) -> Option<usize> {
+    assets.iter().position(|a| a.pathname == pathname)
+}
+
 /// 展開済みアセットからFBX一覧を取得
 /// 戻り値: [(アセットインデックス, ファイル名)]
 pub fn find_fbx_list(assets: &[ExtractedAsset]) -> Vec<(usize, String)> {
@@ -1915,6 +1921,235 @@ pub fn select_best_fbx_index(pkg: &UnityPackageIndex, fbx_indices: &[(usize, Str
     best.0
 }
 
+/// CLI 用モデル解決: --fbx-name ヒントで FBX 候補リストから1件選択
+/// FBX 限定（CLI は FBX 変換のみ対応のため）
+pub fn resolve_pkg_model_for_cli<'a>(
+    items: &'a [PkgModelListItem],
+    hint: Option<&str>,
+) -> PkgResult<&'a PkgModelLocator> {
+    let fbx_items: Vec<_> = items
+        .iter()
+        .filter(|it| it.locator.kind == PkgModelType::Fbx)
+        .collect();
+    let candidates: Vec<String> = fbx_items
+        .iter()
+        .map(|it| it.locator.pathname.to_string())
+        .collect();
+    let Some(hint) = hint else {
+        return match fbx_items.as_slice() {
+            [one] => Ok(&one.locator),
+            [] => Err(PkgError::ModelNotFound {
+                hint: "(none)".into(),
+                expected_type: "FBX",
+                candidates,
+            }),
+            _ => Err(PkgError::ModelAmbiguous {
+                hint: "(auto)".into(),
+                expected_type: "FBX",
+                candidates,
+            }),
+        };
+    };
+    let hint_lower = hint.to_lowercase();
+    let matches: Vec<_> = fbx_items
+        .iter()
+        .filter(|it| it.locator.pathname.to_lowercase().contains(&hint_lower))
+        .collect();
+    match matches.as_slice() {
+        [one] => Ok(&one.locator),
+        [] => Err(PkgError::ModelNotFound {
+            hint: hint.into(),
+            expected_type: "FBX",
+            candidates,
+        }),
+        _ => Err(PkgError::ModelAmbiguous {
+            hint: hint.into(),
+            expected_type: "FBX",
+            candidates: matches
+                .iter()
+                .map(|it| it.locator.pathname.to_string())
+                .collect(),
+        }),
+    }
+}
+
+/// Resolved テクスチャ情報を IrMaterial に適用するヘルパー
+/// 戦略1（source_material 照合）と戦略2（material_name 照合）の共通ロジック
+#[allow(clippy::too_many_arguments)]
+fn apply_resolved_textures(
+    mat: &mut crate::intermediate::types::IrMaterial,
+    res: &ResolvedMaterialTextures,
+    tex_by_guid: &HashMap<&str, &PackageTexture>,
+    added_guids: &mut HashMap<Arc<str>, usize>,
+    ir_textures: &mut Vec<crate::intermediate::types::IrTexture>,
+    matched_base: &mut usize,
+    matched_normal: &mut usize,
+    prefab_label: &str,
+    strategy: &str,
+) {
+    // ── メインテクスチャ ──
+    if mat.texture_index.is_none() {
+        if let Some(ref tex_guid) = res.main_texture_guid {
+            if let Some(&existing_idx) = added_guids.get(tex_guid) {
+                mat.texture_index = Some(existing_idx);
+                *matched_base += 1;
+                log::info!(
+                    "Prefab texture assign ({}, reuse): {} -> mat[{}]",
+                    strategy,
+                    tex_guid,
+                    mat.name
+                );
+            } else if let Some(pkg_tex) = tex_by_guid.get(tex_guid.as_ref()) {
+                let tex_idx = ir_textures.len();
+                let ext = std::path::Path::new(pkg_tex.display_name.as_ref())
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
+                ir_textures.push(crate::intermediate::types::IrTexture {
+                    filename: pkg_tex.display_name.to_string(),
+                    data: TextureData::Encoded(pkg_tex.data.to_vec()),
+                    mime_type: mime,
+                    source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
+                    mip_chain: None,
+                });
+                mat.texture_index = Some(tex_idx);
+                added_guids.insert(Arc::clone(tex_guid), tex_idx);
+                *matched_base += 1;
+                log::info!(
+                    "Prefab texture assign ({}): {} -> mat[{}]",
+                    strategy,
+                    pkg_tex.display_name,
+                    mat.name
+                );
+            } else {
+                log::debug!(
+                    "Prefab texture GUID {} not found in pkg (mat: {})",
+                    tex_guid,
+                    mat.name
+                );
+            }
+        }
+    }
+
+    // ── ノーマルマップ ──
+    if mat.normal_texture.is_none() {
+        if let Some(ref normal_guid) = res.normal_texture_guid {
+            if let Some(&existing_idx) = added_guids.get(normal_guid) {
+                mat.normal_texture = Some(crate::intermediate::types::IrTextureInfo::from_index(
+                    existing_idx,
+                ));
+                mat.normal_texture_scale = res.bump_scale;
+                *matched_normal += 1;
+                log::info!(
+                    "Prefab normal map assign ({}, reuse): {} -> mat[{}]",
+                    strategy,
+                    normal_guid,
+                    mat.name
+                );
+            } else if let Some(pkg_tex) = tex_by_guid.get(normal_guid.as_ref()) {
+                let tex_idx = ir_textures.len();
+                let ext = std::path::Path::new(pkg_tex.display_name.as_ref())
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
+                ir_textures.push(crate::intermediate::types::IrTexture {
+                    filename: pkg_tex.display_name.to_string(),
+                    data: TextureData::Encoded(pkg_tex.data.to_vec()),
+                    mime_type: mime,
+                    source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
+                    mip_chain: None,
+                });
+                mat.normal_texture = Some(crate::intermediate::types::IrTextureInfo::from_index(
+                    tex_idx,
+                ));
+                mat.normal_texture_scale = res.bump_scale;
+                added_guids.insert(Arc::clone(normal_guid), tex_idx);
+                *matched_normal += 1;
+                log::info!(
+                    "Prefab normal map assign ({}): {} -> mat[{}]",
+                    strategy,
+                    pkg_tex.display_name,
+                    mat.name
+                );
+            } else {
+                log::debug!(
+                    "Prefab normal map GUID {} not found in pkg (mat: {})",
+                    normal_guid,
+                    mat.name
+                );
+            }
+        }
+    }
+
+    // ── Emission ──
+    if res.emission_enabled {
+        let ec = res.emission_color;
+        if ec != [0.0; 3] && mat.emissive_factor == glam::Vec3::ZERO {
+            mat.emissive_factor = glam::Vec3::new(ec[0], ec[1], ec[2]);
+            log::info!(
+                "Prefab emission color assign: [{:.2},{:.2},{:.2}] -> mat[{}]",
+                ec[0],
+                ec[1],
+                ec[2],
+                mat.name
+            );
+        }
+
+        if mat.emissive_texture.is_none() {
+            if let Some(ref em_guid) = res.emission_texture_guid {
+                if let Some(&existing_idx) = added_guids.get(em_guid) {
+                    mat.emissive_texture = Some(
+                        crate::intermediate::types::IrTextureInfo::from_index(existing_idx),
+                    );
+                    log::info!(
+                        "Prefab emission texture assign ({}, reuse): {} -> mat[{}]",
+                        strategy,
+                        em_guid,
+                        mat.name
+                    );
+                } else if let Some(pkg_tex) = tex_by_guid.get(em_guid.as_ref()) {
+                    let tex_idx = ir_textures.len();
+                    let ext = std::path::Path::new(pkg_tex.display_name.as_ref())
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
+                    ir_textures.push(crate::intermediate::types::IrTexture {
+                        filename: pkg_tex.display_name.to_string(),
+                        data: TextureData::Encoded(pkg_tex.data.to_vec()),
+                        mime_type: mime,
+                        source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
+                        mip_chain: None,
+                    });
+                    mat.emissive_texture = Some(
+                        crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
+                    );
+                    added_guids.insert(Arc::clone(em_guid), tex_idx);
+                    log::info!(
+                        "Prefab emission texture assign ({}): {} -> mat[{}]",
+                        strategy,
+                        pkg_tex.display_name,
+                        mat.name
+                    );
+                }
+            }
+        }
+
+        if mat.emissive_texture.is_some() && mat.emissive_factor == glam::Vec3::ZERO {
+            mat.emissive_factor = glam::Vec3::ONE;
+            log::info!(
+                "Prefab emission color correction: (0,0,0) -> (1,1,1) (has texture) mat[{}]",
+                mat.name
+            );
+        }
+    }
+}
+
 /// Prefab 解決テクスチャを IrModel に埋め込み（三段階フォールバック）
 /// 戻り値: 未割当材質のインデックス一覧
 pub fn embed_textures_with_prefab(
@@ -1937,8 +2172,34 @@ pub fn embed_textures_with_prefab(
     let mut matched_base = 0usize;
     let mut matched_normal = 0usize;
 
-    // ── 戦略1: source_material で照合（Phase 3 で有効化）──
-    // 現在は IrMaterial.source_material が None なので実質スキップ
+    // ── 戦略1: source_material (renderer_path + slot_index) で照合 ──
+    // FBX extract が source_material を設定している場合、Prefab 解決結果と正確にマッチする
+    {
+        let resolved_by_source: HashMap<&SourceMaterialRef, &ResolvedMaterialTextures> = resolved
+            .iter()
+            .filter_map(|r| r.source_material.as_ref().map(|sm| (sm, r)))
+            .collect();
+
+        if !resolved_by_source.is_empty() {
+            for mat in &mut ir.materials {
+                if let Some(ref sm) = mat.source_material {
+                    if let Some(res) = resolved_by_source.get(sm) {
+                        apply_resolved_textures(
+                            mat,
+                            res,
+                            &tex_by_guid,
+                            &mut added_guids,
+                            &mut ir.textures,
+                            &mut matched_base,
+                            &mut matched_normal,
+                            prefab_label,
+                            "source_material",
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     // ── 戦略2: material_name / fbx_material_name で照合 ──
     if !resolved.is_empty() {
@@ -2016,168 +2277,17 @@ pub fn embed_textures_with_prefab(
                 });
 
             if let Some(res) = res_opt {
-                // ── メインテクスチャ ──
-                if mat.texture_index.is_none() {
-                    if let Some(ref tex_guid) = res.main_texture_guid {
-                        // 既に追加済みならインデックスを再利用
-                        if let Some(&existing_idx) = added_guids.get(tex_guid) {
-                            mat.texture_index = Some(existing_idx);
-                            matched_base += 1;
-                            log::info!(
-                                "Prefab texture assign (name, reuse): {} -> mat[{}]",
-                                tex_guid,
-                                mat.name
-                            );
-                        } else if let Some(pkg_tex) = tex_by_guid.get(tex_guid.as_ref()) {
-                            let tex_idx = ir.textures.len();
-                            let ext = std::path::Path::new(pkg_tex.display_name.as_ref())
-                                .extension()
-                                .and_then(|e| e.to_str())
-                                .unwrap_or("")
-                                .to_lowercase();
-                            let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
-                            ir.textures.push(crate::intermediate::types::IrTexture {
-                                filename: pkg_tex.display_name.to_string(),
-                                data: TextureData::Encoded(pkg_tex.data.to_vec()),
-                                mime_type: mime,
-                                source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
-                                mip_chain: None,
-                            });
-                            mat.texture_index = Some(tex_idx);
-                            added_guids.insert(Arc::clone(tex_guid), tex_idx);
-                            matched_base += 1;
-                            log::info!(
-                                "Prefab texture assign (name): {} -> mat[{}]",
-                                pkg_tex.display_name,
-                                mat.name
-                            );
-                        } else {
-                            log::debug!(
-                                "Prefab texture GUID {} not found in pkg (mat: {})",
-                                tex_guid,
-                                mat.name
-                            );
-                        }
-                    }
-                }
-
-                // ── ノーマルマップ ──
-                if mat.normal_texture.is_none() {
-                    if let Some(ref normal_guid) = res.normal_texture_guid {
-                        if let Some(&existing_idx) = added_guids.get(normal_guid) {
-                            mat.normal_texture = Some(
-                                crate::intermediate::types::IrTextureInfo::from_index(existing_idx),
-                            );
-                            mat.normal_texture_scale = res.bump_scale;
-                            matched_normal += 1;
-                            log::info!(
-                                "Prefab normal map assign (reuse): {} -> mat[{}]",
-                                normal_guid,
-                                mat.name
-                            );
-                        } else if let Some(pkg_tex) = tex_by_guid.get(normal_guid.as_ref()) {
-                            let tex_idx = ir.textures.len();
-                            let ext = std::path::Path::new(pkg_tex.display_name.as_ref())
-                                .extension()
-                                .and_then(|e| e.to_str())
-                                .unwrap_or("")
-                                .to_lowercase();
-                            let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
-                            ir.textures.push(crate::intermediate::types::IrTexture {
-                                filename: pkg_tex.display_name.to_string(),
-                                data: TextureData::Encoded(pkg_tex.data.to_vec()),
-                                mime_type: mime,
-                                source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
-                                mip_chain: None,
-                            });
-                            mat.normal_texture = Some(
-                                crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
-                            );
-                            mat.normal_texture_scale = res.bump_scale;
-                            added_guids.insert(Arc::clone(normal_guid), tex_idx);
-                            matched_normal += 1;
-                            log::info!(
-                                "Prefab normal map assign: {} -> mat[{}]",
-                                pkg_tex.display_name,
-                                mat.name
-                            );
-                        } else {
-                            log::debug!(
-                                "Prefab normal map GUID {} not found in pkg (mat: {})",
-                                normal_guid,
-                                mat.name
-                            );
-                        }
-                    }
-                }
-
-                // ── Emission ──
-                if res.emission_enabled {
-                    // emissive_factor に Emission 色をセット
-                    let ec = res.emission_color;
-                    if ec != [0.0; 3] && mat.emissive_factor == glam::Vec3::ZERO {
-                        mat.emissive_factor = glam::Vec3::new(ec[0], ec[1], ec[2]);
-                        log::info!(
-                            "Prefab emission color assign: [{:.2},{:.2},{:.2}] -> mat[{}]",
-                            ec[0],
-                            ec[1],
-                            ec[2],
-                            mat.name
-                        );
-                    }
-
-                    // Emission テクスチャ
-                    if mat.emissive_texture.is_none() {
-                        if let Some(ref em_guid) = res.emission_texture_guid {
-                            if let Some(&existing_idx) = added_guids.get(em_guid) {
-                                mat.emissive_texture =
-                                    Some(crate::intermediate::types::IrTextureInfo::from_index(
-                                        existing_idx,
-                                    ));
-                                log::info!(
-                                    "Prefab emission texture assign (reuse): {} -> mat[{}]",
-                                    em_guid,
-                                    mat.name
-                                );
-                            } else if let Some(pkg_tex) = tex_by_guid.get(em_guid.as_ref()) {
-                                let tex_idx = ir.textures.len();
-                                let ext = std::path::Path::new(pkg_tex.display_name.as_ref())
-                                    .extension()
-                                    .and_then(|e| e.to_str())
-                                    .unwrap_or("")
-                                    .to_lowercase();
-                                let mime =
-                                    crate::intermediate::types::mime_for_ext(&ext).to_string();
-                                ir.textures.push(crate::intermediate::types::IrTexture {
-                                    filename: pkg_tex.display_name.to_string(),
-                                    data: TextureData::Encoded(pkg_tex.data.to_vec()),
-                                    mime_type: mime,
-                                    source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
-                                    mip_chain: None,
-                                });
-                                mat.emissive_texture = Some(
-                                    crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
-                                );
-                                added_guids.insert(Arc::clone(em_guid), tex_idx);
-                                log::info!(
-                                    "Prefab Emission Texture assigned: {} -> mat[{}]",
-                                    pkg_tex.display_name,
-                                    mat.name
-                                );
-                            }
-                        }
-                    }
-
-                    // emissive_texture があるのに emissive_factor がゼロだと
-                    // シェーダーで 0 * texture = 0 になり発光しない。白に補正。
-                    if mat.emissive_texture.is_some() && mat.emissive_factor == glam::Vec3::ZERO {
-                        mat.emissive_factor = glam::Vec3::ONE;
-                        log::info!(
-                            "Prefab emission color correction: (0,0,0) -> (1,1,1) (has texture) mat[{}]",
-                            mat.name
-                        );
-                    }
-                }
+                apply_resolved_textures(
+                    mat,
+                    res,
+                    &tex_by_guid,
+                    &mut added_guids,
+                    &mut ir.textures,
+                    &mut matched_base,
+                    &mut matched_normal,
+                    prefab_label,
+                    "name",
+                );
             }
         }
     }

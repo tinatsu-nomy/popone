@@ -3,9 +3,12 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
+  - [v0.2.31](#v0231)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
+    - [改善](#%E6%94%B9%E5%96%84)
   - [v0.2.30](#v0230)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3)
-    - [改善](#%E6%94%B9%E5%96%84)
+    - [改善](#%E6%94%B9%E5%96%84-1)
   - [v0.2.29](#v0229)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-1)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84)
@@ -13,11 +16,11 @@
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-2)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-1)
   - [v0.2.27](#v0227)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-3)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-2)
   - [v0.2.26](#v0226)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-4)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84-3)
 
@@ -26,6 +29,20 @@
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.2.31
+
+### 新機能
+
+- **Prefab `source_material` 照合（戦略1）** — FBX 抽出時に `GeometryInstance` を使用して各材質に `SourceMaterialRef`（renderer_path + slot_index）を設定。Prefab の renderer パスと正確にマッチし、材質名のあいまい一致に頼らないテクスチャマッピングを実現。三段階フォールバック: 戦略1（source_material）→ 戦略2（material_name）→ 戦略3（source_texture_name）
+
+### 改善
+
+- **`link_same_name` スコープ制限** — テクスチャ割り当ての「同名連動」機能を同一 `MaterialGroup`（同じモデルインスタンス内）に限定。従来は同じ FBX を2回 append して片方のテクスチャを変更するともう片方にも波及していたが、この問題を解消
+- **リロード安定キー（`PkgModelLocator`）** — `.unitypackage` のリロード経路（`reload_archive_unitypackage`、`reload_append_unitypackage`）で `selected_pkg_model`（GUID/パスネームベース）によるモデル再選択を使用。ファイル名のみのマッチングから切り替え、同名ファイルが複数存在する場合（例: `Assets/A/Body.fbx` と `Assets/B/Body.fbx`）の取り違えを防止。VRM・append モデルも `PkgModelLocator` を保存して正確なリロードに対応
+- **`resolve_pkg_model_for_cli`** — CLI 用モデル解決関数を追加。`--fbx-name` ヒントでパスネーム曖昧一致により FBX を選択し、候補リスト付きの構造化エラーメッセージを提供
+- **`apply_resolved_textures` ヘルパー** — `embed_textures_with_prefab` のテクスチャ適用ロジック（ベーステクスチャ・ノーマルマップ・Emission）を共通ヘルパーに抽出し、戦略1と戦略2のコード重複を削減
+- **`compute_geometry_world_transform` 削除** — `FbxScene.geometry_instances()` の `GeometryInstance.world_transform` に置き換え、重複したワールド変換計算を除去
 
 ## v0.2.30
 

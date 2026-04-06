@@ -134,6 +134,9 @@
     - [材質表示の常時グループ化](#%E6%9D%90%E8%B3%AA%E8%A1%A8%E7%A4%BA%E3%81%AE%E5%B8%B8%E6%99%82%E3%82%B0%E3%83%AB%E3%83%BC%E3%83%97%E5%8C%96)
     - [Prefab リロード（A/T スタンス変換対応）](#prefab-%E3%83%AA%E3%83%AD%E3%83%BC%E3%83%89at-%E3%82%B9%E3%82%BF%E3%83%B3%E3%82%B9%E5%A4%89%E6%8F%9B%E5%AF%BE%E5%BF%9C)
     - [FBX 直接選択時の Prefab 対応リロード](#fbx-%E7%9B%B4%E6%8E%A5%E9%81%B8%E6%8A%9E%E6%99%82%E3%81%AE-prefab-%E5%AF%BE%E5%BF%9C%E3%83%AA%E3%83%AD%E3%83%BC%E3%83%89)
+    - [GeometryInstance ベースの source_material（v0.2.31）](#geometryinstance-%E3%83%99%E3%83%BC%E3%82%B9%E3%81%AE-source_materialv0231)
+    - [リロード安定キー: PkgModelLocator（v0.2.31）](#%E3%83%AA%E3%83%AD%E3%83%BC%E3%83%89%E5%AE%89%E5%AE%9A%E3%82%AD%E3%83%BC-pkgmodellocatorv0231)
+    - [link_same_name スコープ制限（v0.2.31）](#link_same_name-%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%97%E5%88%B6%E9%99%90v0231)
   - [リロード時テクスチャ正規化](#%E3%83%AA%E3%83%AD%E3%83%BC%E3%83%89%E6%99%82%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E6%AD%A3%E8%A6%8F%E5%8C%96)
     - [reload_unitypackage のテクスチャ復元](#reload_unitypackage-%E3%81%AE%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E5%BE%A9%E5%85%83)
     - [assign_texture_source_to_material の IrTexture 重複排除](#assign_texture_source_to_material-%E3%81%AE-irtexture-%E9%87%8D%E8%A4%87%E6%8E%92%E9%99%A4)
@@ -2029,6 +2032,35 @@ reload_current()
         5. finish_load() 後に pkg_material_keys を再構築
       → No: 従来パス（embed_textures_into_ir）
 ```
+
+### GeometryInstance ベースの source_material（v0.2.31）
+
+FBX 抽出で `scene.geometries()` の代わりに `FbxScene::geometry_instances()` を使用するよう変更。各 `GeometryInstance` は以下を提供:
+- `model` — 親 Model ノード（階層パス計算用）
+- `world_transform` — 事前計算されたワールド変換（`compute_geometry_world_transform` を置換）
+- `material_slots` — Connection 順の材質と `slot_index`
+
+各材質に `SourceMaterialRef { renderer_path, slot_index }` を `model_hierarchy_path(inst.model.id)` から設定。これにより `embed_textures_with_prefab` の戦略1（source_material 照合）が有効になり、Prefab の renderer パスと FBX の Model 階層パスを正確にマッチさせる。
+
+**`embed_textures_with_prefab` の三段階フォールバック:**
+1. **source_material** — `SourceMaterialRef`（renderer_path + slot_index）による完全一致
+2. **material_name** — 名前ベースのマッチング（大文字小文字無視・サフィックスフォールバック付き）
+3. **source_texture_name** — 従来のファイル名ベースのマッチング
+
+### リロード安定キー: PkgModelLocator（v0.2.31）
+
+リロード経路で `selected_pkg_model: Option<PkgModelLocator>`（GUID + pathname）によるモデル再選択を使用し、同名 basename のモデルが複数ある場合の取り違えを防止。
+
+**照合優先順:**
+1. `PkgModelLocator.guid` → `UnityPackageIndex.by_guid`（Prefab パス）
+2. `PkgModelLocator.pathname` → `find_asset_by_pathname`（ExtractedAsset パス）
+3. `selected_fbx_name` → basename 一致（レガシーフォールバック）
+
+`AppendedModel.pkg_model` に各 append モデルの locator を保存し、リロード時に正確なモデルを再選択する。
+
+### link_same_name スコープ制限（v0.2.31）
+
+`LoadedModel::same_name_siblings(mat_idx)` は `mat_idx` を含む `MaterialGroup` 内に同名材質の連動を限定。同じ FBX を複数回 append した場合のインスタンス跨ぎの波及を防止。
 
 ## リロード時テクスチャ正規化
 
