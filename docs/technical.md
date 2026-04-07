@@ -69,7 +69,7 @@
     - [Dual Kawase Algorithm](#dual-kawase-algorithm)
     - [MRT (Multiple Render Target) Emissive Separation](#mrt-multiple-render-target-emissive-separation)
     - [UI Parameters](#ui-parameters)
-    - [Per-Material Bloom/Emissive Toggle (v0.2.19)](#per-material-bloomemissive-toggle-v0219)
+    - [Per-Material Emissive Toggle (v0.2.19)](#per-material-emissive-toggle-v0219)
     - [PMX/PMD Self-Emissive Material Bloom Detection](#pmxpmd-self-emissive-material-bloom-detection)
     - [Prefab Emission Support](#prefab-emission-support)
   - [Viewer Display Styles](#viewer-display-styles)
@@ -1155,13 +1155,13 @@ Bloom intermediate buffers use `Rgba16Float` (v0.2.26; previously `Rgba8Unorm`) 
 | Threshold | 0.0–1.0 | 0.0 | Cuts emissive below this luminance |
 | Radius | 3–6 | 4 | Downsample stages. Larger = wider blur |
 
-### Per-Material Bloom/Emissive Toggle (v0.2.19)
+### Per-Material Emissive Toggle (v0.2.19)
 
-`bloom_per_mat: Vec<bool>` controls Bloom/Emissive ON/OFF per material.
+`emissive_per_mat: Vec<bool>` controls emissive ON/OFF per material.
 
-- **glTF materials**: When `bloom_per_mat[i]` is false, `MaterialUniform.emissive_factor` is zeroed and `has_emissive_tex` is set to false. Both the shader's `lit += emissive` and `out.bloom = vec4(bloom_color, ...)` become zero
-- **PMX/PMD materials**: When `bloom_per_mat[i]` is false, `MmdMaterialUniform.bloom_emissive` is zeroed
-- **HDR auto-detection**: Materials with any `emissive_factor` component exceeding 1.0 are initialized with default OFF (`default_bloom_per_mat()`). Prevents white-out in the viewer which lacks tonemapping
+- **glTF materials**: When `emissive_per_mat[i]` is false, `MaterialUniform.emissive_factor` is zeroed and `has_emissive_tex` is set to false. Both the shader's `lit += emissive` and `out.bloom = vec4(bloom_color, ...)` become zero
+- **PMX/PMD materials**: When `emissive_per_mat[i]` is false, `MmdMaterialUniform.bloom_emissive` is zeroed
+- **HDR auto-detection**: Materials with any `emissive_factor` component exceeding 1.0 are initialized with default OFF. Prevents white-out in the viewer which lacks tonemapping
 
 ### PMX/PMD Self-Emissive Material Bloom Detection
 
@@ -1180,13 +1180,15 @@ Added `m_Colors` section and `m_ShaderKeywords` / `m_ValidKeywords` parsing to t
 
 - Auto-assigns `_EmissionColor` / `_EmissionMap` textures
 - Emission enabled by priority:
-  1. `_Emission` float if explicitly present
-  2. `_EMISSION` keyword in `m_ShaderKeywords` / `m_ValidKeywords`
-  3. `_EmissionMap` texture present
-  4. `_EmissionColor` non-black and non-white (white excluded as default in many shaders)
+  1. `_UseEmission` float if explicitly present (lilToon-specific, takes priority)
+  2. `_Emission` float if explicitly present (Standard shader)
+  3. `_EMISSION` keyword in `m_ShaderKeywords` / `m_ValidKeywords`
+  4. `_EmissionMap` texture present
+  5. `_EmissionColor` non-black and non-white (white excluded as default in many shaders)
 - When `_EmissionMap` is present but `_EmissionColor` is black, emissive_factor corrected to white (1,1,1) to avoid shader 0 × texture = 0
+- **lilToon Screen-blend attenuation** (v0.2.36): When `_EmissionBlend` is 1 (Screen mode), `emissive_factor` is multiplied by 0.5 to approximate screen compositing (`base + emission*(1-base)`), which is always darker than pure additive. This prevents bloom white-out on lilToon materials
 - `m_ShaderKeywords` / `m_ValidKeywords` supports both YAML inline format (space-separated string) and multi-line list format (`- _EMISSION`)
-- Added `emission_texture_guid` / `emission_color` / `emission_enabled` fields to `ResolvedMaterialTextures`
+- Added `emission_texture_guid` / `emission_color` / `emission_enabled` / `emission_blend` fields to `ResolvedMaterialTextures`
 
 ## Viewer Display Styles
 
@@ -1994,7 +1996,7 @@ Group header rows use the layout `▶ [S] [C] [N] [B] [☑] GroupName`, implemen
 | `[S]` | `smooth_normals_per_mat` | Batch toggle normal smoothing for all materials in the group (compatible with normal maps: smoothing TBN base normals improves polygon edge visibility) |
 | `[C]` | `clear_normals_per_mat` | Batch toggle custom normal clear for all materials in the group (compatible with normal maps) |
 | `[N]` | `normal_map_per_mat` | Batch toggle normal map application for normal-mapped materials. When OFF, `MaterialUniform.has_normal_tex` is zeroed, skipping normal map sampling in the shader |
-| `[B]` | `bloom_per_mat` | Batch toggle Bloom/Emissive for emissive materials. When OFF, `emissive_factor` is zeroed, disabling both `lit += emissive` and MRT bloom output. HDR emissive (component > 1.0) defaults to OFF |
+| `[B]` | `emissive_per_mat` | Batch toggle emissive for emissive materials. When OFF, `emissive_factor` is zeroed, disabling both `lit += emissive` and MRT bloom output. HDR emissive (component > 1.0) defaults to OFF |
 | `[☑]` | `material_visibility` | Batch toggle visibility for all DrawCalls in the group |
 
 Header row hover detection uses `contains_pointer()` (rect-based). `hovered()` is not suitable because child widgets (buttons, etc.) consume the hover event.

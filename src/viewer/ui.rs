@@ -1700,7 +1700,7 @@ fn show_tab_display(
     ui.separator();
     ui.checkbox(&mut app.display.msaa, "MSAA (アンチエイリアス)");
     ui.horizontal(|ui| {
-        ui.checkbox(&mut app.display.bloom_enabled, "Bloom (グロー)");
+        ui.checkbox(&mut app.display.bloom_enabled, "Bloom");
         if app.display.bloom_enabled && ui.small_button("初期値").clicked() {
             let d = DisplaySettings::default();
             app.display.bloom_intensity = d.bloom_intensity;
@@ -1878,8 +1878,8 @@ fn show_tab_display(
                 .collect()
         })
         .unwrap_or_default();
-    // 材質ごとの Bloom/Emissive 有無を事前抽出
-    let mat_has_bloom: Vec<bool> = app
+    // 材質ごとのエミッシブ有無を事前抽出
+    let mat_has_emissive: Vec<bool> = app
         .loaded
         .as_ref()
         .map(|l| {
@@ -2027,17 +2027,17 @@ fn show_tab_display(
                     }
                     resp.on_hover_text("ノーマルマップ（グループ一括）");
                 }
-                // [B] Bloom/Emissive ON/OFF（グループ一括）
+                // [B] エミッシブ ON/OFF（グループ一括）
                 {
                     let eligible: Vec<usize> = group_mat_idxs
                         .iter()
                         .copied()
-                        .filter(|&mi| mat_has_bloom.get(mi).copied().unwrap_or(false))
+                        .filter(|&mi| mat_has_emissive.get(mi).copied().unwrap_or(false))
                         .collect();
                     let all_on = !eligible.is_empty()
                         && eligible
                             .iter()
-                            .all(|&mi| app.material_display.get(mi).map_or(true, |d| d.bloom));
+                            .all(|&mi| app.material_display.get(mi).map_or(true, |d| d.emissive));
                     let resp = ui.add_enabled(
                         !eligible.is_empty(),
                         egui::SelectableLabel::new(all_on, "B"),
@@ -2046,12 +2046,12 @@ fn show_tab_display(
                         let new_val = !all_on;
                         for &mi in &eligible {
                             if let Some(d) = app.material_display.get_mut(mi) {
-                                d.bloom = new_val;
+                                d.emissive = new_val;
                             }
                         }
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
-                    resp.on_hover_text("Bloom/Emissive（グループ一括）");
+                    resp.on_hover_text("エミッシブ（グループ一括）");
                 }
                 // [ ] 表示/非表示（グループ一括）
                 {
@@ -2201,7 +2201,7 @@ fn show_tab_display(
                         mat_src_tex.get(mat_idx)
                             .and_then(|s| s.as_deref())
                     });
-                // 法線 per-material トグル（S=平滑化, C=カスタム法線クリア, N=ノーマルマップ, B=Bloom）
+                // 法線 per-material トグル（S=平滑化, C=カスタム法線クリア, N=ノーマルマップ, B=エミッシブ）
                 let has_nmap = mat_has_normal_map.get(mat_idx).copied().unwrap_or(false);
                 // [S][C] は常に有効（ノーマルマップと併用可: TBN 基底法線の平滑化で品質向上）
                 if let Some(d) = app.material_display.get(mat_idx) {
@@ -2244,20 +2244,20 @@ fn show_tab_display(
                     if resp.hovered() { row_highlight = true; }
                     resp.on_hover_text("ノーマルマップ");
                 }
-                // [B] Bloom/Emissive ON/OFF
+                // [B] エミッシブ ON/OFF
                 if let Some(d) = app.material_display.get(mat_idx) {
-                    let old = d.bloom;
-                    let has_bloom = mat_has_bloom.get(mat_idx).copied().unwrap_or(false);
+                    let old = d.emissive;
+                    let has_emissive = mat_has_emissive.get(mat_idx).copied().unwrap_or(false);
                     let resp = ui.add_enabled(
-                        has_bloom,
+                        has_emissive,
                         egui::SelectableLabel::new(old, "B"),
                     );
-                    if resp.clicked() && has_bloom {
-                        app.material_display[mat_idx].bloom = !old;
+                    if resp.clicked() && has_emissive {
+                        app.material_display[mat_idx].emissive = !old;
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
                     if resp.hovered() { row_highlight = true; }
-                    resp.on_hover_text("Bloom/Emissive");
+                    resp.on_hover_text("エミッシブ");
                 }
 
                 let cb = if let Some(tex_name) = display_tex {

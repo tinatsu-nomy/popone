@@ -384,7 +384,7 @@ pub fn build_gpu_model(
     smooth_per_mat: &[bool],
     clear_per_mat: &[bool],
     normal_map_per_mat: &[bool],
-    bloom_per_mat: &[bool],
+    emissive_per_mat: &[bool],
 ) -> Result<GpuModel> {
     let gpu_textures = super::texture::upload_textures(ir, images, device, queue)?;
     build_gpu_model_inner(
@@ -395,7 +395,7 @@ pub fn build_gpu_model(
         smooth_per_mat,
         clear_per_mat,
         normal_map_per_mat,
-        bloom_per_mat,
+        emissive_per_mat,
     )
 }
 
@@ -486,7 +486,7 @@ pub fn build_gpu_model_from_ir(
     smooth_per_mat: &[bool],
     clear_per_mat: &[bool],
     normal_map_per_mat: &[bool],
-    bloom_per_mat: &[bool],
+    emissive_per_mat: &[bool],
 ) -> Result<GpuModel> {
     let gpu_textures = super::texture::upload_textures_from_ir(ir, device, queue)?;
     build_gpu_model_inner(
@@ -497,7 +497,7 @@ pub fn build_gpu_model_from_ir(
         smooth_per_mat,
         clear_per_mat,
         normal_map_per_mat,
-        bloom_per_mat,
+        emissive_per_mat,
     )
 }
 
@@ -509,7 +509,7 @@ fn build_gpu_model_inner(
     smooth_per_mat: &[bool],
     clear_per_mat: &[bool],
     normal_map_per_mat: &[bool],
-    bloom_per_mat: &[bool],
+    emissive_per_mat: &[bool],
 ) -> Result<GpuModel> {
     let pos_fn = if ir.source_format.is_vrm0() {
         gltf_pos_to_pmx_v0
@@ -727,13 +727,13 @@ fn build_gpu_model_inner(
                 rim_uv: gpu::pack_uv_params(mp.rim_multiply_texture.as_ref()),
                 outline_uv: gpu::pack_uv_params(mp.outline_width_texture.as_ref()),
                 uv_mask_uv: gpu::pack_uv_params(mp.uv_animation_mask_texture.as_ref()),
-                emissive_factor: if bloom_per_mat.get(mat_idx).copied().unwrap_or(true) {
+                emissive_factor: if emissive_per_mat.get(mat_idx).copied().unwrap_or(true) {
                     mat.emissive_factor.to_array()
                 } else {
                     [0.0; 3]
                 },
                 has_emissive_tex: mat.emissive_texture.is_some()
-                    && bloom_per_mat.get(mat_idx).copied().unwrap_or(true),
+                    && emissive_per_mat.get(mat_idx).copied().unwrap_or(true),
                 emissive_uv: gpu::pack_uv_params(mat.emissive_texture.as_ref()),
                 has_normal_tex: mat.normal_texture.is_some()
                     && normal_map_per_mat.get(mat_idx).copied().unwrap_or(true),

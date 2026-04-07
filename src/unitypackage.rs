@@ -1061,6 +1061,8 @@ pub struct ResolvedMaterialTextures {
     pub emission_color: [f32; 3],
     /// Emission 有効フラグ（_Emission float == 1.0）
     pub emission_enabled: bool,
+    /// Emission ブレンドモード（lilToon: 0=Add, 1=Screen; デフォルト 0）
+    pub emission_blend: u8,
 }
 
 /// Prefab 候補（パスと解決済みマテリアル一覧）
@@ -1762,22 +1764,40 @@ fn resolve_material_guids_to_textures_with_meta(
             .unwrap_or([0.0; 3]);
 
         // Emission 有効判定（優先順）:
-        // 1. _Emission float が明示的にある場合はその値で判定
-        // 2. m_ShaderKeywords / m_ValidKeywords に _EMISSION が含まれる場合は有効
-        // 3. _EmissionMap テクスチャがある場合は有効
-        // 4. _EmissionColor が非黒かつ非白の場合は有効
+        // 1. _UseEmission (lilToon) が明示的にある場合はその値で判定
+        // 2. _Emission float (Standard) が明示的にある場合はその値で判定
+        // 3. m_ShaderKeywords / m_ValidKeywords に _EMISSION が含まれる場合は有効
+        // 4. _EmissionMap テクスチャがある場合は有効
+        // 5. _EmissionColor が非黒かつ非白の場合は有効
         //    白 (1,1,1) 除外理由: 多くのシェーダーが emission 無効時でも白で初期化（実例: Masscat v1.02）
         let has_emission_keyword = parsed.shader_keywords.iter().any(|kw| kw == "_EMISSION");
         let emission_color_meaningful =
             emission_color != [0.0; 3] && emission_color != [1.0, 1.0, 1.0];
-        let emission_enabled = parsed
+        let use_emission_liltoon = parsed
             .floats
             .iter()
-            .find(|f| f.param_name == "_Emission")
-            .map(|f| f.value >= 0.5)
-            .unwrap_or(
-                has_emission_keyword || emission_tex_guid.is_some() || emission_color_meaningful,
-            );
+            .find(|f| f.param_name == "_UseEmission")
+            .map(|f| f.value >= 0.5);
+        let emission_enabled = use_emission_liltoon.unwrap_or_else(|| {
+            parsed
+                .floats
+                .iter()
+                .find(|f| f.param_name == "_Emission")
+                .map(|f| f.value >= 0.5)
+                .unwrap_or(
+                    has_emission_keyword
+                        || emission_tex_guid.is_some()
+                        || emission_color_meaningful,
+                )
+        });
+
+        // Emission ブレンドモード（lilToon: 0=Add, 1=Screen）
+        let emission_blend = parsed
+            .floats
+            .iter()
+            .find(|f| f.param_name == "_EmissionBlend")
+            .map(|f| f.value as u8)
+            .unwrap_or(0);
 
         let fbx_name = meta_guid_to_fbx_name
             .get(mat_guid.as_str())
@@ -1805,6 +1825,7 @@ fn resolve_material_guids_to_textures_with_meta(
             emission_texture_guid: emission_tex_guid,
             emission_color,
             emission_enabled,
+            emission_blend,
         });
     }
 
@@ -2130,6 +2151,21 @@ fn apply_resolved_textures(
             mat.emissive_factor = glam::Vec3::ONE;
             log::info!(
                 "Prefab emission color correction: (0,0,0) -> (1,1,1) (has texture) mat[{}]",
+                mat.name
+            );
+        }
+
+        // lilToon Screen ブレンド (1) の近似:
+        // Screen 合成 = base + emission - base*emission は加算合成より暗い。
+        // PBR の加算エミッションしかないため、factor を減衰させて近似する。
+        if res.emission_blend == 1 && mat.emissive_factor != glam::Vec3::ZERO {
+            const SCREEN_ATTENUATION: f32 = 0.5;
+            let before = mat.emissive_factor;
+            mat.emissive_factor *= SCREEN_ATTENUATION;
+            log::info!(
+                "Prefab emission screen-blend attenuation: [{:.2},{:.2},{:.2}] -> [{:.2},{:.2},{:.2}] mat[{}]",
+                before.x, before.y, before.z,
+                mat.emissive_factor.x, mat.emissive_factor.y, mat.emissive_factor.z,
                 mat.name
             );
         }
@@ -2702,6 +2738,7 @@ Material:
             emission_texture_guid: None,
             emission_color: [0.0; 3],
             emission_enabled: false,
+            emission_blend: 0,
         }];
 
         let unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved, "test");
@@ -2740,6 +2777,7 @@ Material:
             emission_texture_guid: None,
             emission_color: [0.0; 3],
             emission_enabled: false,
+            emission_blend: 0,
         }];
 
         let unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved, "test");
@@ -2785,6 +2823,7 @@ Material:
                 emission_texture_guid: None,
                 emission_color: [0.0; 3],
                 emission_enabled: false,
+                emission_blend: 0,
             },
             ResolvedMaterialTextures {
                 source_material: None,
@@ -2796,6 +2835,7 @@ Material:
                 emission_texture_guid: None,
                 emission_color: [0.0; 3],
                 emission_enabled: false,
+                emission_blend: 0,
             },
         ];
 

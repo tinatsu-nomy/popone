@@ -3,27 +3,37 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.35](#v0235)
+  - [v0.2.36](#v0236)
     - [Improvements](#improvements)
+  - [v0.2.35](#v0235)
+    - [Improvements](#improvements-1)
     - [Documentation](#documentation)
   - [v0.2.34](#v0234)
     - [New Features](#new-features)
-    - [Improvements](#improvements-1)
+    - [Improvements](#improvements-2)
   - [v0.2.33](#v0233)
     - [New Features](#new-features-1)
-    - [Improvements](#improvements-2)
+    - [Improvements](#improvements-3)
   - [v0.2.32](#v0232)
     - [New Features](#new-features-2)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements)
   - [v0.2.31](#v0231)
     - [New Features](#new-features-3)
-    - [Improvements](#improvements-3)
+    - [Improvements](#improvements-4)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.2.36
+
+### Improvements
+
+- **lilToon emission screen-blend attenuation** — lilToon materials with `_EmissionBlend: 1` (Screen mode) now have their `emissive_factor` attenuated by 0.5× to approximate screen blend compositing (`base + emission*(1-base)`), which is always darker than additive. Previously, Screen-mode emission was rendered as pure additive, causing excessive brightness and bloom white-out on materials like Refrain_V2
+- **Prefab `_UseEmission` priority** — Emission detection in the Prefab path (`unitypackage.rs`) now prioritizes lilToon's `_UseEmission` float over the Standard shader's `_Emission` float. Previously, materials with `_UseEmission: 0` could be falsely detected as emissive due to `_EmissionMap` texture presence fallback
+- **UI terminology consistency** — Standardized per-material emission toggle labels from mixed `Bloom/Emissive` / `Bloom (グロー)` to purpose-appropriate terms: post-process effect → `Bloom`, per-material emission → `エミッシブ`. Renamed internal field `MaterialDisplayState::bloom` → `emissive` and all related variables for clarity
 
 ## v0.2.35
 

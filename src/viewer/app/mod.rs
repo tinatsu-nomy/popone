@@ -142,8 +142,8 @@ pub struct MaterialDisplayState {
     pub clear_normals: bool,
     /// ノーマルマップ適用 ON/OFF
     pub normal_map: bool,
-    /// Bloom/Emissive 適用 ON/OFF
-    pub bloom: bool,
+    /// エミッシブ適用 ON/OFF
+    pub emissive: bool,
 }
 
 impl Default for MaterialDisplayState {
@@ -152,7 +152,7 @@ impl Default for MaterialDisplayState {
             smooth_normals: false,
             clear_normals: false,
             normal_map: true,
-            bloom: true,
+            emissive: true,
         }
     }
 }
@@ -260,7 +260,7 @@ pub struct DisplaySettings {
     pub bloom_intensity: f32,
     /// Bloom 輝度抽出閾値 (0.0〜1.0)
     pub bloom_threshold: f32,
-    /// Bloom 拡散段数 (3〜6、大きいほど広い glow)
+    /// Bloom 拡散段数 (3〜6)
     pub bloom_radius: u32,
 }
 
@@ -742,7 +742,7 @@ impl ViewerApp {
         } else {
             Self::default_material_display(&ir)
         };
-        let (smooth_per_mat, clear_per_mat, nmap_per_mat, bloom_per_mat) =
+        let (smooth_per_mat, clear_per_mat, nmap_per_mat, emissive_per_mat) =
             Self::extract_per_mat_vecs(&display);
         let gpu_model = super::mesh::build_gpu_model_from_ir(
             &ir,
@@ -751,7 +751,7 @@ impl ViewerApp {
             &smooth_per_mat,
             &clear_per_mat,
             &nmap_per_mat,
-            &bloom_per_mat,
+            &emissive_per_mat,
         )?;
         self.finish_load_with_gpu(ir, gpu_model, source)
     }
@@ -811,8 +811,8 @@ impl ViewerApp {
         self.material_display = Self::default_material_display(&ir);
 
         // MMD リソース構築
-        let bloom_vec: Vec<bool> = self.material_display.iter().map(|d| d.bloom).collect();
-        self.prepare_mmd_for_model(&mut gpu_model, &ir, &bloom_vec);
+        let emissive_vec: Vec<bool> = self.material_display.iter().map(|d| d.emissive).collect();
+        self.prepare_mmd_for_model(&mut gpu_model, &ir, &emissive_vec);
 
         // テクスチャ割り当て履歴クリア（別モデル読み込み時）
         self.tex.assignments.clear();
@@ -928,11 +928,11 @@ impl ViewerApp {
         &self,
         gpu_model: &mut super::mesh::GpuModel,
         ir: &crate::intermediate::types::IrModel,
-        bloom_per_mat: &[bool],
+        emissive_per_mat: &[bool],
     ) {
         if let Some(ref renderer) = self.renderer {
             let device = &self.render_state.device;
-            renderer.prepare_mmd_resources(device, gpu_model, ir, bloom_per_mat);
+            renderer.prepare_mmd_resources(device, gpu_model, ir, emissive_per_mat);
         }
     }
 
@@ -942,14 +942,14 @@ impl ViewerApp {
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
 
-        let (smooth, clear, nmap, bloom) = Self::extract_per_mat_vecs(&self.material_display);
+        let (smooth, clear, nmap, emissive) = Self::extract_per_mat_vecs(&self.material_display);
         match super::mesh::build_gpu_model_from_ir(
-            &loaded.ir, device, queue, &smooth, &clear, &nmap, &bloom,
+            &loaded.ir, device, queue, &smooth, &clear, &nmap, &emissive,
         ) {
             Ok(mut new_model) => {
                 // MMD リソース構築
                 if let Some(ref renderer) = self.renderer {
-                    renderer.prepare_mmd_resources(device, &mut new_model, &loaded.ir, &bloom);
+                    renderer.prepare_mmd_resources(device, &mut new_model, &loaded.ir, &emissive);
                 }
                 let mat_cache = Self::build_mat_cache(&loaded.ir, &new_model);
                 // draw数が同じなら材質表示状態を保持
@@ -1013,16 +1013,16 @@ impl ViewerApp {
         }
     }
 
-    /// 材質ごとのデフォルト表示状態を生成（HDR emissive は Bloom OFF）
+    /// 材質ごとのデフォルト表示状態を生成（HDR emissive はエミッシブ OFF）
     fn default_material_display(ir: &IrModel) -> Vec<MaterialDisplayState> {
         ir.materials
             .iter()
             .map(|m| {
                 let ef = m.emissive_factor;
                 // 任意成分が 1.0 を超える場合は HDR → デフォルト OFF
-                let bloom = !(ef.x > 1.0 || ef.y > 1.0 || ef.z > 1.0);
+                let emissive = !(ef.x > 1.0 || ef.y > 1.0 || ef.z > 1.0);
                 MaterialDisplayState {
-                    bloom,
+                    emissive,
                     ..Default::default()
                 }
             })
@@ -1036,8 +1036,8 @@ impl ViewerApp {
         let smooth = display.iter().map(|d| d.smooth_normals).collect();
         let clear = display.iter().map(|d| d.clear_normals).collect();
         let nmap = display.iter().map(|d| d.normal_map).collect();
-        let bloom = display.iter().map(|d| d.bloom).collect();
-        (smooth, clear, nmap, bloom)
+        let emissive = display.iter().map(|d| d.emissive).collect();
+        (smooth, clear, nmap, emissive)
     }
 
     /// `material_display` が材質数と一致すればそのまま展開し、不一致ならデフォルト値で生成

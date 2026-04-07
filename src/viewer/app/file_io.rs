@@ -2726,7 +2726,7 @@ impl ViewerApp {
         if self.material_display.iter().any(|d| d.smooth_normals)
             || self.material_display.iter().any(|d| d.clear_normals)
             || self.material_display.iter().any(|d| !d.normal_map)
-            || self.material_display.iter().any(|d| !d.bloom)
+            || self.material_display.iter().any(|d| !d.emissive)
         {
             self.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
         }

@@ -3,27 +3,37 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
-  - [v0.2.35](#v0235)
+  - [v0.2.36](#v0236)
     - [改善](#%E6%94%B9%E5%96%84)
+  - [v0.2.35](#v0235)
+    - [改善](#%E6%94%B9%E5%96%84-1)
     - [ドキュメント](#%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88)
   - [v0.2.34](#v0234)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
-    - [改善](#%E6%94%B9%E5%96%84-1)
+    - [改善](#%E6%94%B9%E5%96%84-2)
   - [v0.2.33](#v0233)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
-    - [改善](#%E6%94%B9%E5%96%84-2)
+    - [改善](#%E6%94%B9%E5%96%84-3)
   - [v0.2.32](#v0232)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84)
   - [v0.2.31](#v0231)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
-    - [改善](#%E6%94%B9%E5%96%84-3)
+    - [改善](#%E6%94%B9%E5%96%84-4)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.2.36
+
+### 改善
+
+- **lilToon エミッション Screen ブレンド減衰** — lilToon の `_EmissionBlend: 1`（Screen モード）の材質で `emissive_factor` を 0.5 倍に減衰し、Screen 合成（`base + emission*(1-base)`）を近似する。Screen は加算合成より常に暗くなるが、従来は純粋な加算合成で描画されていたため、Refrain_V2 等の材質で過剰な明るさと Bloom の白飛びが発生していた
+- **Prefab `_UseEmission` 優先判定** — Prefab パス（`unitypackage.rs`）のエミッション有効判定で、lilToon の `_UseEmission` float を Standard シェーダーの `_Emission` float より優先して参照するように変更。従来は `_UseEmission: 0` の材質でも `_EmissionMap` テクスチャの存在によるフォールバックで誤検出される可能性があった
+- **UI 用語の統一** — 材質のエミッシブトグルの表記を `Bloom/Emissive` / `Bloom（グロー）` の混在から用途別に統一: ポストプロセスエフェクト → `Bloom`、材質単位の発光 → `エミッシブ`。内部フィールド名も `MaterialDisplayState::bloom` → `emissive` にリネーム
 
 ## v0.2.35
 

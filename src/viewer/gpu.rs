@@ -4302,7 +4302,7 @@ impl GpuRenderer {
         device: &wgpu::Device,
         model: &mut GpuModel,
         ir: &IrModel,
-        bloom_per_mat: &[bool],
+        emissive_per_mat: &[bool],
     ) {
         use super::mesh::RenderStyle;
 
@@ -4332,7 +4332,7 @@ impl GpuRenderer {
                 flags |= 4; // has_toon
             }
 
-            let bloom_emissive = if bloom_per_mat
+            let bloom_emissive = if emissive_per_mat
                 .get(draw.material_index)
                 .copied()
                 .unwrap_or(true)

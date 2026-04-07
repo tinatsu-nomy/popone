@@ -1409,6 +1409,12 @@ fn extract_materials(
                         if let Some(tex_info) = resolve_tex("_EmissionMap", true) {
                             ir_mat.emissive_texture = Some(tex_info);
                         }
+                        // lilToon Screen ブレンド (1) の近似:
+                        // 加算エミッションしかないため factor を減衰
+                        let emission_blend = get_float("_EmissionBlend", 0.0) as u8;
+                        if emission_blend == 1 && ir_mat.emissive_factor != glam::Vec3::ZERO {
+                            ir_mat.emissive_factor *= 0.5;
+                        }
                     }
                 }
 
