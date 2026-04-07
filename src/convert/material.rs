@@ -120,8 +120,8 @@ pub fn ir_material_to_pmx(
     // トゥーンシェーダーの場合: ambient/specular の補正
     let (ambient, specular, specular_power) = if ir.is_mtoon() {
         match ir.shader_family {
-            ShaderFamily::Uts2 => {
-                // UTS2: 2nd_ShadeColor→ambient、HighColor→specular が設定済み
+            ShaderFamily::Uts2 | ShaderFamily::LilToon | ShaderFamily::Poiyomi => {
+                // UTS2/lilToon/Poiyomi: 抽出時に ambient/specular を設定済み
                 (ir.ambient, ir.specular, ir.specular_power)
             }
             _ => {
@@ -429,5 +429,59 @@ mod tests {
         let expected = mat.diffuse.truncate() * 0.2;
         assert!((pmx.specular - expected).length() < 1e-5);
         assert!((pmx.specular_power - 10.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_liltoon_specular_preserved() {
+        let mut mat = make_test_material();
+        mat.shader_family = crate::intermediate::types::ShaderFamily::LilToon;
+        mat.specular = glam::Vec3::new(0.6, 0.5, 0.4);
+        mat.specular_power = 10.0;
+        mat.ambient = glam::Vec3::new(0.25, 0.2, 0.15);
+        let pmx = to_pmx(&mat, None);
+        assert_eq!(pmx.specular, mat.specular);
+        assert_eq!(pmx.specular_power, mat.specular_power);
+        assert_eq!(pmx.ambient, mat.ambient);
+    }
+
+    #[test]
+    fn test_liltoon_toon_generates_texture() {
+        let mut mat = make_test_material();
+        mat.shader_family = crate::intermediate::types::ShaderFamily::LilToon;
+        mat.diffuse = Vec4::new(0.9, 0.8, 0.7, 1.0);
+        mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.3, 0.2, 0.1));
+
+        let mut toon_textures = Vec::new();
+        let mut used_names = HashSet::new();
+        let toon_ref = generate_toon(&mat, &mut toon_textures, 8, &mut used_names);
+        assert!(matches!(toon_ref, PmxToonRef::Texture(8)));
+        assert_eq!(toon_textures.len(), 1);
+    }
+
+    #[test]
+    fn test_poiyomi_specular_preserved() {
+        let mut mat = make_test_material();
+        mat.shader_family = crate::intermediate::types::ShaderFamily::Poiyomi;
+        mat.specular = glam::Vec3::new(0.5, 0.4, 0.3);
+        mat.specular_power = 10.0;
+        mat.ambient = glam::Vec3::new(0.2, 0.15, 0.1);
+        let pmx = to_pmx(&mat, None);
+        assert_eq!(pmx.specular, mat.specular);
+        assert_eq!(pmx.specular_power, mat.specular_power);
+        assert_eq!(pmx.ambient, mat.ambient);
+    }
+
+    #[test]
+    fn test_poiyomi_toon_generates_texture() {
+        let mut mat = make_test_material();
+        mat.shader_family = crate::intermediate::types::ShaderFamily::Poiyomi;
+        mat.diffuse = Vec4::new(0.7, 0.7, 0.9, 1.0);
+        mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.2, 0.2, 0.4));
+
+        let mut toon_textures = Vec::new();
+        let mut used_names = HashSet::new();
+        let toon_ref = generate_toon(&mat, &mut toon_textures, 3, &mut used_names);
+        assert!(matches!(toon_ref, PmxToonRef::Texture(3)));
+        assert_eq!(toon_textures.len(), 1);
     }
 }

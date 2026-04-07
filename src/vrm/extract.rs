@@ -644,6 +644,38 @@ fn extract_materials(
                     // プロパティのみでの判定（shader 名が未知の場合のフォールバック）
                     || has_prop("_utsVersion")
             };
+            let v0_is_liltoon = !v0_is_mtoon && !v0_is_uts2 && {
+                let shader = v0_prop.shader.as_str();
+                // lilToon: "lilToon" または "lil/" プレフィクス、または固有プロパティ
+                shader.contains("lilToon")
+                    || shader.starts_with("lil/")
+                    || shader.contains("/lil/")
+                    || v0_prop
+                        .float_properties
+                        .as_ref()
+                        .and_then(|fp| fp.get("_lilToonVersion"))
+                        .and_then(|v| v.as_f64())
+                        .is_some()
+            };
+            let v0_is_poiyomi = !v0_is_mtoon && !v0_is_uts2 && !v0_is_liltoon && {
+                let shader = v0_prop.shader.as_str();
+                // Poiyomi: shader 名に "poiyomi" (大小文字混合あり) または固有プロパティ
+                let shader_lower = shader.to_lowercase();
+                shader_lower.contains("poiyomi")
+                    || shader_lower.contains(".poyi/")
+                    // プロパティのみでの判定: _EnableShadow (float) + _Shadow1stColor (vector)
+                    || (v0_prop
+                        .float_properties
+                        .as_ref()
+                        .and_then(|fp| fp.get("_EnableShadow"))
+                        .and_then(|v| v.as_f64())
+                        .is_some()
+                        && v0_prop
+                            .vector_properties
+                            .as_ref()
+                            .and_then(|vp| vp.get("_Shadow1stColor"))
+                            .is_some())
+            };
 
             // --- VRM 0.x 共通ヘルパー（MToon / UTS2 両方で使用）---
 
@@ -1214,6 +1246,365 @@ fn extract_materials(
                     ir_mat.mtoon.as_ref()
                         .expect("mtoon は直前で Some に設定済み").shade_color,
                 );
+            } else if v0_is_liltoon {
+                // --- lilToon → MtoonParams 近似変換 ---
+                ir_mat.shader_family = ShaderFamily::LilToon;
+                ir_mat.mtoon = Some(MtoonParams::default());
+
+                // --- ベースカラー ---
+                // lilToon は _Color を使用
+                if let Some(color) = v0_prop
+                    .vector_properties
+                    .as_ref()
+                    .and_then(|vp| vp.get("_Color"))
+                    .and_then(|v| v.as_array())
+                {
+                    let r = color.first().and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                    let g = color.get(1).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                    let b = color.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                    let a = color.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                    ir_mat.diffuse = srgb_vec4_rgb_to_linear(Vec4::new(r, g, b, a));
+                }
+                adopt_main_tex(&mut ir_mat);
+
+                // --- 1st Shadow → shade_color ---
+                {
+                    let use_shadow = get_float("_UseShadow", 1.0);
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    if use_shadow > 0.5 {
+                        mtoon.shade_color = Some(srgb_vec3_to_linear(get_color3(
+                            "_ShadowColor",
+                            0.5,
+                            0.5,
+                            0.5,
+                        )));
+                        // _ShadowColorTex → shade_texture（未設定時は _MainTex）
+                        mtoon.shade_texture = resolve_tex("_ShadowColorTex", true)
+                            .or_else(|| resolve_tex("_MainTex", true));
+                    }
+                }
+
+                // --- 2nd Shadow → ambient ---
+                {
+                    let use_shadow2 = get_float("_UseShadow2nd", 0.0);
+                    if use_shadow2 > 0.5 {
+                        let second_shade =
+                            srgb_vec3_to_linear(get_color3("_Shadow2ndColor", 0.3, 0.3, 0.3));
+                        ir_mat.ambient = second_shade * 0.5;
+                    } else if let Some(shade) = ir_mat.mtoon.as_ref().and_then(|m| m.shade_color) {
+                        ir_mat.ambient = shade * 0.5;
+                    }
+                }
+
+                // --- 影境界制御 ---
+                {
+                    let border = get_float("_ShadowBorder", 0.5);
+                    let blur = get_float("_ShadowBlur", 0.1).max(0.001);
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    mtoon.shading_toony_factor = (1.0 - blur).clamp(0.0, 1.0);
+                    mtoon.shading_shift_factor = (-(border * 2.0 - 1.0)).clamp(-1.0, 1.0);
+                }
+
+                // --- アウトライン ---
+                let lil_use_outline = get_float("_UseOutline", 0.0);
+                {
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    mtoon.outline_width_mode = if lil_use_outline > 0.5 {
+                        OutlineWidthMode::WorldCoordinates
+                    } else {
+                        OutlineWidthMode::None
+                    };
+                }
+                if lil_use_outline > 0.5 {
+                    let width = get_float("_OutlineWidth", 0.0);
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    mtoon.outline_width_factor = width * 0.01;
+                    ir_mat.edge_size = (mtoon.outline_width_factor * PMX_SCALE * 10.0).min(1.0);
+
+                    let oc = get_color3("_OutlineColor", 0.0, 0.0, 0.0);
+                    let oc_linear = srgb_vec3_to_linear(oc);
+                    ir_mat.edge_color = Vec4::new(oc_linear.x, oc_linear.y, oc_linear.z, 1.0);
+
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    mtoon.outline_width_texture = resolve_tex("_OutlineWidthMask", true);
+                    mtoon.outline_width_tex_channel = ColorChannel::R;
+                    mtoon.outline_lighting_mix = get_float("_OutlineLitApplyLightColor", 0.0);
+                }
+
+                // --- アルファモード ---
+                let transparent_mode = get_float("_TransparentMode", 0.0) as i32;
+                match transparent_mode {
+                    1 => {
+                        ir_mat.alpha_mode = AlphaMode::Mask;
+                        ir_mat.alpha_cutoff = get_float("_Cutoff", 0.5);
+                    }
+                    2 | 3 => {
+                        ir_mat.alpha_mode = AlphaMode::Blend;
+                    }
+                    _ => {} // 0 = Opaque: glTF core を保持
+                }
+
+                // --- カリング ---
+                let cull_mode_val = get_float("_Cull", 2.0) as i32;
+                ir_mat.cull_mode = match cull_mode_val {
+                    0 => CullMode::None,
+                    1 => CullMode::Front,
+                    _ => CullMode::Back,
+                };
+
+                // --- リムライト ---
+                {
+                    let use_rim = get_float("_UseRim", 0.0);
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    if use_rim > 0.5 {
+                        mtoon.parametric_rim_color =
+                            srgb_vec3_to_linear(get_color3("_RimColor", 1.0, 1.0, 1.0));
+                        mtoon.parametric_rim_fresnel_power = get_float("_RimFresnelPower", 3.0);
+                        mtoon.parametric_rim_lift = 0.0;
+                    }
+                    mtoon.rim_lighting_mix = 1.0;
+                }
+
+                // --- MatCap ---
+                {
+                    let use_matcap = get_float("_UseMatCap", 0.0);
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    if use_matcap > 0.5 {
+                        if let Some(tex_info) = resolve_tex("_MatCapTex", false) {
+                            mtoon.matcap_texture = Some(tex_info);
+                            mtoon.matcap_factor =
+                                srgb_vec3_to_linear(get_color3("_MatCapColor", 1.0, 1.0, 1.0));
+                        }
+                    } else {
+                        mtoon.matcap_factor = Vec3::ZERO;
+                    }
+                }
+
+                // --- エミッシブ ---
+                {
+                    let use_emission = get_float("_UseEmission", 0.0);
+                    if use_emission > 0.5 {
+                        ir_mat.emissive_factor = get_color3("_EmissionColor", 0.0, 0.0, 0.0);
+                        if let Some(tex_info) = resolve_tex("_EmissionMap", true) {
+                            ir_mat.emissive_texture = Some(tex_info);
+                        }
+                    }
+                }
+
+                // --- 法線マップ ---
+                {
+                    let use_bump = get_float("_UseBumpMap", 0.0);
+                    if use_bump > 0.5 {
+                        if let Some(tex_info) = resolve_tex("_BumpMap", true) {
+                            ir_mat.normal_texture = Some(tex_info);
+                            ir_mat.normal_texture_scale = get_float("_BumpScale", 1.0);
+                        }
+                    }
+                }
+
+                // --- specular（lilToon は直接的なスペキュラー概念なし → diffuse ベース） ---
+                ir_mat.specular = ir_mat.diffuse.truncate() * 0.2;
+                ir_mat.specular_power = 10.0;
+
+                // GI
+                {
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    mtoon.gi_equalization_factor = 0.0;
+                }
+
+                log::debug!(
+                    "Material[{}] \"{}\" is_liltoon=true, shader=\"{}\", outline={}, edge_size={:.3}, shade={:?}",
+                    i,
+                    ir_mat.name,
+                    v0_prop.shader,
+                    lil_use_outline > 0.5,
+                    ir_mat.edge_size,
+                    ir_mat.mtoon.as_ref()
+                        .expect("mtoon は直前で Some に設定済み").shade_color,
+                );
+            } else if v0_is_poiyomi {
+                // --- Poiyomi → MtoonParams 近似変換 ---
+                ir_mat.shader_family = ShaderFamily::Poiyomi;
+                ir_mat.mtoon = Some(MtoonParams::default());
+
+                // --- ベースカラー ---
+                if let Some(color) = v0_prop
+                    .vector_properties
+                    .as_ref()
+                    .and_then(|vp| vp.get("_Color"))
+                    .and_then(|v| v.as_array())
+                {
+                    let r = color.first().and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                    let g = color.get(1).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                    let b = color.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                    let a = color.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                    ir_mat.diffuse = srgb_vec4_rgb_to_linear(Vec4::new(r, g, b, a));
+                }
+                adopt_main_tex(&mut ir_mat);
+
+                // --- 1st Shadow → shade_color ---
+                {
+                    let enable_shadow = get_float("_EnableShadow", 0.0);
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    if enable_shadow > 0.5 {
+                        // Poiyomi は _Shadow1stColor を vectorProperties に格納
+                        mtoon.shade_color = Some(srgb_vec3_to_linear(get_color3(
+                            "_Shadow1stColor",
+                            0.5,
+                            0.5,
+                            0.5,
+                        )));
+                        mtoon.shade_texture = resolve_tex("_ShadowTexture", true)
+                            .or_else(|| resolve_tex("_MainTex", true));
+                    }
+                }
+
+                // --- 2nd Shadow → ambient ---
+                {
+                    let second_shade =
+                        srgb_vec3_to_linear(get_color3("_Shadow2ndColor", 0.3, 0.3, 0.3));
+                    if v0_prop
+                        .vector_properties
+                        .as_ref()
+                        .and_then(|vp| vp.get("_Shadow2ndColor"))
+                        .is_some()
+                    {
+                        ir_mat.ambient = second_shade * 0.5;
+                    } else if let Some(shade) = ir_mat.mtoon.as_ref().and_then(|m| m.shade_color) {
+                        ir_mat.ambient = shade * 0.5;
+                    }
+                }
+
+                // --- 影境界制御 ---
+                {
+                    let border = get_float("_ShadowBorder", 0.5);
+                    let blur = get_float("_ShadowBlur", 0.1).max(0.001);
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    mtoon.shading_toony_factor = (1.0 - blur).clamp(0.0, 1.0);
+                    mtoon.shading_shift_factor = (-(border * 2.0 - 1.0)).clamp(-1.0, 1.0);
+                }
+
+                // --- アウトライン ---
+                let poi_use_outline = get_float("_EnableOutline", 0.0);
+                {
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    mtoon.outline_width_mode = if poi_use_outline > 0.5 {
+                        OutlineWidthMode::WorldCoordinates
+                    } else {
+                        OutlineWidthMode::None
+                    };
+                }
+                if poi_use_outline > 0.5 {
+                    let width = get_float("_OutlineWidth", 0.0);
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    mtoon.outline_width_factor = width * 0.01;
+                    ir_mat.edge_size = (mtoon.outline_width_factor * PMX_SCALE * 10.0).min(1.0);
+
+                    let oc = get_color3("_OutlineColor", 0.0, 0.0, 0.0);
+                    let oc_linear = srgb_vec3_to_linear(oc);
+                    ir_mat.edge_color = Vec4::new(oc_linear.x, oc_linear.y, oc_linear.z, 1.0);
+
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    mtoon.outline_width_texture = resolve_tex("_OutlineWidthMask", true);
+                    mtoon.outline_width_tex_channel = ColorChannel::R;
+                    mtoon.outline_lighting_mix = 0.0;
+                }
+
+                // --- アルファモード ---
+                let mode_val = get_float("_Mode", 0.0) as i32;
+                match mode_val {
+                    1 => {
+                        ir_mat.alpha_mode = AlphaMode::Mask;
+                        ir_mat.alpha_cutoff = get_float("_Cutoff", 0.5);
+                    }
+                    2 | 3 => {
+                        ir_mat.alpha_mode = AlphaMode::Blend;
+                    }
+                    _ => {}
+                }
+
+                // --- カリング ---
+                let cull_mode_val = get_float("_Cull", 2.0) as i32;
+                ir_mat.cull_mode = match cull_mode_val {
+                    0 => CullMode::None,
+                    1 => CullMode::Front,
+                    _ => CullMode::Back,
+                };
+
+                // --- エミッシブ ---
+                ir_mat.emissive_factor = get_color3("_EmissionColor", 0.0, 0.0, 0.0);
+                if let Some(tex_info) = resolve_tex("_EmissionMap", true) {
+                    ir_mat.emissive_texture = Some(tex_info);
+                }
+
+                // --- 法線マップ ---
+                if let Some(tex_info) = resolve_tex("_BumpMap", true) {
+                    ir_mat.normal_texture = Some(tex_info);
+                    ir_mat.normal_texture_scale = get_float("_BumpScale", 1.0);
+                }
+
+                // --- specular（Poiyomi は直接的なスペキュラー概念なし → diffuse ベース） ---
+                ir_mat.specular = ir_mat.diffuse.truncate() * 0.2;
+                ir_mat.specular_power = 10.0;
+
+                // GI
+                {
+                    let mtoon = ir_mat
+                        .mtoon
+                        .as_mut()
+                        .expect("mtoon は直前で Some に設定済み");
+                    mtoon.gi_equalization_factor = 0.0;
+                }
+
+                log::debug!(
+                    "Material[{}] \"{}\" is_poiyomi=true, shader=\"{}\", outline={}, edge_size={:.3}, shade={:?}",
+                    i,
+                    ir_mat.name,
+                    v0_prop.shader,
+                    poi_use_outline > 0.5,
+                    ir_mat.edge_size,
+                    ir_mat.mtoon.as_ref()
+                        .expect("mtoon は直前で Some に設定済み").shade_color,
+                );
             }
         }
 
@@ -1470,8 +1861,11 @@ fn extract_materials(
             }
         }
 
-        // Ambient を diffuseから計算（UTS2 は _2nd_ShadeColor で設定済みのため抑止）
-        if !matches!(ir_mat.shader_family, ShaderFamily::Uts2) {
+        // Ambient を diffuseから計算（UTS2/lilToon/Poiyomi は shade_color ベースで設定済みのため抑止）
+        if !matches!(
+            ir_mat.shader_family,
+            ShaderFamily::Uts2 | ShaderFamily::LilToon | ShaderFamily::Poiyomi
+        ) {
             ir_mat.ambient = Vec3::new(
                 ir_mat.diffuse.x * 0.4,
                 ir_mat.diffuse.y * 0.4,

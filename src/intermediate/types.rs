@@ -762,6 +762,20 @@ pub enum ShaderFamily {
     Other,
     Mtoon,
     Uts2,
+    LilToon,
+    Poiyomi,
+}
+
+impl std::fmt::Display for ShaderFamily {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Other => f.write_str("-"),
+            Self::Mtoon => f.write_str("MToon"),
+            Self::Uts2 => f.write_str("UTS2"),
+            Self::LilToon => f.write_str("lilToon"),
+            Self::Poiyomi => f.write_str("Poiyomi"),
+        }
+    }
 }
 
 /// MToon シェーダー固有パラメータ

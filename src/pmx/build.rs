@@ -159,10 +159,10 @@ pub fn build_pmx_model_with_options(
     // 材質詳細ログ
     log::debug!("--- Material list ---");
     for (i, mat) in ir.materials.iter().enumerate() {
-        log::debug!("  [{:2}] \"{}\" diffuse=({:.2},{:.2},{:.2},{:.2}) tex={:?} double={} mtoon={} edge={:.3}",
+        log::debug!("  [{:2}] \"{}\" diffuse=({:.2},{:.2},{:.2},{:.2}) tex={:?} double={} shader={} edge={:.3}",
             i, mat.name,
             mat.diffuse.x, mat.diffuse.y, mat.diffuse.z, mat.diffuse.w,
-            mat.texture_index, mat.cull_mode != CullMode::Back, mat.is_mtoon(), mat.edge_size);
+            mat.texture_index, mat.cull_mode != CullMode::Back, mat.shader_family, mat.edge_size);
     }
     let mtoon_count = ir.materials.iter().filter(|m| m.is_mtoon()).count();
     let double_count = ir

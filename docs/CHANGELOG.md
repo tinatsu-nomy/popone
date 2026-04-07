@@ -3,15 +3,18 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.32](#v0232)
+  - [v0.2.33](#v0233)
     - [New Features](#new-features)
+    - [Improvements](#improvements)
+  - [v0.2.32](#v0232)
+    - [New Features](#new-features-1)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements)
   - [v0.2.31](#v0231)
-    - [New Features](#new-features-1)
-    - [Improvements](#improvements)
+    - [New Features](#new-features-2)
+    - [Improvements](#improvements-1)
   - [v0.2.30](#v0230)
     - [Bug Fixes](#bug-fixes)
-    - [Improvements](#improvements-1)
+    - [Improvements](#improvements-2)
   - [v0.2.29](#v0229)
     - [Bug Fixes](#bug-fixes-1)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements-1)
@@ -19,11 +22,11 @@
     - [Bug Fixes](#bug-fixes-2)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements-2)
   - [v0.2.27](#v0227)
-    - [New Features](#new-features-2)
+    - [New Features](#new-features-3)
     - [Bug Fixes](#bug-fixes-3)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements-3)
   - [v0.2.26](#v0226)
-    - [New Features](#new-features-3)
+    - [New Features](#new-features-4)
     - [Bug Fixes](#bug-fixes-4)
     - [Code Quality & Performance](#code-quality--performance)
 
@@ -32,6 +35,17 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.2.33
+
+### New Features
+
+- **lilToon / Poiyomi shader detection (Phase 3)** — Extended `ShaderFamily` enum with `LilToon` and `Poiyomi` variants, auto-detecting these shaders from VRM 0.0 `materialProperties.shader` field. Detected parameters are approximate-mapped to `MtoonParams`: shade color, shadow border/blur, outline (width/color/mask), rim light, MatCap, emissive, normal map, alpha mode, and cull mode. 2nd shadow color is mapped to PMX ambient. PMX conversion preserves extracted ambient/specular values (same pattern as UTS2). Detection uses shader name matching + property-only fallback (`_lilToonVersion` for lilToon, `_EnableShadow` + `_Shadow1stColor` for Poiyomi)
+
+### Improvements
+
+- **Shader family display in logs** — Material list logs now show `shader=MToon` / `shader=lilToon` / `shader=Poiyomi` / `shader=UTS2` / `shader=-` instead of `mtoon=true/false`. Added `Display` trait implementation for `ShaderFamily` enum
+- **Shader support documentation** — Added "Shader Support" section to usage docs (both JP/EN) with shader detection criteria table and reproduction fidelity table per shader family
 
 ## v0.2.32
 

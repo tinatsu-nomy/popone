@@ -12,6 +12,9 @@
   - [おまけ](#%E3%81%8A%E3%81%BE%E3%81%91)
     - [アニメーション再生](#%E3%82%A2%E3%83%8B%E3%83%A1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E5%86%8D%E7%94%9F)
     - [PMX（MikuMikuDance）形式に変換](#pmxmikumikudance%E5%BD%A2%E5%BC%8F%E3%81%AB%E5%A4%89%E6%8F%9B)
+  - [シェーダー対応状況](#%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%80%E3%83%BC%E5%AF%BE%E5%BF%9C%E7%8A%B6%E6%B3%81)
+    - [シェーダー検出](#%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%80%E3%83%BC%E6%A4%9C%E5%87%BA)
+    - [再現度（ビューア表示 / PMX 変換）](#%E5%86%8D%E7%8F%BE%E5%BA%A6%E3%83%93%E3%83%A5%E3%83%BC%E3%82%A2%E8%A1%A8%E7%A4%BA--pmx-%E5%A4%89%E6%8F%9B)
   - [注意事項・制限事項](#%E6%B3%A8%E6%84%8F%E4%BA%8B%E9%A0%85%E3%83%BB%E5%88%B6%E9%99%90%E4%BA%8B%E9%A0%85)
   - [ビルド](#%E3%83%93%E3%83%AB%E3%83%89)
   - [CLI オプション](#cli-%E3%82%AA%E3%83%97%E3%82%B7%E3%83%A7%E3%83%B3)
@@ -58,7 +61,7 @@ popone.exe input.fbx
 ### ビューア
 
 - **ダークテーマ** — Blender / Substance Painter 風のダークテーマ。パネル・ボタン・ツールチップを統一配色。サイドパネル 280px 固定幅、フラットタブバー。モデル未ロード時はビューポート中央にスプラッシュ画像を角丸表示
-- **3D 表示** — egui + wgpu によるリアルタイムレンダリング。テクスチャ付き Lambert シェーディング、両面描画、アルファブレンド。VRM の MToon 材質は 2 色トゥーンシェーディング（lit/shade smoothstep 補間）+ アウトライン描画（inverted hull 法）+ リムライティング（パラメトリックリム + MatCap テクスチャ）+ 補助テクスチャ（shadeMultiply / shadingShift / rimMultiply、texCoord / KHR_texture_transform 対応）+ UV アニメーション（スクロール・回転）+ emissive（発光）+ 法線マップ（MikkTSpace 接線生成による TBN 構築、doubleSided 背面法線反転対応）+ MToon 仕様準拠 4 段階描画順制御（OPAQUE → MASK → BlendZWrite → Blend、`transparentWithZWrite` / `renderQueueOffsetNumber` + BLEND 内カメラ距離動的ソート対応）で表示。VRM 0.x MToon の全プロパティを VRM 1.0 に正規化（UniVRM マイグレーション準拠）。ベースカラーテクスチャを含む全テクスチャで `texCoord` / `KHR_texture_transform` に対応。glTF sampler のアドレスモード（Repeat / ClampToEdge / MirroredRepeat）・フィルタモード（minFilter の mipmap 選択方式を含む 6 値保持）をテクスチャごとに個別のサンプラーで反映。UTS2（Unity-Chan Toon Shader）材質は自動検出し MToon 近似表示（1st shade / outline / rim / MatCap / emissive / normal 対応、HighColor は PMX 出力のみ）。PMX/PMD は MMD レンダリングモード（NdotL 依存トゥーンシェーディング・エッジ・スフィアマップ）で表示。ライティングはライトカラー + 半球 ambient（Sky/Ground 2色補間）で VRoidHub に近い環境光を再現
+- **3D 表示** — egui + wgpu によるリアルタイムレンダリング。テクスチャ付き Lambert シェーディング、両面描画、アルファブレンド。VRM の MToon 材質は 2 色トゥーンシェーディング（lit/shade smoothstep 補間）+ アウトライン描画（inverted hull 法）+ リムライティング（パラメトリックリム + MatCap テクスチャ）+ 補助テクスチャ（shadeMultiply / shadingShift / rimMultiply、texCoord / KHR_texture_transform 対応）+ UV アニメーション（スクロール・回転）+ emissive（発光）+ 法線マップ（MikkTSpace 接線生成による TBN 構築、doubleSided 背面法線反転対応）+ MToon 仕様準拠 4 段階描画順制御（OPAQUE → MASK → BlendZWrite → Blend、`transparentWithZWrite` / `renderQueueOffsetNumber` + BLEND 内カメラ距離動的ソート対応）で表示。VRM 0.x MToon の全プロパティを VRM 1.0 に正規化（UniVRM マイグレーション準拠）。ベースカラーテクスチャを含む全テクスチャで `texCoord` / `KHR_texture_transform` に対応。glTF sampler のアドレスモード（Repeat / ClampToEdge / MirroredRepeat）・フィルタモード（minFilter の mipmap 選択方式を含む 6 値保持）をテクスチャごとに個別のサンプラーで反映。UTS2（Unity-Chan Toon Shader）/ lilToon / Poiyomi 材質は自動検出し MToon 近似表示（詳細は「シェーダー対応状況」セクション参照）。PMX/PMD は MMD レンダリングモード（NdotL 依存トゥーンシェーディング・エッジ・スフィアマップ）で表示。ライティングはライトカラー + 半球 ambient（Sky/Ground 2色補間）で VRoidHub に近い環境光を再現
 - **カメラ操作** — 左ドラッグ:回転、右ドラッグ:パン、ホイール:ズーム。F:フィット、R:リセット、ダブルクリック:フィット、Shift:精密操作（1/3速度）。FOV 30°（MMD準拠）
 - **表情モーフ** — スライダで Expression を調整（0/1 ボタン・直接入力対応）。テキスト入力で名前の絞り込みが可能（日本語名・英語名の部分一致、大文字小文字不問）
 - **材質表示切替** — 材質ごとの ON/OFF、検索フィルタ。材質名にマウスオーバーすると参照テクスチャファイル名をツールチップ表示（ベース・スフィア・トゥーン・法線・エミッシブ）。材質行ホバーで 3D ビュー上の該当メッシュを半透明オレンジでハイライト。常にモデル名で折り畳みグループ化（Prefab 内の複数 FBX は個別グループ）。グループヘッダーに `[S]`（法線平滑化）`[C]`（カスタム法線クリア）`[N]`（ノーマルマップ ON/OFF）`[B]`（Bloom/Emissive ON/OFF）`[☑]`（表示/非表示）の一括操作ボタン付き。ヘッダー行ホバーでグループ内全メッシュをハイライト
@@ -159,6 +162,32 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - MToon アウトライン → PMX エッジ反映
 - 表示枠の自動分類（Root / 表情 / 体(上) / 腕 / 指 / 足 / その他）
 - UV 正規化（0..1 範囲に補正）
+
+## シェーダー対応状況
+
+VRM 0.0 の `materialProperties` に記録されたシェーダー情報を自動検出し、ビューア表示と PMX 変換に反映します。
+
+### シェーダー検出
+
+| シェーダー | 検出条件 |
+|-----------|---------|
+| MToon | shader 名に "MToon" を含む |
+| UTS2 (Unity-Chan Toon Shader) | shader 名に "UnityChanToonShader" を含む、または `_utsVersion` プロパティの存在 |
+| lilToon | shader 名に "lilToon" / "lil/" を含む、または `_lilToonVersion` プロパティの存在 |
+| Poiyomi | shader 名に "poiyomi" を含む（大小文字不問）、または `_EnableShadow` + `_Shadow1stColor` プロパティの存在 |
+
+### 再現度（ビューア表示 / PMX 変換）
+
+| シェーダー | ビューア | PMX | 対応パラメータ | 非対応 |
+|-----------|:-------:|:---:|--------------|--------|
+| MToon (VRM 1.0) | 95% | 90% | shade/toony/shift/outline/rim/matcap/UV anim/emissive/normal/GI/描画順 | Expression materialColorBinds/textureTransformBinds |
+| MToon (VRM 0.0) | 90% | 85% | 上記 + UniVRM Migration 準拠の全プロパティ正規化 | 同上 |
+| UTS2 | 75% | 70% | 1st shade/2nd shade/outline/rim/matcap/emissive/normal/HighColor(PMXのみ) | StencilMask, AngelRing, UTS2 固有ライティング |
+| lilToon | 60% | 55% | shade/2nd shadow/outline/rim/matcap/emissive/normal/alpha mode | Fur, Refraction, Gem, FakeShadow, AudioLink, Dissolve, 距離フェード |
+| Poiyomi | 45% | 40% | 1st shadow/2nd shadow/outline/emissive/normal/alpha mode | Rim, MatCap, AudioLink, Dissolve, Glitter, Parallax, Decal |
+| その他 | - | - | glTF core の baseColor/alpha/normal/emissive のみ | シェーダー固有パラメータ全般 |
+
+> **Note**: lilToon / Poiyomi は MToon パラメータへの近似変換です。基本的なトゥーンシェーディング・アウトライン・影色は再現されますが、各シェーダー固有の高度な機能（ファー・屈折・AudioLink 等）は再現されません。
 
 ## 注意事項・制限事項
 

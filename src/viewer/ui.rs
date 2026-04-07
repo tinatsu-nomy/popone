@@ -3176,12 +3176,12 @@ fn write_convert_log(
     for (i, mat) in ir.materials.iter().enumerate() {
         let _ = writeln!(
             file,
-            "  [{:2}] {} (tex:{:?} double:{} mtoon:{})",
+            "  [{:2}] {} (tex:{:?} double:{} shader:{})",
             i,
             mat.name,
             mat.texture_index,
             mat.cull_mode != CullMode::Back,
-            mat.is_mtoon(),
+            mat.shader_family,
         );
     }
 

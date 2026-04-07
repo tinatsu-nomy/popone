@@ -144,6 +144,8 @@
     - [generate_toon() (v0.2.32, replaces select_toon)](#generate_toon-v0232-replaces-select_toon)
     - [MToon ambient/specular Correction](#mtoon-ambientspecular-correction)
     - [UTS2 (Unity-Chan Toon Shader Ver.2) Approximate Conversion](#uts2-unity-chan-toon-shader-ver2-approximate-conversion)
+    - [lilToon Approximate Conversion](#liltoon-approximate-conversion)
+    - [Poiyomi Approximate Conversion](#poiyomi-approximate-conversion)
   - [A-Stance Conversion Result Management](#a-stance-conversion-result-management)
     - [AStanceResult enum](#astanceresult-enum)
     - [Determination Logic](#determination-logic)
@@ -2128,7 +2130,7 @@ Applied only at the conversion stage (`convert/material.rs`). The extraction sta
 
 ### UTS2 (Unity-Chan Toon Shader Ver.2) Approximate Conversion
 
-Introduces `ShaderFamily` enum (`Other` / `Mtoon` / `Uts2`) to detect UTS2 from VRM 0.0 `materialProperties.shader` field. Detected parameters are approximate-mapped to `MtoonParams`, reusing the existing MToon rendering pipeline (viewer) and PMX conversion path.
+Introduces `ShaderFamily` enum (`Other` / `Mtoon` / `Uts2` / `LilToon` / `Poiyomi`) to detect toon shaders from VRM 0.0 `materialProperties.shader` field. Detected parameters are approximate-mapped to `MtoonParams`, reusing the existing MToon rendering pipeline (viewer) and PMX conversion path.
 
 #### Shader Detection (Triple Check)
 
@@ -2160,7 +2162,51 @@ UTS2 `_GI_Intensity` is additive indirect light strength (default 0 = no GI), se
 
 #### Ambient Overwrite Prevention
 
-The end-of-extraction `ambient = diffuse * 0.4` recalculation for all materials is suppressed for `ShaderFamily::Uts2` to preserve UTS2's `_2nd_ShadeColor * 0.5`.
+The end-of-extraction `ambient = diffuse * 0.4` recalculation for all materials is suppressed for `ShaderFamily::Uts2 | LilToon | Poiyomi` to preserve shade-color-based ambient values.
+
+### lilToon Approximate Conversion
+
+Detected when shader name contains "lilToon" or "lil/", or when `_lilToonVersion` float property exists. Exclusive with MToon/UTS2 (cascade priority: MToon → UTS2 → lilToon → Poiyomi).
+
+#### Parameter Mapping
+
+| lilToon Property | MtoonParams / IrMaterial Field | Notes |
+|---|---|---|
+| `_Color` | `diffuse` | sRGB → linear conversion |
+| `_ShadowColor` | `shade_color` | Requires `_UseShadow > 0.5` |
+| `_ShadowColorTex` | `shade_texture` | Fallback to `_MainTex` |
+| `_Shadow2ndColor` | `ambient` | `* 0.5`, requires `_UseShadow2nd > 0.5` |
+| `_ShadowBorder` / `_ShadowBlur` | `shading_shift_factor` / `shading_toony_factor` | Same formula as UTS2 |
+| `_UseOutline` / `_OutlineWidth` / `_OutlineColor` / `_OutlineWidthMask` | outline params | `WorldCoordinates` only |
+| `_UseRim` / `_RimColor` / `_RimFresnelPower` | rim params | |
+| `_UseMatCap` / `_MatCapTex` / `_MatCapColor` | matcap params | |
+| `_UseEmission` / `_EmissionColor` / `_EmissionMap` | emissive | Requires enable flag |
+| `_UseBumpMap` / `_BumpMap` / `_BumpScale` | normal texture | Requires enable flag |
+| `_TransparentMode` | `alpha_mode` | 0=Opaque, 1=Mask, 2/3=Blend |
+| `_Cull` | `cull_mode` | 0=None, 1=Front, 2=Back |
+
+Not supported: Fur, Refraction, Gem, FakeShadow, AudioLink, Dissolve, distance fade.
+
+### Poiyomi Approximate Conversion
+
+Detected when shader name contains "poiyomi" (case-insensitive), or when both `_EnableShadow` (float) and `_Shadow1stColor` (vector) properties exist.
+
+#### Parameter Mapping
+
+| Poiyomi Property | MtoonParams / IrMaterial Field | Notes |
+|---|---|---|
+| `_Color` | `diffuse` | sRGB → linear conversion |
+| `_Shadow1stColor` | `shade_color` | Requires `_EnableShadow > 0.5` |
+| `_ShadowTexture` | `shade_texture` | Fallback to `_MainTex` |
+| `_Shadow2ndColor` | `ambient` | `* 0.5`, only if vector property exists |
+| `_ShadowBorder` / `_ShadowBlur` | `shading_shift_factor` / `shading_toony_factor` | Same formula as UTS2/lilToon |
+| `_EnableOutline` / `_OutlineWidth` / `_OutlineColor` / `_OutlineWidthMask` | outline params | `WorldCoordinates` only |
+| `_EmissionColor` / `_EmissionMap` | emissive | Always extracted |
+| `_BumpMap` / `_BumpScale` | normal texture | Always extracted |
+| `_Mode` | `alpha_mode` | 0=Opaque, 1=Mask, 2/3=Blend |
+| `_Cull` | `cull_mode` | 0=None, 1=Front, 2=Back |
+
+Not supported: Rim, MatCap, AudioLink, Dissolve, Glitter, Parallax, Decal.
 
 ## A-Stance Conversion Result Management
 
