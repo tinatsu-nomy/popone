@@ -17,6 +17,7 @@ const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
 const PIPE_TYPE_MESSAGE: u32 = 0x0000_0004;
 const PIPE_READMODE_MESSAGE: u32 = 0x0000_0002;
 const PIPE_WAIT: u32 = 0x0000_0000;
+const ERROR_MORE_DATA: u32 = 234;
 
 const MUTEX_NAME: &str = "Local\\popone_viewer_single_instance";
 const PIPE_NAME: &str = "\\\\.\\pipe\\popone_viewer_ipc";
@@ -76,6 +77,29 @@ extern "system" {
         lp_max_collection_count: *mut u32,
         lp_collect_data_timeout: *mut u32,
     ) -> i32;
+}
+
+/// Win32 ハンドルの RAII ラッパー（Drop で自動 CloseHandle）
+struct WinHandle(*mut std::ffi::c_void);
+
+impl WinHandle {
+    fn new(h: *mut std::ffi::c_void) -> Option<Self> {
+        if h.is_null() || h == INVALID_HANDLE_VALUE {
+            None
+        } else {
+            Some(Self(h))
+        }
+    }
+    fn as_raw(&self) -> *mut std::ffi::c_void {
+        self.0
+    }
+}
+
+impl Drop for WinHandle {
+    fn drop(&mut self) {
+        // SAFETY: self.0 is a valid handle (checked in new()).
+        unsafe { CloseHandle(self.0) };
+    }
 }
 
 /// &str → null 終端 UTF-16
@@ -201,69 +225,89 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
                     PIPE_ACCESS_INBOUND,
                     PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
                     1,     // 最大インスタンス数
-                    32768, // 出力バッファ
-                    32768, // 入力バッファ
+                    65536, // 出力バッファ（長パス対応で 64KB に拡大）
+                    65536, // 入力バッファ
                     0,
                     std::ptr::null_mut(),
                 )
             };
-            if h_pipe == INVALID_HANDLE_VALUE {
-                log::warn!("CreateNamedPipeW failed, listener stopped");
-                break;
-            }
+            let pipe = match WinHandle::new(h_pipe) {
+                Some(p) => p,
+                None => {
+                    log::warn!("CreateNamedPipeW failed, listener stopped");
+                    break;
+                }
+            };
 
             // クライアント接続待ち（ブロッキング）
-            // SAFETY: h_pipe is a valid named pipe handle (checked != INVALID above).
-            let connected = unsafe { ConnectNamedPipe(h_pipe, std::ptr::null_mut()) };
+            // SAFETY: pipe is a valid named pipe handle (checked in WinHandle::new).
+            let connected = unsafe { ConnectNamedPipe(pipe.as_raw(), std::ptr::null_mut()) };
             if connected == 0 {
                 // ERROR_PIPE_CONNECTED (535) は既に接続済みなので正常
                 // SAFETY: GetLastError has no preconditions.
                 let err = unsafe { GetLastError() };
                 if err != 535 {
                     log::warn!("ConnectNamedPipe failed: error={err}");
-                    // SAFETY: h_pipe is a valid handle from CreateNamedPipeW.
-                    unsafe { CloseHandle(h_pipe) };
+                    // pipe は Drop で自動 CloseHandle
                     continue;
                 }
             }
 
-            // メッセージ読み取り
-            let mut buf = [0u8; 32768];
-            let mut bytes_read: u32 = 0;
-            // SAFETY: h_pipe is a valid connected pipe handle, buf is a stack-allocated
-            // array with known size, and bytes_read is a valid mutable pointer.
-            let ok = unsafe {
-                ReadFile(
-                    h_pipe,
-                    buf.as_mut_ptr(),
-                    buf.len() as u32,
-                    &mut bytes_read,
-                    std::ptr::null_mut(),
-                )
-            };
-
-            if ok == 0 {
-                // ReadFile 失敗（ERROR_MORE_DATA 等） — 無視して次の接続へ
+            // メッセージ読み取り（ERROR_MORE_DATA 時はループで全データを取得）
+            let mut accumulated = Vec::new();
+            let mut buf = [0u8; 65536];
+            let mut read_ok = false;
+            loop {
+                let mut bytes_read: u32 = 0;
+                // SAFETY: pipe is a valid connected pipe handle, buf is a stack-allocated
+                // array with known size, and bytes_read is a valid mutable pointer.
+                let ok = unsafe {
+                    ReadFile(
+                        pipe.as_raw(),
+                        buf.as_mut_ptr(),
+                        buf.len() as u32,
+                        &mut bytes_read,
+                        std::ptr::null_mut(),
+                    )
+                };
+                if bytes_read > 0 {
+                    accumulated.extend_from_slice(&buf[..bytes_read as usize]);
+                }
+                if ok != 0 {
+                    read_ok = true; // メッセージ全体を正常に受信完了
+                    break;
+                }
                 // SAFETY: GetLastError has no preconditions.
                 let err = unsafe { GetLastError() };
-                log::warn!("ReadFile failed: error={err}");
-            } else if bytes_read > 0 {
-                let s = String::from_utf8_lossy(&buf[..bytes_read as usize]);
+                if err == ERROR_MORE_DATA {
+                    // メッセージの続きがある — 次の ReadFile で残りを取得
+                    continue;
+                }
+                // その他のエラーは回復不能 — 部分データは破棄
+                log::warn!(
+                    "ReadFile failed: error={err}, discarding {} partial bytes",
+                    accumulated.len()
+                );
+                break;
+            }
+
+            if read_ok && !accumulated.is_empty() {
+                let s = String::from_utf8_lossy(&accumulated);
                 let path = PathBuf::from(s.into_owned());
                 let _ = sender.send(path);
-            } else {
+            } else if read_ok {
                 // 空メッセージ = 前面化のみ
                 let _ = sender.send(PathBuf::new());
             }
 
             ctx.request_repaint();
 
-            // SAFETY: h_pipe is a valid pipe handle. DisconnectNamedPipe disconnects the
-            // server end, and CloseHandle releases the handle.
+            // SAFETY: pipe is a valid pipe handle. DisconnectNamedPipe disconnects the
+            // server end. CloseHandle is called automatically by WinHandle::drop.
             unsafe {
-                DisconnectNamedPipe(h_pipe);
-                CloseHandle(h_pipe);
+                DisconnectNamedPipe(pipe.as_raw());
             }
+            // pipe は Drop で自動 CloseHandle
         }
     });
 }

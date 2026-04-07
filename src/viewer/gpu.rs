@@ -3049,10 +3049,22 @@ impl GpuRenderer {
     /// （事前に ensure_pipelines を呼んでおくこと）
     fn pipelines(&self, use_unorm: bool) -> &PipelineSet {
         match (self.current_msaa, use_unorm) {
-            (true, false) => self.pipelines_msaa_srgb.as_ref().unwrap(),
-            (true, true) => self.pipelines_msaa_unorm.as_ref().unwrap(),
-            (false, false) => self.pipelines_no_msaa_srgb.as_ref().unwrap(),
-            (false, true) => self.pipelines_no_msaa_unorm.as_ref().unwrap(),
+            (true, false) => self
+                .pipelines_msaa_srgb
+                .as_ref()
+                .expect("ensure_pipelines must be called before pipelines()"),
+            (true, true) => self
+                .pipelines_msaa_unorm
+                .as_ref()
+                .expect("ensure_pipelines must be called before pipelines()"),
+            (false, false) => self
+                .pipelines_no_msaa_srgb
+                .as_ref()
+                .expect("ensure_pipelines must be called before pipelines()"),
+            (false, true) => self
+                .pipelines_no_msaa_unorm
+                .as_ref()
+                .expect("ensure_pipelines must be called before pipelines()"),
         }
     }
 

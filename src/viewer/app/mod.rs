@@ -1742,9 +1742,9 @@ impl eframe::App for ViewerApp {
 
     fn on_exit(&mut self) {
         // ログバッファをファイルにフラッシュ
-        if let Ok(lb) = self.log_buffer.lock() {
+        if let Ok(mut lb) = self.log_buffer.lock() {
             if !lb.data.is_empty() {
-                let _ = std::fs::write(&self.log_path, &lb.data);
+                let _ = std::fs::write(&self.log_path, lb.data.make_contiguous());
             }
         }
 

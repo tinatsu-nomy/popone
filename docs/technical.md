@@ -1416,6 +1416,8 @@ When the viewer is already running and launched again, the file path is forwarde
 - **Detection**: `Local\popone_viewer_single_instance` Named Mutex detects existing process
 - **Communication**: `\\.\pipe\popone_viewer_ipc` Named Pipe (MESSAGE mode) sends file path as UTF-8
 - **Reception**: Background thread listens → `mpsc::channel` → `update()` pushes a `PendingLoadDispatch` onto `pending.load_dispatch`
+- **Long path support (v0.2.35)**: `ReadFile` loops on `ERROR_MORE_DATA` (234) to accumulate the full message. Partial data from non-recoverable errors is discarded (only successfully completed reads are forwarded). Buffer size: 64KB per read
+- **Handle management (v0.2.35)**: Pipe handles are wrapped in `WinHandle` (RAII newtype with `Drop` impl calling `CloseHandle`), preventing leaks on early returns, panics, or `continue` paths
 - **Focus**: `ViewportCommand::Minimized(false)` + `Focus` (restores from minimized state)
 - **Path normalization**: `std::fs::canonicalize()` before sending (CWD difference mitigation)
 - **Log preservation**: `InstanceCheck` tri-state (`Primary` / `Forwarded` / `FallbackStart`) skips log rotation when existing instance detected

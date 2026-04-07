@@ -3,24 +3,42 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.2.35](#v0235)
+    - [Improvements](#improvements)
+    - [Documentation](#documentation)
   - [v0.2.34](#v0234)
     - [New Features](#new-features)
-    - [Improvements](#improvements)
+    - [Improvements](#improvements-1)
   - [v0.2.33](#v0233)
     - [New Features](#new-features-1)
-    - [Improvements](#improvements-1)
+    - [Improvements](#improvements-2)
   - [v0.2.32](#v0232)
     - [New Features](#new-features-2)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements)
   - [v0.2.31](#v0231)
     - [New Features](#new-features-3)
-    - [Improvements](#improvements-2)
+    - [Improvements](#improvements-3)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.2.35
+
+### Improvements
+
+- **Single instance IPC long path support** — The Named Pipe listener now handles `ERROR_MORE_DATA` by looping reads until the full message is received, supporting arbitrarily long file paths (including deeply nested Japanese directory names in UTF-8). Partial data from failed reads is discarded to prevent corrupted paths from being processed. Buffer size increased from 32KB to 64KB. Pipe handles are now managed via a RAII wrapper (`WinHandle` with `Drop` impl) to prevent handle leaks on early returns or panics
+- **LogBuffer performance** — Replaced `Vec<u8>` with `VecDeque<u8>` for the in-memory log buffer. Front truncation on overflow (`drain(..excess)`) is now O(1) amortized instead of O(N) memmove
+- **aux_files clone reduction** — PMX/PMD loading in `load_model_from_path_core` now extracts `aux_files` once and reuses it for both model parsing (by reference) and `ReloadableSource` construction (by move), eliminating a redundant `HashMap` clone per load
+- **reload_from_source clone reduction** — Removed the intermediate `source_clone` variable; the function now matches directly on the `&ReloadableSource` parameter and clones only once at the point of `finish_load`, halving the number of deep clones per reload
+- **Pipeline panic diagnostics** — `gpu.rs` `pipelines()` method now uses `expect()` with a descriptive message instead of `unwrap()`, making it easier to diagnose missing `ensure_pipelines` calls
+
+### Documentation
+
+- **Trademarks & Acknowledgments section** — Added trademark attribution for VRM (VRM Consortium), FBX (Autodesk), glTF (Khronos Group), DirectX (Microsoft), PSD (Adobe), PMX/PMD, OBJ, and STL. Added shader technology credits for MToon, UTS2, lilToon, and Poiyomi with license information
+- **Dependency license table updates** — Added 5 missing crates (`toml`, `dunce`, `tempfile`, `encase`, `env_logger`) to both dependency lists and license tables. Fixed `encoding_rs` repository URL (`nickel-org` → `hsivonen`). Fixed `dunce` repository URL (GitHub → GitLab `kornelski/dunce`)
 
 ## v0.2.34
 

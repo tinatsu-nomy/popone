@@ -208,16 +208,21 @@ pub(super) fn cpu_parse_source(
             // 非 temp: ディスク直読み（pmx_to_ir が sph/spa 等も含め全拡張子を読める）
             // temp: preloaded.aux_files を使って pmx_to_ir_with_aux
             let pmx_dir = path.parent().unwrap_or(Path::new("."));
+            // aux_files を1回だけ clone し、モデルロードとソース構築の両方で使い回す
+            let aux = if is_temp {
+                preloaded
+                    .as_ref()
+                    .filter(|pl| pl.path == *path)
+                    .map(|pl| pl.aux_files.clone())
+                    .unwrap_or_default()
+            } else {
+                HashMap::new()
+            };
             let mut ir = if is_temp {
                 let data = read_data(path)?;
                 check_cancel(cancel)?;
                 let pmx_model = crate::pmx::reader::read_pmx_from_data(&data)?;
                 check_cancel(cancel)?;
-                let aux = preloaded
-                    .as_ref()
-                    .filter(|pl| pl.path == *path)
-                    .map(|pl| pl.aux_files.clone())
-                    .unwrap_or_default();
                 crate::pmx::extract::pmx_to_ir_with_aux(&pmx_model, pmx_dir, Some(&aux))?
             } else {
                 let pmx_model = crate::pmx::reader::read_pmx(path)?;
@@ -236,11 +241,6 @@ pub(super) fn cpu_parse_source(
             }
             let source = if is_temp {
                 let data = read_data(path).unwrap_or_default();
-                let aux = preloaded
-                    .as_ref()
-                    .filter(|pl| pl.path == *path)
-                    .map(|pl| pl.aux_files.clone())
-                    .unwrap_or_default();
                 ReloadableSource::Snapshot {
                     original_path: path.to_path_buf(),
                     main_bytes: data,
@@ -254,16 +254,21 @@ pub(super) fn cpu_parse_source(
         FileFormat::Pmd => {
             // 非 temp: ディスク直読み（pmd_to_ir が sph/spa 等も含め全拡張子を読める）
             // temp: preloaded.aux_files を使って pmd_to_ir_with_aux
+            // aux_files を1回だけ clone し、モデルロードとソース構築の両方で使い回す
+            let aux = if is_temp {
+                preloaded
+                    .as_ref()
+                    .filter(|pl| pl.path == *path)
+                    .map(|pl| pl.aux_files.clone())
+                    .unwrap_or_default()
+            } else {
+                HashMap::new()
+            };
             let mut ir = if is_temp {
                 let data = read_data(path)?;
                 check_cancel(cancel)?;
                 let pmd_model = crate::pmd::reader::read_pmd_from_data(&data)?;
                 check_cancel(cancel)?;
-                let aux = preloaded
-                    .as_ref()
-                    .filter(|pl| pl.path == *path)
-                    .map(|pl| pl.aux_files.clone())
-                    .unwrap_or_default();
                 crate::pmd::extract::pmd_to_ir_with_aux(&pmd_model, path, Some(&aux))?
             } else {
                 let pmd_model = crate::pmd::reader::read_pmd(path)?;
@@ -282,11 +287,6 @@ pub(super) fn cpu_parse_source(
             }
             let source = if is_temp {
                 let data = read_data(path).unwrap_or_default();
-                let aux = preloaded
-                    .as_ref()
-                    .filter(|pl| pl.path == *path)
-                    .map(|pl| pl.aux_files.clone())
-                    .unwrap_or_default();
                 ReloadableSource::Snapshot {
                     original_path: path.to_path_buf(),
                     main_bytes: data,
@@ -2869,9 +2869,10 @@ impl ViewerApp {
 
     /// ReloadableSource からモデルを再読み込み（load_file の UI 分岐を回避）
     fn reload_from_source(&mut self, source: &ReloadableSource) -> anyhow::Result<()> {
-        let source_clone = source.clone();
+        // source を直接参照で match し、finish_load の直前で1回だけ clone する
+        // （従来の source_clone + source_clone.clone() による二重クローンを排除）
         let result: anyhow::Result<()> = (|| {
-            match &source_clone {
+            match source {
                 ReloadableSource::File(path) => {
                     let ext = crate::path_ext_lower(&path);
                     match detect_format(&ext) {
@@ -2923,7 +2924,7 @@ impl ViewerApp {
                             )?;
                             // temp_dir はここでスコープ終了 → TempDir::drop が自動削除する
                             drop(temp_dir);
-                            self.finish_load(ir, source_clone.clone())
+                            self.finish_load(ir, source.clone())
                         }
                         FileFormat::Pmx => {
                             let pmx_model = crate::pmx::reader::read_pmx_from_data(main_bytes)?;
@@ -2943,7 +2944,7 @@ impl ViewerApp {
                                         crate::convert::coord::gltf_pos_to_pmx,
                                     );
                             }
-                            self.finish_load(ir, source_clone.clone())
+                            self.finish_load(ir, source.clone())
                         }
                         FileFormat::Pmd => {
                             let pmd_model = crate::pmd::reader::read_pmd_from_data(main_bytes)?;
@@ -2962,7 +2963,7 @@ impl ViewerApp {
                                         crate::convert::coord::gltf_pos_to_pmx,
                                     );
                             }
-                            self.finish_load(ir, source_clone.clone())
+                            self.finish_load(ir, source.clone())
                         }
                         FileFormat::Obj => {
                             let obj_dir = original_path.parent().unwrap_or(Path::new("."));
@@ -2976,7 +2977,7 @@ impl ViewerApp {
                                 obj_dir,
                                 Some(aux_files),
                             )?;
-                            self.finish_load(ir, source_clone.clone())
+                            self.finish_load(ir, source.clone())
                         }
                         FileFormat::Stl => {
                             let name = original_path
@@ -2984,7 +2985,7 @@ impl ViewerApp {
                                 .and_then(|s| s.to_str())
                                 .unwrap_or("Model");
                             let ir = crate::stl::extract::load_stl_from_data(main_bytes, name)?;
-                            self.finish_load(ir, source_clone.clone())
+                            self.finish_load(ir, source.clone())
                         }
                         FileFormat::DirectX => {
                             let x_dir = original_path.parent().unwrap_or(Path::new("."));
@@ -2998,7 +2999,7 @@ impl ViewerApp {
                                 x_dir,
                                 Some(aux_files),
                             )?;
-                            self.finish_load(ir, source_clone.clone())
+                            self.finish_load(ir, source.clone())
                         }
                         _ => {
                             // VRM
@@ -3030,7 +3031,7 @@ impl ViewerApp {
                                 &bloom,
                             )?;
                             Self::encode_ir_textures_as_png(&mut ir, &glb.images);
-                            self.finish_load_with_gpu(ir, gpu_model, source_clone.clone())
+                            self.finish_load_with_gpu(ir, gpu_model, source.clone())
                         }
                     }
                 }
@@ -3048,7 +3049,7 @@ impl ViewerApp {
                             original_path,
                             archive_bytes.as_ref(),
                             selected_entry_path,
-                            &source_clone,
+                            source,
                             &None,
                             &HashMap::new(),
                         );
@@ -3059,7 +3060,7 @@ impl ViewerApp {
                         selected_entry_path,
                         *inner_kind,
                     )?;
-                    self.finish_load(ir, source_clone.clone())
+                    self.finish_load(ir, source.clone())
                 }
             }
         })();

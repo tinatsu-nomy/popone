@@ -3,24 +3,42 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
+  - [v0.2.35](#v0235)
+    - [改善](#%E6%94%B9%E5%96%84)
+    - [ドキュメント](#%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88)
   - [v0.2.34](#v0234)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
-    - [改善](#%E6%94%B9%E5%96%84)
+    - [改善](#%E6%94%B9%E5%96%84-1)
   - [v0.2.33](#v0233)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
-    - [改善](#%E6%94%B9%E5%96%84-1)
+    - [改善](#%E6%94%B9%E5%96%84-2)
   - [v0.2.32](#v0232)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84)
   - [v0.2.31](#v0231)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
-    - [改善](#%E6%94%B9%E5%96%84-2)
+    - [改善](#%E6%94%B9%E5%96%84-3)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.2.35
+
+### 改善
+
+- **シングルインスタンス IPC 長パス対応** — Named Pipe リスナーで `ERROR_MORE_DATA` 発生時にループ読み取りを行い、任意の長さのファイルパス（UTF-8 の深いネスト日本語ディレクトリ名を含む）に対応。読み取り失敗時の部分データは破棄し、不正なパスの処理を防止。バッファサイズを 32KB → 64KB に拡大。パイプハンドルを RAII ラッパー（`WinHandle` + `Drop` 実装）で管理し、早期リターンやパニック時のハンドルリークを防止
+- **LogBuffer パフォーマンス改善** — インメモリログバッファを `Vec<u8>` から `VecDeque<u8>` に変更。上限超過時の先頭切り詰め（`drain(..excess)`）が O(N) memmove → O(1) 償却に改善
+- **aux_files クローン削減** — `load_model_from_path_core` の PMX/PMD ロードで `aux_files` を1回だけ取得し、モデル解析（参照渡し）とソース構築（ムーブ）の両方で使い回し。ロードごとの不要な `HashMap` クローンを排除
+- **reload_from_source クローン削減** — 中間変数 `source_clone` を廃止し、`&ReloadableSource` パラメータを直接 match。`finish_load` の直前でのみ1回クローンすることで、リロードごとのディープクローン回数を半減
+- **パイプライン取得のパニック診断改善** — `gpu.rs` の `pipelines()` メソッドで `unwrap()` を説明付き `expect()` に変更し、`ensure_pipelines` 呼び忘れ時の診断を容易化
+
+### ドキュメント
+
+- **商標・権利帰属セクション追加** — VRM（VRM Consortium）、FBX（Autodesk）、glTF（Khronos Group）、DirectX（Microsoft）、PSD（Adobe）、PMX/PMD、OBJ、STL の商標帰属を追記。MToon、UTS2、lilToon、Poiyomi のシェーダー技術クレジットとライセンス情報を追記
+- **依存ライブラリライセンス表更新** — 漏れていた5クレート（`toml`、`dunce`、`tempfile`、`encase`、`env_logger`）を依存一覧・ライセンス表の両方に追加。`encoding_rs` のリポジトリ URL を修正（`nickel-org` → `hsivonen`）。`dunce` のリポジトリ URL を修正（GitHub → GitLab `kornelski/dunce`）
 
 ## v0.2.34
 

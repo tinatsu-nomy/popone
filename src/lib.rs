@@ -28,8 +28,9 @@ pub fn path_ext_lower(path: &Path) -> String {
 }
 
 /// ログメモリバッファ（上限付き、累計オフセット追跡）
+/// VecDeque を使用し、先頭切り詰め（drain）を O(1) で行う。
 pub struct LogBuffer {
-    pub data: Vec<u8>,
+    pub data: std::collections::VecDeque<u8>,
     /// 累計書き込みバイト数（drain しても減らない）
     pub total_written: usize,
 }
@@ -37,7 +38,7 @@ pub struct LogBuffer {
 impl LogBuffer {
     pub fn new() -> Self {
         Self {
-            data: Vec::new(),
+            data: std::collections::VecDeque::new(),
             total_written: 0,
         }
     }
@@ -53,11 +54,25 @@ impl LogBuffer {
         } else {
             offset - drained
         };
-        let slice = &self.data[start..];
-        if slice.is_empty() {
+        let (front, back) = self.data.as_slices();
+        let total_len = self.data.len();
+        if start >= total_len {
+            return None;
+        }
+        // VecDeque は内部的に2つの連続スライスで構成される
+        let bytes: std::borrow::Cow<'_, [u8]> = if start < front.len() {
+            if back.is_empty() {
+                std::borrow::Cow::Borrowed(&front[start..])
+            } else {
+                std::borrow::Cow::Owned([&front[start..], back].concat())
+            }
+        } else {
+            std::borrow::Cow::Borrowed(&back[start - front.len()..])
+        };
+        if bytes.is_empty() {
             None
         } else {
-            Some(String::from_utf8_lossy(slice).into_owned())
+            Some(String::from_utf8_lossy(&bytes).into_owned())
         }
     }
 }

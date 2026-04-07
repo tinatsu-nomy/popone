@@ -79,7 +79,7 @@ const LOG_BUFFER_MAX_BYTES: usize = 16 * 1024 * 1024;
 impl std::io::Write for SharedLogBufferWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if let Ok(mut lb) = self.0.lock() {
-            lb.data.extend_from_slice(buf);
+            lb.data.extend(buf.iter().copied());
             lb.total_written += buf.len();
             // 上限超過時は先頭を切り詰め（直近ログを優先保持）
             if lb.data.len() > LOG_BUFFER_MAX_BYTES {
@@ -97,9 +97,9 @@ impl std::io::Write for SharedLogBufferWriter {
 /// メモリバッファの内容をファイルに一括書き出す
 #[cfg(feature = "viewer")]
 fn flush_log_buffer(buffer: &SharedLogBuffer, path: &std::path::Path) {
-    if let Ok(lb) = buffer.lock() {
+    if let Ok(mut lb) = buffer.lock() {
         if !lb.data.is_empty() {
-            let _ = std::fs::write(path, &lb.data);
+            let _ = std::fs::write(path, lb.data.make_contiguous());
         }
     }
 }
