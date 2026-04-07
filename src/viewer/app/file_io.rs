@@ -883,7 +883,7 @@ impl ViewerApp {
             };
             let pkg_idx_ref = pkg.pkg_index.as_deref();
             match self.load_fbx_from_assets(
-                pkg.assets,
+                &pkg.assets,
                 pkg.fbx_index,
                 &pkg.source_path,
                 mode,
@@ -899,6 +899,7 @@ impl ViewerApp {
                     self.convert_message = Some(ConvertMessage::failure(format!(
                         "ファイルを読み込めませんでした。\n詳細: {e}"
                     )));
+                    self.pending.multi_load = None;
                 }
             }
         } else {
@@ -991,7 +992,7 @@ impl ViewerApp {
             // モデルが1つだけ → プログレス表示後に遅延ロード
             let (idx, _, model_type) = model_list[0];
             self.pending.pkg_load = Some(PendingPkgModelLoad {
-                assets,
+                assets: Arc::new(assets),
                 fbx_index: idx,
                 model_type,
                 source_path: path.to_path_buf(),
@@ -1008,6 +1009,7 @@ impl ViewerApp {
             for (_, name, mtype) in &model_list {
                 log::info!("  {:?}: {}", mtype, name);
             }
+            let checked = vec![false; model_list.len()];
             self.pending.unity_pkg = Some(PendingUnityPackage {
                 assets,
                 model_list,
@@ -1016,6 +1018,7 @@ impl ViewerApp {
                 archive_snapshot: snapshot,
                 nested_archive_source: None,
                 pkg_index: Some(pkg_index),
+                checked,
             });
         }
         Ok(())
@@ -1057,7 +1060,7 @@ impl ViewerApp {
         if model_list.len() == 1 {
             let (idx, _, model_type) = model_list[0];
             self.pending.pkg_load = Some(PendingPkgModelLoad {
-                assets,
+                assets: Arc::new(assets),
                 fbx_index: idx,
                 model_type,
                 source_path: path.to_path_buf(),
@@ -1069,6 +1072,7 @@ impl ViewerApp {
                 pkg_index: Some(pkg_index),
             });
         } else {
+            let checked = vec![false; model_list.len()];
             self.pending.unity_pkg = Some(PendingUnityPackage {
                 assets,
                 model_list,
@@ -1077,6 +1081,7 @@ impl ViewerApp {
                 archive_snapshot: snapshot,
                 nested_archive_source: None,
                 pkg_index: Some(pkg_index),
+                checked,
             });
         }
         Ok(())
@@ -1242,7 +1247,7 @@ impl ViewerApp {
             let (model_index, ref _name, model_type) = model_list[0];
             log::info!("Archive .unitypackage: 1 model detected");
             self.pending.pkg_load = Some(PendingPkgModelLoad {
-                assets,
+                assets: Arc::new(assets),
                 fbx_index: model_index,
                 model_type,
                 source_path: source_path.clone(),
@@ -1263,6 +1268,7 @@ impl ViewerApp {
                 };
                 log::info!("  [{}] {}", label, name);
             }
+            let checked = vec![false; model_list.len()];
             self.pending.unity_pkg = Some(PendingUnityPackage {
                 assets,
                 model_list,
@@ -1271,6 +1277,7 @@ impl ViewerApp {
                 archive_snapshot,
                 nested_archive_source,
                 pkg_index: Some(pkg_index),
+                checked,
             });
         }
         Ok(())
@@ -1593,7 +1600,22 @@ impl ViewerApp {
             ReloadableSource::Snapshot { .. } => Some(source.clone()),
             _ => None,
         };
-        self.append_from_pkg(assets, model_index, model_type, path, source_override);
+        // リロード経由では pkg_index を再構築して渡す（Prefab append 用）
+        let pkg_index = if model_type == PkgModelType::Prefab {
+            crate::unitypackage::build_unity_package_index(&archive_data)
+                .ok()
+                .map(Arc::new)
+        } else {
+            None
+        };
+        let _ok = self.append_from_pkg(
+            &assets,
+            model_index,
+            model_type,
+            path,
+            source_override,
+            pkg_index,
+        );
 
         // 追加材質に対するpkgテクスチャ割り当てを復元
         if !saved_pkg_tex_assignments.is_empty() {
@@ -1633,7 +1655,7 @@ impl ViewerApp {
     /// 展開済みアセットから指定FBXをロード
     pub fn load_fbx_from_assets(
         &mut self,
-        assets: Vec<crate::unitypackage::ExtractedAsset>,
+        assets: &[crate::unitypackage::ExtractedAsset],
         fbx_index: usize,
         source_path: &std::path::Path,
         mode: FbxLoadMode,
@@ -1804,7 +1826,7 @@ impl ViewerApp {
     /// 展開済みアセットから指定VRMをロード
     pub fn load_vrm_from_assets(
         &mut self,
-        assets: Vec<crate::unitypackage::ExtractedAsset>,
+        assets: &[crate::unitypackage::ExtractedAsset],
         vrm_index: usize,
         source_path: &std::path::Path,
         source_override: Option<ReloadableSource>,
@@ -1864,7 +1886,7 @@ impl ViewerApp {
     /// Prefab エントリから参照先 FBX を解決してロード（複数 FBX マージ対応）
     pub fn load_prefab_from_assets(
         &mut self,
-        _assets: Vec<crate::unitypackage::ExtractedAsset>,
+        _assets: &[crate::unitypackage::ExtractedAsset],
         prefab_index: usize,
         source_path: &std::path::Path,
         source_override: Option<ReloadableSource>,
@@ -3369,7 +3391,7 @@ impl ViewerApp {
                 main_bytes: snap,
                 aux_files: HashMap::new(),
             });
-            return self.load_vrm_from_assets(assets, vrm_idx, path, source_override);
+            return self.load_vrm_from_assets(&assets, vrm_idx, path, source_override);
         }
 
         // 初回ロードで Prefab 対応テクスチャマッピングが使われたか判定
@@ -3558,7 +3580,7 @@ impl ViewerApp {
 
         // 通常パス: 単純名前マッチング
         let (fbx_data, fbx_name, textures) =
-            crate::unitypackage::take_fbx_and_textures(assets, fbx_idx)?;
+            crate::unitypackage::take_fbx_and_textures(&assets, fbx_idx)?;
         log::info!(
             "Unitypackage reload: {} textures: {}",
             fbx_name,
@@ -3701,13 +3723,7 @@ impl ViewerApp {
             Some(archive_source.clone())
         };
 
-        self.load_prefab_from_assets(
-            Vec::new(),
-            prefab_index,
-            path,
-            source_override,
-            Some(pkg_index),
-        )?;
+        self.load_prefab_from_assets(&[], prefab_index, path, source_override, Some(pkg_index))?;
 
         // pkg テクスチャが load_prefab_from_assets 内で設定されなかった場合に復元
         if self.tex.pkg_textures.is_none() {
@@ -3828,7 +3844,7 @@ impl ViewerApp {
                 })
                 .unwrap_or(vrm_list[0].0);
             return self.load_vrm_from_assets(
-                assets,
+                &assets,
                 vrm_idx,
                 original_path,
                 Some(archive_source.clone()),
@@ -3856,7 +3872,7 @@ impl ViewerApp {
             .unwrap_or(fbx_list[0].0);
 
         let (fbx_data, fbx_name, textures) =
-            crate::unitypackage::take_fbx_and_textures(assets, fbx_idx)?;
+            crate::unitypackage::take_fbx_and_textures(&assets, fbx_idx)?;
         log::info!(
             "Archive unitypackage reload: {} textures: {}",
             fbx_name,
@@ -4307,14 +4323,16 @@ impl ViewerApp {
     }
 
     /// unitypackage 内のモデルを既存モデルに追加（アペンド）
+    /// unitypackage 内モデルを既存モデルに追加。成功時 true を返す。
     pub(super) fn append_from_pkg(
         &mut self,
-        assets: Vec<crate::unitypackage::ExtractedAsset>,
+        assets: &[crate::unitypackage::ExtractedAsset],
         model_index: usize,
         model_type: PkgModelType,
         source_path: &std::path::Path,
         source_override: Option<ReloadableSource>,
-    ) {
+        pkg_index: Option<Arc<UnityPackageIndex>>,
+    ) -> bool {
         let normalize = self.normalize_pose;
         let normalize_tstance = self.normalize_to_tstance;
         let mut pkg_unmatched: Vec<usize> = Vec::new();
@@ -4370,8 +4388,100 @@ impl ViewerApp {
                     Ok(ir)
                 }
                 PkgModelType::Prefab => {
-                    // Prefab のアペンドは非対応（通常ロードのみ）
-                    anyhow::bail!("Prefab のアペンドモードは未対応です");
+                    let pkg = pkg_index
+                        .as_ref()
+                        .context("Prefab append には pkg_index が必要です")?;
+
+                    let resolve_result =
+                        crate::unitypackage::resolve_single_prefab(pkg, model_index)?;
+                    log::info!(
+                        "Append Prefab resolved: {} FBX detected",
+                        resolve_result.entries.len()
+                    );
+
+                    let prefab_filename = std::path::Path::new(&pkg.entries[model_index].pathname)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+
+                    // テクスチャ収集
+                    let textures: Vec<crate::unitypackage::PackageTexture> = pkg
+                        .entries
+                        .iter()
+                        .filter(|e| {
+                            let lower = e.pathname.to_lowercase();
+                            [
+                                ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".psd", ".tif", ".tiff",
+                            ]
+                            .iter()
+                            .any(|ext| lower.ends_with(ext))
+                        })
+                        .map(|e| {
+                            let display_name = std::path::Path::new(&e.pathname)
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy();
+                            crate::unitypackage::PackageTexture {
+                                guid: Arc::from(e.guid.as_str()),
+                                display_name: Arc::from(display_name.as_ref()),
+                                data: Arc::clone(&e.data),
+                                pathname: Arc::from(e.pathname.as_str()),
+                            }
+                        })
+                        .collect();
+
+                    // レガシー形式テクスチャリスト（pkg_textures 追加用）
+                    pkg_textures_to_add = textures
+                        .iter()
+                        .map(|t| (t.display_name.to_string(), t.data.to_vec()))
+                        .collect();
+
+                    let mut base_ir: Option<IrModel> = None;
+
+                    for (i, fbx_entry_info) in resolve_result.entries.iter().enumerate() {
+                        let fbx_entry = &pkg.entries[fbx_entry_info.fbx_index];
+                        let fbx_data = fbx_entry.data.to_vec();
+                        let fbx_name = std::path::Path::new(&fbx_entry.pathname)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+
+                        log::info!(
+                            "  Append FBX[{}]: {} (GUID={})",
+                            i,
+                            fbx_name,
+                            fbx_entry_info.fbx_guid
+                        );
+
+                        let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                            &fbx_data,
+                            None,
+                            normalize,
+                            normalize_tstance,
+                        )?;
+
+                        let prefab_label = format!("prefab({})", prefab_filename);
+                        let unmatched = crate::unitypackage::embed_textures_with_prefab(
+                            &mut ir,
+                            &textures,
+                            &fbx_entry_info.materials,
+                            &prefab_label,
+                        );
+
+                        if let Some(ref mut base) = base_ir {
+                            let mat_offset = base.materials.len();
+                            base.merge(ir);
+                            pkg_unmatched.extend(unmatched.iter().map(|&idx| idx + mat_offset));
+                        } else {
+                            pkg_model_name = Some(prefab_filename.clone());
+                            pkg_unmatched = unmatched;
+                            base_ir = Some(ir);
+                        }
+                    }
+
+                    base_ir.context("Prefab に有効な FBX が見つかりません")
                 }
             }
         })();
@@ -4468,8 +4578,10 @@ impl ViewerApp {
                 self.convert_message = Some(ConvertMessage::failure(format!(
                     "追加読み込みに失敗しました。\n詳細: {e}"
                 )));
+                return false;
             }
         }
+        true
     }
 
     #[expect(dead_code)]

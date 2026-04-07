@@ -33,7 +33,7 @@ const DARK_BORDER_COLOR: egui::Color32 = egui::Color32::from_rgb(0x33, 0x33, 0x3
 pub use helpers::{FbxLoadMode, PkgModelType, PreloadedData, ReloadableSource, TextureSource};
 pub use pending::{
     ExportState, PendingArchive, PendingArchiveLoad, PendingFbxChoice, PendingFbxChoicePkg,
-    PendingOverlay, PendingPkgModelLoad, PendingState, PendingUnityPackage,
+    PendingMultiLoad, PendingOverlay, PendingPkgModelLoad, PendingState, PendingUnityPackage,
 };
 pub use texture_mgmt::{CachedMaterialInfo, PendingTexMatch, PendingTexPreview, TextureState};
 

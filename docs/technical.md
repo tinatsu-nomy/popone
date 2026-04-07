@@ -180,6 +180,8 @@
   - [Session Persistence](#session-persistence)
     - [Settings File (popone.toml)](#settings-file-poponetoml)
     - [Texture Assignment History (popone_history.json)](#texture-assignment-history-popone_historyjson)
+    - [Prefab Append Loading (v0.2.34)](#prefab-append-loading-v0234)
+    - [Multi-Model Batch Loading (v0.2.34)](#multi-model-batch-loading-v0234)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -2613,3 +2615,38 @@ Saves texture assignments for FBX/OBJ models (`ReloadableSource::File` with empt
 - **Value**: Array of `{ material_index, material_name, texture_path }`
 - **Material matching**: index+name exact match → name unique fallback → skip
 - **On recall**: `link_same_name` temporarily disabled, failures detected via `ConvertResult::Failure`, results notified to user
+
+### Prefab Append Loading (v0.2.34)
+
+Prefab models can now be appended to an already-loaded scene. The `append_from_pkg` function handles the `PkgModelType::Prefab` branch:
+
+1. `resolve_single_prefab(pkg, model_index)` resolves the Prefab's GUID reference chain to discover all referenced FBX entries
+2. For each resolved FBX: extract data from `pkg.entries`, run `extract_ir_model_from_fbx_with_options`, and apply `embed_textures_with_prefab` for GUID-based texture mapping
+3. Multiple FBX results are merged into a single `IrModel` via `ir.merge()`
+4. The merged `IrModel` is returned to `finish_append_ext`, which handles GPU model rebuild and `MaterialGroup` creation
+
+The function returns `bool` to signal success/failure. On failure, the caller clears `PendingMultiLoad` to abort any remaining batch.
+
+### Multi-Model Batch Loading (v0.2.34)
+
+The `.unitypackage` model selection dialog supports multi-select via checkboxes:
+
+**UI Flow:**
+- Each model entry has a checkbox alongside the existing click-to-load button
+- "Load selected (N)" button triggers batch loading
+- Single-click loading is preserved for quick single-model selection
+
+**Queue Architecture:**
+- `PendingMultiLoad` holds a single `Arc<Vec<ExtractedAsset>>` and a `Vec<(usize, PkgModelType)>` of remaining models
+- The first selected model is loaded via `PendingPkgModelLoad` (normal load or append depending on context)
+- `process_pending_tasks` dequeues one model per frame from `PendingMultiLoad` into `pkg_load`, creating a new `PendingPkgModelLoad` with `Arc::clone` (reference count only, no data copy)
+- Dequeue is gated on both `pkg_load.is_none()` and `fbx_choice.is_none()` to prevent advancing while a load-mode dialog is open
+
+**Zero-Copy Asset Sharing:**
+- `take_fbx_and_textures` / `take_vrm` changed from `Vec<ExtractedAsset>` (consuming) to `&[ExtractedAsset]` (borrowing)
+- `PendingPkgModelLoad.assets` / `PendingFbxChoicePkg.assets` changed to `Arc<Vec<ExtractedAsset>>`
+- Result: N models share one asset list; no `ExtractedAsset` cloning occurs
+
+**Abort Behavior:**
+- If any model load fails (returns `Err` or `append_from_pkg` returns `false`), `multi_load` is set to `None`
+- If the FBX load-mode choice dialog is cancelled, `multi_load` is also cleared

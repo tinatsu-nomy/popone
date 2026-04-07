@@ -299,6 +299,7 @@ fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         app.execute_fbx_choice(choice);
     } else if cancelled || !open {
         app.pending.fbx_choice = None;
+        app.pending.multi_load = None;
     }
 }
 
@@ -380,6 +381,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     }
 
     let mut selected: Option<(usize, super::app::PkgModelType)> = None;
+    let mut multi_selected = false;
     let mut cancelled = false;
     let mut open = true;
 
@@ -391,40 +393,56 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         .pivot(egui::Align2::CENTER_CENTER)
         .show(ctx, |ui| {
             ui.label(".unitypackage 内に複数のモデルが見つかりました。");
-            ui.label("読み込むファイルを選択してください。");
+            ui.label("クリックで単体読み込み、チェックでまとめて読み込み。");
             ui.separator();
-            // クロージャ内で pending を再借用（名前の String clone を回避）
-            let Some(pending) = app.pending.unity_pkg.as_ref() else {
+            let Some(pending) = app.pending.unity_pkg.as_mut() else {
                 return;
             };
             egui::ScrollArea::vertical()
                 .max_height(300.0)
                 .show(ui, |ui| {
-                    for (asset_idx, name, model_type) in &pending.model_list {
+                    for (i, (asset_idx, name, model_type)) in pending.model_list.iter().enumerate()
+                    {
                         let type_label = match model_type {
                             super::app::PkgModelType::Prefab => "[Prefab]",
                             super::app::PkgModelType::Vrm => "[VRM]",
                             super::app::PkgModelType::Fbx => "[FBX]",
                         };
-                        if ui.button(format!("{} {}", type_label, name)).clicked() {
-                            selected = Some((*asset_idx, *model_type));
-                        }
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut pending.checked[i], "");
+                            if ui.button(format!("{} {}", type_label, name)).clicked() {
+                                selected = Some((*asset_idx, *model_type));
+                            }
+                        });
                     }
                 });
             ui.separator();
-            if ui.button("キャンセル").clicked() {
-                cancelled = true;
-            }
+            let checked_count = pending.checked.iter().filter(|&&c| c).count();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        checked_count >= 1,
+                        egui::Button::new(format!("まとめて読み込み ({})", checked_count)),
+                    )
+                    .clicked()
+                {
+                    multi_selected = true;
+                }
+                if ui.button("キャンセル").clicked() {
+                    cancelled = true;
+                }
+            });
         });
 
     if let Some((idx, model_type)) = selected {
+        // 単一選択: 従来と同じ動作
         let pending = app
             .pending
             .unity_pkg
             .take()
             .expect("pending_unity_pkg は Some 確認済み");
         app.pending.pkg_load = Some(super::app::PendingPkgModelLoad {
-            assets: pending.assets,
+            assets: std::sync::Arc::new(pending.assets),
             fbx_index: idx,
             model_type,
             source_path: pending.source_path,
@@ -435,6 +453,72 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             nested_archive_source: pending.nested_archive_source,
             pkg_index: pending.pkg_index,
         });
+    } else if multi_selected {
+        // 複数選択: 1つ目を通常ロード、残りを PendingMultiLoad に積む
+        let pending = app
+            .pending
+            .unity_pkg
+            .take()
+            .expect("pending_unity_pkg は Some 確認済み");
+        let checked_indices: Vec<usize> = pending
+            .checked
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &c)| if c { Some(i) } else { None })
+            .collect();
+
+        if let Some((&first, rest)) = checked_indices.split_first() {
+            let (first_asset_idx, _, first_model_type) = pending.model_list[first];
+
+            // assets を Arc 化して共有（clone は参照カウントのみ）
+            let shared_assets = std::sync::Arc::new(pending.assets);
+
+            if rest.is_empty() {
+                // 1件のみ
+                app.pending.pkg_load = Some(super::app::PendingPkgModelLoad {
+                    assets: shared_assets,
+                    fbx_index: first_asset_idx,
+                    model_type: first_model_type,
+                    source_path: pending.source_path,
+                    shown: false,
+                    append: pending.append,
+                    suppress_tex_match: false,
+                    archive_snapshot: pending.archive_snapshot,
+                    nested_archive_source: pending.nested_archive_source,
+                    pkg_index: pending.pkg_index,
+                });
+            } else {
+                // 複数: Arc clone のみで assets を共有
+                let remaining: Vec<(usize, super::app::PkgModelType)> = rest
+                    .iter()
+                    .rev()
+                    .map(|&i| {
+                        let (idx, _, mt) = pending.model_list[i];
+                        (idx, mt)
+                    })
+                    .collect();
+                app.pending.pkg_load = Some(super::app::PendingPkgModelLoad {
+                    assets: std::sync::Arc::clone(&shared_assets),
+                    fbx_index: first_asset_idx,
+                    model_type: first_model_type,
+                    source_path: pending.source_path.clone(),
+                    shown: false,
+                    append: pending.append,
+                    suppress_tex_match: false,
+                    archive_snapshot: pending.archive_snapshot.clone(),
+                    nested_archive_source: pending.nested_archive_source.clone(),
+                    pkg_index: pending.pkg_index.clone(),
+                });
+                app.pending.multi_load = Some(super::app::PendingMultiLoad {
+                    assets: shared_assets,
+                    remaining,
+                    source_path: pending.source_path,
+                    archive_snapshot: pending.archive_snapshot,
+                    nested_archive_source: pending.nested_archive_source,
+                    pkg_index: pending.pkg_index,
+                });
+            }
+        }
     } else if cancelled || !open {
         app.pending.unity_pkg = None;
     }

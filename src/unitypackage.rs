@@ -285,10 +285,9 @@ pub fn find_fbx_list(assets: &[ExtractedAsset]) -> Vec<(usize, String)> {
         .collect()
 }
 
-/// 展開済みアセットから指定FBXとテクスチャを取り出す
-/// assets は消費される（所有権移動）
+/// 展開済みアセットから指定FBXとテクスチャを参照ベースで取得する
 pub fn take_fbx_and_textures(
-    mut assets: Vec<ExtractedAsset>,
+    assets: &[ExtractedAsset],
     fbx_index: usize,
 ) -> Result<FbxWithTextures> {
     if fbx_index >= assets.len() {
@@ -297,20 +296,21 @@ pub fn take_fbx_and_textures(
         )));
     }
 
-    // FBX を取り出す
-    let fbx_asset = assets.swap_remove(fbx_index);
+    let fbx_asset = &assets[fbx_index];
     let fbx_name = fbx_asset.filename();
     let fbx_data = fbx_asset.data.to_vec();
 
-    // テクスチャ（画像ファイル）を収集
+    // テクスチャ（画像ファイル）を収集（FBX 自身を除外）
     let texture_exts = ["png", "jpg", "jpeg", "tga", "bmp", "psd", "tif", "tiff"];
     let textures: Vec<(String, Vec<u8>)> = assets
-        .into_iter()
-        .filter(|a| {
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != fbx_index)
+        .filter(|(_, a)| {
             let lower = a.pathname.to_lowercase();
             texture_exts.iter().any(|ext| lower.ends_with(ext))
         })
-        .map(|a| {
+        .map(|(_, a)| {
             let name = a.filename();
             (name, a.data.to_vec())
         })
@@ -337,15 +337,14 @@ pub fn find_vrm_list(assets: &[ExtractedAsset]) -> Vec<(usize, String)> {
         .collect()
 }
 
-/// 展開済みアセットから指定VRMを取り出す
-/// assets は消費される（所有権移動）
-pub fn take_vrm(mut assets: Vec<ExtractedAsset>, vrm_index: usize) -> Result<(Vec<u8>, String)> {
+/// 展開済みアセットから指定VRMを参照ベースで取得する
+pub fn take_vrm(assets: &[ExtractedAsset], vrm_index: usize) -> Result<(Vec<u8>, String)> {
     if vrm_index >= assets.len() {
         return Err(PoponeError::UnityPackage(format!(
             "VRMインデックスが範囲外: {vrm_index}"
         )));
     }
-    let vrm_asset = assets.swap_remove(vrm_index);
+    let vrm_asset = &assets[vrm_index];
     let vrm_name = vrm_asset.filename();
     let vrm_data = vrm_asset.data.to_vec();
     log::info!(
@@ -402,7 +401,7 @@ pub fn extract_fbx_from_unitypackage(
         fbx_list[0].0
     };
 
-    take_fbx_and_textures(assets, selected_idx)
+    take_fbx_and_textures(&assets, selected_idx)
 }
 
 /// unitypackage内テクスチャをIrModelの材質に自動割り当て

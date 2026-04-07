@@ -29,11 +29,13 @@ pub struct PendingUnityPackage {
     pub nested_archive_source: Option<ReloadableSource>,
     /// Phase 3: パッケージインデックス（Prefab テクスチャ解決用）
     pub pkg_index: Option<Arc<UnityPackageIndex>>,
+    /// 複数選択用チェック状態（model_list と同サイズ）
+    pub checked: Vec<bool>,
 }
 
 /// unitypackage モデル遅延読み込み状態
 pub struct PendingPkgModelLoad {
-    pub assets: Vec<crate::unitypackage::ExtractedAsset>,
+    pub assets: Arc<Vec<crate::unitypackage::ExtractedAsset>>,
     pub fbx_index: usize,
     pub model_type: PkgModelType,
     pub source_path: PathBuf,
@@ -86,7 +88,7 @@ pub struct PendingFbxChoice {
 
 /// unitypackage 経由 FBX 選択時の追加コンテキスト
 pub struct PendingFbxChoicePkg {
-    pub assets: Vec<crate::unitypackage::ExtractedAsset>,
+    pub assets: Arc<Vec<crate::unitypackage::ExtractedAsset>>,
     pub fbx_index: usize,
     pub source_path: PathBuf,
     /// 一時ファイルからの読み込み時、アーカイブデータのスナップショット
@@ -279,6 +281,19 @@ pub struct PendingState {
     pub file_dialog: Option<(FileDialogKind, std::sync::mpsc::Receiver<Option<PathBuf>>)>,
     /// OBJ/STL インポートオプション選択待ち
     pub import_options: Option<PendingImportOptions>,
+    /// 複数モデル一括ロード（assets を1つだけ保持し、デキュー時に clone）
+    pub multi_load: Option<PendingMultiLoad>,
+}
+
+/// 複数モデル一括ロード用キュー（assets を Arc 共有して clone コストを排除）
+pub struct PendingMultiLoad {
+    pub assets: Arc<Vec<crate::unitypackage::ExtractedAsset>>,
+    /// 残りのモデル (fbx_index, model_type)
+    pub remaining: Vec<(usize, PkgModelType)>,
+    pub source_path: PathBuf,
+    pub archive_snapshot: Option<Arc<[u8]>>,
+    pub nested_archive_source: Option<ReloadableSource>,
+    pub pkg_index: Option<Arc<UnityPackageIndex>>,
 }
 
 impl Default for PendingState {
@@ -297,6 +312,7 @@ impl Default for PendingState {
             confirm_save_tex_history: false,
             file_dialog: None,
             import_options: None,
+            multi_load: None,
         }
     }
 }
@@ -548,14 +564,18 @@ impl ViewerApp {
                 if p.suppress_tex_match {
                     self.suppress_tex_match = true;
                 }
-                self.append_from_pkg(
-                    p.assets,
+                let ok = self.append_from_pkg(
+                    &p.assets,
                     p.fbx_index,
                     p.model_type,
                     &source_path,
                     source_override.clone(),
+                    p.pkg_index,
                 );
                 self.suppress_tex_match = false;
+                if !ok {
+                    self.pending.multi_load = None;
+                }
                 // 以下の通常ロードをスキップ
             } else {
                 let pkg_index = p.pkg_index;
@@ -590,7 +610,7 @@ impl ViewerApp {
                                 });
                             } else {
                                 match self.load_fbx_from_assets(
-                                    p.assets,
+                                    &p.assets,
                                     p.fbx_index,
                                     &source_path,
                                     FbxLoadMode::ModelOnly,
@@ -605,12 +625,13 @@ impl ViewerApp {
                                         self.convert_message = Some(ConvertMessage::failure(
                                             format!("ファイルを読み込めませんでした。\n詳細: {e}"),
                                         ));
+                                        self.pending.multi_load = None;
                                     }
                                 }
                             }
                         } else {
                             match self.load_fbx_from_assets(
-                                p.assets,
+                                &p.assets,
                                 p.fbx_index,
                                 &source_path,
                                 FbxLoadMode::Both,
@@ -626,13 +647,14 @@ impl ViewerApp {
                                     self.convert_message = Some(ConvertMessage::failure(format!(
                                         "ファイルを読み込めませんでした。\n詳細: {e}"
                                     )));
+                                    self.pending.multi_load = None;
                                 }
                             }
                         }
                     }
                     PkgModelType::Vrm => {
                         match self.load_vrm_from_assets(
-                            p.assets,
+                            &p.assets,
                             p.fbx_index,
                             &source_path,
                             source_override,
@@ -646,12 +668,13 @@ impl ViewerApp {
                                 self.convert_message = Some(ConvertMessage::failure(format!(
                                     "ファイルを読み込めませんでした。\n詳細: {e}"
                                 )));
+                                self.pending.multi_load = None;
                             }
                         }
                     }
                     PkgModelType::Prefab => {
                         match self.load_prefab_from_assets(
-                            p.assets,
+                            &p.assets,
                             p.fbx_index,
                             &source_path,
                             source_override,
@@ -666,11 +689,42 @@ impl ViewerApp {
                                 self.convert_message = Some(ConvertMessage::failure(format!(
                                     "Prefabを読み込めませんでした。\n詳細: {e}"
                                 )));
+                                self.pending.multi_load = None;
                             }
                         }
                     }
                 }
             } // else (通常ロード)
+        }
+        // 複数モデル一括ロードキューの処理
+        // pkg_load と fbx_choice の両方が空のときのみ次を投入
+        // （FBX読み込みモード選択中にキューが進むのを防ぐ）
+        if self.pending.pkg_load.is_none() && self.pending.fbx_choice.is_none() {
+            if let Some(ref mut ml) = self.pending.multi_load {
+                if let Some((fbx_index, model_type)) = ml.remaining.pop() {
+                    self.pending.pkg_load = Some(PendingPkgModelLoad {
+                        assets: ml.assets.clone(),
+                        fbx_index,
+                        model_type,
+                        source_path: ml.source_path.clone(),
+                        shown: false,
+                        append: true,
+                        suppress_tex_match: false,
+                        archive_snapshot: ml.archive_snapshot.clone(),
+                        nested_archive_source: ml.nested_archive_source.clone(),
+                        pkg_index: ml.pkg_index.clone(),
+                    });
+                }
+            }
+            // remaining が空になったら multi_load を破棄
+            if self
+                .pending
+                .multi_load
+                .as_ref()
+                .is_some_and(|ml| ml.remaining.is_empty())
+            {
+                self.pending.multi_load = None;
+            }
         }
         // アーカイブモデル遅延読み込み
         if self.pending.archive_load.as_ref().is_some_and(|p| p.shown) {
