@@ -3,6 +3,8 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.2.37](#v0237)
+    - [Bug Fixes](#bug-fixes)
   - [v0.2.36](#v0236)
     - [Improvements](#improvements)
   - [v0.2.35](#v0235)
@@ -26,6 +28,12 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.2.37
+
+### Bug Fixes
+
+- **Appended Prefab reload index mismatch** — Fixed a bug where A-stance / T-stance conversion on an appended `.unitypackage` Prefab model caused `Prefab parse failed` errors. `reload_append_unitypackage` was calling `extract_all_assets()` and `build_unity_package_index()` separately, producing two `HashMap`-based entry arrays with non-deterministic iteration order. The asset index returned by pathname lookup in the first array could point to an unrelated file (e.g. a `.shader`) in the second array. The fix builds `UnityPackageIndex` once and derives the `ExtractedAsset` list from its entries, matching the pattern already used in `try_load_unitypackage_for_append`
 
 ## v0.2.36
 

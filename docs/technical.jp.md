@@ -1880,6 +1880,8 @@ try_load_unitypackage / try_load_unitypackage_for_append
 
 シグネチャを `path: &Path` から `source: &ReloadableSource` に変更。Snapshot バリアントの場合は `main_bytes.to_vec()` でアーカイブデータを復元し、File バリアントの場合は従来通り `std::fs::read` で読み込む。
 
+**インデックス整合性修正（v0.2.37）:** `reload_append_unitypackage` は従来 `extract_all_assets()` で `assets` 配列を構築した後、Prefab 解決用に `build_unity_package_index()` を別途呼び出していた。両関数とも内部で `HashMap<String, String>`（`pathnames`）をイテレートするが、Rust の HashMap はイテレーション順序が非決定的なため、2回の呼び出しで生成されるエントリ配列の順序が一致しない可能性があった。`find_asset_by_pathname(&assets, ...)` で取得したインデックスが、別に構築された `UnityPackageIndex` では無関係なファイル（例: `.shader`）を指すことがあり、`resolve_single_prefab` が不正なファイルを Prefab として解析しエラーとなっていた。`try_load_unitypackage_for_append` と同じパターンで `UnityPackageIndex` を1回だけ構築し、`pkg_index.entries` から `assets` を導出するよう修正。
+
 ### .gltf の除外
 
 `.gltf` ファイルは外部バッファ参照（`.bin`・画像ファイル）を持つため、スナップショット化の対象外。`gltf::import_slice` では外部URI を解決できないため、通常の `load_glb(path)` パスを使用。

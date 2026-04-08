@@ -3,6 +3,8 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
+  - [v0.2.37](#v0237)
+    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3)
   - [v0.2.36](#v0236)
     - [改善](#%E6%94%B9%E5%96%84)
   - [v0.2.35](#v0235)
@@ -26,6 +28,12 @@
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.2.37
+
+### バグ修正
+
+- **追加読み込み Prefab のリロード時インデックス不整合修正** — 追加読み込みした `.unitypackage` Prefab モデルに対して A スタンス / T スタンス変換を行うと `Prefab parse failed` エラーが発生するバグを修正。`reload_append_unitypackage` が `extract_all_assets()` と `build_unity_package_index()` を別々に呼び出しており、HashMap のイテレーション順序が非決定的なためエントリ配列の順序が一致しなかった。1回目の配列でパス名検索したインデックスが、2回目の配列では無関係なファイル（例: `.shader`）を指す可能性があった。`try_load_unitypackage_for_append` と同じパターンで `UnityPackageIndex` を1回だけ構築し、そこから `ExtractedAsset` を導出するよう修正
 
 ## v0.2.36
 

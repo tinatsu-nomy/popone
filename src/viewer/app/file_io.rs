@@ -1540,13 +1540,25 @@ impl ViewerApp {
             }
         };
         let path = source.display_path();
-        let assets = match crate::unitypackage::extract_all_assets(&archive_data) {
-            Ok(a) => a,
-            Err(e) => {
-                log::error!("Unitypackage extraction failed: {e}");
-                return;
-            }
-        };
+        // pkg_index を先に構築し、assets をそこから導出する
+        // （extract_all_assets と build_unity_package_index は HashMap イテレーション順序が
+        //   非決定的なため、別々に構築するとインデックスがずれる）
+        let pkg_index_for_reload =
+            match crate::unitypackage::build_unity_package_index(&archive_data) {
+                Ok(idx) => Arc::new(idx),
+                Err(e) => {
+                    log::error!("Unitypackage extraction failed: {e}");
+                    return;
+                }
+            };
+        let assets: Vec<crate::unitypackage::ExtractedAsset> = pkg_index_for_reload
+            .entries
+            .iter()
+            .map(|e| crate::unitypackage::ExtractedAsset {
+                pathname: e.pathname.clone(),
+                data: Arc::clone(&e.data),
+            })
+            .collect();
 
         // pkg_model (GUID/パス) → pkg_model_name (basename) → selected_fbx_name (basename) の優先順で照合
         let fbx_list = crate::unitypackage::find_fbx_list(&assets);
@@ -1600,11 +1612,9 @@ impl ViewerApp {
             ReloadableSource::Snapshot { .. } => Some(source.clone()),
             _ => None,
         };
-        // リロード経由では pkg_index を再構築して渡す（Prefab append 用）
+        // Prefab append 用に pkg_index を渡す（reload 冒頭で構築済みのものを再利用）
         let pkg_index = if model_type == PkgModelType::Prefab {
-            crate::unitypackage::build_unity_package_index(&archive_data)
-                .ok()
-                .map(Arc::new)
+            Some(pkg_index_for_reload)
         } else {
             None
         };

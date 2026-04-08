@@ -1880,6 +1880,8 @@ try_load_unitypackage / try_load_unitypackage_for_append
 
 Signature changed from `path: &Path` to `source: &ReloadableSource`. For the Snapshot variant, archive data is restored via `main_bytes.to_vec()`. For the File variant, `std::fs::read` is used as before.
 
+**Index consistency fix (v0.2.37):** `reload_append_unitypackage` previously called `extract_all_assets()` to build the `assets` array and then separately called `build_unity_package_index()` for Prefab resolution. Both functions internally iterate a `HashMap<String, String>` (`pathnames`) whose iteration order is non-deterministic in Rust. This meant the asset index found by `find_asset_by_pathname(&assets, ...)` could refer to a different entry in the separately-built `UnityPackageIndex`, causing `resolve_single_prefab` to parse an unrelated file (e.g. a `.shader`) as a Prefab. The fix builds `UnityPackageIndex` once and derives `assets` from `pkg_index.entries`, matching the pattern in `try_load_unitypackage_for_append`.
+
 ### .gltf Exclusion
 
 `.gltf` files have external buffer references (`.bin`, image files), so they are excluded from snapshotting. `gltf::import_slice` cannot resolve external URIs, so the normal `load_glb(path)` path is used.
