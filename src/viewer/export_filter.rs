@@ -355,6 +355,7 @@ mod tests {
     use super::*;
     use crate::intermediate::types::{IrBone, TextureData};
     use glam::{Mat4, Vec2, Vec4};
+    use std::sync::Arc;
 
     fn make_bone(name: &str) -> IrBone {
         IrBone {
@@ -739,14 +740,14 @@ mod tests {
             textures: vec![
                 IrTexture {
                     filename: "tex0.png".into(),
-                    data: TextureData::Encoded(vec![0]),
+                    data: TextureData::Encoded(Arc::from(vec![0u8])),
                     mime_type: "image/png".into(),
                     source_path: String::new(),
                     mip_chain: None,
                 },
                 IrTexture {
                     filename: "tex1.png".into(),
-                    data: TextureData::Encoded(vec![1]),
+                    data: TextureData::Encoded(Arc::from(vec![1u8])),
                     mime_type: "image/png".into(),
                     source_path: String::new(),
                     mip_chain: None,
@@ -800,14 +801,14 @@ mod tests {
             textures: vec![
                 IrTexture {
                     filename: "tex0.png".into(),
-                    data: TextureData::Encoded(vec![0]),
+                    data: TextureData::Encoded(Arc::from(vec![0u8])),
                     mime_type: "image/png".into(),
                     source_path: String::new(),
                     mip_chain: None,
                 },
                 IrTexture {
                     filename: "tex1.png".into(),
-                    data: TextureData::Encoded(vec![1]),
+                    data: TextureData::Encoded(Arc::from(vec![1u8])),
                     mime_type: "image/png".into(),
                     source_path: String::new(),
                     mip_chain: None,

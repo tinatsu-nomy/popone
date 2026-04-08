@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
 /// テクスチャの UV ラッピングモード
@@ -990,7 +992,7 @@ impl Default for IrMaterial {
 #[derive(Debug, Clone)]
 pub enum TextureData {
     /// PNG/JPEG/TGA 等のエンコード済みバイナリ
-    Encoded(Vec<u8>),
+    Encoded(Arc<[u8]>),
     /// デコード済み生 RGBA ピクセル（GPU アップロード時にデコード不要）
     RawRgba {
         pixels: Vec<u8>,
@@ -1439,7 +1441,7 @@ mod tests {
             }],
             textures: vec![IrTexture {
                 filename: "host_tex.png".into(),
-                data: TextureData::Encoded(vec![0]),
+                data: TextureData::Encoded(Arc::from(vec![0u8])),
                 mime_type: "image/png".into(),
                 source_path: String::new(),
                 mip_chain: None,
@@ -1466,7 +1468,7 @@ mod tests {
             }],
             textures: vec![IrTexture {
                 filename: "other_tex.png".into(),
-                data: TextureData::Encoded(vec![1]),
+                data: TextureData::Encoded(Arc::from(vec![1u8])),
                 mime_type: "image/png".into(),
                 source_path: String::new(),
                 mip_chain: None,

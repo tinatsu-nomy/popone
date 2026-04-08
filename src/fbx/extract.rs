@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::error::Result;
 use glam::{Mat4, Vec2, Vec3, Vec4};
@@ -565,7 +566,7 @@ fn texture_to_ir(tex: &texture::TextureData, ir_textures: &mut Vec<IrTexture>) -
     let idx = ir_textures.len();
     ir_textures.push(IrTexture {
         filename: format!("{}.png", sanitize_filename(&tex.name)),
-        data: TextureData::Encoded(png_data),
+        data: TextureData::Encoded(Arc::from(png_data)),
         mime_type: "image/png".to_string(),
         source_path: "embedded (FBX)".to_string(),
         mip_chain: None,

@@ -3,6 +3,7 @@ use glam::{Mat3, Mat4, Vec2, Vec3, Vec4};
 use gltf::buffer::Data;
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
 use crate::convert::coord::PMX_SCALE;
 use crate::intermediate::types::*;
@@ -455,7 +456,10 @@ fn extract_textures(
             }
         };
         let (data, mime_type) = if rgba.is_empty() {
-            (TextureData::Encoded(Vec::new()), "image/png".to_string())
+            (
+                TextureData::Encoded(Arc::from(Vec::<u8>::new())),
+                "image/png".to_string(),
+            )
         } else {
             (
                 TextureData::RawRgba {

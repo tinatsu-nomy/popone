@@ -3,31 +3,48 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
+  - [v0.2.38](#v0238)
+    - [パフォーマンス](#%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9)
+    - [改善](#%E6%94%B9%E5%96%84)
   - [v0.2.37](#v0237)
     - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3)
   - [v0.2.36](#v0236)
-    - [改善](#%E6%94%B9%E5%96%84)
-  - [v0.2.35](#v0235)
     - [改善](#%E6%94%B9%E5%96%84-1)
+  - [v0.2.35](#v0235)
+    - [改善](#%E6%94%B9%E5%96%84-2)
     - [ドキュメント](#%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88)
   - [v0.2.34](#v0234)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
-    - [改善](#%E6%94%B9%E5%96%84-2)
+    - [改善](#%E6%94%B9%E5%96%84-3)
   - [v0.2.33](#v0233)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
-    - [改善](#%E6%94%B9%E5%96%84-3)
+    - [改善](#%E6%94%B9%E5%96%84-4)
   - [v0.2.32](#v0232)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84)
   - [v0.2.31](#v0231)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
-    - [改善](#%E6%94%B9%E5%96%84-4)
+    - [改善](#%E6%94%B9%E5%96%84-5)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.2.38
+
+### パフォーマンス
+
+- **Prefab テクスチャ解決インデックス** — `UnityPackageIndex` 構築時に `prefab_by_fbx_guid` 逆引きマップと `prefab_cache` を事前構築。`resolve_prefab_textures` が FBX ごとに全 `.prefab` エントリをフルスキャン（O(P×F)）していた処理を O(1) HashMap ルックアップに置換
+- **Variant 解決キャッシュ** — `resolve_variant_multi` の結果を `variant_cache` にキャッシュ。`resolve_variant_multi_inner` の再帰呼び出しで Prefab YAML を毎回再パースしていた処理を `prefab_cache` 参照に置換
+- **TextureData Arc 共有** — `TextureData::Encoded` の内部型を `Vec<u8>` → `Arc<[u8]>` に変更。`.unitypackage` からのテクスチャデータを `to_vec()` フルコピーではなく `Arc::clone`（O(1)）で共有
+- **マテリアル GUID 重複チェック** — `resolve_prefab_textures` / `resolve_variant_multi_inner` 内のマテリアル GUID ユニーク化を `Vec::contains()`（O(N²)）から `HashSet`（O(N)）に変更
+- **Prefab パース並列化** — `build_prefab_fbx_map` で `rayon::par_iter` を使用し、インデックス構築時の全 Prefab YAML パースをマルチスレッド並列化
+
+### 改善
+
+- **一括読み込み進捗トースト** — 複数モデル一括読み込み時にモデルごとの進捗をトースト通知で表示（例: 「読み込み中 (2/5)：model.fbx」）。進捗情報を `PendingPkgModelLoad.batch_progress` に保持し、最終件でも `PendingMultiLoad` 破棄後に表示が消えないよう対応
 
 ## v0.2.37
 

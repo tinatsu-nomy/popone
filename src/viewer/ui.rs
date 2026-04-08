@@ -452,6 +452,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             archive_snapshot: pending.archive_snapshot,
             nested_archive_source: pending.nested_archive_source,
             pkg_index: pending.pkg_index,
+            batch_progress: None,
         });
     } else if multi_selected {
         // 複数選択: 1つ目を通常ロード、残りを PendingMultiLoad に積む
@@ -486,6 +487,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                     archive_snapshot: pending.archive_snapshot,
                     nested_archive_source: pending.nested_archive_source,
                     pkg_index: pending.pkg_index,
+                    batch_progress: None,
                 });
             } else {
                 // 複数: Arc clone のみで assets を共有
@@ -497,6 +499,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                         (idx, mt)
                     })
                     .collect();
+                let total_count = 1 + remaining.len(); // first + rest
                 app.pending.pkg_load = Some(super::app::PendingPkgModelLoad {
                     assets: std::sync::Arc::clone(&shared_assets),
                     fbx_index: first_asset_idx,
@@ -508,6 +511,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                     archive_snapshot: pending.archive_snapshot.clone(),
                     nested_archive_source: pending.nested_archive_source.clone(),
                     pkg_index: pending.pkg_index.clone(),
+                    batch_progress: Some((1, total_count)),
                 });
                 app.pending.multi_load = Some(super::app::PendingMultiLoad {
                     assets: shared_assets,
@@ -516,6 +520,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                     archive_snapshot: pending.archive_snapshot,
                     nested_archive_source: pending.nested_archive_source,
                     pkg_index: pending.pkg_index,
+                    total_count,
                 });
             }
         }

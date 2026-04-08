@@ -1002,6 +1002,7 @@ impl ViewerApp {
                 archive_snapshot: snapshot,
                 nested_archive_source: None,
                 pkg_index: Some(pkg_index),
+                batch_progress: None,
             });
         } else {
             // 複数 → 選択ダイアログを表示
@@ -1070,6 +1071,7 @@ impl ViewerApp {
                 archive_snapshot: snapshot,
                 nested_archive_source: None,
                 pkg_index: Some(pkg_index),
+                batch_progress: None,
             });
         } else {
             let checked = vec![false; model_list.len()];
@@ -1257,6 +1259,7 @@ impl ViewerApp {
                 archive_snapshot,
                 nested_archive_source,
                 pkg_index: Some(pkg_index),
+                batch_progress: None,
             });
         } else {
             log::info!("Archive .unitypackage: found {} models:", model_list.len());
@@ -3534,7 +3537,7 @@ impl ViewerApp {
                         let idx = ir.textures.len();
                         ir.textures.push(crate::intermediate::types::IrTexture {
                             filename: ir_filename,
-                            data: TextureData::Encoded(ir_data),
+                            data: TextureData::Encoded(Arc::from(ir_data)),
                             mime_type: ir_mime,
                             source_path: format!("unitypackage: {}", tex_name),
                             mip_chain: None,
@@ -3661,7 +3664,7 @@ impl ViewerApp {
                     let idx = ir.textures.len();
                     ir.textures.push(crate::intermediate::types::IrTexture {
                         filename: ir_filename,
-                        data: TextureData::Encoded(ir_data),
+                        data: TextureData::Encoded(Arc::from(ir_data)),
                         mime_type: ir_mime,
                         source_path: format!("unitypackage: {}", tex_name),
                         mip_chain: None,
@@ -3951,7 +3954,7 @@ impl ViewerApp {
                     let idx = ir.textures.len();
                     ir.textures.push(crate::intermediate::types::IrTexture {
                         filename: ir_filename,
-                        data: TextureData::Encoded(ir_data),
+                        data: TextureData::Encoded(Arc::from(ir_data)),
                         mime_type: ir_mime,
                         source_path: format!("unitypackage: {}", tex_name),
                         mip_chain: None,

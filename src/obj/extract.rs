@@ -216,7 +216,7 @@ fn build_ir_model(
                 let idx = ir_textures.len();
                 ir_textures.push(IrTexture {
                     filename: tex_name.clone(),
-                    data: TextureData::Encoded(data),
+                    data: TextureData::Encoded(Arc::from(data)),
                     mime_type: mime.to_string(),
                     source_path: tex_name.clone(),
                     mip_chain: None,

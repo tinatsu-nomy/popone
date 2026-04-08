@@ -3,6 +3,7 @@
 use crate::error::{PoponeError, Result, ResultExt};
 use crate::intermediate::types::{SourceMaterialRef, TextureData};
 use flate2::read::GzDecoder;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 use std::sync::Arc;
@@ -123,6 +124,19 @@ pub struct UnityPackageIndex {
     pub entries: Vec<AssetEntry>,
     pub by_guid: HashMap<String, usize>,
     pub by_path: HashMap<String, usize>,
+    /// FBX GUID → .prefab entry indices that reference this FBX
+    pub prefab_by_fbx_guid: HashMap<String, Vec<usize>>,
+    /// Prefab parsed result cache (entry index → parsed result)
+    pub prefab_cache: HashMap<usize, ParsedPrefabCache>,
+    /// Variant resolution cache: source GUID → resolved FBX GUIDs
+    pub variant_cache: HashMap<String, Vec<String>>,
+}
+
+/// Parsed prefab cache entry (corresponds to an entry index)
+pub struct ParsedPrefabCache {
+    pub format: PrefabFormat,
+    pub new_infos: Vec<NewPrefabInfo>,
+    pub old_infos: Vec<OldPrefabInfo>,
 }
 
 /// 展開サイズ上限: 2GB（archive モジュールと同じ）
@@ -261,11 +275,19 @@ fn build_unity_package_index_with_limit(
         total_bytes / 1024
     );
 
-    Ok(UnityPackageIndex {
+    let mut index = UnityPackageIndex {
         entries,
         by_guid,
         by_path,
-    })
+        prefab_by_fbx_guid: HashMap::new(),
+        prefab_cache: HashMap::new(),
+        variant_cache: HashMap::new(),
+    };
+
+    // Post-process: build prefab → FBX GUID map and cache parsed results
+    build_prefab_fbx_map(&mut index);
+
+    Ok(index)
 }
 
 /// フルパス（pathname）でアセットインデックスを検索
@@ -468,7 +490,7 @@ pub fn embed_textures_into_ir_with_label(
                 let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                 ir.textures.push(crate::intermediate::types::IrTexture {
                     filename: key.clone(),
-                    data: TextureData::Encoded(data.to_vec()),
+                    data: TextureData::Encoded(Arc::from(data.to_vec())),
                     mime_type: mime,
                     source_path: format!("{}: {}", source_label, key),
                     mip_chain: None,
@@ -564,7 +586,7 @@ fn decode_unity_escape(s: &str) -> String {
 
 /// Prefab 形式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PrefabFormat {
+pub enum PrefabFormat {
     New,
     Old,
 }
@@ -581,15 +603,17 @@ fn detect_prefab_format(content: &str) -> PrefabFormat {
 }
 
 /// 新形式 Prefab の解析結果
-struct NewPrefabInfo {
-    source_fbx_guid: String,
-    material_overrides: Vec<MaterialOverride>,
+#[derive(Clone)]
+pub struct NewPrefabInfo {
+    pub source_fbx_guid: String,
+    pub material_overrides: Vec<MaterialOverride>,
 }
 
 /// マテリアルオーバーライド（スロット番号 + マテリアル GUID）
-struct MaterialOverride {
-    slot_index: usize,
-    material_guid: String,
+#[derive(Clone)]
+pub struct MaterialOverride {
+    pub slot_index: usize,
+    pub material_guid: String,
 }
 
 /// 新形式 Prefab をパース
@@ -655,9 +679,10 @@ fn parse_prefab_new(content: &str) -> PkgResult<Vec<NewPrefabInfo>> {
 }
 
 /// 旧形式 Prefab の解析結果
-struct OldPrefabInfo {
-    fbx_guid: String,
-    material_guids: Vec<String>,
+#[derive(Clone)]
+pub struct OldPrefabInfo {
+    pub fbx_guid: String,
+    pub material_guids: Vec<String>,
 }
 
 /// 旧形式 Prefab をパース
@@ -1113,6 +1138,14 @@ pub fn resolve_variant_multi(pkg: &UnityPackageIndex, guid: &str) -> PkgResult<V
     resolve_variant_multi_inner(pkg, guid, 0, &mut visited)
 }
 
+/// Cached version of resolve_variant_multi: checks variant_cache first.
+fn resolve_variant_multi_cached(pkg: &UnityPackageIndex, guid: &str) -> PkgResult<Vec<String>> {
+    if let Some(cached) = pkg.variant_cache.get(guid) {
+        return Ok(cached.clone());
+    }
+    resolve_variant_multi(pkg, guid)
+}
+
 fn resolve_variant_multi_inner(
     pkg: &UnityPackageIndex,
     guid: &str,
@@ -1149,51 +1182,103 @@ fn resolve_variant_multi_inner(
     }
 
     if lower.ends_with(".prefab") {
-        let data = &pkg.entries[entry_idx].data;
-        let content = String::from_utf8_lossy(data);
-        let format = detect_prefab_format(&content);
-        log::debug!("resolve_variant: Prefab {} format={:?}", pathname, format);
-
         let mut results: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
 
-        // New 形式パース（PrefabInstance ブロック）
-        if format == PrefabFormat::New {
-            if let Ok(infos) = parse_prefab_new(&content) {
-                log::debug!("resolve_variant: New Prefab infos={}", infos.len());
-                for (i, info) in infos.iter().enumerate() {
-                    log::debug!(
-                        "resolve_variant:   [{}] source_guid={}",
-                        i,
-                        info.source_fbx_guid
-                    );
+        // Use prefab_cache if available to avoid re-parsing
+        if let Some(cached) = pkg.prefab_cache.get(&entry_idx) {
+            log::debug!(
+                "resolve_variant: Prefab {} format={:?} (cached)",
+                pathname,
+                cached.format
+            );
+
+            // New format: recurse into source_fbx_guid references
+            if cached.format == PrefabFormat::New {
+                // Collect source GUIDs first to avoid borrow conflict with pkg
+                let source_guids: Vec<String> = cached
+                    .new_infos
+                    .iter()
+                    .map(|info| info.source_fbx_guid.clone())
+                    .collect();
+                log::debug!("resolve_variant: New Prefab infos={}", source_guids.len());
+                for (i, sg) in source_guids.iter().enumerate() {
+                    log::debug!("resolve_variant:   [{}] source_guid={}", i, sg);
                 }
-                for info in &infos {
-                    let sub = resolve_variant_multi_inner(
-                        pkg,
-                        &info.source_fbx_guid,
-                        depth + 1,
-                        visited,
-                    )?;
+                for sg in &source_guids {
+                    let sub = resolve_variant_multi_inner(pkg, sg, depth + 1, visited)?;
                     for g in sub {
-                        if !results.contains(&g) {
+                        if seen.insert(g.clone()) {
                             results.push(g);
                         }
                     }
                 }
             }
-        }
 
-        // Old 形式パース（SkinnedMeshRenderer セクション）
-        // 混合形式（PrefabInstance + SkinnedMeshRenderer 共存）は New + Old 両方をパースする
-        {
-            if let Ok(infos) = parse_prefab_old(&content) {
-                log::debug!("resolve_variant: Old Prefab infos={}", infos.len());
-                for (i, info) in infos.iter().enumerate() {
-                    log::debug!("resolve_variant:   [{}] fbx_guid={}", i, info.fbx_guid);
+            // Old format: direct FBX GUID references
+            {
+                let fbx_guids: Vec<String> = cached
+                    .old_infos
+                    .iter()
+                    .map(|info| info.fbx_guid.clone())
+                    .collect();
+                log::debug!("resolve_variant: Old Prefab infos={}", fbx_guids.len());
+                for (i, fg) in fbx_guids.iter().enumerate() {
+                    log::debug!("resolve_variant:   [{}] fbx_guid={}", i, fg);
                 }
-                for info in &infos {
-                    if !results.contains(&info.fbx_guid) {
-                        results.push(info.fbx_guid.clone());
+                for fg in &fbx_guids {
+                    if seen.insert(fg.clone()) {
+                        results.push(fg.clone());
+                    }
+                }
+            }
+        } else {
+            // Fallback: parse from raw data (shouldn't happen after index build)
+            let data = &pkg.entries[entry_idx].data;
+            let content = String::from_utf8_lossy(data);
+            let format = detect_prefab_format(&content);
+            log::debug!(
+                "resolve_variant: Prefab {} format={:?} (uncached fallback)",
+                pathname,
+                format
+            );
+
+            if format == PrefabFormat::New {
+                if let Ok(infos) = parse_prefab_new(&content) {
+                    log::debug!("resolve_variant: New Prefab infos={}", infos.len());
+                    for (i, info) in infos.iter().enumerate() {
+                        log::debug!(
+                            "resolve_variant:   [{}] source_guid={}",
+                            i,
+                            info.source_fbx_guid
+                        );
+                    }
+                    for info in &infos {
+                        let sub = resolve_variant_multi_inner(
+                            pkg,
+                            &info.source_fbx_guid,
+                            depth + 1,
+                            visited,
+                        )?;
+                        for g in sub {
+                            if seen.insert(g.clone()) {
+                                results.push(g);
+                            }
+                        }
+                    }
+                }
+            }
+
+            {
+                if let Ok(infos) = parse_prefab_old(&content) {
+                    log::debug!("resolve_variant: Old Prefab infos={}", infos.len());
+                    for (i, info) in infos.iter().enumerate() {
+                        log::debug!("resolve_variant:   [{}] fbx_guid={}", i, info.fbx_guid);
+                    }
+                    for info in &infos {
+                        if seen.insert(info.fbx_guid.clone()) {
+                            results.push(info.fbx_guid.clone());
+                        }
                     }
                 }
             }
@@ -1211,6 +1296,119 @@ fn resolve_variant_multi_inner(
     Ok(Vec::new())
 }
 
+/// Build prefab_by_fbx_guid map and prefab_cache from all .prefab entries.
+/// Called once after the index is initially constructed.
+fn build_prefab_fbx_map(index: &mut UnityPackageIndex) {
+    // Collect prefab data slices for parallel parsing (borrows index.entries immutably)
+    let prefab_data: Vec<(usize, &[u8], &str)> = index
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.pathname.to_lowercase().ends_with(".prefab"))
+        .map(|(i, e)| (i, e.data.as_ref() as &[u8], e.pathname.as_str()))
+        .collect();
+
+    // Phase 1 (parallel): Parse all prefabs using rayon
+    let parsed_results: Vec<(usize, ParsedPrefabCache)> = prefab_data
+        .par_iter()
+        .map(|&(idx, data, pathname)| {
+            let content = String::from_utf8_lossy(data).into_owned();
+            let format = detect_prefab_format(&content);
+
+            let new_infos = if format == PrefabFormat::New {
+                parse_prefab_new(&content).unwrap_or_else(|e| {
+                    log::warn!("Prefab parse failed ({}): {}", pathname, e);
+                    Vec::new()
+                })
+            } else {
+                Vec::new()
+            };
+
+            // Always parse Old format too: mixed-format Prefabs have both
+            // PrefabInstance and SkinnedMeshRenderer sections
+            let old_infos = parse_prefab_old(&content).unwrap_or_else(|e| {
+                if format == PrefabFormat::Old {
+                    log::warn!("Old Prefab parse failed ({}): {}", pathname, e);
+                }
+                Vec::new()
+            });
+
+            (
+                idx,
+                ParsedPrefabCache {
+                    format,
+                    new_infos,
+                    old_infos,
+                },
+            )
+        })
+        .collect();
+
+    // Phase 2a: Insert all parsed caches first so resolve_variant_multi_inner can find them
+    for (prefab_idx, cache) in &parsed_results {
+        index.prefab_cache.insert(
+            *prefab_idx,
+            ParsedPrefabCache {
+                format: cache.format,
+                new_infos: cache.new_infos.clone(),
+                old_infos: cache.old_infos.clone(),
+            },
+        );
+    }
+
+    // Phase 2b (sequential): Variant resolution + map building (needs &UnityPackageIndex)
+    for (prefab_idx, cache) in &parsed_results {
+        // New format: resolve variant chains to find actual FBX GUIDs
+        for info in &cache.new_infos {
+            let fbx_guids = match resolve_variant_multi(index, &info.source_fbx_guid) {
+                Ok(gs) => {
+                    if gs.is_empty() {
+                        vec![info.source_fbx_guid.clone()]
+                    } else {
+                        gs
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Variant resolve failed during index build: {}", e);
+                    continue;
+                }
+            };
+            // Cache variant resolution result for later reuse
+            index
+                .variant_cache
+                .insert(info.source_fbx_guid.clone(), fbx_guids.clone());
+            for fbx_guid in fbx_guids {
+                index
+                    .prefab_by_fbx_guid
+                    .entry(fbx_guid)
+                    .or_default()
+                    .push(*prefab_idx);
+            }
+        }
+
+        // Old format: direct FBX GUID references
+        for info in &cache.old_infos {
+            index
+                .prefab_by_fbx_guid
+                .entry(info.fbx_guid.clone())
+                .or_default()
+                .push(*prefab_idx);
+        }
+    }
+
+    // Deduplicate prefab indices per FBX GUID
+    for indices in index.prefab_by_fbx_guid.values_mut() {
+        indices.sort_unstable();
+        indices.dedup();
+    }
+
+    log::debug!(
+        "Prefab FBX map built: {} FBX GUIDs, {} cached prefabs",
+        index.prefab_by_fbx_guid.len(),
+        index.prefab_cache.len()
+    );
+}
+
 /// Prefab テクスチャ解決: FBX GUID に対応する Prefab を探してマテリアル→テクスチャマッピングを返す
 pub fn resolve_prefab_textures(
     pkg: &UnityPackageIndex,
@@ -1219,30 +1417,36 @@ pub fn resolve_prefab_textures(
 ) -> Vec<ResolvedMaterialTextures> {
     let mut candidates: Vec<PrefabCandidate> = Vec::new();
 
-    // .prefab エントリを全件検索
-    for entry in &pkg.entries {
-        if !entry.pathname.to_lowercase().ends_with(".prefab") {
-            continue;
+    // Use prebuilt FBX GUID → prefab index map instead of iterating all entries
+    let prefab_indices = match pkg.prefab_by_fbx_guid.get(fbx_guid) {
+        Some(indices) => indices.clone(),
+        None => {
+            log::info!(
+                "Prefab texture resolve: no Prefab found for FBX {}",
+                fbx_path
+            );
+            return Vec::new();
         }
+    };
 
-        let content = String::from_utf8_lossy(&entry.data);
-        let format = detect_prefab_format(&content);
+    for &prefab_idx in &prefab_indices {
+        let entry = &pkg.entries[prefab_idx];
+        let cache = match pkg.prefab_cache.get(&prefab_idx) {
+            Some(c) => c,
+            None => continue,
+        };
 
-        log::debug!("Prefab inspection: {} format={:?}", entry.pathname, format);
+        log::debug!(
+            "Prefab inspection: {} format={:?}",
+            entry.pathname,
+            cache.format
+        );
 
-        // New 形式（PrefabInstance: あり）のパース
+        // New format: use cached NewPrefabInfo (variant resolution already done at index build)
         let mut new_matched = false;
-        if format == PrefabFormat::New {
-            let infos = match parse_prefab_new(&content) {
-                Ok(v) => v,
-                Err(e) => {
-                    log::warn!("Prefab parse failed ({}): {}", entry.pathname, e);
-                    Vec::new()
-                }
-            };
-
-            log::debug!("  New Prefab infos: {}", infos.len());
-            for (i, info) in infos.iter().enumerate() {
+        if cache.format == PrefabFormat::New {
+            log::debug!("  New Prefab infos: {}", cache.new_infos.len());
+            for (i, info) in cache.new_infos.iter().enumerate() {
                 log::debug!(
                     "    [{}] source_guid={}, overrides={}",
                     i,
@@ -1251,43 +1455,30 @@ pub fn resolve_prefab_textures(
                 );
             }
 
-            for info in infos {
-                // Variant 解決: source_fbx_guid が .prefab を指す場合は再帰（複数 FBX 対応）
-                let resolved_guids = match resolve_variant_multi(pkg, &info.source_fbx_guid) {
+            for info in &cache.new_infos {
+                // Variant resolution was already performed during index build;
+                // the fact that this prefab_idx appears under fbx_guid means it matched.
+                // However, a single prefab may reference multiple FBX GUIDs, so we still
+                // need to verify that this particular info's source resolves to our fbx_guid.
+                // We re-check via resolve_variant_multi (cheap since it's a simple lookup).
+                let resolved_guids = match resolve_variant_multi_cached(pkg, &info.source_fbx_guid)
+                {
                     Ok(gs) => {
                         if gs.is_empty() {
-                            log::debug!(
-                                "  Variant resolve: empty (using guid={} as-is)",
-                                info.source_fbx_guid
-                            );
                             vec![info.source_fbx_guid.clone()]
                         } else {
-                            log::debug!("  Variant resolved: {} -> {:?}", info.source_fbx_guid, gs);
                             gs
                         }
                     }
-                    Err(e) => {
-                        log::warn!("Variant resolve failed: {}", e);
-                        continue;
-                    }
+                    Err(_) => continue,
                 };
 
                 if !resolved_guids.contains(&fbx_guid.to_string()) {
-                    log::debug!(
-                        "  resolved_guids={:?}, fbx_guid={}, match=false",
-                        resolved_guids,
-                        fbx_guid
-                    );
                     continue;
                 }
-                log::debug!(
-                    "  resolved_guids={:?}, fbx_guid={}, match=true",
-                    resolved_guids,
-                    fbx_guid
-                );
                 new_matched = true;
 
-                // FBX の .meta から externalObjects を取得
+                // FBX .meta -> externalObjects
                 let fbx_entry_idx = match pkg.by_guid.get(fbx_guid) {
                     Some(&idx) => idx,
                     None => continue,
@@ -1308,22 +1499,18 @@ pub fn resolve_prefab_textures(
                     .map(|m| (m.material_guid.clone(), m.material_name.clone()))
                     .collect();
 
-                // マテリアル GUID セット構築: FBX .meta + Prefab オーバーライド
-                // ユニークなマテリアル GUID を順序付きで収集
-                // (Variant Prefab では異なる SMR の同じスロットに異なるマテリアルが割り当てられるため、
-                //  slot_index をキーにすると上書きが発生する → ユニーク GUID を連番で管理)
+                // Collect unique material GUIDs: FBX .meta + Prefab overrides
                 let mut all_mat_guids: Vec<String> = Vec::new();
+                let mut seen_guids: HashSet<String> = HashSet::new();
 
-                // FBX .meta の externalObjects を基本として登録
                 for fbx_mat in &meta_materials {
-                    if !all_mat_guids.contains(&fbx_mat.material_guid) {
+                    if seen_guids.insert(fbx_mat.material_guid.clone()) {
                         all_mat_guids.push(fbx_mat.material_guid.clone());
                     }
                 }
 
-                // Prefab のオーバーライドを追加（ユニーク）
                 for ov in &info.material_overrides {
-                    if !all_mat_guids.contains(&ov.material_guid) {
+                    if seen_guids.insert(ov.material_guid.clone()) {
                         all_mat_guids.push(ov.material_guid.clone());
                     }
                 }
@@ -1346,33 +1533,27 @@ pub fn resolve_prefab_textures(
             }
         }
 
-        // Old 形式のパース（New 形式でマッチしなかった場合のフォールバック含む）
-        // 混合形式の Prefab（SkinnedMeshRenderer + PrefabInstance が共存）に対応
-        if format == PrefabFormat::Old || (format == PrefabFormat::New && !new_matched) {
-            if format == PrefabFormat::New {
+        // Old format (or New format fallback when no new_infos matched)
+        if cache.format == PrefabFormat::Old || (cache.format == PrefabFormat::New && !new_matched)
+        {
+            if cache.format == PrefabFormat::New {
                 log::debug!(
                     "  New format no match -> Old format fallback ({})",
                     entry.pathname
                 );
             }
-            let infos = match parse_prefab_old(&content) {
-                Ok(v) => v,
-                Err(e) => {
-                    log::warn!("Old Prefab parse failed ({}): {}", entry.pathname, e);
-                    continue;
-                }
-            };
 
-            // 同じ FBX GUID の複数 SkinnedMeshRenderer のマテリアル GUID を統合
+            // Merge material GUIDs from all OldPrefabInfo matching this FBX GUID
             let mut all_mat_guids: Vec<String> = Vec::new();
+            let mut seen_guids: HashSet<String> = HashSet::new();
             let mut has_match = false;
-            for info in &infos {
+            for info in &cache.old_infos {
                 if info.fbx_guid != fbx_guid {
                     continue;
                 }
                 has_match = true;
                 for guid in &info.material_guids {
-                    if !all_mat_guids.contains(guid) {
+                    if seen_guids.insert(guid.clone()) {
                         all_mat_guids.push(guid.clone());
                     }
                 }
@@ -1381,7 +1562,7 @@ pub fn resolve_prefab_textures(
                 continue;
             }
 
-            // FBX .meta からマテリアル GUID → FBX マテリアル名を取得
+            // FBX .meta -> material GUID → FBX material name
             let fbx_entry_idx = match pkg.by_guid.get(fbx_guid) {
                 Some(&idx) => idx,
                 None => continue,
@@ -1402,9 +1583,9 @@ pub fn resolve_prefab_textures(
                     HashMap::new()
                 };
 
-            // .meta から取得できたマテリアルも追加
+            // Add meta-sourced materials too
             for meta_guid in meta_guid_to_fbx_name.keys() {
-                if !all_mat_guids.contains(meta_guid) {
+                if seen_guids.insert(meta_guid.clone()) {
                     all_mat_guids.push(meta_guid.clone());
                 }
             }
@@ -2022,7 +2203,7 @@ fn apply_resolved_textures(
                 let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                 ir_textures.push(crate::intermediate::types::IrTexture {
                     filename: pkg_tex.display_name.to_string(),
-                    data: TextureData::Encoded(pkg_tex.data.to_vec()),
+                    data: TextureData::Encoded(Arc::clone(&pkg_tex.data)),
                     mime_type: mime,
                     source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
                     mip_chain: None,
@@ -2068,7 +2249,7 @@ fn apply_resolved_textures(
                 let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                 ir_textures.push(crate::intermediate::types::IrTexture {
                     filename: pkg_tex.display_name.to_string(),
-                    data: TextureData::Encoded(pkg_tex.data.to_vec()),
+                    data: TextureData::Encoded(Arc::clone(&pkg_tex.data)),
                     mime_type: mime,
                     source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
                     mip_chain: None,
@@ -2128,7 +2309,7 @@ fn apply_resolved_textures(
                     let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                     ir_textures.push(crate::intermediate::types::IrTexture {
                         filename: pkg_tex.display_name.to_string(),
-                        data: TextureData::Encoded(pkg_tex.data.to_vec()),
+                        data: TextureData::Encoded(Arc::clone(&pkg_tex.data)),
                         mime_type: mime,
                         source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
                         mip_chain: None,
@@ -2372,7 +2553,7 @@ pub fn embed_textures_with_prefab(
                 let mime = crate::intermediate::types::mime_for_ext(&ext).to_string();
                 ir.textures.push(crate::intermediate::types::IrTexture {
                     filename: pkg_tex.display_name.to_string(),
-                    data: TextureData::Encoded(pkg_tex.data.to_vec()),
+                    data: TextureData::Encoded(Arc::clone(&pkg_tex.data)),
                     mime_type: mime,
                     source_path: format!("{}: {}", prefab_label, pkg_tex.pathname),
                     mip_chain: None,
@@ -2716,7 +2897,7 @@ Material:
         ir.materials.push(mat);
         ir.textures.push(crate::intermediate::types::IrTexture {
             filename: "base.png".into(),
-            data: TextureData::Encoded(vec![0u8; 4]),
+            data: TextureData::Encoded(Arc::from(vec![0u8; 4])),
             mime_type: "image/png".into(),
             source_path: String::new(),
             mip_chain: None,
@@ -2800,7 +2981,7 @@ Material:
         }
         ir.textures.push(crate::intermediate::types::IrTexture {
             filename: "base.png".into(),
-            data: TextureData::Encoded(vec![0u8; 4]),
+            data: TextureData::Encoded(Arc::from(vec![0u8; 4])),
             mime_type: "image/png".into(),
             source_path: String::new(),
             mip_chain: None,
@@ -2873,5 +3054,117 @@ Material:
         assert!(is_image_extension("model.psd"));
         assert!(!is_image_extension("model.fbx"));
         assert!(!is_image_extension("scene.prefab"));
+    }
+
+    /// Mixed-format Prefab: PrefabInstance (New) + SkinnedMeshRenderer (Old) が共存
+    const MIXED_PREFAB_SAMPLE: &str = r#"
+%YAML 1.1
+--- !u!1001 &1234567890
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 1889091244555525569, guid: aaaa1111bbbb2222cccc3333dddd4444, type: 3}
+      propertyPath: m_Materials.Array.data[0]
+      value:
+      objectReference: {fileID: 2100000, guid: aabbccdd00112233aabbccdd00112233, type: 2}
+    m_RemovedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: aaaa1111bbbb2222cccc3333dddd4444, type: 3}
+--- !u!137 &137310319924682442
+SkinnedMeshRenderer:
+  m_ObjectHideFlags: 1
+  m_Materials:
+  - {fileID: 2100000, guid: 00000000111111112222222233333333, type: 2}
+  m_Mesh: {fileID: 4300116, guid: 44444444555555556666666677777777, type: 3}
+"#;
+
+    #[test]
+    fn test_mixed_prefab_parses_both_formats() {
+        // Mixed-format should be detected as New (PrefabInstance: present)
+        assert_eq!(detect_prefab_format(MIXED_PREFAB_SAMPLE), PrefabFormat::New);
+
+        // New-format parse should find the PrefabInstance block
+        let new_infos = parse_prefab_new(MIXED_PREFAB_SAMPLE).unwrap();
+        assert_eq!(new_infos.len(), 1);
+        assert_eq!(
+            new_infos[0].source_fbx_guid,
+            "aaaa1111bbbb2222cccc3333dddd4444"
+        );
+        assert_eq!(new_infos[0].material_overrides.len(), 1);
+
+        // Old-format parse should find the SkinnedMeshRenderer block
+        let old_infos = parse_prefab_old(MIXED_PREFAB_SAMPLE).unwrap();
+        assert_eq!(old_infos.len(), 1);
+        assert_eq!(old_infos[0].fbx_guid, "44444444555555556666666677777777");
+        assert_eq!(old_infos[0].material_guids.len(), 1);
+    }
+
+    #[test]
+    fn test_mixed_prefab_cache_has_both_infos() {
+        // Build a minimal UnityPackageIndex with a mixed-format Prefab and two FBX entries
+        let prefab_data: Arc<[u8]> = Arc::from(MIXED_PREFAB_SAMPLE.as_bytes().to_vec());
+        let new_fbx_guid = "aaaa1111bbbb2222cccc3333dddd4444";
+        let old_fbx_guid = "44444444555555556666666677777777";
+
+        let entries = vec![
+            AssetEntry {
+                guid: "prefab_guid_0000000000000000000000".into(),
+                pathname: "Assets/scene.prefab".into(),
+                data: prefab_data,
+                meta: None,
+            },
+            AssetEntry {
+                guid: new_fbx_guid.into(),
+                pathname: "Assets/new_model.fbx".into(),
+                data: Arc::from(vec![0u8; 4]),
+                meta: None,
+            },
+            AssetEntry {
+                guid: old_fbx_guid.into(),
+                pathname: "Assets/old_model.fbx".into(),
+                data: Arc::from(vec![0u8; 4]),
+                meta: None,
+            },
+        ];
+
+        let mut index = UnityPackageIndex {
+            by_guid: entries
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (e.guid.clone(), i))
+                .collect(),
+            by_path: entries
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (e.pathname.clone(), i))
+                .collect(),
+            entries,
+            prefab_by_fbx_guid: HashMap::new(),
+            prefab_cache: HashMap::new(),
+            variant_cache: HashMap::new(),
+        };
+
+        build_prefab_fbx_map(&mut index);
+
+        // Cache should have both new_infos and old_infos for the mixed Prefab
+        let cache = index.prefab_cache.get(&0).expect("prefab should be cached");
+        assert_eq!(cache.format, PrefabFormat::New);
+        assert!(!cache.new_infos.is_empty(), "new_infos should not be empty");
+        assert!(
+            !cache.old_infos.is_empty(),
+            "old_infos should not be empty for mixed-format Prefab"
+        );
+
+        // prefab_by_fbx_guid should map BOTH FBX GUIDs to this Prefab
+        assert!(
+            index.prefab_by_fbx_guid.contains_key(new_fbx_guid),
+            "New-format FBX GUID should be in prefab_by_fbx_guid"
+        );
+        assert!(
+            index.prefab_by_fbx_guid.contains_key(old_fbx_guid),
+            "Old-format FBX GUID should be in prefab_by_fbx_guid"
+        );
     }
 }

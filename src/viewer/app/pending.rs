@@ -51,6 +51,8 @@ pub struct PendingPkgModelLoad {
     pub nested_archive_source: Option<ReloadableSource>,
     /// Phase 3: パッケージインデックス（Prefab テクスチャ解決用）
     pub pkg_index: Option<Arc<UnityPackageIndex>>,
+    /// Batch progress: (current, total) — carried from PendingMultiLoad at queue pop time
+    pub batch_progress: Option<(usize, usize)>,
 }
 
 /// アーカイブ内モデル選択待ち
@@ -294,6 +296,8 @@ pub struct PendingMultiLoad {
     pub archive_snapshot: Option<Arc<[u8]>>,
     pub nested_archive_source: Option<ReloadableSource>,
     pub pkg_index: Option<Arc<UnityPackageIndex>>,
+    /// Total number of models in batch (for progress display)
+    pub total_count: usize,
 }
 
 impl Default for PendingState {
@@ -435,6 +439,20 @@ impl ViewerApp {
         }
     }
 
+    /// Set progress toast for batch model loading
+    fn set_batch_progress_message(
+        &mut self,
+        batch_progress: &Option<(usize, usize)>,
+        model_name: &str,
+    ) {
+        if let Some((current, total)) = *batch_progress {
+            let msg = format!("読み込み完了 ({}/{}): {}", current, total, model_name);
+            self.convert_message = Some(ConvertMessage::success(msg));
+        } else {
+            self.convert_message = None;
+        }
+    }
+
     /// 遅延処理（ファイル読み込み、GPU再構築、PMX変換など）を実行
     pub(super) fn process_pending_tasks(&mut self) {
         // 非同期ファイルダイアログの結果をポーリング
@@ -538,11 +556,31 @@ impl ViewerApp {
                 .get(p.fbx_index)
                 .map(|a| a.pathname.as_str())
                 .unwrap_or("?");
+
+            // Batch progress info (e.g. "2/5") — stored in PendingPkgModelLoad itself
+            // so it survives multi_load being set to None after the last pop
+            let batch_progress = p.batch_progress;
+
+            let model_display_name = std::path::Path::new(model_pathname)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            // Show loading progress toast for batch mode
+            if let Some((current, total)) = batch_progress {
+                let msg = format!("読み込み中 ({}/{})：{}", current, total, model_display_name);
+                self.convert_message = Some(ConvertMessage::success(msg));
+            }
+
             log::info!(
-                "Load from archive: {:?} [{}] from {}",
+                "Load from archive: {:?} [{}] from {}{}",
                 p.model_type,
                 model_pathname,
-                source_path.display()
+                source_path.display(),
+                batch_progress
+                    .map(|(c, t)| format!(" ({}/{})", c, t))
+                    .unwrap_or_default()
             );
 
             // source_override を構築（nested_archive_source > archive_snapshot > None）
@@ -618,7 +656,10 @@ impl ViewerApp {
                                     pkg_index.as_deref(),
                                 ) {
                                     Ok(()) => {
-                                        self.convert_message = None;
+                                        self.set_batch_progress_message(
+                                            &batch_progress,
+                                            &model_display_name,
+                                        );
                                     }
                                     Err(e) => {
                                         log::error!("Load failed: {e}");
@@ -640,7 +681,10 @@ impl ViewerApp {
                             ) {
                                 Ok(()) => {
                                     log::info!("Load success: {}", source_path.display());
-                                    self.convert_message = None;
+                                    self.set_batch_progress_message(
+                                        &batch_progress,
+                                        &model_display_name,
+                                    );
                                 }
                                 Err(e) => {
                                     log::error!("Load failed: {e}");
@@ -661,7 +705,10 @@ impl ViewerApp {
                         ) {
                             Ok(()) => {
                                 log::info!("Load success: {}", source_path.display());
-                                self.convert_message = None;
+                                self.set_batch_progress_message(
+                                    &batch_progress,
+                                    &model_display_name,
+                                );
                             }
                             Err(e) => {
                                 log::error!("Load failed: {e}");
@@ -682,7 +729,10 @@ impl ViewerApp {
                         ) {
                             Ok(()) => {
                                 log::info!("PrefabLoad success: {}", source_path.display());
-                                self.convert_message = None;
+                                self.set_batch_progress_message(
+                                    &batch_progress,
+                                    &model_display_name,
+                                );
                             }
                             Err(e) => {
                                 log::error!("PrefabLoad failed: {e}");
@@ -702,6 +752,8 @@ impl ViewerApp {
         if self.pending.pkg_load.is_none() && self.pending.fbx_choice.is_none() {
             if let Some(ref mut ml) = self.pending.multi_load {
                 if let Some((fbx_index, model_type)) = ml.remaining.pop() {
+                    // Calculate progress AFTER pop (remaining is now smaller)
+                    let current = ml.total_count - ml.remaining.len();
                     self.pending.pkg_load = Some(PendingPkgModelLoad {
                         assets: ml.assets.clone(),
                         fbx_index,
@@ -713,6 +765,7 @@ impl ViewerApp {
                         archive_snapshot: ml.archive_snapshot.clone(),
                         nested_archive_source: ml.nested_archive_source.clone(),
                         pkg_index: ml.pkg_index.clone(),
+                        batch_progress: Some((current, ml.total_count)),
                     });
                 }
             }

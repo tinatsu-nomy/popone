@@ -18,7 +18,7 @@
   <rect width="1060" height="804" fill="#FAFAFA" rx="8"/>
 
   <!-- タイトル -->
-  <text x="520" y="30" text-anchor="middle" font-size="16" font-weight="bold" fill="#333">popone アーキテクチャ (v0.2.35)</text>
+  <text x="520" y="30" text-anchor="middle" font-size="16" font-weight="bold" fill="#333">popone アーキテクチャ (v0.2.38)</text>
 
   <!-- 入力ファイル -->
   <rect x="20" y="50" width="130" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>

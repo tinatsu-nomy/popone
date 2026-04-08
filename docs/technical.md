@@ -1902,17 +1902,33 @@ Automatically maps textures to FBX models by following Unity's GUID reference ch
 ### UnityPackageIndex
 
 GUID-based index structure providing O(1) lookup from GUID to pathname, data, and meta.
+Since v0.2.38, also includes pre-built Prefab caches for O(1) texture resolution.
 
 ```rust
 pub struct UnityPackageIndex {
     pub entries: Vec<AssetEntry>,
     pub by_guid: HashMap<String, usize>,
     pub by_path: HashMap<String, usize>,
+    /// FBX GUID → .prefab entry indices (v0.2.38)
+    pub prefab_by_fbx_guid: HashMap<String, Vec<usize>>,
+    /// Parsed Prefab cache: entry index → ParsedPrefabCache (v0.2.38)
+    pub prefab_cache: HashMap<usize, ParsedPrefabCache>,
+    /// Variant resolution cache: source GUID → resolved FBX GUIDs (v0.2.38)
+    pub variant_cache: HashMap<String, Vec<String>>,
 }
 ```
 
 `build_unity_package_index()` extracts the tar.gz once, then all subsequent lookups use `by_guid` / `by_path`.
 Built for both direct viewer loading and archive (ZIP / 7z) loading paths.
+
+After index construction, `build_prefab_fbx_map()` populates the Prefab caches:
+1. **Phase 1 (parallel)**: All `.prefab` entries are parsed via `rayon::par_iter` (`detect_prefab_format` + `parse_prefab_new` + `parse_prefab_old`). Mixed-format Prefabs always run both parsers.
+2. **Phase 2a**: Parsed results are inserted into `prefab_cache`.
+3. **Phase 2b (sequential)**: Variant resolution (`resolve_variant_multi`) maps each Prefab's FBX references into `prefab_by_fbx_guid`. Results are cached in `variant_cache`.
+
+`resolve_prefab_textures()` uses `prefab_by_fbx_guid.get(fbx_guid)` for O(1) lookup instead of scanning all entries, and reads from `prefab_cache` instead of re-parsing.
+
+`TextureData::Encoded` uses `Arc<[u8]>` (since v0.2.38) to share texture data from `PackageTexture.data` without copying.
 
 ### Prefab Format Detection
 
@@ -2652,6 +2668,12 @@ The `.unitypackage` model selection dialog supports multi-select via checkboxes:
 - `take_fbx_and_textures` / `take_vrm` changed from `Vec<ExtractedAsset>` (consuming) to `&[ExtractedAsset]` (borrowing)
 - `PendingPkgModelLoad.assets` / `PendingFbxChoicePkg.assets` changed to `Arc<Vec<ExtractedAsset>>`
 - Result: N models share one asset list; no `ExtractedAsset` cloning occurs
+
+**Progress Toast (v0.2.38):**
+- `PendingMultiLoad.total_count` tracks the total number of selected models
+- `PendingPkgModelLoad.batch_progress: Option<(usize, usize)>` carries `(current, total)` from queue pop time
+- Progress is stored in `PendingPkgModelLoad` itself (not derived from `multi_load`) to survive cleanup of the last item
+- Toast shows "読み込み中 (N/M)：filename" at load start, "読み込み完了 (N/M): filename" on success
 
 **Abort Behavior:**
 - If any model load fails (returns `Err` or `append_from_pkg` returns `false`), `multi_load` is set to `None`

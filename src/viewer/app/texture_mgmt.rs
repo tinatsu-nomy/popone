@@ -344,7 +344,7 @@ impl ViewerApp {
                     .textures
                     .push(crate::intermediate::types::IrTexture {
                         filename: ir_filename,
-                        data: TextureData::Encoded(ir_data),
+                        data: TextureData::Encoded(Arc::from(ir_data)),
                         mime_type: ir_mime,
                         source_path: display_name.clone(),
                         mip_chain: None,
@@ -494,7 +494,7 @@ impl ViewerApp {
                     .textures
                     .push(crate::intermediate::types::IrTexture {
                         filename: ir_filename,
-                        data: TextureData::Encoded(ir_data),
+                        data: TextureData::Encoded(Arc::from(ir_data)),
                         mime_type: ir_mime,
                         source_path: tex_name.to_string(),
                         mip_chain: None,
@@ -832,7 +832,7 @@ impl ViewerApp {
             .textures
             .push(crate::intermediate::types::IrTexture {
                 filename: ir_filename,
-                data: TextureData::Encoded(ir_data),
+                data: TextureData::Encoded(Arc::from(ir_data)),
                 mime_type: ir_mime,
                 source_path: path.display().to_string(),
                 mip_chain: None,

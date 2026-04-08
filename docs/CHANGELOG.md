@@ -3,31 +3,48 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.2.38](#v0238)
+    - [Performance](#performance)
+    - [Improvements](#improvements)
   - [v0.2.37](#v0237)
     - [Bug Fixes](#bug-fixes)
   - [v0.2.36](#v0236)
-    - [Improvements](#improvements)
-  - [v0.2.35](#v0235)
     - [Improvements](#improvements-1)
+  - [v0.2.35](#v0235)
+    - [Improvements](#improvements-2)
     - [Documentation](#documentation)
   - [v0.2.34](#v0234)
     - [New Features](#new-features)
-    - [Improvements](#improvements-2)
+    - [Improvements](#improvements-3)
   - [v0.2.33](#v0233)
     - [New Features](#new-features-1)
-    - [Improvements](#improvements-3)
+    - [Improvements](#improvements-4)
   - [v0.2.32](#v0232)
     - [New Features](#new-features-2)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements)
   - [v0.2.31](#v0231)
     - [New Features](#new-features-3)
-    - [Improvements](#improvements-4)
+    - [Improvements](#improvements-5)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.2.38
+
+### Performance
+
+- **Prefab texture resolution index** — `UnityPackageIndex` now builds a `prefab_by_fbx_guid` reverse-lookup map and `prefab_cache` at index construction time. `resolve_prefab_textures` uses O(1) HashMap lookup instead of O(P×F) full scan of all `.prefab` entries per FBX
+- **Variant resolution cache** — `resolve_variant_multi` results are cached in `variant_cache`. `resolve_variant_multi_inner` reads from `prefab_cache` instead of re-parsing Prefab YAML on each recursive call
+- **TextureData Arc sharing** — `TextureData::Encoded` changed from `Vec<u8>` to `Arc<[u8]>`. Texture data from `.unitypackage` is now shared via `Arc::clone` (O(1)) instead of `to_vec()` full copy
+- **Material GUID deduplication** — Replaced `Vec::contains()` (O(N²)) with `HashSet` (O(N)) for material GUID uniqueness checks in `resolve_prefab_textures` and `resolve_variant_multi_inner`
+- **Parallel Prefab parsing** — `build_prefab_fbx_map` uses `rayon::par_iter` to parse all Prefab YAML files in parallel during index construction
+
+### Improvements
+
+- **Batch loading progress toast** — Multi-model batch loading now shows per-model progress as a toast notification (e.g. "読み込み中 (2/5)：model.fbx"). Progress info is stored in `PendingPkgModelLoad.batch_progress` to survive `PendingMultiLoad` cleanup on the last item
 
 ## v0.2.37
 

@@ -1084,7 +1084,7 @@ impl ViewerApp {
                         .write_image(img.as_raw(), w, h, image::ExtendedColorType::Rgba8)
                         .is_ok()
                     {
-                        tex.data = TextureData::Encoded(png_data);
+                        tex.data = TextureData::Encoded(Arc::from(png_data));
                         if !tex.filename.ends_with(".png") {
                             tex.filename = tex
                                 .filename

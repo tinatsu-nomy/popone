@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use glam::Vec3;
 
@@ -79,7 +80,7 @@ pub fn generate_toon(
 
     let tex = IrTexture {
         filename: filename.clone(),
-        data: TextureData::Encoded(png_data),
+        data: TextureData::Encoded(Arc::from(png_data)),
         mime_type: "image/png".to_string(),
         source_path: format!("generated(toon: {})", ir.name),
         mip_chain: None,

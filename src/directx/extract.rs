@@ -186,7 +186,7 @@ fn x_to_ir(
                             .to_string();
                         ir_textures.push(IrTexture {
                             filename: safe_filename,
-                            data: TextureData::Encoded(data),
+                            data: TextureData::Encoded(Arc::from(data)),
                             mime_type: mime.to_string(),
                             source_path: tex_name.clone(),
                             mip_chain: None,

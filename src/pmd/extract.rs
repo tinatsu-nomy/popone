@@ -312,7 +312,7 @@ fn extract_textures(
 
             IrTexture {
                 filename: filename.clone(),
-                data: TextureData::Encoded(data),
+                data: TextureData::Encoded(Arc::from(data)),
                 mime_type: mime.to_string(),
                 source_path: normalized.clone(),
                 mip_chain: None,
