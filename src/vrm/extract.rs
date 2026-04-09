@@ -395,7 +395,7 @@ fn extract_meta_comment(typed: &VrmTyped) -> String {
 /// linear f32 空間で縮小してから sRGB に戻すことで色空間的に正確なダウンサンプリングを行う。
 /// バックグラウンドスレッドで実行されるため UI への影響はない。
 /// sRGB↔linear 変換は LUT 実装で `powf` 呼び出しを排除済み。
-fn generate_mip_chain(rgba: &[u8], width: u32, height: u32) -> Option<Vec<(u32, u32, Vec<u8>)>> {
+fn generate_mip_chain(rgba: &[u8], width: u32, height: u32) -> Option<Vec<(u32, u32, Arc<[u8]>)>> {
     if rgba.len() != (width * height * 4) as usize {
         return None;
     }
@@ -418,7 +418,7 @@ fn generate_mip_chain(rgba: &[u8], width: u32, height: u32) -> Option<Vec<(u32, 
             image::imageops::FilterType::Triangle,
         );
         let mip_srgb = crate::color::linear_f32_to_rgba8(&current_linear);
-        chain.push((mip_w, mip_h, mip_srgb.into_raw()));
+        chain.push((mip_w, mip_h, Arc::from(mip_srgb.into_raw())));
     }
     Some(chain)
 }
@@ -463,7 +463,7 @@ fn extract_textures(
         } else {
             (
                 TextureData::RawRgba {
-                    pixels: rgba,
+                    pixels: rgba.into(),
                     width: w,
                     height: h,
                 },
@@ -2354,10 +2354,10 @@ fn extract_meshes(
                         .name()
                         .unwrap_or(&format!("mesh_{}", mesh.index()))
                         .to_string(),
-                    vertices,
-                    indices,
+                    vertices: vertices.into(),
+                    indices: indices.into(),
                     material_index,
-                    morph_targets,
+                    morph_targets: morph_targets.into(),
                     node_index: node_idx,
                     uvs1,
                 };

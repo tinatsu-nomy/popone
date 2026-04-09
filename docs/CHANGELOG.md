@@ -3,27 +3,33 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.2.38](#v0238)
+  - [v0.2.39](#v0239)
     - [Performance](#performance)
+    - [New Features](#new-features)
+    - [Bug Fixes](#bug-fixes)
+    - [Architecture](#architecture)
+    - [Refactoring](#refactoring)
+  - [v0.2.38](#v0238)
+    - [Performance](#performance-1)
     - [Improvements](#improvements)
   - [v0.2.37](#v0237)
-    - [Bug Fixes](#bug-fixes)
+    - [Bug Fixes](#bug-fixes-1)
   - [v0.2.36](#v0236)
     - [Improvements](#improvements-1)
   - [v0.2.35](#v0235)
     - [Improvements](#improvements-2)
     - [Documentation](#documentation)
   - [v0.2.34](#v0234)
-    - [New Features](#new-features)
+    - [New Features](#new-features-1)
     - [Improvements](#improvements-3)
   - [v0.2.33](#v0233)
-    - [New Features](#new-features-1)
+    - [New Features](#new-features-2)
     - [Improvements](#improvements-4)
   - [v0.2.32](#v0232)
-    - [New Features](#new-features-2)
+    - [New Features](#new-features-3)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements)
   - [v0.2.31](#v0231)
-    - [New Features](#new-features-3)
+    - [New Features](#new-features-4)
     - [Improvements](#improvements-5)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -31,6 +37,61 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.2.39
+
+### Performance
+
+- **Asynchronous UnityPackage/archive loading** — File reading, `build_unity_package_index`, and `list_models` for `.unitypackage` and ZIP/7z archives are now executed on a background thread via `spawn_bg_index_load`, eliminating UI freezes during the initial indexing phase
+- **Asynchronous model parsing from packages** — CPU-heavy FBX/VRM/Prefab parsing from `.unitypackage` and archive extraction + parsing are now executed on background threads via `spawn_bg_pkg_load` / `spawn_bg_archive_load`. Previously these ran synchronously on the UI thread
+- **Background texture pre-decoding** — `pre_decode_textures` converts `TextureData::Encoded` (PNG/JPEG/TGA/PSD) to `TextureData::RawRgba` on the background thread, eliminating image decode cost from the main thread's `upload_textures_from_ir`
+- **Frame-split GPU texture upload** — `PendingGpuBuild` uploads textures to GPU in batches of 4 per frame via `upload_single_texture`, preventing the main thread from blocking during large texture uploads. Applies to both initial load and append operations
+- **Texture data zero-copy** — `take_fbx_and_textures` / `take_vrm` return types changed from `Vec<u8>` to `Arc<[u8]>`, and `embed_textures_into_ir` generified with `AsRef<[u8]>`. `pkg_textures` and reload paths unified to `Arc<[u8]>`, eliminating redundant `.to_vec()` copies
+- **D&D temp file preload removed from UI thread** — `process_drag_and_drop` no longer calls `std::fs::read` / `collect_image_files_recursive` synchronously. File reading is delegated to the background parse thread via `read_data` / `collect_aux` closures
+- **Background PMX conversion** — `execute_conversion` now clones the IR and spawns a background thread for `convert_ir_to_pmx_with_cancel`. The UI thread returns immediately, showing a "PMX変換中..." overlay with a cancel button
+- **Background reload (File/Snapshot)** — `reload_current` dispatches File and Snapshot sources through the existing `spawn_bg_load` pipeline. Archive/UnityPackage sources remain synchronous. Reload snapshot is saved before dispatch and restored after GPU build completes
+- **`TextureData::RawRgba` Arc sharing** — `pixels` field changed from `Vec<u8>` to `Arc<[u8]>`, and `mip_chain` entries from `Vec<u8>` to `Arc<[u8]>`. Cloning `IrModel` for PMX conversion is now near-zero-cost for texture data
+- **`IrModel::clone_for_export`** — Lightweight clone that strips GPU-only data (`mip_chain`, `uvs1`) to minimize UI thread copy cost when spawning the PMX conversion thread
+- **GPU pipeline warm-up during splash screen** — `GpuRenderer::new()` (shader compilation) and `ensure_pipelines()` (26 render pipelines × 4 configs) are now executed incrementally during splash screen display via `WarmupPhase` state machine, one phase per frame. Eliminates ~10s first-model-load freeze (measured: 76ms total in release build)
+- **GPU model build CPU offloading** — `build_gpu_model_inner` split into `cpu_prep_model` (vertex dedup, normal averaging, morph precomputation — runs on background thread) and `gpu_finalize_model` (buffer/bind group creation — runs on main thread in <7ms). `PendingGpuBuild` state machine extended with 3-phase flow: texture upload → BG cpu_prep → GPU finalize
+- **Incremental pkg thumbnail cache** — `apply_pkg_append_post` now calls `append_pkg_thumb_cache(start_index)` to generate thumbnails only for newly added textures, instead of `rebuild_pkg_thumb_cache()` which regenerated all thumbnails from scratch. Eliminates cumulative freeze growth during batch append (was: 15s→61s growing, now: ~7.6s constant)
+
+### New Features
+
+- **Load cancellation UI** — A "中止" (Cancel) button appears on the progress overlay during background loading, GPU build, and PMX conversion. Escape key also cancels. During reload, cancellation restores the previous model instead of clearing to empty
+- **Escape key for selection dialogs** — FBX choice, OBJ/STL import options, UnityPackage model select, and archive model select dialogs can now be dismissed with the Escape key
+- **FBX choice dialog via background** — The FBX model/animation selection dialog (`execute_fbx_choice`) now dispatches to `spawn_bg_load` / `spawn_bg_pkg_load` instead of synchronous parsing
+- **PMX conversion cooperative cancel** — `convert_ir_to_pmx_with_cancel` checks a cancel flag between each step (texture write, PMX build, file write). Texture export checks per-texture. All output goes to a temp directory (`.popone_convert_tmp/`) and is moved to the final path only on success; on cancel the temp directory is deleted entirely
+
+### Bug Fixes
+
+- **PMX output filename truncation** — `sanitize_filename` now truncates model names exceeding 80 characters at a Unicode character boundary. Previously, VRM models with very long metadata names (e.g., detailed descriptions in `meta.name`) produced PMX filenames that could exceed Windows path limits or cause filesystem errors
+
+### Architecture
+
+- **`CpuParseInput` expanded** — Added `ArchiveModel`, `PkgModel`, `UnityPackageIndex`, `ArchiveIndex` variants for background processing of all load paths
+- **`BgLoadKind` expanded** — Added `ArchiveInitial`, `ArchiveAppend`, `ArchivePreparedUnityPackage`, `PkgInitial`, `PkgAppend`, `NeedsFbxChoice`, `UnityPackageIndexed`, `ArchiveIndexed` variants with `Box<Payload>` structs to separate request and result data
+- **`PendingGpuBuild` state machine** — GPU texture upload is split across frames (4 textures/frame). `start_deferred_gpu_build` is used for BG load results; reload paths also use this pipeline for File/Snapshot sources
+- **Append GPU build deferred** — Append operations use `start_deferred_append_gpu_build_ext` with rollback support: on GPU build failure, the original model is restored via IR truncation + old GPU model
+- **`build_ir_from_archive_bundle` free function** — Extracted from `&self` method to enable background thread invocation
+- **`PendingConvertBg`** — Background PMX conversion state with `mpsc::Receiver` for result polling and `AtomicBool` for cancel. Polled in `process_pending_tasks`
+- **`reload_snapshot` field** — `ViewerApp` stores a `ReloadSnapshot` during BG reload. On GPU build completion, `finish_reload_from_snapshot` restores the snapshot. On cancel, `restore_snapshot_on_failure` preserves the old model
+- **`IrModel` / `IrMesh` / `IrPhysics` Clone derive** — Added `Clone` to support `clone_for_export` for background PMX conversion
+- **`watchdog.rs` — Main thread responsiveness monitor** — A background watchdog thread monitors the main thread's heartbeat (`AtomicU64` epoch millis, threshold 5s, check interval 2s). If no heartbeat update is detected within the threshold, logs `[watchdog] Main thread unresponsive`; on recovery, logs total freeze duration. Uses a `PAUSED` sentinel value (`u64::MAX`) to suppress false positives when the window is minimized. The main thread calls `request_repaint_after(3s)` to maintain heartbeat during idle (no input / no animation)
+- **`WarmupPhase` state machine** — 5-phase GPU pipeline warm-up during splash screen: `NotStarted` → `RendererCreated` → `SrgbMsaaDone` → `SrgbNoMsaaDone` → `Complete`. `ensure_pipelines` refactored with explicit `msaa: bool` parameter
+- **`cpu_prep_model` / `gpu_finalize_model` split** — `build_gpu_model_inner` decomposed into CPU-only `cpu_prep_model` (vertex processing, `Send`-safe, runs on BG thread) and GPU-only `gpu_finalize_model` (bind group/buffer creation, main thread). New types: `CpuPrepResult`, `CpuDrawPlan`, `PerMatGpuMeta`, `AuxTexRefs`. `PendingGpuBuild` extended with `cpu_prep_rx` channel for 3-phase async flow
+- **`append_pkg_thumb_cache` incremental method** — Generates thumbnails only for `pkg_textures[start_index..]` instead of full rebuild, preserving existing thumbnail GPU textures
+
+### Refactoring
+
+- **`spawn_bg_task` common helper** — Extracted shared boilerplate (cancel, mpsc channel, request_id, thread spawn) from 4 `spawn_bg_*` functions into a single `spawn_bg_task` helper. Each caller now only builds `CpuParseInput` and `fallback_kind`
+- **`process_pending_tasks` split into `poll_*` methods** — Decomposed the ~450-line monolithic method into `poll_file_dialog`, `poll_dispatch_and_bg_load`, `poll_deferred_loads`, `poll_gpu_build`, `poll_export_tasks`, `poll_overlay_tasks`, `poll_convert_bg`. Introduced `poll_receiver` helper to deduplicate `try_recv` 4-branch pattern (7 occurrences)
+- **`IrMesh` heavy fields Arc-wrapped** — `vertices`, `indices`, `morph_targets` changed from `Vec<T>` to `Arc<Vec<T>>`. Clone is now O(1) reference count. Mutation via `vertices_mut()` / `indices_mut()` / `morph_targets_mut()` using `Arc::make_mut` (COW)
+- **`assign_texture_core` common method** — Unified `assign_texture_source_to_material` (file path) and `assign_texture_data_to_material` (byte data) into a shared core. Fixed missing `mmd_texture_bind_group = None` clear on the file-path path
+- **Append rollback typed** — Introduced `IrRollbackSnapshot`, `LoadedModelOwnership`, `AnimationSnapshot` structs to replace manual field-by-field save/restore in append operations
+- **`TmpDirGuard` RAII cleanup** — Replaced 5× manual `.inspect_err(|_| cleanup())?` pattern in `convert_ir_to_pmx_with_cancel` with a Drop-based guard. `disarm()` on success path prevents cleanup
+- **`MaterialBuildFlags` struct** — Consolidated 4 parallel slice arguments (`smooth_per_mat`, `clear_per_mat`, `normal_map_per_mat`, `emissive_per_mat`) into a single struct across `build_gpu_model` / `cpu_prep_model` / `PendingGpuBuild`
+- **`write_model_opt_cancel`** — `PmxWriter` now supports cooperative cancellation between sections (vertices, faces, textures, materials, bones, morphs). `write_pmx_and_stats` passes the cancel flag through
 
 ## v0.2.38
 

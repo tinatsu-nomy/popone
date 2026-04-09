@@ -1,6 +1,7 @@
 use crate::error::Result;
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::pmx::types::*;
 
@@ -15,14 +16,38 @@ impl<W: Write> PmxWriter<W> {
     }
 
     pub fn write_model(&mut self, model: &PmxModel) -> Result<()> {
+        self.write_model_opt_cancel(model, None)
+    }
+
+    pub fn write_model_opt_cancel(
+        &mut self,
+        model: &PmxModel,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<()> {
+        let check = || -> Result<()> {
+            if let Some(c) = cancel {
+                if c.load(Ordering::Relaxed) {
+                    return Err(crate::error::PoponeError::Other(
+                        "PMX write cancelled".into(),
+                    ));
+                }
+            }
+            Ok(())
+        };
+
         self.write_header(&model.header)?;
         self.write_model_info(&model.model_info)?;
+        check()?;
         self.write_vertices(&model.vertices)?;
+        check()?;
         self.write_faces(&model.faces)?;
+        check()?;
         self.write_textures(&model.textures)?;
         self.write_materials(&model.materials)?;
+        check()?;
         self.write_bones(&model.bones)?;
         self.write_morphs(&model.morphs)?;
+        check()?;
         self.write_display_frames(&model.display_frames)?;
         self.write_rigid_bodies(&model.rigid_bodies)?;
         self.write_joints(&model.joints)?;

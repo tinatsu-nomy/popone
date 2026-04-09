@@ -140,8 +140,9 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
                     (&vert_neg_corners[vi], -1.0f32)
                 };
 
+            let vert_copy = mesh.vertices[vi];
             let new_vi = mesh.vertices.len() as u32;
-            mesh.vertices.push(mesh.vertices[vi]);
+            mesh.vertices_mut().push(vert_copy);
             if !mesh.uvs1.is_empty() {
                 let uv1 = if vi < mesh.uvs1.len() {
                     mesh.uvs1[vi]
@@ -151,7 +152,7 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
                 mesh.uvs1.push(uv1);
             }
             // モーフターゲットの頂点インデックスも複製
-            for mt in &mut mesh.morph_targets {
+            for mt in mesh.morph_targets_mut() {
                 if let Some(&(_, offset)) = mt
                     .position_offsets
                     .iter()
@@ -172,7 +173,7 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
             }
             // 少数派コーナーのインデックスを新頂点に張り替え
             for &corner in minority_corners {
-                mesh.indices[corner] = new_vi;
+                mesh.indices_mut()[corner] = new_vi;
             }
             split_count += 1;
             log::trace!(
@@ -212,7 +213,7 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
             acc.2 += 1;
         }
 
-        for (i, v) in mesh.vertices.iter_mut().enumerate() {
+        for (i, v) in mesh.vertices_mut().iter_mut().enumerate() {
             if has_valid_tangent(v.tangent) {
                 continue; // glTF から読み込み済み
             }
@@ -243,7 +244,7 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
             "MikkTSpace tangent generation failed: mesh='{}' - using default tangents",
             mesh.name
         );
-        for v in &mut mesh.vertices {
+        for v in mesh.vertices_mut() {
             if !has_valid_tangent(v.tangent) {
                 v.tangent = Vec4::new(1.0, 0.0, 0.0, 1.0);
             }

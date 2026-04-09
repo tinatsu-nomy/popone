@@ -10,3 +10,4 @@ pub mod mesh;
 pub mod single_instance;
 pub mod texture;
 pub mod ui;
+pub mod watchdog;

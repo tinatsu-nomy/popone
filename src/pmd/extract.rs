@@ -514,10 +514,10 @@ fn extract_meshes(pmd: &PmdModel, _materials: &[IrMaterial]) -> (Vec<IrMesh>, Ha
 
         meshes.push(IrMesh {
             name,
-            vertices: local_vertices,
-            indices: local_indices,
+            vertices: local_vertices.into(),
+            indices: local_indices.into(),
             material_index: mat_idx,
-            morph_targets: Vec::new(),
+            morph_targets: Arc::new(Vec::new()),
             node_index: 0,
             uvs1: Vec::new(),
         });
@@ -592,7 +592,7 @@ fn distribute_pmd_vertex_morphs(pmd: &PmdModel, meshes: &mut [IrMesh]) {
         for (mesh_idx, mut offsets) in mesh_offsets.into_iter().enumerate() {
             if !offsets.is_empty() {
                 offsets.sort_by_key(|&(vi, _)| vi);
-                meshes[mesh_idx].morph_targets.push(IrMorphTarget {
+                meshes[mesh_idx].morph_targets_mut().push(IrMorphTarget {
                     name: m.name.clone(),
                     position_offsets: offsets,
                     normal_offsets: Vec::new(),

@@ -163,7 +163,7 @@ pub fn convert_vrm_to_pmx(
             pmx_model.textures[pmx_idx] = format!("textures\\{}", name);
         }
     }
-    write_pmx_and_stats(&pmx_model, output_path, &tex_dir)
+    write_pmx_and_stats(&pmx_model, output_path, &tex_dir, None)
 }
 
 /// FBX → PMX 変換
@@ -263,7 +263,129 @@ pub fn convert_ir_to_pmx(
             pmx_model.textures[pmx_idx] = format!("textures\\{}", name);
         }
     }
-    write_pmx_and_stats(&pmx_model, output_path, &tex_dir)
+    write_pmx_and_stats(&pmx_model, output_path, &tex_dir, None)
+}
+
+/// IrModel から PMX 変換（協調キャンセル対応版）。
+/// 全出力を一時ディレクトリに書き出し、成功時のみ最終パスへ移動する。
+/// キャンセル時は一時ディレクトリごと削除し、出力先に中途半端なファイルが残ることを防ぐ。
+pub fn convert_ir_to_pmx_with_cancel(
+    ir: &intermediate::types::IrModel,
+    output_path: &Path,
+    options: &PmxBuildOptions,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<ConvertStats> {
+    use std::sync::atomic::Ordering;
+
+    let check = || -> Result<()> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(error::PoponeError::Other("PMX conversion cancelled".into()));
+        }
+        Ok(())
+    };
+
+    let output_dir = output_path.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(output_dir)?;
+
+    // Drop guard: scope 離脱時に一時ディレクトリを自動削除（成功時は disarm）
+    let tmp_dir = output_dir.join(".popone_convert_tmp");
+    if tmp_dir.exists() {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+    std::fs::create_dir_all(&tmp_dir)?;
+    let mut guard = TmpDirGuard::new(tmp_dir.clone());
+
+    let tmp_tex_dir = tmp_dir.join("textures");
+    let tmp_pmx_path = tmp_dir.join(
+        output_path
+            .file_name()
+            .unwrap_or(std::ffi::OsStr::new("output.pmx")),
+    );
+
+    check()?;
+    let written_filenames = convert::texture::write_all_textures_from_ir_opt_cancel(
+        &ir.textures,
+        &tmp_tex_dir,
+        Some(cancel),
+    )?;
+
+    check()?;
+    let (mut pmx_model, toon_textures) = pmx::build::build_pmx_model_with_options(ir, options)?;
+    for (i, name) in written_filenames.iter().enumerate() {
+        if i < pmx_model.textures.len() {
+            pmx_model.textures[i] = format!("textures\\{}", name);
+        }
+    }
+
+    check()?;
+    let base_tex_count = ir.textures.len();
+    let toon_written = convert::texture::write_all_textures_from_ir_opt_cancel(
+        &toon_textures,
+        &tmp_tex_dir,
+        Some(cancel),
+    )?;
+    for (i, name) in toon_written.iter().enumerate() {
+        let pmx_idx = base_tex_count + i;
+        if pmx_idx < pmx_model.textures.len() {
+            pmx_model.textures[pmx_idx] = format!("textures\\{}", name);
+        }
+    }
+
+    check()?;
+    let mut stats = write_pmx_and_stats(&pmx_model, &tmp_pmx_path, &tmp_tex_dir, Some(cancel))?;
+
+    // Final cancel check after PMX write, before committing to output path
+    check()?;
+
+    // 成功パス: guard を disarm して一時ディレクトリを残す
+    guard.disarm();
+
+    // 一時ディレクトリから最終出力先へ移動
+    let final_tex_dir = output_dir.join("textures");
+    if tmp_tex_dir.exists() {
+        std::fs::create_dir_all(&final_tex_dir)?;
+        if let Ok(entries) = std::fs::read_dir(&tmp_tex_dir) {
+            for entry in entries.flatten() {
+                let dest = final_tex_dir.join(entry.file_name());
+                if std::fs::rename(entry.path(), &dest).is_err() {
+                    let _ = std::fs::copy(entry.path(), &dest);
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+    if std::fs::rename(&tmp_pmx_path, output_path).is_err() {
+        let _ = std::fs::copy(&tmp_pmx_path, output_path);
+        let _ = std::fs::remove_file(&tmp_pmx_path);
+    }
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    stats.output_path = output_path.to_string_lossy().into_owned();
+    stats.tex_dir = final_tex_dir.to_string_lossy().into_owned();
+    Ok(stats)
+}
+
+/// RAII guard that removes a temporary directory on drop unless disarmed.
+struct TmpDirGuard {
+    path: Option<std::path::PathBuf>,
+}
+
+impl TmpDirGuard {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+
+    fn disarm(&mut self) {
+        self.path = None;
+    }
+}
+
+impl Drop for TmpDirGuard {
+    fn drop(&mut self) {
+        if let Some(ref p) = self.path {
+            let _ = std::fs::remove_dir_all(p);
+        }
+    }
 }
 
 /// PMX モデルをファイルに書き出して ConvertStats を返す（共通処理）
@@ -271,6 +393,7 @@ fn write_pmx_and_stats(
     pmx_model: &pmx::types::PmxModel,
     output_path: &Path,
     tex_dir: &Path,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<ConvertStats> {
     let stats = ConvertStats {
         output_path: output_path.to_string_lossy().into_owned(),
@@ -287,7 +410,7 @@ fn write_pmx_and_stats(
     let writer = std::io::BufWriter::new(file);
     let header = pmx_model.header.clone();
     let mut pmx_writer = pmx::writer::PmxWriter::new(writer, header);
-    pmx_writer.write_model(pmx_model)?;
+    pmx_writer.write_model_opt_cancel(pmx_model, cancel)?;
 
     Ok(stats)
 }
@@ -345,6 +468,18 @@ pub fn sanitize_filename(name: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
+    // ファイル名が長すぎる場合は切り詰め（char 境界で安全にカット）
+    const MAX_FILENAME_CHARS: usize = 80;
+    let trimmed = if trimmed.chars().count() > MAX_FILENAME_CHARS {
+        let end = trimmed
+            .char_indices()
+            .nth(MAX_FILENAME_CHARS)
+            .map_or(trimmed.len(), |(i, _)| i);
+        // 切り詰め後の末尾空白・ピリオドも除去
+        trimmed[..end].trim_end_matches(|c: char| c == ' ' || c == '.')
+    } else {
+        trimmed
+    };
     // Windows 予約名チェック（ベース名 = 最初の '.' より前で判定）
     let base = match trimmed.find('.') {
         Some(pos) => &trimmed[..pos],

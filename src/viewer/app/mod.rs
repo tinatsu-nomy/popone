@@ -492,6 +492,28 @@ pub struct ViewerApp {
     /// バックグラウンドロードの世代番号カウンタ。`fresh_request_id` 呼び出しごとに +1。
     /// 旧ロードの結果を識別して破棄するために使用する。
     pub(crate) next_request_id: u64,
+    /// リロード用スナップショット（BG ロード完了後に復元する）
+    pub(crate) reload_snapshot: Option<file_io::ReloadSnapshot>,
+    /// ウォッチドッグ用ハートビート（毎フレーム tick して応答性を監視）
+    heartbeat: super::watchdog::Heartbeat,
+    /// GPU パイプラインのウォームアップ進行状態
+    warmup_phase: WarmupPhase,
+}
+
+/// GpuRenderer の段階的ウォームアップ状態
+#[derive(Default)]
+enum WarmupPhase {
+    /// GpuRenderer::new() をまだ呼んでいない
+    #[default]
+    NotStarted,
+    /// GpuRenderer::new() 完了、sRGB+MSAA パイプライン未生成
+    RendererCreated,
+    /// sRGB+MSAA 完了
+    SrgbMsaaDone,
+    /// sRGB+noMSAA 完了
+    SrgbNoMsaaDone,
+    /// 全パイプライン事前生成完了
+    Complete,
 }
 
 impl ViewerApp {
@@ -499,6 +521,42 @@ impl ViewerApp {
     pub(crate) fn fresh_request_id(&mut self) -> u64 {
         self.next_request_id = self.next_request_id.wrapping_add(1);
         self.next_request_id
+    }
+
+    /// GPU パイプラインの段階的ウォームアップ（スプラッシュ画面表示中に1フェーズずつ実行）。
+    /// 各フェーズはシェーダーコンパイルを含むため数秒かかるが、フレーム間でスプラッシュ画像が表示される。
+    fn tick_gpu_warmup(&mut self) {
+        let device = &self.render_state.device;
+        let queue = &self.render_state.queue;
+        match self.warmup_phase {
+            WarmupPhase::NotStarted => {
+                log::info!("[warmup] Creating GpuRenderer (shader compilation)");
+                self.renderer = Some(super::gpu::GpuRenderer::new(device, queue, false));
+                self.warmup_phase = WarmupPhase::RendererCreated;
+            }
+            WarmupPhase::RendererCreated => {
+                if let Some(ref mut r) = self.renderer {
+                    log::info!("[warmup] Pipeline set: sRGB + MSAA");
+                    r.ensure_pipelines(device, false, true);
+                }
+                self.warmup_phase = WarmupPhase::SrgbMsaaDone;
+            }
+            WarmupPhase::SrgbMsaaDone => {
+                if let Some(ref mut r) = self.renderer {
+                    log::info!("[warmup] Pipeline set: sRGB + noMSAA");
+                    r.ensure_pipelines(device, false, false);
+                }
+                self.warmup_phase = WarmupPhase::SrgbNoMsaaDone;
+            }
+            WarmupPhase::SrgbNoMsaaDone => {
+                if let Some(ref mut r) = self.renderer {
+                    log::info!("[warmup] Pipeline set: Unorm + MSAA");
+                    r.ensure_pipelines(device, true, true);
+                }
+                self.warmup_phase = WarmupPhase::Complete;
+            }
+            WarmupPhase::Complete => {}
+        }
     }
 }
 
@@ -616,6 +674,9 @@ impl ViewerApp {
             texture_history,
             dark_theme_applied: false,
             next_request_id: 0,
+            reload_snapshot: None,
+            heartbeat: super::watchdog::start(Duration::from_secs(5), Duration::from_secs(2)),
+            warmup_phase: WarmupPhase::NotStarted,
         }
     }
 
@@ -742,18 +803,458 @@ impl ViewerApp {
         } else {
             Self::default_material_display(&ir)
         };
-        let (smooth_per_mat, clear_per_mat, nmap_per_mat, emissive_per_mat) =
-            Self::extract_per_mat_vecs(&display);
-        let gpu_model = super::mesh::build_gpu_model_from_ir(
-            &ir,
-            device,
-            queue,
-            &smooth_per_mat,
-            &clear_per_mat,
-            &nmap_per_mat,
-            &emissive_per_mat,
-        )?;
+        let mat_flags = Self::extract_per_mat_vecs(&display);
+        let gpu_model = super::mesh::build_gpu_model_from_ir(&ir, device, queue, &mat_flags)?;
         self.finish_load_with_gpu(ir, gpu_model, source)
+    }
+
+    /// GPU テクスチャアップロードを分割して実行する版（BG パース完了後に使用）
+    pub(crate) fn start_deferred_gpu_build(
+        &mut self,
+        ir: IrModel,
+        source: ReloadableSource,
+        post_kind: Option<pending::BgLoadKind>,
+        path: std::path::PathBuf,
+    ) {
+        let display = if self.material_display.len() == ir.materials.len() {
+            self.material_display.clone()
+        } else {
+            Self::default_material_display(&ir)
+        };
+        let mat_flags = Self::extract_per_mat_vecs(&display);
+
+        self.pending.gpu_build = Some(pending::PendingGpuBuild {
+            gpu_textures: Vec::with_capacity(ir.textures.len()),
+            next_tex: 0,
+            mat_flags,
+            post_kind,
+            path,
+            ir,
+            source,
+            append_info: None,
+            cpu_prep_rx: None,
+        });
+    }
+
+    /// Append 操作の GPU ビルドを遅延実行する版。
+    /// IR マージは即時実行し、マージ済み IR をフレーム分割テクスチャアップロードに回す。
+    /// ビルド完了までは `self.loaded = None`（一時的にモデル非表示）。
+    pub(crate) fn start_deferred_append_gpu_build(
+        &mut self,
+        other_ir: IrModel,
+        append_source: helpers::ReloadableSource,
+        silent: bool,
+        pkg_model_name: Option<String>,
+        pkg_locator: Option<crate::unitypackage::PkgModelLocator>,
+        path: std::path::PathBuf,
+    ) {
+        self.start_deferred_append_gpu_build_ext(
+            other_ir,
+            append_source,
+            silent,
+            pkg_model_name,
+            pkg_locator,
+            path,
+            None,
+        );
+    }
+
+    /// Append 操作の GPU ビルドを遅延実行（PkgAppend ペイロード付き版）
+    pub(crate) fn start_deferred_append_gpu_build_ext(
+        &mut self,
+        mut other_ir: IrModel,
+        append_source: helpers::ReloadableSource,
+        silent: bool,
+        pkg_model_name: Option<String>,
+        pkg_locator: Option<crate::unitypackage::PkgModelLocator>,
+        path: std::path::PathBuf,
+        pkg_append_payload: Option<Box<pending::PkgAppendPayload>>,
+    ) {
+        let Some(mut loaded) = self.loaded.take() else {
+            return;
+        };
+
+        let added_name = other_ir.name.clone();
+        let added_bones = other_ir.bones.len();
+        let added_meshes = other_ir.meshes.len();
+        let added_materials = other_ir.materials.len();
+        let saved_material_count = loaded.ir.materials.len();
+        let mat_offset = saved_material_count;
+        let tex_count_before = loaded.ir.textures.len();
+
+        let ir_snapshot = pending::IrRollbackSnapshot::capture(&loaded.ir);
+        // ヒューマノイド補完（finish_append_ext と同じ処理）
+        let other_has_humanoid = other_ir.bones.iter().any(|b| b.vrm_bone_name.is_some());
+        if !other_has_humanoid {
+            let names: Vec<(usize, &str)> = other_ir
+                .bones
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (i, b.original_name.as_str()))
+                .collect();
+            let mapping = crate::fbx::humanoid::detect_humanoid(&names);
+            for (&idx, hb) in &mapping.mapping {
+                other_ir.bones[idx].vrm_bone_name = Some(hb.as_vrm_name().to_string());
+            }
+            if !mapping.mapping.is_empty() {
+                log::info!(
+                    "Pre-merge humanoid completion: {} bones detected",
+                    mapping.mapping.len()
+                );
+            }
+        }
+
+        let t_merge = std::time::Instant::now();
+        let (merged_bones, new_bones) = loaded.ir.merge(other_ir);
+        log::info!("[gpu_build] IR merge done in {}ms (merged_bones={merged_bones}, new_bones={new_bones})", t_merge.elapsed().as_millis());
+
+        // material_display を resize
+        let mc = loaded.ir.materials.len();
+        self.material_display
+            .resize_with(mc, MaterialDisplayState::default);
+        let mat_flags = Self::extract_per_mat_vecs(&self.material_display);
+
+        let anim_snapshot = pending::AnimationSnapshot::capture(self.anim.state.as_ref());
+
+        // loaded を分解: IR (マージ済み) + GPU モデル + 所有権フィールド
+        let rollback_gpu_model = loaded.gpu_model;
+        let ownership = pending::LoadedModelOwnership {
+            source: loaded.source,
+            primary_astance_result: loaded.primary_astance_result,
+            appended_models: loaded.appended_models,
+            material_groups: loaded.material_groups,
+            pkg_material_keys: loaded.pkg_material_keys,
+            prefab_name: loaded.prefab_name,
+            prefab_entry_path: loaded.prefab_entry_path,
+        };
+        let merged_ir = loaded.ir;
+
+        let append_info = pending::AppendGpuBuildInfo {
+            rollback_gpu_model,
+            ir_snapshot,
+            ownership,
+            append_source,
+            added_name,
+            added_bones,
+            added_meshes,
+            added_materials,
+            saved_material_count,
+            merged_bones,
+            new_bones,
+            pkg_model_name,
+            pkg_locator,
+            silent,
+            pkg_append_payload,
+            mat_offset,
+            tex_count_before,
+            source_path: path.clone(),
+            anim_snapshot,
+        };
+
+        let tex_count = merged_ir.textures.len();
+        self.pending.gpu_build = Some(pending::PendingGpuBuild {
+            gpu_textures: Vec::with_capacity(tex_count),
+            next_tex: 0,
+            mat_flags,
+            post_kind: None,
+            path,
+            ir: merged_ir,
+            source: helpers::ReloadableSource::File(std::path::PathBuf::new()), // ダミー（append 完了時に primary_source を使用）
+            append_info: Some(Box::new(append_info)),
+            cpu_prep_rx: None,
+        });
+    }
+
+    /// Append GPU ビルド失敗時に元のモデルにロールバックする。
+    /// マージ済み IR を truncate で元に戻し、旧 GPU モデルを復元する。
+    pub(crate) fn rollback_append(&mut self, mut ir: IrModel, ai: pending::AppendGpuBuildInfo) {
+        log::info!("Rolling back append: restoring original model via truncate");
+        let mat_count = ai.ir_snapshot.material_count;
+        ai.ir_snapshot.rollback(&mut ir);
+
+        // LoadedModel を旧 GPU モデル + truncate 済み IR で再構築
+        let mat_cache = Self::build_mat_cache(&ir, &ai.rollback_gpu_model);
+        let stats_cache = CachedStats::new(&ir);
+        let own = ai.ownership;
+        self.loaded = Some(LoadedModel {
+            ir,
+            gpu_model: ai.rollback_gpu_model,
+            source: own.source,
+            primary_astance_result: own.primary_astance_result,
+            appended_models: own.appended_models,
+            material_groups: own.material_groups,
+            pkg_material_keys: own.pkg_material_keys,
+            prefab_name: own.prefab_name,
+            prefab_entry_path: own.prefab_entry_path,
+            mat_cache,
+            stats_cache,
+        });
+        // material_display を元のサイズに戻す
+        self.material_display.truncate(mat_count);
+        // レンダラキャッシュ無効化
+        if let Some(ref mut renderer) = self.renderer {
+            renderer.invalidate_visualization_cache();
+            renderer.invalidate_normal_cache();
+        }
+    }
+
+    /// 遅延 GPU ビルド完了後の Append 後処理。
+    /// `PendingGpuBuild` から取り出したマージ済み IR + 構築済み GPU モデルと、
+    /// `AppendGpuBuildInfo` に保存しておいた旧 LoadedModel 情報から LoadedModel を再構築する。
+    pub(crate) fn finish_deferred_append(
+        &mut self,
+        ir: IrModel,
+        mut gpu_model: super::mesh::GpuModel,
+        mut ai: pending::AppendGpuBuildInfo,
+    ) {
+        let _t = std::time::Instant::now();
+        // レンダラー初期化（まだなければ）
+        if self.renderer.is_none() {
+            let device = &self.render_state.device;
+            let queue = &self.render_state.queue;
+            self.renderer = Some(super::gpu::GpuRenderer::new(
+                device,
+                queue,
+                gpu_model.has_alpha,
+            ));
+        }
+        log::info!(
+            "[append_detail] renderer init: {}ms",
+            _t.elapsed().as_millis()
+        );
+
+        // MMD リソース構築
+        let t1 = std::time::Instant::now();
+        let emissive_vec: Vec<bool> = self.material_display.iter().map(|d| d.emissive).collect();
+        if let Some(ref renderer) = self.renderer {
+            let device = &self.render_state.device;
+            renderer.prepare_mmd_resources(device, &mut gpu_model, &ir, &emissive_vec);
+        }
+        log::info!(
+            "[append_detail] prepare_mmd: {}ms",
+            t1.elapsed().as_millis()
+        );
+
+        // viewport テクスチャ解放
+        if let Some(tex_id) = self.viewport_texture_id.take() {
+            let mut renderer = self.render_state.renderer.write();
+            renderer.free_texture(&tex_id);
+        }
+
+        let new_draw_count = gpu_model.draws.len();
+        self.material_visibility.resize(new_draw_count, true);
+        let new_morph_count = ir.morphs.len();
+        self.morph_weights.resize(new_morph_count, 0.0);
+        self.morph_dirty = self.morph_weights.iter().any(|&w| w != 0.0);
+
+        let t2 = std::time::Instant::now();
+        let mat_cache = Self::build_mat_cache(&ir, &gpu_model);
+        let stats_cache = CachedStats::new(&ir);
+        log::info!(
+            "[append_detail] mat_cache+stats: {}ms",
+            t2.elapsed().as_millis()
+        );
+
+        // MaterialGroup: 旧グループ + 新規グループ
+        let mut own = ai.ownership;
+        let prev_draw_end: usize = own
+            .material_groups
+            .iter()
+            .map(|g| g.draw_range.end)
+            .max()
+            .unwrap_or(0);
+        own.material_groups.push(MaterialGroup {
+            name: ai.added_name.clone(),
+            material_range: ai.saved_material_count..ai.saved_material_count + ai.added_materials,
+            draw_range: prev_draw_end..gpu_model.draws.len(),
+        });
+
+        // appended_models に追加
+        let display_path = ai.append_source.display_path().to_path_buf();
+        own.appended_models.push(AppendedModel {
+            source: ai.append_source,
+            pkg_model_name: ai.pkg_model_name,
+            pkg_model: ai.pkg_locator,
+        });
+
+        // LoadedModel を再構築
+        self.loaded = Some(LoadedModel {
+            ir,
+            gpu_model,
+            source: own.source,
+            primary_astance_result: own.primary_astance_result,
+            appended_models: own.appended_models,
+            material_groups: own.material_groups,
+            mat_cache,
+            stats_cache,
+            pkg_material_keys: own.pkg_material_keys,
+            prefab_name: own.prefab_name,
+            prefab_entry_path: own.prefab_entry_path,
+        });
+
+        // last_dir 更新
+        if let Some(dir) = display_path.parent() {
+            self.tex.last_dir = Some(dir.to_path_buf());
+        }
+
+        // レンダラーのキャッシュ無効化
+        let t3 = std::time::Instant::now();
+        if let Some(ref mut renderer) = self.renderer {
+            renderer.invalidate_visualization_cache();
+            renderer.invalidate_normal_cache();
+            renderer.mark_sort_dirty();
+            // グリッドを更新
+            if let Some(ref loaded) = self.loaded {
+                let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
+                renderer.rebuild_grid(&self.render_state.device, bbox_min, bbox_max);
+            }
+        }
+        log::info!(
+            "[append_detail] renderer invalidate+grid: {}ms",
+            t3.elapsed().as_millis()
+        );
+
+        // アニメーション状態を再構築
+        let t4 = std::time::Instant::now();
+        if let Some(anim_arc) = ai.anim_snapshot.animation_arc.take() {
+            if let Some(ref loaded) = self.loaded {
+                let mut new_state =
+                    super::animation::AnimationState::new(anim_arc, &loaded.ir, &loaded.gpu_model);
+                ai.anim_snapshot.apply_to(&mut new_state);
+                self.anim.state = Some(new_state);
+            }
+        }
+        log::info!(
+            "[append_detail] animation rebuild: {}ms",
+            t4.elapsed().as_millis()
+        );
+
+        // シェーダー状態を正規化
+        let t5 = std::time::Instant::now();
+        self.normalize_shader_state();
+        log::info!(
+            "[append_detail] normalize_shader: {}ms",
+            t5.elapsed().as_millis()
+        );
+
+        log::info!(
+            "Append loaded (deferred gpu): {} (bones:{} -> merged:{}/new:{}, meshes:{}, materials:{})",
+            ai.added_name,
+            ai.added_bones,
+            ai.merged_bones,
+            ai.new_bones,
+            ai.added_meshes,
+            ai.added_materials,
+        );
+        if !ai.silent {
+            self.convert_message = Some(ConvertMessage::success(format!(
+                "追加読み込み完了: {}\nボーン:{} (統合:{} + 新規:{}), メッシュ:{}, 材質:{}",
+                ai.added_name,
+                ai.added_bones,
+                ai.merged_bones,
+                ai.new_bones,
+                ai.added_meshes,
+                ai.added_materials,
+            )));
+        }
+
+        // PkgAppend 後処理（テクスチャリネーム・テクスチャマッチング等）
+        let t6 = std::time::Instant::now();
+        if let Some(payload) = ai.pkg_append_payload {
+            self.apply_pkg_append_post(
+                *payload,
+                ai.mat_offset,
+                ai.tex_count_before,
+                &ai.source_path,
+            );
+        }
+        log::info!(
+            "[append_detail] pkg_append_post: {}ms",
+            t6.elapsed().as_millis()
+        );
+        log::info!("[append_detail] TOTAL: {}ms", _t.elapsed().as_millis());
+    }
+
+    /// PkgAppend 遅延 GPU ビルド完了後の後処理
+    fn apply_pkg_append_post(
+        &mut self,
+        payload: pending::PkgAppendPayload,
+        mat_offset: usize,
+        tex_count_before: usize,
+        source_path: &std::path::Path,
+    ) {
+        if payload.suppress_tex_match {
+            self.suppress_tex_match = true;
+        }
+
+        // appended_models の最後のインデックスで pkg_prefix を構築
+        let appended_count = self
+            .loaded
+            .as_ref()
+            .map(|l| l.appended_models.len())
+            .unwrap_or(0);
+
+        if appended_count > 0 {
+            let pkg_stem = source_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("pkg");
+            let pkg_prefix = format!("{}_pkg{}", pkg_stem, appended_count);
+
+            if let Some(ref mut loaded) = self.loaded {
+                for tex in loaded.ir.textures[tex_count_before..].iter_mut() {
+                    tex.filename = format!("{}_{}", pkg_prefix, tex.filename);
+                }
+            }
+
+            let mut pkg_textures_to_add = payload.pkg_textures_to_add;
+            if !pkg_textures_to_add.is_empty() {
+                for (name, _) in &mut pkg_textures_to_add {
+                    *name = format!("{}_{}", pkg_prefix, name);
+                }
+                let thumb_start = self.tex.pkg_thumb_cache.len();
+                if let Some(ref mut existing) = self.tex.pkg_textures {
+                    existing.extend(pkg_textures_to_add);
+                } else {
+                    self.tex.pkg_textures = Some(pkg_textures_to_add);
+                }
+                // 新規追加分のみサムネイル生成（全再構築を回避）
+                self.append_pkg_thumb_cache(thumb_start);
+            }
+        }
+
+        if !payload.pkg_unmatched.is_empty()
+            && self.tex.pkg_textures.is_some()
+            && !payload.suppress_tex_match
+        {
+            self.cancel_tex_match_preview();
+            let global_unmatched: Vec<usize> = payload
+                .pkg_unmatched
+                .iter()
+                .map(|&i| i + mat_offset)
+                .collect();
+            let count = global_unmatched.len();
+            self.tex.pending_match = Some(texture_mgmt::PendingTexMatch {
+                mat_indices: global_unmatched,
+                selections: vec![None; count],
+                tex_filter: String::new(),
+                previewed: vec![None; count],
+                saved_binds: std::collections::HashMap::new(),
+                texture_views: Vec::new(),
+                failed_uploads: std::collections::HashSet::new(),
+            });
+        }
+
+        self.suppress_tex_match = false;
+
+        // バッチ進捗トースト（成功メッセージを上書き）
+        if let Some((current, total)) = payload.batch_progress {
+            let name = payload.pkg_model_name.as_deref().unwrap_or("?");
+            self.convert_message = Some(ConvertMessage::success(format!(
+                "読み込み完了 ({}/{}): {}",
+                current, total, name
+            )));
+        }
     }
 
     /// シェーダー状態を現在のモデルに合わせて正規化
@@ -822,6 +1323,8 @@ impl ViewerApp {
         if self.tex.pending_file_dialog.is_some() {
             self.tex.pending_file_dialog = None;
         }
+        // PSD→PNG バックグラウンド変換を破棄（前モデルの tex_idx が stale になるのを防ぐ）
+        self.tex.pending_psd_conversions.clear();
         // L3: pending_tex_preview の egui TextureId を正しく解放してから破棄
         if let Some(preview) = self.tex.pending_preview.take() {
             self.cancel_tex_preview_inner(preview);
@@ -942,14 +1445,17 @@ impl ViewerApp {
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
 
-        let (smooth, clear, nmap, emissive) = Self::extract_per_mat_vecs(&self.material_display);
-        match super::mesh::build_gpu_model_from_ir(
-            &loaded.ir, device, queue, &smooth, &clear, &nmap, &emissive,
-        ) {
+        let mat_flags = Self::extract_per_mat_vecs(&self.material_display);
+        match super::mesh::build_gpu_model_from_ir(&loaded.ir, device, queue, &mat_flags) {
             Ok(mut new_model) => {
                 // MMD リソース構築
                 if let Some(ref renderer) = self.renderer {
-                    renderer.prepare_mmd_resources(device, &mut new_model, &loaded.ir, &emissive);
+                    renderer.prepare_mmd_resources(
+                        device,
+                        &mut new_model,
+                        &loaded.ir,
+                        &mat_flags.emissive,
+                    );
                 }
                 let mat_cache = Self::build_mat_cache(&loaded.ir, &new_model);
                 // draw数が同じなら材質表示状態を保持
@@ -1029,31 +1535,25 @@ impl ViewerApp {
             .collect()
     }
 
-    /// `material_display` から各フラグの `Vec<bool>` を展開する
-    fn extract_per_mat_vecs(
-        display: &[MaterialDisplayState],
-    ) -> (Vec<bool>, Vec<bool>, Vec<bool>, Vec<bool>) {
-        let smooth = display.iter().map(|d| d.smooth_normals).collect();
-        let clear = display.iter().map(|d| d.clear_normals).collect();
-        let nmap = display.iter().map(|d| d.normal_map).collect();
-        let emissive = display.iter().map(|d| d.emissive).collect();
-        (smooth, clear, nmap, emissive)
+    /// `material_display` から `MaterialBuildFlags` を展開する
+    fn extract_per_mat_vecs(display: &[MaterialDisplayState]) -> super::mesh::MaterialBuildFlags {
+        super::mesh::MaterialBuildFlags {
+            smooth: display.iter().map(|d| d.smooth_normals).collect(),
+            clear: display.iter().map(|d| d.clear_normals).collect(),
+            normal_map: display.iter().map(|d| d.normal_map).collect(),
+            emissive: display.iter().map(|d| d.emissive).collect(),
+        }
     }
 
     /// `material_display` が材質数と一致すればそのまま展開し、不一致ならデフォルト値で生成
     fn per_mat_or_default_display(
         display: &[MaterialDisplayState],
         mat_count: usize,
-    ) -> (Vec<bool>, Vec<bool>, Vec<bool>, Vec<bool>) {
+    ) -> super::mesh::MaterialBuildFlags {
         if display.len() == mat_count {
             Self::extract_per_mat_vecs(display)
         } else {
-            (
-                vec![false; mat_count],
-                vec![false; mat_count],
-                vec![true; mat_count],
-                vec![true; mat_count],
-            )
+            super::mesh::MaterialBuildFlags::default_for(mat_count)
         }
     }
 
@@ -1191,6 +1691,16 @@ impl ViewerApp {
 
 impl eframe::App for ViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // ウォッチドッグ: 最小化中は update() の呼び出しが保証されないため pause し、
+        // 通常時は tick で応答性を記録する。idle 時も 3 秒間隔で repaint を予約して
+        // ハートビートを維持する（フリーズ時はスレッド自体がブロックされ実行されない）。
+        if ctx.input(|i| i.viewport().minimized == Some(true)) {
+            self.heartbeat.pause();
+        } else {
+            self.heartbeat.tick();
+        }
+        ctx.request_repaint_after(Duration::from_secs(3));
+
         // ダークテーマ: new() での設定が eframe の初期化で上書きされる場合があるため
         // update() 初回で再適用する（以降はフラグで1回のみ）
         if !self.dark_theme_applied {
@@ -1257,7 +1767,16 @@ impl eframe::App for ViewerApp {
             self.fps_last_update = now;
         }
 
-        self.process_pending_tasks();
+        // GPU ウォームアップ: スプラッシュ表示中にパイプラインを段階的に事前生成
+        if self.loaded.is_none()
+            && self.pending.gpu_build.is_none()
+            && !matches!(self.warmup_phase, WarmupPhase::Complete)
+        {
+            self.tick_gpu_warmup();
+            ctx.request_repaint();
+        }
+
+        self.process_pending_tasks(ctx);
         self.update_animation(dt, ctx);
         let (is_hover_image, is_hover_model) = self.process_drag_and_drop(ctx);
         self.process_keyboard_shortcuts(ctx);

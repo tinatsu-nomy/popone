@@ -1709,7 +1709,7 @@ fn build_vertices_and_faces(
         let vertex_offset = all_vertices.len() as u32;
         mesh_vertex_start.push(vertex_offset);
 
-        for vtx in &mesh.vertices {
+        for vtx in mesh.vertices.iter() {
             let pmx_pos = pos_fn(vtx.position) * scale;
             let pmx_normal = nrm_fn(vtx.normal);
             let weight = build_weight(vtx.active_weights());

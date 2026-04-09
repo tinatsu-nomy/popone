@@ -5,6 +5,7 @@ use crate::intermediate::types::{
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use super::reader;
 
@@ -119,10 +120,10 @@ fn stl_to_ir(stl: &reader::StlModel, scale: f32, z_up: bool) -> Result<IrModel> 
 
     let mesh = IrMesh {
         name: stl.name.clone(),
-        vertices,
-        indices,
+        vertices: vertices.into(),
+        indices: indices.into(),
         material_index: 0,
-        morph_targets: vec![],
+        morph_targets: Arc::new(Vec::new()),
         node_index: 0,
         uvs1: vec![],
     };

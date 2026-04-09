@@ -71,6 +71,16 @@ pub fn write_all_textures_from_ir(
     textures: &[IrTexture],
     output_dir: &Path,
 ) -> Result<Vec<String>> {
+    write_all_textures_from_ir_opt_cancel(textures, output_dir, None)
+}
+
+/// テクスチャ書き出し（協調キャンセル対応版）。
+/// `cancel` が Some の場合、テクスチャ 1 枚ごとにキャンセルを確認する。
+pub fn write_all_textures_from_ir_opt_cancel(
+    textures: &[IrTexture],
+    output_dir: &Path,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<Vec<String>> {
     if textures.is_empty() {
         return Ok(Vec::new());
     }
@@ -81,6 +91,13 @@ pub fn write_all_textures_from_ir(
 
     let mut filenames = Vec::new();
     for tex in textures {
+        if let Some(c) = cancel {
+            if c.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(crate::error::PoponeError::Other(
+                    "texture export cancelled".into(),
+                ));
+            }
+        }
         if crate::psd::is_psd_filename(&tex.filename) {
             // PSD → PNG 変換
             match crate::psd::psd_to_png(tex.data.as_bytes()) {
@@ -172,7 +189,8 @@ pub fn write_all_textures_from_ir(
                     height,
                 } => {
                     // 生 RGBA は PNG エンコードして書き出す
-                    if let Some(img) = image::RgbaImage::from_raw(*width, *height, pixels.clone()) {
+                    if let Some(img) = image::RgbaImage::from_raw(*width, *height, pixels.to_vec())
+                    {
                         img.save(&out_path)?;
                     } else {
                         log::warn!(

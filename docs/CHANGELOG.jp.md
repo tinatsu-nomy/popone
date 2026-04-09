@@ -3,27 +3,33 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
-  - [v0.2.38](#v0238)
+  - [v0.2.39](#v0239)
     - [パフォーマンス](#%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
+    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3)
+    - [アーキテクチャ](#%E3%82%A2%E3%83%BC%E3%82%AD%E3%83%86%E3%82%AF%E3%83%81%E3%83%A3)
+    - [リファクタリング](#%E3%83%AA%E3%83%95%E3%82%A1%E3%82%AF%E3%82%BF%E3%83%AA%E3%83%B3%E3%82%B0)
+  - [v0.2.38](#v0238)
+    - [パフォーマンス](#%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9-1)
     - [改善](#%E6%94%B9%E5%96%84)
   - [v0.2.37](#v0237)
-    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3)
+    - [バグ修正](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3-1)
   - [v0.2.36](#v0236)
     - [改善](#%E6%94%B9%E5%96%84-1)
   - [v0.2.35](#v0235)
     - [改善](#%E6%94%B9%E5%96%84-2)
     - [ドキュメント](#%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88)
   - [v0.2.34](#v0234)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
     - [改善](#%E6%94%B9%E5%96%84-3)
   - [v0.2.33](#v0233)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
     - [改善](#%E6%94%B9%E5%96%84-4)
   - [v0.2.32](#v0232)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
     - [コード品質・パフォーマンス改善](#%E3%82%B3%E3%83%BC%E3%83%89%E5%93%81%E8%B3%AA%E3%83%BB%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9%E6%94%B9%E5%96%84)
   - [v0.2.31](#v0231)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-4)
     - [改善](#%E6%94%B9%E5%96%84-5)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -31,6 +37,61 @@
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.2.39
+
+### パフォーマンス
+
+- **UnityPackage/アーカイブの非同期読み込み** — `.unitypackage` および ZIP/7z のファイル読み込み・`build_unity_package_index`・`list_models` をバックグラウンドスレッドで実行し、インデックス構築中のUIフリーズを解消
+- **パッケージ内モデルの非同期パース** — `.unitypackage` 内 FBX/VRM/Prefab のCPUパースとアーカイブ内モデルの解凍+パースをバックグラウンドスレッドで実行（`spawn_bg_pkg_load` / `spawn_bg_archive_load`）。従来はUIスレッドで同期実行
+- **テクスチャ事前デコード** — `pre_decode_textures` がバックグラウンドスレッドで `TextureData::Encoded`（PNG/JPEG/TGA/PSD）を `TextureData::RawRgba` に変換。メインスレッドの `upload_textures_from_ir` から画像デコードコストを排除
+- **GPUテクスチャアップロードのフレーム分割** — `PendingGpuBuild` が1フレームあたり4枚ずつ `upload_single_texture` でGPUにアップロード。大量テクスチャでのメインスレッドブロックを防止。初回ロード・追加読み込みの両方に適用
+- **テクスチャデータのゼロコピー** — `take_fbx_and_textures` / `take_vrm` の戻り値を `Vec<u8>` → `Arc<[u8]>` に変更。`embed_textures_into_ir` を `AsRef<[u8]>` でジェネリック化。`pkg_textures` およびリロードパスを `Arc<[u8]>` に統一し、不要な `.to_vec()` コピーを排除
+- **D&D 一時ファイル先読みの非ブロック化** — `process_drag_and_drop` 内の `std::fs::read` / `collect_image_files_recursive` を削除。ファイル読み込みは BG パーススレッドの `read_data` / `collect_aux` クロージャに委譲
+- **PMX 変換のバックグラウンド化** — `execute_conversion` が IR を clone して BG スレッドで `convert_ir_to_pmx_with_cancel` を実行。UI スレッドは即座に復帰し「PMX変換中...」オーバーレイとキャンセルボタンを表示
+- **リロードのバックグラウンド化（File/Snapshot）** — `reload_current` が File・Snapshot ソースを既存の `spawn_bg_load` パイプライン経由でディスパッチ。Archive/UnityPackage は同期パスを維持。リロードスナップショットを GPU ビルド完了後に復元
+- **`TextureData::RawRgba` Arc 共有** — `pixels` フィールドを `Vec<u8>` → `Arc<[u8]>` に変更。`mip_chain` エントリも `Vec<u8>` → `Arc<[u8]>`。PMX 変換用の IrModel clone 時、テクスチャデータのコピーコストがほぼゼロに
+- **`IrModel::clone_for_export`** — GPU 専用データ（`mip_chain`・`uvs1`）を除外した軽量 clone。PMX 変換 BG スレッド起動時の UI スレッドコピーコストを最小化
+- **GPU パイプラインのスプラッシュ画面ウォームアップ** — `GpuRenderer::new()`（シェーダーコンパイル）と `ensure_pipelines()`（26 パイプライン × 4 構成）をスプラッシュ画面表示中に `WarmupPhase` ステートマシンで 1 フェーズ/フレームずつ段階実行。初回モデルロードの ~10s フリーズを解消（リリースビルド実測: 合計 76ms）
+- **GPU モデルビルドの CPU オフロード** — `build_gpu_model_inner` を `cpu_prep_model`（頂点 dedup・法線平均化・モーフ前計算 → BG スレッド実行）と `gpu_finalize_model`（バッファ/bind group 生成 → メインスレッドで <7ms）に分離。`PendingGpuBuild` を 3 フェーズ（テクスチャ upload → BG cpu_prep → GPU finalize）に拡張
+- **pkg サムネイルキャッシュの差分更新** — `apply_pkg_append_post` で `rebuild_pkg_thumb_cache()`（全サムネイル再生成）の代わりに `append_pkg_thumb_cache(start_index)` を使用し、新規追加分のみサムネイル生成。バッチ append 時の累積フリーズ増加を解消（改善前: 15s→61s 累積増加、改善後: ~7.6s 一定）
+
+### 新機能
+
+- **中止ボタン拡張** — プログレスオーバーレイの「中止」ボタンを BGロード中・GPU構築中・PMX変換中の全フェーズで表示。Escキーでもキャンセル可能。リロード中のキャンセルでは旧モデルを復元（初期状態に戻さない）
+- **選択ダイアログの Esc キー対応** — FBX 読み込み方法選択・OBJ/STL インポート設定・UnityPackage モデル選択・アーカイブ内モデル選択の各ダイアログを Esc キーで閉じられるように
+- **FBX選択ダイアログのバックグラウンド化** — FBXモデル/アニメーション選択ダイアログ（`execute_fbx_choice`）の確定後のロードを `spawn_bg_load` / `spawn_bg_pkg_load` 経由に変更
+- **PMX 変換の協調キャンセル** — `convert_ir_to_pmx_with_cancel` が各ステップ間（テクスチャ書き出し・PMX 構築・ファイル書き込み）でキャンセルフラグを確認。テクスチャ書き出しは1枚ごとに確認。全出力を一時ディレクトリ（`.popone_convert_tmp/`）に書き出し、成功時のみ最終パスに移動。キャンセル時は一時ディレクトリごと削除
+
+### バグ修正
+
+- **PMX 出力ファイル名の切り詰め** — `sanitize_filename` でモデル名が 80 文字を超える場合に Unicode 文字境界で切り詰めるように修正。従来はVRM モデルのメタデータ名（`meta.name`）が非常に長い場合、Windows のパス長制限を超過したりファイルシステムエラーが発生する可能性があった
+
+### アーキテクチャ
+
+- **`CpuParseInput` 拡張** — `ArchiveModel`・`PkgModel`・`UnityPackageIndex`・`ArchiveIndex` バリアントを追加し、全ロードパスのバックグラウンド処理に対応
+- **`BgLoadKind` 拡張** — `ArchiveInitial`・`ArchiveAppend`・`ArchivePreparedUnityPackage`・`PkgInitial`・`PkgAppend`・`NeedsFbxChoice`・`UnityPackageIndexed`・`ArchiveIndexed` を追加。`Box<Payload>` 構造体でリクエストとレスポンスのデータを分離
+- **`PendingGpuBuild` ステートマシン** — GPUテクスチャアップロードをフレーム分割（4枚/フレーム）。BGロード結果には `start_deferred_gpu_build` を使用。リロードの File/Snapshot ソースもこのパイプラインを使用
+- **Append GPU ビルド遅延化** — 追加読み込みも `start_deferred_append_gpu_build_ext` でフレーム分割。GPUビルド失敗時はIR truncate + 旧GPUモデルでロールバック
+- **`build_ir_from_archive_bundle` フリー関数化** — `&self` メソッドからフリー関数に抽出し、バックグラウンドスレッドから呼び出し可能に
+- **`PendingConvertBg`** — BG PMX 変換状態。`mpsc::Receiver` で結果ポーリング、`AtomicBool` でキャンセル。`process_pending_tasks` で監視
+- **`reload_snapshot` フィールド** — `ViewerApp` が BG リロード中に `ReloadSnapshot` を保持。GPU ビルド完了時に `finish_reload_from_snapshot` で復元。キャンセル時は `restore_snapshot_on_failure` で旧モデルを保持
+- **`IrModel` / `IrMesh` / `IrPhysics` Clone 導出** — `clone_for_export` および BG PMX 変換を可能にするため `Clone` derive を追加
+- **`watchdog.rs` — メインスレッド応答性監視** — バックグラウンドのウォッチドッグスレッドがメインスレッドのハートビート（`AtomicU64` エポックミリ秒、閾値 5 秒、チェック間隔 2 秒）を監視。閾値内にハートビート更新がなければ `[watchdog] Main thread unresponsive` をログ出力し、復帰時にフリーズ総時間を記録。最小化中は `PAUSED` 番兵値（`u64::MAX`）で誤検知を抑制。idle 時は `request_repaint_after(3s)` でハートビートを維持
+- **`WarmupPhase` ステートマシン** — スプラッシュ画面中の 5 段階 GPU パイプラインウォームアップ: `NotStarted` → `RendererCreated` → `SrgbMsaaDone` → `SrgbNoMsaaDone` → `Complete`。`ensure_pipelines` に明示 `msaa: bool` 引数を追加
+- **`cpu_prep_model` / `gpu_finalize_model` 分離** — `build_gpu_model_inner` を CPU 専用 `cpu_prep_model`（頂点処理、`Send` 安全、BG スレッド実行）と GPU 専用 `gpu_finalize_model`（bind group/バッファ生成、メインスレッド）に分割。新型: `CpuPrepResult`・`CpuDrawPlan`・`PerMatGpuMeta`・`AuxTexRefs`。`PendingGpuBuild` に `cpu_prep_rx` チャネルを追加し 3 フェーズ非同期フローに拡張
+- **`append_pkg_thumb_cache` 差分メソッド** — `pkg_textures[start_index..]` のみサムネイル生成。既存のサムネイル GPU テクスチャを保持したまま追記
+
+### リファクタリング
+
+- **`spawn_bg_task` 共通ヘルパー** — 4 つの `spawn_bg_*` 関数から共通ボイラープレート（キャンセル・mpsc チャネル・request_id・スレッド起動）を `spawn_bg_task` ヘルパーに集約。各呼び出し元は `CpuParseInput` と `fallback_kind` の構築のみ担当
+- **`process_pending_tasks` の `poll_*` 分割** — 約 450 行のモノリシックメソッドを `poll_file_dialog`・`poll_dispatch_and_bg_load`・`poll_deferred_loads`・`poll_gpu_build`・`poll_export_tasks`・`poll_overlay_tasks`・`poll_convert_bg` に分割。`poll_receiver` ヘルパーで `try_recv` 4 分岐パターン（7 箇所）の重複を解消
+- **`IrMesh` 重量フィールドの Arc 化** — `vertices`・`indices`・`morph_targets` を `Vec<T>` → `Arc<Vec<T>>` に変更。clone が O(1) 参照カウント化。mutation は `vertices_mut()` / `indices_mut()` / `morph_targets_mut()` で `Arc::make_mut`（COW）を使用
+- **`assign_texture_core` 共通メソッド** — `assign_texture_source_to_material`（ファイルパス）と `assign_texture_data_to_material`（バイト列）の重複ロジックを共通コアに統合。ファイルパス側で欠落していた `mmd_texture_bind_group = None` クリアを修正
+- **Append ロールバックの型安全化** — append 操作のフィールド単位の手動保存/復元を `IrRollbackSnapshot`・`LoadedModelOwnership`・`AnimationSnapshot` 構造体に集約
+- **`TmpDirGuard` RAII クリーンアップ** — `convert_ir_to_pmx_with_cancel` 内の 5 箇所の `.inspect_err(|_| cleanup())?` パターンを Drop ベースのガードに置換。成功パスで `disarm()` によりクリーンアップを抑制
+- **`MaterialBuildFlags` 構造体** — 4 つの並行スライス引数（`smooth_per_mat`・`clear_per_mat`・`normal_map_per_mat`・`emissive_per_mat`）を `build_gpu_model` / `cpu_prep_model` / `PendingGpuBuild` 横断で 1 構造体に集約
+- **`write_model_opt_cancel`** — `PmxWriter` がセクション間（vertices・faces・textures・materials・bones・morphs）で協調キャンセルに対応。`write_pmx_and_stats` がキャンセルフラグを伝播
 
 ## v0.2.38
 

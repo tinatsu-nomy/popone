@@ -305,10 +305,10 @@ fn extract_meshes(pmx: &PmxModel) -> (Vec<IrMesh>, HashMap<u32, usize>) {
         if face_count == 0 {
             meshes.push(IrMesh {
                 name: mat.name.clone(),
-                vertices: Vec::new(),
-                indices: Vec::new(),
+                vertices: Arc::new(Vec::new()),
+                indices: Arc::new(Vec::new()),
                 material_index: mat_idx,
-                morph_targets: Vec::new(),
+                morph_targets: Arc::new(Vec::new()),
                 node_index: 0,
                 uvs1: Vec::new(),
             });
@@ -394,10 +394,10 @@ fn extract_meshes(pmx: &PmxModel) -> (Vec<IrMesh>, HashMap<u32, usize>) {
 
         meshes.push(IrMesh {
             name: mat.name.clone(),
-            vertices: local_vertices,
-            indices: local_indices,
+            vertices: local_vertices.into(),
+            indices: local_indices.into(),
             material_index: mat_idx,
-            morph_targets: Vec::new(),
+            morph_targets: Arc::new(Vec::new()),
             node_index: 0,
             uvs1: Vec::new(),
         });
@@ -471,7 +471,7 @@ fn distribute_vertex_morphs(pmx: &PmxModel, meshes: &mut [IrMesh]) {
                 // このメッシュに影響がある場合のみ追加
                 if !offsets.is_empty() {
                     offsets.sort_by_key(|&(vi, _)| vi);
-                    meshes[mesh_idx].morph_targets.push(IrMorphTarget {
+                    meshes[mesh_idx].morph_targets_mut().push(IrMorphTarget {
                         name: morph.name.clone(),
                         position_offsets: offsets,
                         normal_offsets: Vec::new(),

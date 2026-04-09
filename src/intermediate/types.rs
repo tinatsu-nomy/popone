@@ -169,7 +169,7 @@ pub enum AStanceResult {
 }
 
 /// 中間表現モデル
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct IrModel {
     pub name: String,
     pub comment: String,
@@ -192,6 +192,48 @@ pub struct IrModel {
 }
 
 impl IrModel {
+    /// PMX 変換向け軽量 clone。GPU 専用データ（mip_chain, uvs1）を除外する。
+    /// vertices / indices / morph_targets は Arc 共有で O(1) clone。
+    pub fn clone_for_export(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            comment: self.comment.clone(),
+            bones: self.bones.clone(),
+            meshes: self
+                .meshes
+                .iter()
+                .map(|m| IrMesh {
+                    name: m.name.clone(),
+                    vertices: Arc::clone(&m.vertices),
+                    indices: Arc::clone(&m.indices),
+                    material_index: m.material_index,
+                    morph_targets: Arc::clone(&m.morph_targets),
+                    node_index: m.node_index,
+                    uvs1: Vec::new(), // PMX では不使用
+                })
+                .collect(),
+            materials: self.materials.clone(),
+            textures: self
+                .textures
+                .iter()
+                .map(|t| IrTexture {
+                    filename: t.filename.clone(),
+                    data: t.data.clone(), // Arc 共有で軽量
+                    mime_type: t.mime_type.clone(),
+                    source_path: t.source_path.clone(),
+                    mip_chain: None, // GPU 専用、PMX では不使用
+                })
+                .collect(),
+            morphs: self.morphs.clone(),
+            physics: self.physics.clone(),
+            node_to_bone: self.node_to_bone.clone(),
+            source_format: self.source_format,
+            rig_type: self.rig_type.clone(),
+            humanoid_bone_count: self.humanoid_bone_count,
+            astance_result: self.astance_result,
+        }
+    }
+
     /// 全メッシュの頂点数合計
     pub fn total_vertices(&self) -> usize {
         self.meshes.iter().map(|m| m.vertices.len()).sum()
@@ -440,7 +482,7 @@ impl IrModel {
         for mesh in &mut other.meshes {
             mesh.material_index += mat_offset;
             mesh.node_index += node_offset;
-            for vtx in &mut mesh.vertices {
+            for vtx in mesh.vertices_mut() {
                 for (bone_idx, _) in vtx.active_weights_mut() {
                     *bone_idx = bone_remap[*bone_idx];
                 }
@@ -652,18 +694,43 @@ pub struct IrGrant {
 }
 
 /// 中間メッシュ
-#[derive(Debug)]
+///
+/// `vertices`, `indices`, `morph_targets` は `Arc` で共有され、
+/// `clone` 時のコピーコストを O(1) に削減する。
+/// mutation が必要な場合は `vertices_mut()` 等のヘルパーを使用する
+/// （内部で `Arc::make_mut` による COW が行われる）。
+#[derive(Debug, Clone)]
 pub struct IrMesh {
     pub name: String,
-    pub vertices: Vec<IrVertex>,
-    pub indices: Vec<u32>,
+    pub vertices: Arc<Vec<IrVertex>>,
+    pub indices: Arc<Vec<u32>>,
     pub material_index: usize,
     /// モーフターゲット（頂点オフセット）
-    pub morph_targets: Vec<IrMorphTarget>,
+    pub morph_targets: Arc<Vec<IrMorphTarget>>,
     /// このメッシュが属するglTFノードIndex
     pub node_index: usize,
     /// TEXCOORD_1（セカンダリUV）。空なら UV1 なし。
     pub uvs1: Vec<[f32; 2]>,
+}
+
+impl IrMesh {
+    /// COW mutable access to vertices.
+    #[inline]
+    pub fn vertices_mut(&mut self) -> &mut Vec<IrVertex> {
+        Arc::make_mut(&mut self.vertices)
+    }
+
+    /// COW mutable access to indices.
+    #[inline]
+    pub fn indices_mut(&mut self) -> &mut Vec<u32> {
+        Arc::make_mut(&mut self.indices)
+    }
+
+    /// COW mutable access to morph_targets.
+    #[inline]
+    pub fn morph_targets_mut(&mut self) -> &mut Vec<IrMorphTarget> {
+        Arc::make_mut(&mut self.morph_targets)
+    }
 }
 
 /// 中間頂点
@@ -994,8 +1061,9 @@ pub enum TextureData {
     /// PNG/JPEG/TGA 等のエンコード済みバイナリ
     Encoded(Arc<[u8]>),
     /// デコード済み生 RGBA ピクセル（GPU アップロード時にデコード不要）
+    /// pixels は Arc で共有し、IrModel clone 時のコピーコストを排除する。
     RawRgba {
-        pixels: Vec<u8>,
+        pixels: Arc<[u8]>,
         width: u32,
         height: u32,
     },
@@ -1034,9 +1102,9 @@ pub struct IrTexture {
     /// embedded/アーカイブ内パス/外部ファイ���パス等
     pub source_path: String,
     /// ミップチェーン（レベル1以降のダウンサンプル済みRGBA）。
-    /// バックグラウンド��レッドで事前���成することでメインスレッドの GPU 構築を高速化する。
-    /// Vec<(width, height, RGBA bytes)>
-    pub mip_chain: Option<Vec<(u32, u32, Vec<u8>)>>,
+    /// バックグラウンドスレッドで事前生成することでメインスレッドの GPU 構築を高速化する。
+    /// Vec<(width, height, RGBA bytes)>  — Arc で共有し clone コストを排除。
+    pub mip_chain: Option<Vec<(u32, u32, Arc<[u8]>)>>,
 }
 
 impl IrTexture {
@@ -1088,7 +1156,7 @@ pub enum IrMorphKind {
 }
 
 /// 物理情報
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct IrPhysics {
     pub rigid_bodies: Vec<IrRigidBody>,
     pub joints: Vec<IrJoint>,
@@ -1165,7 +1233,7 @@ mod tests {
 
     /// テスト用ヘルパー: ウェイト付き頂点を含むメッシュ
     fn mesh_with_weights(name: &str, mat_idx: usize, bone_indices: &[usize]) -> IrMesh {
-        let vertices = bone_indices
+        let vertices: Vec<IrVertex> = bone_indices
             .iter()
             .map(|&bi| IrVertex {
                 position: Vec3::ZERO,
@@ -1179,10 +1247,10 @@ mod tests {
             .collect();
         IrMesh {
             name: name.to_string(),
-            vertices,
-            indices: vec![0, 1, 2],
+            vertices: vertices.into(),
+            indices: Arc::new(vec![0, 1, 2]),
             material_index: mat_idx,
-            morph_targets: vec![],
+            morph_targets: Arc::new(Vec::new()),
             node_index: 0,
             uvs1: Vec::new(),
         }

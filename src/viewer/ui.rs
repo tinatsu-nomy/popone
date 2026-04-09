@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
 
 use eframe::egui;
 use egui::epaint::{Color32, Mesh, Vertex};
@@ -297,7 +298,7 @@ fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             .take()
             .expect("pending_fbx_choice は Some 確認済み");
         app.execute_fbx_choice(choice);
-    } else if cancelled || !open {
+    } else if cancelled || !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.pending.fbx_choice = None;
         app.pending.multi_load = None;
     }
@@ -369,7 +370,7 @@ fn show_import_options_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             .take()
             .expect("pending.import_options は Some 確認済み");
         app.execute_import_with_options(opts);
-    } else if cancelled || !open {
+    } else if cancelled || !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.pending.import_options = None;
     }
 }
@@ -453,6 +454,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             nested_archive_source: pending.nested_archive_source,
             pkg_index: pending.pkg_index,
             batch_progress: None,
+            skip_anim_check: false,
         });
     } else if multi_selected {
         // 複数選択: 1つ目を通常ロード、残りを PendingMultiLoad に積む
@@ -488,6 +490,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                     nested_archive_source: pending.nested_archive_source,
                     pkg_index: pending.pkg_index,
                     batch_progress: None,
+                    skip_anim_check: false,
                 });
             } else {
                 // 複数: Arc clone のみで assets を共有
@@ -512,6 +515,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                     nested_archive_source: pending.nested_archive_source.clone(),
                     pkg_index: pending.pkg_index.clone(),
                     batch_progress: Some((1, total_count)),
+                    skip_anim_check: false,
                 });
                 app.pending.multi_load = Some(super::app::PendingMultiLoad {
                     assets: shared_assets,
@@ -524,7 +528,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                 });
             }
         }
-    } else if cancelled || !open {
+    } else if cancelled || !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.pending.unity_pkg = None;
     }
 }
@@ -587,7 +591,7 @@ fn show_archive_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             append: pending.append,
             is_temp: pending.is_temp,
         });
-    } else if cancelled || !open {
+    } else if cancelled || !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.pending.archive = None;
     }
 }
@@ -904,7 +908,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             preview.previewed.iter_mut().for_each(|v| *v = false);
         }
         // 割り当て情報を先にコピーして借用を解放
-        let assignments: Vec<(usize, String, Vec<u8>)> = pending
+        let assignments: Vec<(usize, String, Arc<[u8]>)> = pending
             .selections
             .iter()
             .enumerate()
@@ -1110,7 +1114,7 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
 }
 
 /// PMX変換を実行
-pub fn execute_conversion(app: &mut ViewerApp) {
+pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
     if app.loaded.is_none() {
         return;
     }
@@ -1125,7 +1129,7 @@ pub fn execute_conversion(app: &mut ViewerApp) {
         .map(|lb| lb.total_written)
         .unwrap_or(0);
 
-    // 法線が変更されている場合、IrModel に書き戻して変換（変換後に元の法線を復元）
+    // 法線が変更されている場合、IrModel に書き戻して変換用 IR を作る
     let normals_modified = app.material_display.iter().any(|d| d.smooth_normals)
         || app.material_display.iter().any(|d| d.clear_normals);
     // 元の法線を保存（復元用）
@@ -1152,8 +1156,7 @@ pub fn execute_conversion(app: &mut ViewerApp) {
         .expect("loaded は has_model チェック済み");
 
     // 可視材質フィルタリング
-    let filtered_ir;
-    let ir_ref = if app.export.export_visible_only {
+    let convert_ir = if app.export.export_visible_only {
         let visible_mat_indices: HashSet<usize> = loaded
             .mat_cache
             .draw_indices
@@ -1172,14 +1175,13 @@ pub fn execute_conversion(app: &mut ViewerApp) {
             visible_mat_indices.len(),
             &loaded.ir.materials.len()
         );
-        filtered_ir = build_filtered_ir(&loaded.ir, &visible_mat_indices);
-        &filtered_ir
+        build_filtered_ir(&loaded.ir, &visible_mat_indices)
     } else {
-        &loaded.ir
+        loaded.ir.clone_for_export()
     };
 
     // PMX/PMD 形式では no_physics/raw_structure は無効（UI もグレーアウト）
-    let is_pmx_pmd = ir_ref.source_format.is_pmx_pmd();
+    let is_pmx_pmd = convert_ir.source_format.is_pmx_pmd();
     let options = crate::pmx::build::PmxBuildOptions {
         align_rigid_rotation: app.display.align_rigid_rotation,
         no_physics: if is_pmx_pmd {
@@ -1194,72 +1196,28 @@ pub fn execute_conversion(app: &mut ViewerApp) {
         },
         scale: app.export.scale,
     };
-    let result = crate::convert_ir_to_pmx(ir_ref, &output_path, &options);
 
-    if app.export.output_log {
-        let debug_logs = read_log_buffer_from_offset(&app.log_buffer, log_offset_before);
+    // A/Tスタンス情報を先に取得（BG スレッドで loaded にアクセスできないため）
+    let primary_astance_result = app
+        .loaded
+        .as_ref()
+        .map(|l| l.primary_astance_result)
+        .unwrap_or_default();
+    let stance_label = if is_pmx_pmd {
+        "Tスタンス"
+    } else {
+        "Aスタンス"
+    };
+    let stance_label_owned = stance_label.to_string();
+    let output_log = app.export.output_log;
+    let log_buffer = Arc::clone(&app.log_buffer);
 
-        write_convert_log(&log_path, ir_ref, result.as_ref(), debug_logs.as_deref());
-    }
-
-    match result {
-        Ok(stats) => {
-            let mut msg = format!(
-                "変換完了: {}\nボーン: {} / 頂点: {} / 材質: {} / モーフ: {}",
-                stats.output_path, stats.bones, stats.vertices, stats.materials, stats.morphs,
-            );
-            if app.export.output_log {
-                msg += &format!("\nログ: {}", log_path.display());
-            }
-            // A/Tスタンス変換の結果に応じて警告を付加（primary_astance_result を参照）
-            use crate::intermediate::types::AStanceResult;
-            let stance_label = if ir_ref.source_format.is_pmx_pmd() {
-                "Tスタンス"
-            } else {
-                "Aスタンス"
-            };
-            let primary_result = app
-                .loaded
-                .as_ref()
-                .map(|l| l.primary_astance_result)
-                .unwrap_or_default();
-            let has_warning = match primary_result {
-                AStanceResult::NotFound => {
-                    msg += &format!(
-                        "\n⚠ {}変換: 腕ボーンが見つからず変換できませんでした",
-                        stance_label
-                    );
-                    true
-                }
-                AStanceResult::AlreadyAStance => {
-                    msg += &format!("\n※ 既に{}に近いためスキップしました", stance_label);
-                    false
-                }
-                _ => false,
-            };
-            if has_warning {
-                app.convert_message = Some(ConvertMessage::warning(msg));
-            } else {
-                app.convert_message = Some(ConvertMessage::success(msg));
-            }
-            // 出力フォルダを開く
-            if let Some(dir) = output_path.parent() {
-                super::app::helpers::open_directory(dir);
-            }
-        }
-        Err(e) => {
-            app.convert_message = Some(ConvertMessage::failure(format!(
-                "変換失敗: {e}\n出力先のパスやディスク容量を確認してください。"
-            )));
-        }
-    }
-
-    // 法線を元に戻す（write_normals_back で上書きした法線を復元）
+    // 法線を即座に復元（BG スレッドは clone した IR を使うため、元 IR はすぐ戻せる）
     if let Some(saved) = saved_normals {
         if let Some(ref mut loaded) = app.loaded {
             for (mi, mesh) in loaded.ir.meshes.iter_mut().enumerate() {
                 if let Some(normals) = saved.get(mi) {
-                    for (vi, v) in mesh.vertices.iter_mut().enumerate() {
+                    for (vi, v) in mesh.vertices_mut().iter_mut().enumerate() {
                         if let Some(&n) = normals.get(vi) {
                             v.normal = n;
                         }
@@ -1268,6 +1226,83 @@ pub fn execute_conversion(app: &mut ViewerApp) {
             }
         }
     }
+
+    // BG スレッドで PMX 変換を実行
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cancel_clone = std::sync::Arc::clone(&cancel);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let repaint = ctx.clone();
+
+    std::thread::spawn(move || {
+        // 協調キャンセル対応: 各ステップ間でフラグを確認
+        let result = crate::convert_ir_to_pmx_with_cancel(
+            &convert_ir,
+            &output_path,
+            &options,
+            &cancel_clone,
+        );
+
+        // キャンセル由来のエラーなら何もせず終了（UI 側で既にメッセージ表示済み）
+        if cancel_clone.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+
+        if output_log {
+            let debug_logs = read_log_buffer_from_offset(&log_buffer, log_offset_before);
+            write_convert_log(
+                &log_path,
+                &convert_ir,
+                result.as_ref(),
+                debug_logs.as_deref(),
+            );
+        }
+
+        let bg_result = match result {
+            Ok(stats) => {
+                use crate::intermediate::types::AStanceResult;
+                let mut msg = format!(
+                    "変換完了: {}\nボーン: {} / 頂点: {} / 材質: {} / モーフ: {}",
+                    stats.output_path, stats.bones, stats.vertices, stats.materials, stats.morphs,
+                );
+                if output_log {
+                    msg += &format!("\nログ: {}", log_path.display());
+                }
+                let has_warning = match primary_astance_result {
+                    AStanceResult::NotFound => {
+                        msg += &format!(
+                            "\n⚠ {}変換: 腕ボーンが見つからず変換できませんでした",
+                            stance_label_owned
+                        );
+                        true
+                    }
+                    AStanceResult::AlreadyAStance => {
+                        msg += &format!("\n※ 既に{}に近いためスキップしました", stance_label_owned);
+                        false
+                    }
+                    _ => false,
+                };
+                super::app::pending::ConvertBgResult {
+                    result: Ok(msg),
+                    log_written: output_log,
+                    has_warning,
+                    output_dir: output_path.parent().map(|d| d.to_path_buf()),
+                }
+            }
+            Err(e) => super::app::pending::ConvertBgResult {
+                result: Err(format!(
+                    "変換失敗: {e}\n出力先のパスやディスク容量を確認してください。"
+                )),
+                log_written: output_log,
+                has_warning: false,
+                output_dir: None,
+            },
+        };
+
+        let _ = tx.send(bg_result);
+        repaint.request_repaint();
+    });
+
+    app.pending.convert_bg = Some(super::app::pending::PendingConvertBg { rx, cancel });
 }
 
 /// 数値をカンマ区切りでフォーマット (例: 34059 → "34,059")
@@ -2648,7 +2683,8 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         || app.pending.convert.is_some()
         || app.pending.rebuild.is_some()
         || app.pending.reload.is_some()
-        || app.pending.pkg_load.is_some();
+        || app.pending.pkg_load.is_some()
+        || app.export.pending_mkdir.is_some();
 
     ui.heading(egui::RichText::new("PMX 変換").color(egui::Color32::from_gray(0xD0)));
     ui.separator();
@@ -2669,7 +2705,12 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         );
     });
     ui.horizontal(|ui| {
-        if ui.small_button("フォルダ選択...").clicked() {
+        // ダイアログ表示中は重複起動しない
+        let dialog_active = app.export.pending_folder_dialog.is_some();
+        if ui
+            .add_enabled(!dialog_active, egui::Button::new("フォルダ選択...").small())
+            .clicked()
+        {
             let start_dir = app
                 .export
                 .output_base_dir
@@ -2680,13 +2721,18 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         .and_then(|l| l.source.display_path().parent().map(|p| p.to_path_buf()))
                 })
                 .unwrap_or_default();
-            let mut dialog = rfd::FileDialog::new().set_title("PMX出力先フォルダを選択");
-            if start_dir.exists() {
-                dialog = dialog.set_directory(&start_dir);
-            }
-            if let Some(dir) = dialog.pick_folder() {
-                app.export.output_base_dir = Some(dir);
-            }
+            // フォルダ選択ダイアログを別スレッドで開く（UIをブロックしない）
+            let (tx, rx) = std::sync::mpsc::channel();
+            let repaint = ui.ctx().clone();
+            std::thread::spawn(move || {
+                let mut dialog = rfd::FileDialog::new().set_title("PMX出力先フォルダを選択");
+                if start_dir.exists() {
+                    dialog = dialog.set_directory(&start_dir);
+                }
+                let _ = tx.send(dialog.pick_folder());
+                repaint.request_repaint();
+            });
+            app.export.pending_folder_dialog = Some(rx);
         }
         if app.export.output_base_dir.is_some() && ui.small_button("リセット").clicked() {
             app.export.output_base_dir = None;
@@ -2723,14 +2769,22 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         .into_owned()
                 });
                 let output_path = converted_dir.join(format!("{}.pmx", pmx_stem));
-                // 出力ディレクトリ作成
-                if let Some(dir) = output_path.parent() {
-                    if let Err(e) = std::fs::create_dir_all(dir) {
-                        log::warn!("Failed to create output directory: {e}");
-                    }
-                }
                 app.export.pmx_output_path = output_path.to_string_lossy().into_owned();
-                app.pending.convert = Some(PendingOverlay::WaitingOverlay);
+                // 出力ディレクトリ作成を BG スレッドで実行（ネットワークドライブ対策）
+                if let Some(dir) = output_path.parent() {
+                    let dir = dir.to_path_buf();
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let repaint = ui.ctx().clone();
+                    std::thread::spawn(move || {
+                        let result = std::fs::create_dir_all(&dir);
+                        let _ = tx.send(result.map_err(|e| format!("{e}")));
+                        repaint.request_repaint();
+                    });
+                    app.export.pending_mkdir = Some(super::app::pending::PendingMkdir { rx });
+                } else {
+                    // 親ディレクトリが無い場合は直接変換を開始
+                    app.pending.convert = Some(PendingOverlay::WaitingOverlay);
+                }
             }
         }
     });
@@ -2831,15 +2885,17 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     ui.heading(egui::RichText::new("UVマップ出力").color(egui::Color32::from_gray(0xD0)));
     ui.separator();
     ui.add_enabled_ui(has_model && !is_processing, |ui| {
-        if ui.button("UVマップ出力").clicked() {
+        // ダイアログ表示中は重複起動しない
+        let uv_dialog_active = app.export.pending_uv_dialog.is_some();
+        if ui
+            .add_enabled(!uv_dialog_active, egui::Button::new("UVマップ出力"))
+            .clicked()
+        {
             let default_path = if app.export.pmx_output_path.is_empty() {
                 std::path::PathBuf::from("uvmap.psd")
             } else {
                 std::path::PathBuf::from(&app.export.pmx_output_path).with_extension("psd")
             };
-            let mut dialog = rfd::FileDialog::new()
-                .set_title("UVマップ出力先を選択")
-                .add_filter("PSD", &["psd"]);
             // デフォルトディレクトリ: PMX出力パスがあればその親、なければモデルファイルの親
             let default_dir = default_path
                 .parent()
@@ -2854,42 +2910,42 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                             .to_path_buf()
                     })
                 });
-            if let Some(dir) = default_dir.as_deref() {
-                dialog = dialog.set_directory(dir);
-            }
-            if let Some(name) = default_path.file_name() {
-                dialog = dialog.set_file_name(name.to_string_lossy());
-            }
-            if let Some(path) = dialog.save_file() {
-                let Some(loaded) = app.loaded.as_ref() else {
-                    app.convert_message = Some(ConvertMessage::failure(
-                        "モデルが読み込まれていません".to_string(),
-                    ));
-                    return;
+            let file_name = default_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned());
+            // ダイアログ結果受信後に使う材質グループ情報をキャプチャ
+            let uv_groups: Vec<(String, std::ops::Range<usize>)> =
+                if let Some(ref loaded) = app.loaded {
+                    loaded
+                        .material_groups
+                        .iter()
+                        .map(|g| (g.name.clone(), g.material_range.clone()))
+                        .collect()
+                } else {
+                    Vec::new()
                 };
-                let uv_groups: Vec<(String, std::ops::Range<usize>)> = loaded
-                    .material_groups
-                    .iter()
-                    .map(|g| (g.name.clone(), g.material_range.clone()))
-                    .collect();
-                match crate::convert::uvmap::export_uv_map_grouped(
-                    &loaded.ir,
-                    &path,
-                    app.export.uv_map_size,
-                    &uv_groups,
-                ) {
-                    Ok(()) => {
-                        app.convert_message = Some(ConvertMessage::success(format!(
-                            "UVマップ出力完了: {}",
-                            path.display()
-                        )));
-                    }
-                    Err(e) => {
-                        app.convert_message =
-                            Some(ConvertMessage::failure(format!("UVマップ出力失敗: {e}")));
-                    }
+            let uv_map_size = app.export.uv_map_size;
+            // 保存ダイアログを別スレッドで開く（UIをブロックしない）
+            let (tx, rx) = std::sync::mpsc::channel();
+            let repaint = ui.ctx().clone();
+            std::thread::spawn(move || {
+                let mut dialog = rfd::FileDialog::new()
+                    .set_title("UVマップ出力先を選択")
+                    .add_filter("PSD", &["psd"]);
+                if let Some(dir) = default_dir.as_deref() {
+                    dialog = dialog.set_directory(dir);
                 }
-            }
+                if let Some(ref name) = file_name {
+                    dialog = dialog.set_file_name(name);
+                }
+                let _ = tx.send(dialog.save_file());
+                repaint.request_repaint();
+            });
+            app.export.pending_uv_dialog = Some(super::app::pending::PendingUvExport {
+                rx,
+                uv_map_size,
+                uv_groups,
+            });
         }
     });
     ui.horizontal(|ui| {

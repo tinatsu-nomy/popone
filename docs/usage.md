@@ -104,6 +104,7 @@ If the viewer is already running, subsequent launches pass the file path to the 
 | L | Cycle light mode |
 | Space | Play/pause animation |
 | Left/Right | Step frame (when paused) |
+| Esc | Cancel loading / GPU build / PMX conversion / close selection dialog |
 
 </details>
 
@@ -150,7 +151,7 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 | Texture PNG | Output to `textures/` folder (PSD textures are automatically converted to PNG) |
 | UV Map PSD | Per-material layers with model-based group folders (from viewer) |
 
-- In the viewer, "PMX Convert" button exports immediately to `converted_modelXX/` directory. Output folder opens automatically in Explorer. Base output directory is configurable in the "Export" tab
+- In the viewer, "PMX Convert" button exports immediately to `converted_modelXX/` directory. Output folder opens automatically in Explorer. Base output directory is configurable in the "Export" tab. Output PMX filename is derived from the model's metadata name (truncated to 80 characters if too long)
 - Auto-detection of VRM 0.0 / 1.0 / FBX / UnityPackage / ZIP / 7z
 - MMD standard bone insertion (master, center, groove, waist, leg IK, toe IK)
 - Semi-standard bones (waist cancel, leg D, toe EX, arm twist, wrist twist, shoulder cancel)

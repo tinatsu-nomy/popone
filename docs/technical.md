@@ -93,6 +93,15 @@
     - [Panic Log](#panic-log)
   - [Single Instance](#single-instance)
   - [FPS Measurement](#fps-measurement)
+  - [GPU Pipeline Warm-up & Model Build Optimization (v0.2.39)](#gpu-pipeline-warm-up--model-build-optimization-v0239)
+    - [Pipeline Warm-up (`WarmupPhase`)](#pipeline-warm-up-warmupphase)
+    - [GPU Model Build Split (`cpu_prep_model` / `gpu_finalize_model`)](#gpu-model-build-split-cpu_prep_model--gpu_finalize_model)
+    - [Incremental Thumbnail Cache](#incremental-thumbnail-cache)
+  - [Watchdog — Main Thread Responsiveness Monitor (v0.2.39)](#watchdog--main-thread-responsiveness-monitor-v0239)
+    - [Architecture](#architecture-1)
+    - [Heartbeat (`viewer/watchdog.rs`)](#heartbeat-viewerwatchdogrs)
+    - [Watchdog Thread](#watchdog-thread)
+    - [Log Output Examples](#log-output-examples)
   - [Animation Playback](#animation-playback)
     - [Pose Reset on Animation Clear (v0.2.20)](#pose-reset-on-animation-clear-v0220)
     - [Supported Formats](#supported-formats)
@@ -164,7 +173,7 @@
     - [Recursive Morph Validity Check](#recursive-morph-validity-check)
     - [Texture Pruning](#texture-pruning)
     - [Specification](#specification)
-  - [Architecture](#architecture-1)
+  - [Architecture](#architecture-2)
   - [Source File Structure](#source-file-structure)
   - [Library API](#library-api)
   - [Tests](#tests)
@@ -182,6 +191,7 @@
     - [Texture Assignment History (popone_history.json)](#texture-assignment-history-popone_historyjson)
     - [Prefab Append Loading (v0.2.34)](#prefab-append-loading-v0234)
     - [Multi-Model Batch Loading (v0.2.34)](#multi-model-batch-loading-v0234)
+    - [Deferred GPU Build (v0.2.39)](#deferred-gpu-build-v0239)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -562,17 +572,18 @@ Model parsing and GPU resource construction are split into a CPU phase (backgrou
    → overlay: WaitingOverlay → Ready
    → paint_progress_overlay shows "Loading..."
 
-3. Frame N+1: process_pending_tasks()
+3. Frame N+1: process_pending_tasks() → poll_dispatch_and_bg_load() (v0.2.39)
    → Extracts PendingDispatch { dispatch, prior_loading } from bg_state
    → route_load_dispatch(dispatch, prior_loading)
      - Format detection
      - .vrma / .glb/.gltf animation / .anim → immediate (no BG, preserves prior_loading)
      - FBX (mesh+anim) → PendingFbxChoice dialog
-     - UnityPackage / zip / 7z → sync fallback
+     - UnityPackage / zip / 7z → spawn_bg_index_load() (v0.2.39)
      - Otherwise → spawn_bg_load()
+   → All spawn_bg_* functions delegate to spawn_bg_task() common helper (v0.2.39)
    → pending.bg_state = BackgroundLoadState::Loading(BgLoadHandle { rx, cancel, request_id })
 
-4. Frame N+2 onward: process_pending_tasks()
+4. Frame N+2 onward: process_pending_tasks() → poll_dispatch_and_bg_load() (v0.2.39)
    → Polls via handle.rx.try_recv() from BackgroundLoadState::Loading(handle)
    → Ok(Ok(result)) → apply_bg_load_result()
    → Ok(Err(e)) → error display
@@ -600,8 +611,7 @@ A pure function that doesn't take `&self`, safe to call from background threads.
 Dispatches on the main thread:
 - **Immediate**: VRMA, GLB/glTF animation, .anim (no model load, no GPU resource ops)
 - **Interactive UI**: FBX choice dialog (keeps `self.preloaded = dispatch.preloaded` for existing method compatibility)
-- **Sync fallback**: UnityPackage / archive (multi-step UI flows, out of scope for v0.2.27 async)
-- **Background**: VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x
+- **Background**: VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage / ZIP / 7z (v0.2.39: all formats now background)
 
 ### `apply_bg_load_result` Method
 
@@ -615,6 +625,7 @@ Post-processes BG results on the main thread:
 - **GPU access restriction**: `cpu_parse_source` is a free function that never references `wgpu::Device` / `Queue`. GPU operations only happen in `finish_load` on the main thread
 - **egui::Context thread safety**: egui 0.31's `Context` is implemented as `Arc<RwLock<ContextImpl>>` and is `Send + Sync`. `ctx.request_repaint()` is callable from BG threads
 - **Double load (v0.2.27)**: When a new `load_dispatch` is submitted, the old `bg_load` receiver is dropped. The thread runs to completion but `tx.send()` returns `Err` and the result is discarded. The initial v0.2.27 implementation used a stopgap "reject new dispatches while a prior load is in progress" rule
+- **`spawn_bg_task` common helper (v0.2.39)**: Extracted shared boilerplate (old-task cancellation, `request_id` allocation, `mpsc` channel creation, `std::thread::spawn` + `cpu_parse_source` invocation) from `spawn_bg_load` / `spawn_bg_index_load` / `spawn_bg_archive_load` / `spawn_bg_pkg_load` into a single `spawn_bg_task` helper. Each caller now only builds `CpuParseInput` and `fallback_kind`
 - **Double load cancellation (v0.2.28)**: `route_load_dispatch` was switched from "reject" to "cancel and accept". It sets the old `BgLoadHandle.cancel: Arc<AtomicBool>` to `true` and then calls `spawn_bg_load` for the new request. The old thread bails out at its next cancel check point (currently the start of `cpu_parse_source`) with `"bg load cancelled"`, and the receive side logs it via `log::info!` only (not surfaced to the UI) since cancellation is intentional
 - **Generation tracking (v0.2.28)**: `ViewerApp.next_request_id: u64` is monotonically incremented (via `wrapping_add(1)`) by each `spawn_bg_load` call, and the id is embedded in both `BgLoadHandle.request_id` and `BgLoadResult.request_id`. The receiver verifies `handle.request_id == result.request_id`, discarding the result as stale if they differ (while keeping the handle so the current-generation result is still awaited). This prevents the race where an old thread manages to send its result just before cancellation takes effect, which would otherwise overwrite the current-generation model
 - **FBX reload temp directory (v0.2.28)**: The Snapshot-reload path that writes FBX external textures back to disk previously used a fixed name `%TEMP%\popone_fbx_reload`, which collided during concurrent reloads. v0.2.28 replaces it with `tempfile::Builder::new().prefix("popone_fbx_reload_").tempdir()?` so each invocation gets a unique name. `TempDir::Drop` handles automatic cleanup, eliminating the explicit `remove_dir_all` call
@@ -1431,6 +1442,88 @@ Displays FPS and frame time (ms) in the viewport top-right overlay.
 - **Method**: Frame counting (computes `FPS = (frame_count - 1) / time_span` from `VecDeque<Instant>` over the last 1 second)
 - **Update interval**: 0.5 seconds (flicker prevention)
 - **ms display**: Average frame time within the window (consistent with FPS value)
+
+## GPU Pipeline Warm-up & Model Build Optimization (v0.2.39)
+
+Eliminates main thread freezes during model loading by splitting work across frames and background threads.
+
+### Pipeline Warm-up (`WarmupPhase`)
+
+During splash screen display (`self.loaded.is_none()`), GPU pipelines are pre-compiled one phase per frame:
+
+| Phase | Action | Typical Time |
+|---|---|---|
+| `NotStarted` → `RendererCreated` | `GpuRenderer::new()` — shader module compilation (naga WGSL) | ~50ms |
+| `RendererCreated` → `SrgbMsaaDone` | `ensure_pipelines(sRGB, MSAA=true)` — 26 render pipelines | ~15ms |
+| `SrgbMsaaDone` → `SrgbNoMsaaDone` | `ensure_pipelines(sRGB, MSAA=false)` | ~12ms |
+| `SrgbNoMsaaDone` → `Complete` | `ensure_pipelines(Unorm, MSAA=true)` | ~7ms |
+
+Previously these compiled lazily on first `render_to_texture()`, causing a ~10s freeze on first model load. `ensure_pipelines` was refactored to accept an explicit `msaa: bool` parameter.
+
+### GPU Model Build Split (`cpu_prep_model` / `gpu_finalize_model`)
+
+`build_gpu_model_inner` (mesh.rs) was decomposed into two phases:
+
+```
+PendingGpuBuild state machine:
+  Phase 1: Texture upload (4/frame, frame-split)    — main thread, interruptible
+  Phase 2: cpu_prep_model (BG thread via mpsc)       — vertex dedup, normals, morphs
+  Phase 3: gpu_finalize_model (main thread, <7ms)    — buffers + bind groups
+```
+
+- **`cpu_prep_model`**: Pure CPU, `Send`-safe. Produces `CpuPrepResult` containing pre-processed vertices, indices, `CpuDrawPlan` per material (with `MaterialParams` and `AuxTexRefs`), morph data, bbox, edge scales. `IrModel` is moved to the BG thread via `std::mem::take` and returned with the result. Accepts `MaterialBuildFlags` struct (v0.2.39) instead of 4 separate parallel slices (`smooth_per_mat`, `clear_per_mat`, `normal_map_per_mat`, `emissive_per_mat`)
+- **`gpu_finalize_model`**: Creates bind group layouts, sampler cache, default textures, then iterates `CpuDrawPlan`s to create bind groups and buffers. O(materials) GPU API calls only
+- **`MaterialBuildFlags` (v0.2.39)**: Per-material display flags struct consolidating `smooth`, `clear`, `normal_map`, `emissive` slices. Used across `build_gpu_model` / `build_gpu_model_from_ir` / `cpu_prep_model` / `PendingGpuBuild`. `default_for(mat_count)` generates default values in one place
+
+### Incremental Thumbnail Cache
+
+`apply_pkg_append_post` previously called `rebuild_pkg_thumb_cache()` which decoded and uploaded ALL pkg texture thumbnails from scratch on every append. With `append_pkg_thumb_cache(start_index)`, only newly added textures generate thumbnails. Eliminates cumulative O(N²) cost during batch append.
+
+## Watchdog — Main Thread Responsiveness Monitor (v0.2.39)
+
+A background watchdog thread detects main thread freezes (Windows "Not Responding" state) and logs the event for post-mortem diagnosis.
+
+### Architecture
+
+```
+Main Thread (egui event loop)          Watchdog Thread
+┌──────────────────────────┐           ┌──────────────────────────┐
+│ update() {               │           │ loop {                   │
+│   if minimized:          │           │   sleep(2s)              │
+│     heartbeat.pause()    │           │   last = hb.load()       │
+│   else:                  │           │   if last == PAUSED:     │
+│     heartbeat.tick()     │  shared   │     skip                 │
+│   request_repaint_after  │◄────────►│   elif now - last > 5s:  │
+│     (3s)                 │ AtomicU64 │     log::warn!(...)      │
+│   ...                    │           │   elif was_unresponsive: │
+│ }                        │           │     log::info!(recovered)│
+└──────────────────────────┘           └──────────────────────────┘
+```
+
+### Heartbeat (`viewer/watchdog.rs`)
+
+| Field | Type | Description |
+|---|---|---|
+| `Heartbeat.0` | `Arc<AtomicU64>` | Epoch milliseconds of last `tick()`, or `u64::MAX` for `PAUSED` |
+
+- **`tick()`**: Stores current epoch millis (`Ordering::Relaxed`)
+- **`pause()`**: Stores `PAUSED` sentinel (`u64::MAX`). Used when `viewport().minimized == Some(true)` to suppress false positives since `update()` may not be called while minimized
+- **`request_repaint_after(3s)`**: Ensures `update()` is called at least every 3 seconds during idle (no input, no animation), keeping the heartbeat fresh. During a real freeze, the main thread is blocked and the scheduled repaint never executes
+
+### Watchdog Thread
+
+- **Check interval**: 2 seconds (`thread::sleep`)
+- **Threshold**: 5 seconds (matches Windows "Not Responding" detection)
+- **State transitions**: Normal → `warn!("unresponsive")` → `warn!("still unresponsive (total Nms)")` → `info!("recovered after Nms freeze")`
+- **PAUSED handling**: When `PAUSED` is read, resets `was_unresponsive` state and skips the check
+
+### Log Output Examples
+
+```
+[12:34:56.789][WARN] [watchdog] Main thread unresponsive (no heartbeat for 6012ms)
+[12:34:58.790][WARN] [watchdog] Main thread still unresponsive (total 8013ms)
+[12:35:00.123][INFO] [watchdog] Main thread recovered after 9456ms freeze
+```
 
 ## Animation Playback
 
@@ -2354,7 +2447,7 @@ An optional feature that excludes materials hidden in the display tab from PMX c
 ### Design Principles
 
 - **Viewer-specific**: Filter logic is placed in `viewer/export_filter.rs`. No changes to core conversion logic (`pmx/build.rs`, `lib.rs`)
-- **IrModel manual construction**: Since `IrModel`/`IrMesh`/`IrPhysics` lack `Clone`, filtered IR is newly constructed field by field
+- **IrModel manual construction**: Filtered IR is newly constructed field by field. `IrMesh` heavy fields (`vertices`, `indices`, `morph_targets`) are `Arc<Vec<T>>` (v0.2.39), so cloning shares data via reference count (O(1)). Mutation uses `Arc::make_mut` COW via `vertices_mut()` / `indices_mut()` / `morph_targets_mut()`
 - **draw→material conversion**: `material_visibility` is managed per DrawCall unit (GPU draw call unit), so it is converted to a `HashSet` of `material_index` via `mat_cache.draw_indices`
 
 ### Processing Flow (`build_filtered_ir`)
@@ -2678,3 +2771,47 @@ The `.unitypackage` model selection dialog supports multi-select via checkboxes:
 **Abort Behavior:**
 - If any model load fails (returns `Err` or `append_from_pkg` returns `false`), `multi_load` is set to `None`
 - If the FBX load-mode choice dialog is cancelled, `multi_load` is also cleared
+
+### Deferred GPU Build (v0.2.39)
+
+After BG parsing completes, GPU texture upload and model construction are split across frames to avoid blocking the UI thread:
+
+**Frame-split texture upload:**
+- `start_deferred_gpu_build()` creates `PendingGpuBuild` with merged IR and per-material display flags
+- `process_pending_tasks` (split into `poll_*` methods in v0.2.39) uploads `GPU_UPLOAD_BATCH` (4) textures per frame via `upload_single_texture`
+- Progress overlay shows "GPU構築中..." during upload
+
+**Completion:**
+- When all textures are uploaded, `build_gpu_model_inner` constructs vertex/index buffers
+- For initial load: `finish_load_with_gpu` + `apply_gpu_build_post` (pkg_material_keys, MaterialGroup, etc.)
+- For append: `finish_deferred_append` reconstructs `LoadedModel` from saved metadata + new GPU model
+
+**Append rollback:**
+- `AppendGpuBuildInfo` stores the old `GpuModel` and pre-merge IR sizes. Rollback state is organized into typed snapshots (v0.2.39): `IrRollbackSnapshot` (IR array sizes + metadata), `LoadedModelOwnership` (source, appended_models, material_groups etc.), `AnimationSnapshot` (playback state). This ensures `LoadedModel` / `IrModel` field additions only need updates in one place
+- On GPU build failure, `rollback_append` (via `IrRollbackSnapshot::rollback()`) truncates the merged IR to pre-merge size and restores the old `GpuModel`
+
+**Load cancellation (v0.2.39):**
+- Cancel button ("中止") and Escape key trigger `cancel_bg_load`
+- Cancels BG thread via `AtomicBool`, clears all pending state, sets `self.loaded = None`
+- `pre_decode_textures` checks cancel flag per-texture to avoid prolonged CPU usage after cancel
+- GPU build phase: cancel button triggers `cancel_gpu_build`, clearing `PendingGpuBuild`
+- Reload cancel: `restore_snapshot_on_failure` restores previous model instead of clearing to empty
+
+**Background PMX conversion (v0.2.39):**
+- `execute_conversion` clones the IR via `clone_for_export` (strips `mip_chain`/`uvs1`) and spawns a background thread
+- `convert_ir_to_pmx_with_cancel` writes all output to a temp directory (`.popone_convert_tmp/`), managed by `TmpDirGuard` RAII (v0.2.39) — Drop deletes the temp dir automatically on cancel/error/panic, `disarm()` on success path prevents cleanup
+- Cancel flag checked: before each step, per-texture during texture export, per-section during PMX write via `write_model_opt_cancel` (v0.2.39, checks between vertices/faces/textures/materials/bones/morphs sections)
+- On success: `TmpDirGuard` disarmed, files moved from temp directory to final output path
+- On cancel/error: `TmpDirGuard` Drop deletes temp directory entirely, no partial output remains
+- `PendingConvertBg` holds `mpsc::Receiver` for result polling and `AtomicBool` for cancel
+- `TextureData::RawRgba::pixels` changed to `Arc<[u8]>` — cloning IR for BG thread is near-zero-cost for textures
+
+**Background reload (v0.2.39):**
+- `reload_current` dispatches File/Snapshot sources through existing `spawn_bg_load` pipeline
+- Archive/UnityPackage sources remain synchronous (complex state management)
+- `reload_snapshot: Option<ReloadSnapshot>` stored on `ViewerApp` before dispatch
+- On GPU build completion: `finish_reload_from_snapshot` restores camera, morphs, visibility, animations
+- On cancel: `restore_snapshot_on_failure` restores previous model and state
+
+**Selection dialog Escape key (v0.2.39):**
+- FBX choice, OBJ/STL import options, UnityPackage select, and archive select dialogs accept Escape key as cancel

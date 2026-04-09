@@ -392,10 +392,10 @@ fn x_to_ir(
                 } else {
                     mesh.name.clone()
                 },
-                vertices,
-                indices: final_indices,
+                vertices: vertices.into(),
+                indices: final_indices.into(),
                 material_index: mat_idx,
-                morph_targets: vec![],
+                morph_targets: Arc::new(Vec::new()),
                 node_index: 0,
                 uvs1: vec![],
             });
@@ -535,10 +535,10 @@ fn x_to_ir(
                         },
                         local_mat_idx
                     ),
-                    vertices,
-                    indices: final_indices,
+                    vertices: vertices.into(),
+                    indices: final_indices.into(),
                     material_index: global_mat_idx,
-                    morph_targets: vec![],
+                    morph_targets: Arc::new(Vec::new()),
                     node_index: 0,
                     uvs1: vec![],
                 });

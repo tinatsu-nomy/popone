@@ -85,88 +85,169 @@ pub(super) enum CpuParseInput {
         format: FileFormat,
         preloaded: Option<super::helpers::PreloadedData>,
     },
+    /// アーカイブ内モデル（BGスレッドで解凍+パース）
+    ArchiveModel {
+        archive_data: Arc<[u8]>,
+        format: crate::archive::ArchiveFormat,
+        contents: crate::archive::ArchiveContents,
+        model_index: usize,
+        source_path: PathBuf,
+        is_temp: bool,
+        append: bool,
+        normalize_pose: bool,
+        normalize_to_tstance: bool,
+    },
+    /// UnityPackage 内モデル（FBX/VRM/Prefab）
+    PkgModel {
+        assets: Arc<Vec<crate::unitypackage::ExtractedAsset>>,
+        model_index: usize,
+        model_type: super::helpers::PkgModelType,
+        source_path: PathBuf,
+        pkg_index: Option<Arc<crate::unitypackage::UnityPackageIndex>>,
+        source_override: Option<super::helpers::ReloadableSource>,
+        normalize_pose: bool,
+        normalize_to_tstance: bool,
+        append: bool,
+        suppress_tex_match: bool,
+        batch_progress: Option<(usize, usize)>,
+        /// Whether a model is already loaded (for FBX anim check)
+        has_loaded_model: bool,
+    },
+    /// UnityPackage ファイル入口（ファイル読み込み + index 構築を BG で実行）
+    UnityPackageIndex {
+        path: PathBuf,
+        preloaded: Option<super::helpers::PreloadedData>,
+        append: bool,
+    },
+    /// アーカイブファイル入口（ファイル読み込み + モデル一覧化を BG で実行）
+    ArchiveIndex {
+        path: PathBuf,
+        preloaded: Option<super::helpers::PreloadedData>,
+        append: bool,
+    },
 }
 
-/// バックグラウンドスレッドで実行する CPU パース（`&self` 不要のフリー関数）。
-/// ファイル読込 + パース → `(IrModel, ReloadableSource)` を返す。
-/// GPU リソース構築は行わない。
-pub(super) fn cpu_parse_source(
-    input: CpuParseInput,
+/// BGスレッドでテクスチャを事前デコード（Encoded → RawRgba）。
+/// メインスレッドの `upload_textures_from_ir` は RawRgba をそのまま GPU 転送するだけになり、
+/// 画像デコード分の UI フリーズを排除する。
+/// キャンセルされた場合は途中で打ち切り、残りは Encoded のままメインスレッドでフォールバック。
+fn pre_decode_textures(ir: &mut IrModel, cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    use crate::intermediate::types::TextureData;
+
+    for tex in &mut ir.textures {
+        // テクスチャごとにキャンセル確認
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            log::info!(
+                "Pre-decode cancelled, {} textures remaining as Encoded",
+                ir.textures
+                    .iter()
+                    .filter(|t| matches!(t.data, TextureData::Encoded(_)))
+                    .count()
+            );
+            break;
+        }
+        if let TextureData::Encoded(ref data) = tex.data {
+            if data.is_empty() {
+                continue;
+            }
+            let is_psd = crate::psd::is_psd_filename(&tex.filename);
+            match super::super::texture::decode_image_to_rgba_with_hint(
+                data,
+                is_psd,
+                Some(&tex.mime_type),
+            ) {
+                Ok((pixels, width, height)) => {
+                    tex.data = TextureData::RawRgba {
+                        pixels: pixels.into(),
+                        width,
+                        height,
+                    };
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Pre-decode failed for '{}': {} ({} bytes)",
+                        tex.filename,
+                        e,
+                        data.len()
+                    );
+                    // デコード失敗時は Encoded のまま残す（メインスレッドでフォールバック）
+                }
+            }
+        }
+    }
+}
+
+/// アーカイブバンドルから IrModel を構築（BGスレッド用フリー関数）
+fn build_ir_from_archive_bundle_bg(
+    bundle: &crate::archive::ModelBundle,
+    source_path: &Path,
     normalize_pose: bool,
     normalize_to_tstance: bool,
-    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> anyhow::Result<(IrModel, super::helpers::ReloadableSource)> {
-    use super::helpers::ReloadableSource;
-
-    let CpuParseInput::File {
-        ref path,
-        format,
-        ref preloaded,
-    } = input;
-
-    // キャンセルチェック：関数冒頭、各フォーマット分岐の直前、重い I/O の後、extract 呼び出しの前後、
-    // そして関数末尾で粗く行う。パーサ本体（VRM/FBX/PMX extract）の内部までは潜らせず、
-    // ディスパッチ境界でチェックすることで旧スレッドの無駄な CPU/I/O を段階的に打ち切る。
-    let check_cancel = |cancel: &Arc<std::sync::atomic::AtomicBool>| -> anyhow::Result<()> {
-        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            anyhow::bail!("bg load cancelled");
-        }
-        Ok(())
-    };
-    check_cancel(cancel)?;
-
-    let is_temp = is_temp_path(path) || preloaded.as_ref().is_some_and(|pl| pl.path == *path);
-
-    // preloaded があればそこからバイト列を取得、なければディスクから読む
-    let read_data = |p: &Path| -> anyhow::Result<Arc<[u8]>> {
-        if let Some(ref pl) = preloaded {
-            if pl.path == *p {
-                return Ok(Arc::clone(&pl.main_bytes));
+) -> anyhow::Result<IrModel> {
+    use crate::archive::ArchiveModelKind;
+    match bundle.kind {
+        ArchiveModelKind::Pmx => {
+            let pmx_model = crate::pmx::reader::read_pmx_from_data(&bundle.model.data)?;
+            let mut ir = crate::pmx::extract::pmx_to_ir_with_aux(
+                &pmx_model,
+                std::path::Path::new("."),
+                Some(&bundle.aux_files),
+            )?;
+            if normalize_pose {
+                ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
+                    &mut ir.bones,
+                    &mut ir.meshes,
+                    &mut ir.morphs,
+                    &mut ir.physics,
+                    crate::convert::coord::gltf_pos_to_pmx,
+                );
             }
-            if let Some(data) = pl.aux_files.get(p) {
-                return Ok(Arc::clone(data));
+            Ok(ir)
+        }
+        ArchiveModelKind::Pmd => {
+            let pmd_model = crate::pmd::reader::read_pmd_from_data(&bundle.model.data)?;
+            let mut ir = crate::pmd::extract::pmd_to_ir_with_aux(
+                &pmd_model,
+                &bundle.model.path,
+                Some(&bundle.aux_files),
+            )?;
+            if normalize_pose {
+                ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
+                    &mut ir.bones,
+                    &mut ir.meshes,
+                    &mut ir.morphs,
+                    &mut ir.physics,
+                    crate::convert::coord::gltf_pos_to_pmx,
+                );
             }
+            Ok(ir)
         }
-        Ok(std::fs::read(p)?.into())
-    };
-    let collect_aux = |p: &Path| -> HashMap<PathBuf, Arc<[u8]>> {
-        if let Some(ref pl) = preloaded {
-            if pl.path == *p {
-                return pl.aux_files.clone();
-            }
+        ArchiveModelKind::Fbx => {
+            let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                &bundle.model.data,
+                Some(source_path),
+                normalize_pose,
+                normalize_to_tstance,
+            )?;
+            let label = format!(
+                "archive({})",
+                source_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            );
+            crate::unitypackage::embed_textures_into_ir_with_label(
+                &mut ir,
+                &bundle.textures,
+                &label,
+            );
+            Ok(ir)
         }
-        let mut aux = HashMap::new();
-        if let Some(dir) = p.parent() {
-            collect_image_files_recursive(dir, dir, &mut aux);
-        }
-        aux
-    };
-
-    let make_source = |data: Arc<[u8]>, aux: HashMap<PathBuf, Arc<[u8]>>| -> ReloadableSource {
-        if is_temp {
-            ReloadableSource::Snapshot {
-                original_path: path.to_path_buf(),
-                main_bytes: data,
-                aux_files: aux,
-            }
-        } else {
-            ReloadableSource::File(path.to_path_buf())
-        }
-    };
-
-    check_cancel(cancel)?;
-    match format {
-        FileFormat::Vrm => {
-            let glb = if is_temp {
-                let data = read_data(path)?;
-                crate::vrm::loader::load_glb_from_data(&data)?
-            } else {
-                crate::vrm::loader::load_glb(path)?
-            };
-            check_cancel(cancel)?;
-            let version = crate::vrm::detect::detect_version(&glb.document);
-            let all_extensions = crate::vrm::loader::get_raw_extensions(&glb.document);
-            let ir = crate::vrm::extract::extract_ir_model_with_options(
+        ArchiveModelKind::Vrm | ArchiveModelKind::Glb => {
+            let glb = vrm::loader::load_glb_from_data(&bundle.model.data)?;
+            let version = vrm::detect::detect_version(&glb.document);
+            let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
+            let ir = vrm::extract::extract_ir_model_with_options(
                 &glb.document,
                 &glb.buffers,
                 &glb.images,
@@ -175,183 +256,1032 @@ pub(super) fn cpu_parse_source(
                 &all_extensions,
                 normalize_pose,
             )?;
-            check_cancel(cancel)?;
-            // 生 RGBA のまま IrTexture に格納（vrm::extract で設定済み）。
-            // PNG エンコードは GPU アップロード後に必要になった時点（PMX エクスポート等）で行う。
-            let source = if is_temp {
-                let data = read_data(path)?;
-                ReloadableSource::Snapshot {
-                    original_path: path.to_path_buf(),
-                    main_bytes: data,
-                    aux_files: HashMap::new(),
-                }
-            } else {
-                ReloadableSource::File(path.to_path_buf())
-            };
-            Ok((ir, source))
+            Ok(ir)
         }
-        FileFormat::Fbx => {
-            let data = read_data(path)?;
-            check_cancel(cancel)?;
-            let ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-                &data,
-                Some(path),
-                normalize_pose,
-                normalize_to_tstance,
+        ArchiveModelKind::Obj => {
+            let base_dir = bundle
+                .model
+                .path
+                .parent()
+                .unwrap_or(std::path::Path::new("."));
+            let name = bundle
+                .model
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Model");
+            let ir = crate::obj::extract::load_obj_from_data(
+                &bundle.model.data,
+                name,
+                base_dir,
+                Some(&bundle.aux_files),
             )?;
-            check_cancel(cancel)?;
-            let aux = collect_aux(path);
-            let source = make_source(data, aux);
-            Ok((ir, source))
+            Ok(ir)
         }
-        FileFormat::Pmx => {
-            // 非 temp: ディスク直読み（pmx_to_ir が sph/spa 等も含め全拡張子を読める）
-            // temp: preloaded.aux_files を使って pmx_to_ir_with_aux
-            let pmx_dir = path.parent().unwrap_or(Path::new("."));
-            // aux_files を1回だけ clone し、モデルロードとソース構築の両方で使い回す
-            let aux = if is_temp {
-                preloaded
-                    .as_ref()
-                    .filter(|pl| pl.path == *path)
-                    .map(|pl| pl.aux_files.clone())
-                    .unwrap_or_default()
-            } else {
-                HashMap::new()
-            };
-            let mut ir = if is_temp {
-                let data = read_data(path)?;
-                check_cancel(cancel)?;
-                let pmx_model = crate::pmx::reader::read_pmx_from_data(&data)?;
-                check_cancel(cancel)?;
-                crate::pmx::extract::pmx_to_ir_with_aux(&pmx_model, pmx_dir, Some(&aux))?
-            } else {
-                let pmx_model = crate::pmx::reader::read_pmx(path)?;
-                check_cancel(cancel)?;
-                crate::pmx::extract::pmx_to_ir(&pmx_model, pmx_dir)?
-            };
-            check_cancel(cancel)?;
-            if normalize_pose {
-                ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                    &mut ir.bones,
-                    &mut ir.meshes,
-                    &mut ir.morphs,
-                    &mut ir.physics,
-                    crate::convert::coord::gltf_pos_to_pmx,
-                );
-            }
-            let source = if is_temp {
-                let data = read_data(path).unwrap_or_default();
-                ReloadableSource::Snapshot {
-                    original_path: path.to_path_buf(),
-                    main_bytes: data,
-                    aux_files: aux,
-                }
-            } else {
-                ReloadableSource::File(path.to_path_buf())
-            };
-            Ok((ir, source))
+        ArchiveModelKind::Stl => {
+            let name = bundle
+                .model
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Model");
+            let ir = crate::stl::extract::load_stl_from_data(&bundle.model.data, name)?;
+            Ok(ir)
         }
-        FileFormat::Pmd => {
-            // 非 temp: ディスク直読み（pmd_to_ir が sph/spa 等も含め全拡張子を読める）
-            // temp: preloaded.aux_files を使って pmd_to_ir_with_aux
-            // aux_files を1回だけ clone し、モデルロードとソース構築の両方で使い回す
-            let aux = if is_temp {
-                preloaded
-                    .as_ref()
-                    .filter(|pl| pl.path == *path)
-                    .map(|pl| pl.aux_files.clone())
-                    .unwrap_or_default()
-            } else {
-                HashMap::new()
-            };
-            let mut ir = if is_temp {
-                let data = read_data(path)?;
-                check_cancel(cancel)?;
-                let pmd_model = crate::pmd::reader::read_pmd_from_data(&data)?;
-                check_cancel(cancel)?;
-                crate::pmd::extract::pmd_to_ir_with_aux(&pmd_model, path, Some(&aux))?
-            } else {
-                let pmd_model = crate::pmd::reader::read_pmd(path)?;
-                check_cancel(cancel)?;
-                crate::pmd::extract::pmd_to_ir(&pmd_model, path)?
-            };
-            check_cancel(cancel)?;
-            if normalize_pose {
-                ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                    &mut ir.bones,
-                    &mut ir.meshes,
-                    &mut ir.morphs,
-                    &mut ir.physics,
-                    crate::convert::coord::gltf_pos_to_pmx,
-                );
-            }
-            let source = if is_temp {
-                let data = read_data(path).unwrap_or_default();
-                ReloadableSource::Snapshot {
-                    original_path: path.to_path_buf(),
-                    main_bytes: data,
-                    aux_files: aux,
-                }
-            } else {
-                ReloadableSource::File(path.to_path_buf())
-            };
-            Ok((ir, source))
+        ArchiveModelKind::DirectX => {
+            let base_dir = bundle
+                .model
+                .path
+                .parent()
+                .unwrap_or(std::path::Path::new("."));
+            let name = bundle
+                .model
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Model");
+            let ir = crate::directx::extract::load_x_from_data(
+                &bundle.model.data,
+                name,
+                base_dir,
+                Some(&bundle.aux_files),
+            )?;
+            Ok(ir)
         }
-        FileFormat::Obj => {
-            let ir = if is_temp {
-                let data = read_data(path)?;
-                check_cancel(cancel)?;
-                let obj_dir = path.parent().unwrap_or(Path::new("."));
-                let aux = collect_aux(path);
-                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
-                crate::obj::extract::load_obj_from_data(&data, name, obj_dir, Some(&aux))?
-            } else {
-                crate::obj::extract::load_obj(path)?
-            };
-            check_cancel(cancel)?;
-            let data = read_data(path).unwrap_or_default();
-            let aux = collect_aux(path);
-            let source = make_source(data, aux);
-            Ok((ir, source))
+        ArchiveModelKind::UnityPackage => {
+            // load_model_from_archive / cpu_parse_source で先に分岐済み。ここに到達することはない
+            anyhow::bail!("UnityPackage は build_ir_from_archive_bundle_bg では処理できません")
         }
-        FileFormat::Stl => {
-            let ir = if is_temp {
-                let data = read_data(path)?;
-                check_cancel(cancel)?;
-                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
-                crate::stl::extract::load_stl_from_data(&data, name)?
-            } else {
-                crate::stl::extract::load_stl(path)?
-            };
-            check_cancel(cancel)?;
-            let data = read_data(path).unwrap_or_default();
-            let source = make_source(data, HashMap::new());
-            Ok((ir, source))
-        }
-        FileFormat::DirectX => {
-            let ir = if is_temp {
-                let data = read_data(path)?;
-                check_cancel(cancel)?;
-                let x_dir = path.parent().unwrap_or(Path::new("."));
-                let aux = collect_aux(path);
-                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
-                crate::directx::extract::load_x_from_data(&data, name, x_dir, Some(&aux))?
-            } else {
-                crate::directx::extract::load_x(path)?
-            };
-            check_cancel(cancel)?;
-            let data = read_data(path).unwrap_or_default();
-            let aux = collect_aux(path);
-            let source = make_source(data, aux);
-            Ok((ir, source))
-        }
-        _ => anyhow::bail!("Unsupported format for background loading: {:?}", format),
     }
+}
+
+/// バックグラウンドスレッドで実行する CPU パース（`&self` 不要のフリー関数）。
+/// ファイル読込 + パース → `(IrModel, ReloadableSource, Option<BgLoadKind>)` を返す。
+/// 3番目の要素が `Some` の場合、spawn 側の `kind` を上書きする（アーカイブ用）。
+/// GPU リソース構築は行わない。テクスチャは事前デコードして RawRgba に変換し、
+/// メインスレッドの GPU アップロード時のデコードコストを排除する。
+pub(super) fn cpu_parse_source(
+    input: CpuParseInput,
+    normalize_pose: bool,
+    normalize_to_tstance: bool,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> anyhow::Result<(
+    IrModel,
+    super::helpers::ReloadableSource,
+    Option<super::pending::BgLoadKind>,
+)> {
+    let result = cpu_parse_source_inner(input, normalize_pose, normalize_to_tstance, cancel)?;
+    let (mut ir, source, kind) = result;
+    // ダミー IrModel を返す kind バリアントはデコード不要
+    if !matches!(
+        kind,
+        Some(super::pending::BgLoadKind::ArchivePreparedUnityPackage { .. })
+            | Some(super::pending::BgLoadKind::UnityPackageIndexed { .. })
+            | Some(super::pending::BgLoadKind::ArchiveIndexed { .. })
+    ) {
+        pre_decode_textures(&mut ir, cancel);
+    }
+    Ok((ir, source, kind))
+}
+
+/// cpu_parse_source の本体
+fn cpu_parse_source_inner(
+    input: CpuParseInput,
+    normalize_pose: bool,
+    normalize_to_tstance: bool,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> anyhow::Result<(
+    IrModel,
+    super::helpers::ReloadableSource,
+    Option<super::pending::BgLoadKind>,
+)> {
+    use super::helpers::ReloadableSource;
+
+    // キャンセルチェック用クロージャ
+    let check_cancel = |cancel: &Arc<std::sync::atomic::AtomicBool>| -> anyhow::Result<()> {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            anyhow::bail!("bg load cancelled");
+        }
+        Ok(())
+    };
+
+    match input {
+        CpuParseInput::ArchiveModel {
+            archive_data,
+            format,
+            contents,
+            model_index,
+            source_path,
+            is_temp,
+            append,
+            normalize_pose: np,
+            normalize_to_tstance: nt,
+        } => {
+            check_cancel(cancel)?;
+            let model_path = contents.models[model_index].1.clone();
+            let kind = contents.models[model_index].3;
+
+            let bundle =
+                crate::archive::extract_model_bundle(&archive_data, format, contents, model_index)?;
+            check_cancel(cancel)?;
+
+            // UnityPackage: BGスレッドで pkg_index を構築し、メインスレッドへ渡す
+            if kind == crate::archive::ArchiveModelKind::UnityPackage {
+                let pkg_index = Arc::new(crate::unitypackage::build_unity_package_index(
+                    &bundle.model.data,
+                )?);
+                let assets: Vec<crate::unitypackage::ExtractedAsset> = pkg_index
+                    .entries
+                    .iter()
+                    .map(|e| crate::unitypackage::ExtractedAsset {
+                        pathname: e.pathname.clone(),
+                        data: Arc::clone(&e.data),
+                    })
+                    .collect();
+                let model_list = super::helpers::build_pkg_model_list(&assets);
+
+                let bg_kind = super::pending::BgLoadKind::ArchivePreparedUnityPackage {
+                    pkg_data: bundle.model.data,
+                    pkg_index,
+                    assets,
+                    model_list,
+                    source_path: source_path.clone(),
+                    archive_data,
+                    is_temp,
+                    append,
+                    entry_path: model_path,
+                };
+                // dummy ir/source — apply handler will use kind fields instead
+                let ir = IrModel::default();
+                let source = ReloadableSource::File(source_path);
+                return Ok((ir, source, Some(bg_kind)));
+            }
+
+            let ir = build_ir_from_archive_bundle_bg(&bundle, &source_path, np, nt)?;
+            check_cancel(cancel)?;
+
+            let source = ReloadableSource::Archive {
+                original_path: source_path.clone(),
+                archive_bytes: if is_temp {
+                    Some(Arc::clone(&archive_data))
+                } else {
+                    None
+                },
+                selected_entry_path: model_path.to_string_lossy().into_owned(),
+                inner_kind: kind,
+            };
+
+            let bg_kind = if append {
+                super::pending::BgLoadKind::ArchiveAppend
+            } else {
+                super::pending::BgLoadKind::ArchiveInitial
+            };
+            Ok((ir, source, Some(bg_kind)))
+        }
+        CpuParseInput::File {
+            ref path,
+            format,
+            ref preloaded,
+        } => {
+            check_cancel(cancel)?;
+
+            let is_temp =
+                is_temp_path(path) || preloaded.as_ref().is_some_and(|pl| pl.path == *path);
+
+            // preloaded があればそこからバイト列を取得、なければディスクから読む
+            let read_data = |p: &Path| -> anyhow::Result<Arc<[u8]>> {
+                if let Some(ref pl) = preloaded {
+                    if pl.path == *p {
+                        return Ok(Arc::clone(&pl.main_bytes));
+                    }
+                    if let Some(data) = pl.aux_files.get(p) {
+                        return Ok(Arc::clone(data));
+                    }
+                }
+                Ok(std::fs::read(p)?.into())
+            };
+            let collect_aux = |p: &Path| -> HashMap<PathBuf, Arc<[u8]>> {
+                if let Some(ref pl) = preloaded {
+                    if pl.path == *p {
+                        return pl.aux_files.clone();
+                    }
+                }
+                let mut aux = HashMap::new();
+                if let Some(dir) = p.parent() {
+                    collect_image_files_recursive(dir, dir, &mut aux);
+                }
+                aux
+            };
+
+            let make_source =
+                |data: Arc<[u8]>, aux: HashMap<PathBuf, Arc<[u8]>>| -> ReloadableSource {
+                    if is_temp {
+                        ReloadableSource::Snapshot {
+                            original_path: path.to_path_buf(),
+                            main_bytes: data,
+                            aux_files: aux,
+                        }
+                    } else {
+                        ReloadableSource::File(path.to_path_buf())
+                    }
+                };
+
+            check_cancel(cancel)?;
+            match format {
+                FileFormat::Vrm => {
+                    let glb = if is_temp {
+                        let data = read_data(path)?;
+                        crate::vrm::loader::load_glb_from_data(&data)?
+                    } else {
+                        crate::vrm::loader::load_glb(path)?
+                    };
+                    check_cancel(cancel)?;
+                    let version = crate::vrm::detect::detect_version(&glb.document);
+                    let all_extensions = crate::vrm::loader::get_raw_extensions(&glb.document);
+                    let ir = crate::vrm::extract::extract_ir_model_with_options(
+                        &glb.document,
+                        &glb.buffers,
+                        &glb.images,
+                        &glb.vrm_extension,
+                        &version,
+                        &all_extensions,
+                        normalize_pose,
+                    )?;
+                    check_cancel(cancel)?;
+                    // 生 RGBA のまま IrTexture に格納（vrm::extract で設定済み）。
+                    // PNG エンコードは GPU アップロード後に必要になった時点（PMX エクスポート等）で行う。
+                    let source = if is_temp {
+                        let data = read_data(path)?;
+                        ReloadableSource::Snapshot {
+                            original_path: path.to_path_buf(),
+                            main_bytes: data,
+                            aux_files: HashMap::new(),
+                        }
+                    } else {
+                        ReloadableSource::File(path.to_path_buf())
+                    };
+                    Ok((ir, source, None))
+                }
+                FileFormat::Fbx => {
+                    let data = read_data(path)?;
+                    check_cancel(cancel)?;
+                    let ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                        &data,
+                        Some(path),
+                        normalize_pose,
+                        normalize_to_tstance,
+                    )?;
+                    check_cancel(cancel)?;
+                    let aux = collect_aux(path);
+                    let source = make_source(data, aux);
+                    Ok((ir, source, None))
+                }
+                FileFormat::Pmx => {
+                    // 非 temp: ディスク直読み（pmx_to_ir が sph/spa 等も含め全拡張子を読める）
+                    // temp: preloaded.aux_files を使って pmx_to_ir_with_aux
+                    let pmx_dir = path.parent().unwrap_or(Path::new("."));
+                    // aux_files を1回だけ clone し、モデルロードとソース構築の両方で使い回す
+                    let aux = if is_temp {
+                        preloaded
+                            .as_ref()
+                            .filter(|pl| pl.path == *path)
+                            .map(|pl| pl.aux_files.clone())
+                            .unwrap_or_default()
+                    } else {
+                        HashMap::new()
+                    };
+                    let mut ir = if is_temp {
+                        let data = read_data(path)?;
+                        check_cancel(cancel)?;
+                        let pmx_model = crate::pmx::reader::read_pmx_from_data(&data)?;
+                        check_cancel(cancel)?;
+                        crate::pmx::extract::pmx_to_ir_with_aux(&pmx_model, pmx_dir, Some(&aux))?
+                    } else {
+                        let pmx_model = crate::pmx::reader::read_pmx(path)?;
+                        check_cancel(cancel)?;
+                        crate::pmx::extract::pmx_to_ir(&pmx_model, pmx_dir)?
+                    };
+                    check_cancel(cancel)?;
+                    if normalize_pose {
+                        ir.astance_result =
+                            crate::intermediate::pose::normalize_pose_to_tstance_full(
+                                &mut ir.bones,
+                                &mut ir.meshes,
+                                &mut ir.morphs,
+                                &mut ir.physics,
+                                crate::convert::coord::gltf_pos_to_pmx,
+                            );
+                    }
+                    let source = if is_temp {
+                        let data = read_data(path).unwrap_or_default();
+                        ReloadableSource::Snapshot {
+                            original_path: path.to_path_buf(),
+                            main_bytes: data,
+                            aux_files: aux,
+                        }
+                    } else {
+                        ReloadableSource::File(path.to_path_buf())
+                    };
+                    Ok((ir, source, None))
+                }
+                FileFormat::Pmd => {
+                    // 非 temp: ディスク直読み（pmd_to_ir が sph/spa 等も含め全拡張子を読める）
+                    // temp: preloaded.aux_files を使って pmd_to_ir_with_aux
+                    // aux_files を1回だけ clone し、モデルロードとソース構築の両方で使い回す
+                    let aux = if is_temp {
+                        preloaded
+                            .as_ref()
+                            .filter(|pl| pl.path == *path)
+                            .map(|pl| pl.aux_files.clone())
+                            .unwrap_or_default()
+                    } else {
+                        HashMap::new()
+                    };
+                    let mut ir = if is_temp {
+                        let data = read_data(path)?;
+                        check_cancel(cancel)?;
+                        let pmd_model = crate::pmd::reader::read_pmd_from_data(&data)?;
+                        check_cancel(cancel)?;
+                        crate::pmd::extract::pmd_to_ir_with_aux(&pmd_model, path, Some(&aux))?
+                    } else {
+                        let pmd_model = crate::pmd::reader::read_pmd(path)?;
+                        check_cancel(cancel)?;
+                        crate::pmd::extract::pmd_to_ir(&pmd_model, path)?
+                    };
+                    check_cancel(cancel)?;
+                    if normalize_pose {
+                        ir.astance_result =
+                            crate::intermediate::pose::normalize_pose_to_tstance_full(
+                                &mut ir.bones,
+                                &mut ir.meshes,
+                                &mut ir.morphs,
+                                &mut ir.physics,
+                                crate::convert::coord::gltf_pos_to_pmx,
+                            );
+                    }
+                    let source = if is_temp {
+                        let data = read_data(path).unwrap_or_default();
+                        ReloadableSource::Snapshot {
+                            original_path: path.to_path_buf(),
+                            main_bytes: data,
+                            aux_files: aux,
+                        }
+                    } else {
+                        ReloadableSource::File(path.to_path_buf())
+                    };
+                    Ok((ir, source, None))
+                }
+                FileFormat::Obj => {
+                    let ir = if is_temp {
+                        let data = read_data(path)?;
+                        check_cancel(cancel)?;
+                        let obj_dir = path.parent().unwrap_or(Path::new("."));
+                        let aux = collect_aux(path);
+                        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
+                        crate::obj::extract::load_obj_from_data(&data, name, obj_dir, Some(&aux))?
+                    } else {
+                        crate::obj::extract::load_obj(path)?
+                    };
+                    check_cancel(cancel)?;
+                    let data = read_data(path).unwrap_or_default();
+                    let aux = collect_aux(path);
+                    let source = make_source(data, aux);
+                    Ok((ir, source, None))
+                }
+                FileFormat::Stl => {
+                    let ir = if is_temp {
+                        let data = read_data(path)?;
+                        check_cancel(cancel)?;
+                        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
+                        crate::stl::extract::load_stl_from_data(&data, name)?
+                    } else {
+                        crate::stl::extract::load_stl(path)?
+                    };
+                    check_cancel(cancel)?;
+                    let data = read_data(path).unwrap_or_default();
+                    let source = make_source(data, HashMap::new());
+                    Ok((ir, source, None))
+                }
+                FileFormat::DirectX => {
+                    let ir = if is_temp {
+                        let data = read_data(path)?;
+                        check_cancel(cancel)?;
+                        let x_dir = path.parent().unwrap_or(Path::new("."));
+                        let aux = collect_aux(path);
+                        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Model");
+                        crate::directx::extract::load_x_from_data(&data, name, x_dir, Some(&aux))?
+                    } else {
+                        crate::directx::extract::load_x(path)?
+                    };
+                    check_cancel(cancel)?;
+                    let data = read_data(path).unwrap_or_default();
+                    let aux = collect_aux(path);
+                    let source = make_source(data, aux);
+                    Ok((ir, source, None))
+                }
+                _ => anyhow::bail!("Unsupported format for background loading: {:?}", format),
+            }
+        } // CpuParseInput::File
+        CpuParseInput::PkgModel {
+            assets,
+            model_index,
+            model_type,
+            source_path,
+            pkg_index,
+            source_override,
+            normalize_pose: np,
+            normalize_to_tstance: nt,
+            append,
+            suppress_tex_match,
+            batch_progress,
+            has_loaded_model,
+        } => {
+            use super::helpers::PkgModelType;
+            use super::pending::{
+                BgLoadKind, PkgAppendPayload, PkgFbxChoicePayload, PkgInitialPayload,
+            };
+
+            let source = source_override
+                .unwrap_or_else(|| ReloadableSource::File(source_path.to_path_buf()));
+
+            // PkgModelLocator 構築用: assets 消費前に pathname を取得
+            let asset_pathname: Option<String> =
+                assets.get(model_index).map(|a| a.pathname.clone());
+
+            if append {
+                // ── アペンドモード ──
+                let mut pkg_unmatched: Vec<usize> = Vec::new();
+                let mut pkg_model_name: Option<String> = None;
+                let mut pkg_textures_to_add: Vec<(String, Arc<[u8]>)> = Vec::new();
+                let pkg_material_keys: Vec<Option<crate::unitypackage::PkgMaterialKey>> =
+                    Vec::new();
+
+                let ir = match model_type {
+                    PkgModelType::Fbx => {
+                        check_cancel(cancel)?;
+                        let (fbx_data, fbx_name, textures) =
+                            crate::unitypackage::take_fbx_and_textures(&assets, model_index)?;
+                        pkg_model_name = Some(fbx_name.clone());
+                        check_cancel(cancel)?;
+                        let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                            &fbx_data, None, np, nt,
+                        )?;
+                        check_cancel(cancel)?;
+                        let unmatched =
+                            crate::unitypackage::embed_textures_into_ir(&mut ir, &textures);
+                        pkg_unmatched = unmatched;
+                        pkg_textures_to_add = textures;
+                        ir
+                    }
+                    PkgModelType::Vrm => {
+                        check_cancel(cancel)?;
+                        let (vrm_data, vrm_name) =
+                            crate::unitypackage::take_vrm(&assets, model_index)?;
+                        pkg_model_name = Some(vrm_name);
+                        check_cancel(cancel)?;
+                        let glb = crate::vrm::loader::load_glb_from_data(&vrm_data)?;
+                        let version = crate::vrm::detect::detect_version(&glb.document);
+                        let all_extensions = crate::vrm::loader::get_raw_extensions(&glb.document);
+                        check_cancel(cancel)?;
+                        let mut ir = crate::vrm::extract::extract_ir_model_with_options(
+                            &glb.document,
+                            &glb.buffers,
+                            &glb.images,
+                            &glb.vrm_extension,
+                            &version,
+                            &all_extensions,
+                            np,
+                        )?;
+                        check_cancel(cancel)?;
+                        super::ViewerApp::encode_ir_textures_as_png(&mut ir, &glb.images);
+                        ir
+                    }
+                    PkgModelType::Prefab => {
+                        check_cancel(cancel)?;
+                        let pkg = pkg_index
+                            .as_ref()
+                            .context("Prefab append には pkg_index が必要です")?;
+                        let resolve_result =
+                            crate::unitypackage::resolve_single_prefab(pkg, model_index)?;
+
+                        let prefab_filename =
+                            std::path::Path::new(&pkg.entries[model_index].pathname)
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+
+                        let textures: Vec<crate::unitypackage::PackageTexture> = pkg
+                            .entries
+                            .iter()
+                            .filter(|e| {
+                                let lower = e.pathname.to_lowercase();
+                                [
+                                    ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".psd", ".tif",
+                                    ".tiff",
+                                ]
+                                .iter()
+                                .any(|ext| lower.ends_with(ext))
+                            })
+                            .map(|e| {
+                                let display_name = std::path::Path::new(&e.pathname)
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy();
+                                crate::unitypackage::PackageTexture {
+                                    guid: Arc::from(e.guid.as_str()),
+                                    display_name: Arc::from(display_name.as_ref()),
+                                    data: Arc::clone(&e.data),
+                                    pathname: Arc::from(e.pathname.as_str()),
+                                }
+                            })
+                            .collect();
+
+                        pkg_textures_to_add = textures
+                            .iter()
+                            .map(|t| (t.display_name.to_string(), Arc::clone(&t.data)))
+                            .collect();
+
+                        let mut base_ir: Option<IrModel> = None;
+                        check_cancel(cancel)?;
+
+                        for (i, fbx_entry_info) in resolve_result.entries.iter().enumerate() {
+                            let fbx_entry = &pkg.entries[fbx_entry_info.fbx_index];
+                            let fbx_data = fbx_entry.data.to_vec();
+                            let fbx_name = std::path::Path::new(&fbx_entry.pathname)
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+                            log::info!(
+                                "  Append FBX[{}]: {} (GUID={})",
+                                i,
+                                fbx_name,
+                                fbx_entry_info.fbx_guid
+                            );
+                            check_cancel(cancel)?;
+                            let mut ir =
+                                crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                                    &fbx_data, None, np, nt,
+                                )?;
+                            check_cancel(cancel)?;
+                            let prefab_label = format!("prefab({})", prefab_filename);
+                            let unmatched = crate::unitypackage::embed_textures_with_prefab(
+                                &mut ir,
+                                &textures,
+                                &fbx_entry_info.materials,
+                                &prefab_label,
+                            );
+
+                            if let Some(ref mut base) = base_ir {
+                                let mat_offset = base.materials.len();
+                                base.merge(ir);
+                                pkg_unmatched.extend(unmatched.iter().map(|&idx| idx + mat_offset));
+                            } else {
+                                pkg_model_name = Some(prefab_filename.clone());
+                                pkg_unmatched = unmatched;
+                                base_ir = Some(ir);
+                            }
+                        }
+
+                        base_ir.context("Prefab に有効な FBX が見つかりません")?
+                    }
+                };
+
+                let pkg_locator = asset_pathname.map(|path| crate::unitypackage::PkgModelLocator {
+                    guid: "".into(),
+                    pathname: path.into(),
+                    kind: model_type,
+                });
+
+                let payload = PkgAppendPayload {
+                    pkg_model_name,
+                    pkg_model_locator: pkg_locator,
+                    pkg_textures_to_add,
+                    pkg_unmatched,
+                    batch_progress,
+                    suppress_tex_match,
+                    pkg_material_keys,
+                };
+                return Ok((ir, source, Some(BgLoadKind::PkgAppend(Box::new(payload)))));
+            }
+
+            // ── 通常ロード (append=false) ──
+            match model_type {
+                PkgModelType::Fbx => {
+                    check_cancel(cancel)?;
+                    let (fbx_data, fbx_name, textures_legacy, pkg_textures_new) =
+                        if let Some(ref idx) = pkg_index {
+                            let prepared = crate::unitypackage::prepare_pkg_fbx(idx, model_index)?;
+                            let fbx_name = std::path::Path::new(prepared.model.pathname.as_ref())
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+                            let fbx_data = Arc::clone(&prepared.fbx_data);
+                            let legacy_textures: Vec<(String, Arc<[u8]>)> = prepared
+                                .textures
+                                .iter()
+                                .map(|t| (t.display_name.to_string(), Arc::clone(&t.data)))
+                                .collect();
+                            (fbx_data, fbx_name, legacy_textures, Some(prepared))
+                        } else {
+                            let (fbx_data, fbx_name, textures) =
+                                crate::unitypackage::take_fbx_and_textures(&assets, model_index)?;
+                            (fbx_data, fbx_name, textures, None)
+                        };
+
+                    check_cancel(cancel)?;
+
+                    // has_loaded_model + has_anim => NeedsFbxChoice
+                    if has_loaded_model {
+                        let has_anim = if let Some(asset) = assets.get(model_index) {
+                            crate::fbx::animation::load_fbx_animation_from_data(&asset.data)
+                                .is_ok_and(|a| !a.is_empty())
+                        } else {
+                            false
+                        };
+                        if has_anim {
+                            let payload = PkgFbxChoicePayload {
+                                fbx_name,
+                                assets,
+                                fbx_index: model_index,
+                                source_path,
+                                archive_snapshot: None, // filled by spawn_bg_pkg_load
+                                source_override: Some(source),
+                                pkg_index,
+                                batch_progress,
+                            };
+                            // NeedsFbxChoice: dummy IR (will not be applied)
+                            let dummy_ir = IrModel::default();
+                            let dummy_source = ReloadableSource::File(PathBuf::new());
+                            return Ok((
+                                dummy_ir,
+                                dummy_source,
+                                Some(BgLoadKind::NeedsFbxChoice(Box::new(payload))),
+                            ));
+                        }
+                    }
+
+                    let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                        &fbx_data, None, np, nt,
+                    )?;
+                    check_cancel(cancel)?;
+
+                    // テクスチャ埋め込み
+                    let unmatched = if let Some(ref prepared) = pkg_textures_new {
+                        let prefab_label = format!(
+                            "prefab({})",
+                            std::path::Path::new(&*prepared.model.pathname)
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                        );
+                        crate::unitypackage::embed_textures_with_prefab(
+                            &mut ir,
+                            &prepared.textures,
+                            &prepared.resolved,
+                            &prefab_label,
+                        )
+                    } else {
+                        crate::unitypackage::embed_textures_into_ir(&mut ir, &textures_legacy)
+                    };
+
+                    // pkg_material_keys 構築
+                    let pkg_keys = if let Some(ref idx) = pkg_index {
+                        let fbx_guid = idx
+                            .entries
+                            .get(model_index)
+                            .map(|e| e.guid.as_str())
+                            .unwrap_or("");
+                        let instance_id = crate::unitypackage::BASE_INSTANCE_ID;
+                        let model_guid: Arc<str> = fbx_guid.into();
+                        ir.materials
+                            .iter()
+                            .map(|mat| {
+                                Some(crate::unitypackage::PkgMaterialKey {
+                                    instance_id,
+                                    model_guid: model_guid.clone(),
+                                    source_material: mat.source_material.clone(),
+                                    material_name: mat.name.as_str().into(),
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    } else {
+                        Vec::new()
+                    };
+
+                    let pkg_model_locator = pkg_textures_new.as_ref().map(|p| p.model.clone());
+
+                    let payload = PkgInitialPayload {
+                        fbx_name: Some(fbx_name),
+                        pkg_model_locator,
+                        pkg_textures_legacy: textures_legacy,
+                        unmatched_indices: unmatched,
+                        pkg_material_keys: pkg_keys,
+                        fbx_ranges: Vec::new(),
+                        batch_progress,
+                        suppress_tex_match,
+                        prefab_name: None,
+                        prefab_entry_path: None,
+                    };
+                    return Ok((ir, source, Some(BgLoadKind::PkgInitial(Box::new(payload)))));
+                }
+                PkgModelType::Vrm => {
+                    check_cancel(cancel)?;
+                    let vrm_pathname: Option<String> =
+                        assets.get(model_index).map(|a| a.pathname.clone());
+                    let (vrm_data, vrm_name) = crate::unitypackage::take_vrm(&assets, model_index)?;
+                    check_cancel(cancel)?;
+                    let glb = crate::vrm::loader::load_glb_from_data(&vrm_data)?;
+                    let version = crate::vrm::detect::detect_version(&glb.document);
+                    let all_extensions = crate::vrm::loader::get_raw_extensions(&glb.document);
+                    check_cancel(cancel)?;
+                    let mut ir = crate::vrm::extract::extract_ir_model_with_options(
+                        &glb.document,
+                        &glb.buffers,
+                        &glb.images,
+                        &glb.vrm_extension,
+                        &version,
+                        &all_extensions,
+                        np,
+                    )?;
+                    check_cancel(cancel)?;
+                    super::ViewerApp::encode_ir_textures_as_png(&mut ir, &glb.images);
+
+                    let pkg_model_locator =
+                        vrm_pathname.map(|path| crate::unitypackage::PkgModelLocator {
+                            guid: "".into(),
+                            pathname: path.into(),
+                            kind: crate::unitypackage::PkgModelType::Vrm,
+                        });
+
+                    let payload = PkgInitialPayload {
+                        fbx_name: Some(vrm_name),
+                        pkg_model_locator,
+                        pkg_textures_legacy: Vec::new(),
+                        unmatched_indices: Vec::new(),
+                        pkg_material_keys: Vec::new(),
+                        fbx_ranges: Vec::new(),
+                        batch_progress,
+                        suppress_tex_match,
+                        prefab_name: None,
+                        prefab_entry_path: None,
+                    };
+                    return Ok((ir, source, Some(BgLoadKind::PkgInitial(Box::new(payload)))));
+                }
+                PkgModelType::Prefab => {
+                    check_cancel(cancel)?;
+                    let pkg = pkg_index
+                        .as_ref()
+                        .context("Prefab ロードには pkg_index が必要です")?;
+                    let resolve_result =
+                        crate::unitypackage::resolve_single_prefab(pkg, model_index)?;
+
+                    let prefab_filename = std::path::Path::new(&pkg.entries[model_index].pathname)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let prefab_entry_path = pkg.entries[model_index].pathname.clone();
+
+                    let textures: Vec<crate::unitypackage::PackageTexture> = pkg
+                        .entries
+                        .iter()
+                        .filter(|e| {
+                            let lower = e.pathname.to_lowercase();
+                            [
+                                ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".psd", ".tif", ".tiff",
+                            ]
+                            .iter()
+                            .any(|ext| lower.ends_with(ext))
+                        })
+                        .map(|e| {
+                            let display_name = std::path::Path::new(&e.pathname)
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy();
+                            crate::unitypackage::PackageTexture {
+                                guid: Arc::from(e.guid.as_str()),
+                                display_name: Arc::from(display_name.as_ref()),
+                                data: Arc::clone(&e.data),
+                                pathname: Arc::from(e.pathname.as_str()),
+                            }
+                        })
+                        .collect();
+
+                    let legacy_textures: Vec<(String, Arc<[u8]>)> = textures
+                        .iter()
+                        .map(|t| (t.display_name.to_string(), Arc::clone(&t.data)))
+                        .collect();
+
+                    let mut base_ir: Option<IrModel> = None;
+                    let mut all_pkg_keys: Vec<Option<crate::unitypackage::PkgMaterialKey>> =
+                        Vec::new();
+                    let mut all_unmatched: Vec<usize> = Vec::new();
+                    let mut fbx_ranges: Vec<(String, usize, usize)> = Vec::new();
+                    let mut first_fbx_name: Option<String> = None;
+                    let mut first_locator: Option<crate::unitypackage::PkgModelLocator> = None;
+
+                    check_cancel(cancel)?;
+
+                    for (i, fbx_entry_info) in resolve_result.entries.iter().enumerate() {
+                        let fbx_entry = &pkg.entries[fbx_entry_info.fbx_index];
+                        let fbx_data = fbx_entry.data.to_vec();
+                        let fbx_name = std::path::Path::new(&fbx_entry.pathname)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+
+                        log::info!(
+                            "  FBX[{}]: {} (GUID={})",
+                            i,
+                            fbx_name,
+                            fbx_entry_info.fbx_guid
+                        );
+                        check_cancel(cancel)?;
+
+                        let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
+                            &fbx_data, None, np, nt,
+                        )?;
+                        check_cancel(cancel)?;
+
+                        let prefab_label = format!("prefab({})", prefab_filename);
+                        let unmatched = crate::unitypackage::embed_textures_with_prefab(
+                            &mut ir,
+                            &textures,
+                            &fbx_entry_info.materials,
+                            &prefab_label,
+                        );
+
+                        let instance_id = crate::unitypackage::BASE_INSTANCE_ID;
+                        let model_guid: Arc<str> = fbx_entry_info.fbx_guid.as_str().into();
+                        let keys: Vec<_> = ir
+                            .materials
+                            .iter()
+                            .map(|mat| {
+                                Some(crate::unitypackage::PkgMaterialKey {
+                                    instance_id,
+                                    model_guid: model_guid.clone(),
+                                    source_material: mat.source_material.clone(),
+                                    material_name: mat.name.as_str().into(),
+                                })
+                            })
+                            .collect();
+
+                        if let Some(ref mut base) = base_ir {
+                            let mat_offset = base.materials.len();
+                            let mat_count = ir.materials.len();
+                            base.merge(ir);
+                            fbx_ranges.push((fbx_name, mat_offset, mat_count));
+                            all_unmatched.extend(unmatched.iter().map(|&idx| idx + mat_offset));
+                            all_pkg_keys.extend(keys);
+                        } else {
+                            let mat_count = ir.materials.len();
+                            fbx_ranges.push((fbx_name.clone(), 0, mat_count));
+                            first_fbx_name = Some(fbx_name);
+                            first_locator = Some(crate::unitypackage::PkgModelLocator {
+                                guid: fbx_entry_info.fbx_guid.as_str().into(),
+                                pathname: fbx_entry.pathname.as_str().into(),
+                                kind: crate::unitypackage::PkgModelType::Fbx,
+                            });
+                            all_unmatched = unmatched;
+                            all_pkg_keys = keys;
+                            base_ir = Some(ir);
+                        }
+                    }
+
+                    let ir = base_ir.context("Prefab に有効な FBX が見つかりません")?;
+
+                    let payload = PkgInitialPayload {
+                        fbx_name: first_fbx_name,
+                        pkg_model_locator: first_locator,
+                        pkg_textures_legacy: legacy_textures,
+                        unmatched_indices: all_unmatched,
+                        pkg_material_keys: all_pkg_keys,
+                        fbx_ranges,
+                        batch_progress,
+                        suppress_tex_match,
+                        prefab_name: Some(prefab_filename),
+                        prefab_entry_path: Some(prefab_entry_path),
+                    };
+                    return Ok((ir, source, Some(BgLoadKind::PkgInitial(Box::new(payload)))));
+                }
+            }
+        } // CpuParseInput::PkgModel
+        CpuParseInput::UnityPackageIndex {
+            path,
+            preloaded,
+            append,
+        } => {
+            check_cancel(cancel)?;
+
+            let is_temp =
+                is_temp_path(&path) || preloaded.as_ref().is_some_and(|pl| pl.path == path);
+
+            // ファイル読み込み
+            let archive_data: Arc<[u8]> = if let Some(ref pl) = preloaded {
+                if pl.path == path {
+                    Arc::clone(&pl.main_bytes)
+                } else {
+                    std::fs::read(&path)?.into()
+                }
+            } else {
+                std::fs::read(&path)?.into()
+            };
+
+            check_cancel(cancel)?;
+
+            // UnityPackageIndex を構築
+            let pkg_index = Arc::new(crate::unitypackage::build_unity_package_index(
+                &archive_data,
+            )?);
+
+            check_cancel(cancel)?;
+
+            // ExtractedAsset リストを構築
+            let assets: Vec<crate::unitypackage::ExtractedAsset> = pkg_index
+                .entries
+                .iter()
+                .map(|e| crate::unitypackage::ExtractedAsset {
+                    pathname: e.pathname.clone(),
+                    data: Arc::clone(&e.data),
+                })
+                .collect();
+
+            // モデルリストを構築
+            let model_list = super::helpers::build_pkg_model_list(&assets);
+
+            // 一時ファイルの場合はアーカイブデータをスナップショット
+            let archive_snapshot = if is_temp { Some(archive_data) } else { None };
+
+            let bg_kind = super::pending::BgLoadKind::UnityPackageIndexed {
+                pkg_index,
+                assets,
+                model_list,
+                source_path: path.clone(),
+                is_temp,
+                archive_snapshot,
+                append,
+            };
+
+            // ダミー IrModel/source を返す（apply_bg_load_result で kind のフィールドを使用）
+            let ir = IrModel::default();
+            let source = ReloadableSource::File(path);
+            Ok((ir, source, Some(bg_kind)))
+        }
+        CpuParseInput::ArchiveIndex {
+            path,
+            preloaded,
+            append,
+        } => {
+            check_cancel(cancel)?;
+
+            let is_temp =
+                is_temp_path(&path) || preloaded.as_ref().is_some_and(|pl| pl.path == path);
+
+            // ファイル読み込み
+            let archive_data: Arc<[u8]> = if let Some(ref pl) = preloaded {
+                if pl.path == path {
+                    Arc::clone(&pl.main_bytes)
+                } else {
+                    std::fs::read(&path)?.into()
+                }
+            } else {
+                std::fs::read(&path)?.into()
+            };
+
+            check_cancel(cancel)?;
+
+            let ext = crate::path_ext_lower(&path);
+            let format = crate::archive::archive_format_from_ext(&ext)
+                .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
+
+            // アーカイブ内モデル一覧を取得
+            let contents = crate::archive::list_models(&archive_data, format)?;
+
+            check_cancel(cancel)?;
+
+            let bg_kind = super::pending::BgLoadKind::ArchiveIndexed {
+                archive_data,
+                format,
+                contents,
+                source_path: path.clone(),
+                is_temp,
+                append,
+            };
+
+            let ir = IrModel::default();
+            let source = ReloadableSource::File(path);
+            Ok((ir, source, Some(bg_kind)))
+        }
+    } // match input
 }
 
 /// `reload_current` で退避・復元するフィールドをまとめた構造体。
 /// 新フィールド追加時の漏れを防止する。
-struct ReloadSnapshot {
+pub(crate) struct ReloadSnapshot {
     appended_models: Vec<AppendedModel>,
     camera: OrbitCamera,
     morph_weights: Vec<f32>,
@@ -362,7 +1292,7 @@ struct ReloadSnapshot {
     export_visible_only: bool,
     tex_assignments: HashMap<usize, TextureSource>,
     pkg_tex_assignments: HashMap<usize, String>,
-    pkg_textures: Option<Vec<(String, Vec<u8>)>>,
+    pkg_textures: Option<Vec<(String, Arc<[u8]>)>>,
     vrma_library: Vec<(
         String,
         PathBuf,
@@ -497,12 +1427,12 @@ impl ViewerApp {
 
         // append モード
         if append {
-            // unitypackage / archive は同期パスにフォールバック
+            // unitypackage / archive はバックグラウンドで index 構築
             if format == FileFormat::UnityPackage
                 || format == FileFormat::Zip
                 || format == FileFormat::SevenZ
             {
-                self.append_model(path);
+                self.spawn_bg_index_load(path, format, true);
                 return;
             }
             // その他のフォーマットはバ��クグラウンドパース
@@ -562,12 +1492,19 @@ impl ViewerApp {
             }
         }
 
-        // archive / unitypackage は同期パスにフォールバック
-        if matches!(
-            format,
-            FileFormat::UnityPackage | FileFormat::Zip | FileFormat::SevenZ
-        ) {
-            self.load_file_as_model(path);
+        // archive / unitypackage はバックグラウンドで index 構築
+        if format == FileFormat::UnityPackage {
+            self.tex.pkg_textures = None;
+            self.clear_pkg_thumb_cache();
+            self.normalize_pose = false;
+            self.normalize_to_tstance = false;
+            self.spawn_bg_index_load(path, format, false);
+            return;
+        }
+        if matches!(format, FileFormat::Zip | FileFormat::SevenZ) {
+            self.normalize_pose = false;
+            self.normalize_to_tstance = false;
+            self.spawn_bg_index_load(path, format, false);
             return;
         }
 
@@ -588,18 +1525,24 @@ impl ViewerApp {
         );
     }
 
-    /// バックグラウンドスレッドで CPU パースを実行する。
-    fn spawn_bg_load(
+    /// BG スレッドで `cpu_parse_source` を実行する共通ヘルパー。
+    /// 旧 Loading のキャンセル、request_id/cancel/channel 作成、BgLoadHandle セット、
+    /// スレッド起動を一箇所に集約する。
+    ///
+    /// `post_map` は BG スレッド内で `BgLoadResult` を最終調整するクロージャ。
+    /// 例: `NeedsFbxChoice` に `archive_snapshot` を後付けする場合に使用。
+    fn spawn_bg_task(
         &mut self,
-        path: PathBuf,
-        kind: super::pending::BgLoadKind,
-        format: FileFormat,
+        input: CpuParseInput,
+        fallback_kind: super::pending::BgLoadKind,
+        result_path: PathBuf,
+        post_map: impl FnOnce(&mut super::pending::BgLoadResult) + Send + 'static,
     ) {
         use super::pending::BackgroundLoadState;
         use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
 
-        // 残存している旧 Loading があればここでもキャンセル（route_load_dispatch 以外の経路保険）
+        // 残存している旧 Loading があればキャンセル（route_load_dispatch 以外の経路保険）
         if let BackgroundLoadState::Loading(old) =
             std::mem::replace(&mut self.pending.bg_state, BackgroundLoadState::Idle)
         {
@@ -610,7 +1553,6 @@ impl ViewerApp {
         let cancel = Arc::new(AtomicBool::new(false));
         let normalize_pose = self.normalize_pose;
         let normalize_to_tstance = self.normalize_to_tstance;
-        let preloaded = self.preloaded.take();
 
         let (tx, rx) = std::sync::mpsc::channel();
         self.pending.bg_state = BackgroundLoadState::Loading(super::pending::BgLoadHandle {
@@ -619,22 +1561,137 @@ impl ViewerApp {
             request_id,
         });
 
-        let path_clone = path.clone();
         std::thread::spawn(move || {
-            let input = CpuParseInput::File {
-                path: path_clone.clone(),
-                format,
-                preloaded,
-            };
             let result = cpu_parse_source(input, normalize_pose, normalize_to_tstance, &cancel);
-            let result = result.map(|(ir, source)| super::pending::BgLoadResult {
-                ir,
-                source,
-                kind,
-                path: path_clone,
-                request_id,
+            let result = result.map(|(ir, source, kind_override)| {
+                let mut bg_result = super::pending::BgLoadResult {
+                    ir,
+                    source,
+                    kind: kind_override.unwrap_or(fallback_kind),
+                    path: result_path,
+                    request_id,
+                };
+                post_map(&mut bg_result);
+                bg_result
             });
             let _ = tx.send(result);
+        });
+    }
+
+    /// バックグラウンドスレッドで CPU パースを実行する。
+    fn spawn_bg_load(
+        &mut self,
+        path: PathBuf,
+        kind: super::pending::BgLoadKind,
+        format: FileFormat,
+    ) {
+        let preloaded = self.preloaded.take();
+        let input = CpuParseInput::File {
+            path: path.clone(),
+            format,
+            preloaded,
+        };
+        self.spawn_bg_task(input, kind, path, |_| {});
+    }
+
+    /// UnityPackage / アーカイブの入口処理（ファイル読み込み + index 構築）をバックグラウンドで実行する。
+    fn spawn_bg_index_load(&mut self, path: PathBuf, format: FileFormat, append: bool) {
+        use super::pending::BgLoadKind;
+
+        let preloaded = self.preloaded.take();
+        let input = if format == FileFormat::UnityPackage {
+            CpuParseInput::UnityPackageIndex {
+                path: path.clone(),
+                preloaded,
+                append,
+            }
+        } else {
+            CpuParseInput::ArchiveIndex {
+                path: path.clone(),
+                preloaded,
+                append,
+            }
+        };
+        // index load は常に kind_override を返すため fallback は使われない
+        self.spawn_bg_task(input, BgLoadKind::ArchiveInitial, path, |_| {});
+    }
+
+    /// アーカイブ内モデルをバックグラウンドスレッドで解凍+パースする。
+    pub(super) fn spawn_bg_archive_load(&mut self, p: PendingArchiveLoad) {
+        use super::pending::BgLoadKind;
+
+        let result_path = p.source_path.clone();
+        let append = p.append;
+        let input = CpuParseInput::ArchiveModel {
+            archive_data: p.archive_data,
+            format: p.format,
+            contents: p.contents,
+            model_index: p.model_index,
+            source_path: p.source_path,
+            is_temp: p.is_temp,
+            append,
+            normalize_pose: self.normalize_pose,
+            normalize_to_tstance: self.normalize_to_tstance,
+        };
+        let fallback = if append {
+            BgLoadKind::ArchiveAppend
+        } else {
+            BgLoadKind::ArchiveInitial
+        };
+        self.spawn_bg_task(input, fallback, result_path, |_| {});
+    }
+
+    /// UnityPackage 内モデルをバックグラウンドスレッドでパースする。
+    pub(super) fn spawn_bg_pkg_load(&mut self, p: PendingPkgModelLoad) {
+        use super::pending::BgLoadKind;
+
+        // skip_anim_check が true（execute_fbx_choice 確定後）の場合、
+        // NeedsFbxChoice ループを防ぐため has_loaded_model を false に
+        let has_loaded_model = if p.skip_anim_check {
+            false
+        } else {
+            self.loaded.is_some()
+        };
+
+        // source_override を構築（nested_archive_source > archive_snapshot > None）
+        let source_override = if let Some(nested) = p.nested_archive_source {
+            Some(nested)
+        } else if let Some(ref snap) = p.archive_snapshot {
+            Some(ReloadableSource::Snapshot {
+                original_path: p.source_path.clone(),
+                main_bytes: Arc::clone(snap),
+                aux_files: HashMap::new(),
+            })
+        } else {
+            None
+        };
+
+        let result_path = p.source_path.clone();
+        let archive_snapshot = p.archive_snapshot.clone();
+        let input = CpuParseInput::PkgModel {
+            assets: p.assets,
+            model_index: p.fbx_index,
+            model_type: p.model_type,
+            source_path: p.source_path,
+            pkg_index: p.pkg_index,
+            source_override,
+            normalize_pose: self.normalize_pose,
+            normalize_to_tstance: self.normalize_to_tstance,
+            append: p.append,
+            suppress_tex_match: p.suppress_tex_match,
+            batch_progress: p.batch_progress,
+            has_loaded_model,
+        };
+        let fallback = if p.append {
+            BgLoadKind::ArchiveAppend
+        } else {
+            BgLoadKind::ArchiveInitial
+        };
+        self.spawn_bg_task(input, fallback, result_path, move |bg_result| {
+            // NeedsFbxChoice のペイロードに archive_snapshot を設定
+            if let BgLoadKind::NeedsFbxChoice(ref mut payload) = bg_result.kind {
+                payload.archive_snapshot = archive_snapshot;
+            }
         });
     }
 
@@ -646,18 +1703,18 @@ impl ViewerApp {
         use super::pending::BgLoadKind;
         match result.kind {
             BgLoadKind::Initial {
-                format: _,
+                format,
                 auto_fbx_anim,
             } => {
-                self.finish_load(result.ir, result.source)?;
-                log::info!("Model loaded (bg): {}", result.path.display());
-                self.convert_message = None;
-                self.anim.state = None;
-                self.anim.library.clear();
-                self.anim.active_index = None;
-                if auto_fbx_anim {
-                    self.try_load_fbx_animation(&result.path);
-                }
+                self.start_deferred_gpu_build(
+                    result.ir,
+                    result.source,
+                    Some(BgLoadKind::Initial {
+                        format,
+                        auto_fbx_anim,
+                    }),
+                    result.path,
+                );
             }
             BgLoadKind::Append => {
                 // 座標系互換チェック
@@ -677,10 +1734,383 @@ impl ViewerApp {
                         );
                     }
                 }
-                self.finish_append_with_source(result.ir, result.source, None);
+                self.start_deferred_append_gpu_build(
+                    result.ir,
+                    result.source,
+                    false,
+                    None,
+                    None,
+                    result.path,
+                );
+            }
+            BgLoadKind::ArchiveInitial => {
+                self.start_deferred_gpu_build(
+                    result.ir,
+                    result.source,
+                    Some(BgLoadKind::ArchiveInitial),
+                    result.path,
+                );
+            }
+            BgLoadKind::ArchiveAppend => {
+                // 座標系互換チェック
+                if let Some(ref loaded) = self.loaded {
+                    let host_fmt = loaded.ir.source_format;
+                    let other_fmt = result.ir.source_format;
+                    if host_fmt.is_vrm0() != other_fmt.is_vrm0() {
+                        log::warn!(
+                            "Appending archive model with different coordinate system: {} + {}",
+                            host_fmt.label(),
+                            other_fmt.label()
+                        );
+                        anyhow::bail!(
+                            "座標系が異なるモデルは追加できません。\nホスト: {}, 追加: {}",
+                            host_fmt.label(),
+                            other_fmt.label()
+                        );
+                    }
+                }
+                self.start_deferred_append_gpu_build(
+                    result.ir,
+                    result.source,
+                    false,
+                    None,
+                    None,
+                    result.path,
+                );
+            }
+            BgLoadKind::ArchivePreparedUnityPackage {
+                pkg_data: _,
+                pkg_index,
+                assets,
+                model_list,
+                source_path,
+                archive_data,
+                is_temp,
+                append,
+                entry_path,
+            } => {
+                if model_list.is_empty() {
+                    anyhow::bail!(".unitypackage 内に VRM / FBX ファイルが見つかりません");
+                }
+
+                let archive_snapshot = if is_temp {
+                    Some(Arc::clone(&archive_data))
+                } else {
+                    None
+                };
+                let nested_archive_source = Some(ReloadableSource::Archive {
+                    original_path: source_path.clone(),
+                    archive_bytes: if is_temp { Some(archive_data) } else { None },
+                    selected_entry_path: entry_path.to_string_lossy().into_owned(),
+                    inner_kind: crate::archive::ArchiveModelKind::UnityPackage,
+                });
+
+                if model_list.len() == 1 {
+                    let (model_index, ref _name, model_type) = model_list[0];
+                    log::info!("Archive .unitypackage (bg): 1 model detected");
+                    self.pending.pkg_load = Some(PendingPkgModelLoad {
+                        assets: Arc::new(assets),
+                        fbx_index: model_index,
+                        model_type,
+                        source_path: source_path.clone(),
+                        shown: false,
+                        append,
+                        suppress_tex_match: false,
+                        archive_snapshot,
+                        nested_archive_source,
+                        pkg_index: Some(pkg_index),
+                        batch_progress: None,
+                        skip_anim_check: false,
+                    });
+                } else {
+                    log::info!(
+                        "Archive .unitypackage (bg): found {} models:",
+                        model_list.len()
+                    );
+                    for (_, name, mt) in &model_list {
+                        let label = match mt {
+                            PkgModelType::Prefab => "Prefab",
+                            PkgModelType::Vrm => "VRM",
+                            PkgModelType::Fbx => "FBX",
+                        };
+                        log::info!("  [{}] {}", label, name);
+                    }
+                    let checked = vec![false; model_list.len()];
+                    self.pending.unity_pkg = Some(PendingUnityPackage {
+                        assets,
+                        model_list,
+                        source_path: source_path.clone(),
+                        append,
+                        archive_snapshot,
+                        nested_archive_source,
+                        pkg_index: Some(pkg_index),
+                        checked,
+                    });
+                }
+            }
+            BgLoadKind::PkgInitial(mut payload) => {
+                // GPU ビルド前の前処理（selected_fbx_name, pkg_textures 等）
+                self.selected_fbx_name = payload.fbx_name.clone();
+                self.selected_pkg_model = payload.pkg_model_locator.clone();
+
+                // pkg_textures を設定（payload から取り出して即時反映）
+                let pkg_tex = std::mem::take(&mut payload.pkg_textures_legacy);
+                if !pkg_tex.is_empty() {
+                    self.tex.pkg_textures = Some(pkg_tex);
+                    self.rebuild_pkg_thumb_cache();
+                }
+
+                // GPU ビルドは遅延実行（後処理は apply_gpu_build_post で実施）
+                self.start_deferred_gpu_build(
+                    result.ir,
+                    result.source,
+                    Some(BgLoadKind::PkgInitial(payload)),
+                    result.path,
+                );
+            }
+            BgLoadKind::PkgAppend(payload) => {
+                let pkg_model_name = payload.pkg_model_name.clone();
+                let pkg_model_locator = payload.pkg_model_locator.clone();
+                self.start_deferred_append_gpu_build_ext(
+                    result.ir,
+                    result.source,
+                    false,
+                    pkg_model_name,
+                    pkg_model_locator,
+                    result.path,
+                    Some(payload),
+                );
+            }
+            BgLoadKind::NeedsFbxChoice(payload) => {
+                // FBX choice ダイアログを表示（ユーザーがモデル/アニメ/両方を選択）
+                self.pending.fbx_choice = Some(PendingFbxChoice {
+                    path: PathBuf::from(&payload.fbx_name),
+                    load_model: true,
+                    load_animation: true,
+                    pkg_context: Some(super::pending::PendingFbxChoicePkg {
+                        assets: payload.assets,
+                        fbx_index: payload.fbx_index,
+                        source_path: payload.source_path,
+                        archive_snapshot: payload.archive_snapshot,
+                        nested_archive_source: payload.source_override,
+                        pkg_index: payload.pkg_index,
+                    }),
+                    preloaded: None,
+                });
+            }
+            BgLoadKind::UnityPackageIndexed {
+                pkg_index,
+                assets,
+                model_list,
+                source_path,
+                is_temp,
+                archive_snapshot,
+                append,
+            } => {
+                if model_list.is_empty() {
+                    anyhow::bail!(".unitypackage 内に VRM / FBX ファイルが見つかりません");
+                }
+
+                let snapshot = if is_temp { archive_snapshot } else { None };
+
+                if model_list.len() == 1 {
+                    let (idx, _, model_type) = model_list[0];
+                    self.pending.pkg_load = Some(PendingPkgModelLoad {
+                        assets: Arc::new(assets),
+                        fbx_index: idx,
+                        model_type,
+                        source_path,
+                        shown: false,
+                        append,
+                        suppress_tex_match: if append {
+                            self.suppress_tex_match
+                        } else {
+                            false
+                        },
+                        archive_snapshot: snapshot,
+                        nested_archive_source: None,
+                        pkg_index: Some(pkg_index),
+                        batch_progress: None,
+                        skip_anim_check: false,
+                    });
+                } else {
+                    log::info!("Found {} models in .unitypackage:", model_list.len());
+                    for (_, name, mtype) in &model_list {
+                        log::info!("  {:?}: {}", mtype, name);
+                    }
+                    let checked = vec![false; model_list.len()];
+                    self.pending.unity_pkg = Some(PendingUnityPackage {
+                        assets,
+                        model_list,
+                        source_path,
+                        append,
+                        archive_snapshot: snapshot,
+                        nested_archive_source: None,
+                        pkg_index: Some(pkg_index),
+                        checked,
+                    });
+                }
+            }
+            BgLoadKind::ArchiveIndexed {
+                archive_data,
+                format,
+                contents,
+                source_path,
+                is_temp,
+                append,
+            } => {
+                if contents.models.is_empty() {
+                    anyhow::bail!("アーカイブ内にモデルファイルが見つかりません");
+                }
+
+                if contents.models.len() == 1 {
+                    self.pending.archive_load = Some(PendingArchiveLoad {
+                        archive_data,
+                        format,
+                        contents,
+                        model_index: 0,
+                        source_path,
+                        shown: false,
+                        append,
+                        is_temp,
+                    });
+                } else {
+                    log::info!("Found {} models in archive:", contents.models.len());
+                    for (_, p, _, kind) in &contents.models {
+                        log::info!("  [{}] {}", kind.label(), p.display());
+                    }
+                    self.pending.archive = Some(super::pending::PendingArchive {
+                        archive_data,
+                        format,
+                        contents,
+                        source_path,
+                        append,
+                        is_temp,
+                    });
+                }
             }
         }
         Ok(())
+    }
+
+    /// GPU フレーム分割ビルド完了後の後処理（`process_pending_tasks` から呼ばれる）
+    pub(super) fn apply_gpu_build_post(
+        &mut self,
+        post_kind: Option<super::pending::BgLoadKind>,
+        path: &Path,
+    ) {
+        use super::pending::BgLoadKind;
+        match post_kind {
+            None => {
+                log::info!("Model loaded (deferred gpu): {}", path.display());
+                self.convert_message = None;
+            }
+            Some(BgLoadKind::Initial { auto_fbx_anim, .. }) => {
+                log::info!("Model loaded (deferred gpu): {}", path.display());
+                self.convert_message = None;
+                self.anim.state = None;
+                self.anim.library.clear();
+                self.anim.active_index = None;
+                if auto_fbx_anim {
+                    self.try_load_fbx_animation(path);
+                }
+            }
+            Some(BgLoadKind::ArchiveInitial) => {
+                log::info!(
+                    "Model loaded from archive (deferred gpu): {}",
+                    path.display()
+                );
+                self.convert_message = None;
+                self.anim.state = None;
+                self.anim.library.clear();
+                self.anim.active_index = None;
+            }
+            Some(BgLoadKind::PkgInitial(payload)) => {
+                // finish_load_with_gpu 後に pkg_material_keys を設定
+                if !payload.pkg_material_keys.is_empty() {
+                    if let Some(ref mut loaded) = self.loaded {
+                        loaded.pkg_material_keys = payload.pkg_material_keys;
+                    }
+                }
+
+                // Prefab: prefab_name / prefab_entry_path を設定
+                if let Some(ref mut loaded) = self.loaded {
+                    if payload.prefab_name.is_some() {
+                        loaded.prefab_name = payload.prefab_name;
+                        loaded.prefab_entry_path = payload.prefab_entry_path;
+                    }
+                }
+
+                // Prefab: fbx_ranges から MaterialGroup を構築
+                if payload.fbx_ranges.len() > 1 {
+                    if let Some(ref mut loaded) = self.loaded {
+                        let mut new_groups = Vec::with_capacity(payload.fbx_ranges.len());
+                        for (name, mat_start, mat_count) in &payload.fbx_ranges {
+                            let mat_range = *mat_start..*mat_start + *mat_count;
+                            let mut draw_start = usize::MAX;
+                            let mut draw_end = 0usize;
+                            for (di, draw) in loaded.gpu_model.draws.iter().enumerate() {
+                                if mat_range.contains(&draw.material_index) {
+                                    draw_start = draw_start.min(di);
+                                    draw_end = draw_end.max(di + 1);
+                                }
+                            }
+                            if draw_start == usize::MAX {
+                                draw_start = draw_end;
+                            }
+                            new_groups.push(MaterialGroup {
+                                name: name.clone(),
+                                material_range: mat_range,
+                                draw_range: draw_start..draw_end,
+                            });
+                        }
+                        loaded.material_groups = new_groups;
+                    }
+                }
+
+                // 未割当材質のテクスチャ選択ダイアログ
+                if !payload.unmatched_indices.is_empty()
+                    && self.tex.pkg_textures.is_some()
+                    && !payload.suppress_tex_match
+                {
+                    self.cancel_tex_match_preview();
+                    let count = payload.unmatched_indices.len();
+                    self.tex.pending_match = Some(PendingTexMatch {
+                        mat_indices: payload.unmatched_indices,
+                        selections: vec![None; count],
+                        tex_filter: String::new(),
+                        previewed: vec![None; count],
+                        saved_binds: std::collections::HashMap::new(),
+                        texture_views: Vec::new(),
+                        failed_uploads: std::collections::HashSet::new(),
+                    });
+                }
+
+                // アニメーションをクリア
+                self.anim.state = None;
+                self.anim.library.clear();
+                self.anim.active_index = None;
+
+                // バッチ進捗トースト
+                if let Some((current, total)) = payload.batch_progress {
+                    let name = payload.fbx_name.as_deref().unwrap_or("?");
+                    self.convert_message = Some(ConvertMessage::success(format!(
+                        "読み込み完了 ({}/{}): {}",
+                        current, total, name
+                    )));
+                } else {
+                    self.convert_message = None;
+                }
+                log::info!("Model loaded from pkg (deferred gpu): {}", path.display());
+            }
+            _ => {
+                // 他の kind は遅延パスを使用しない
+                log::warn!(
+                    "Unexpected post_kind in apply_gpu_build_post: {}",
+                    path.display()
+                );
+            }
+        }
     }
 
     /// 旧同期ロード経路（archive/reload 等の同期フォールバック用に残存）。
@@ -859,7 +2289,6 @@ impl ViewerApp {
             pkg_context,
             preloaded,
         } = choice;
-        self.preloaded = preloaded;
 
         let mode = match (load_model, load_animation) {
             (true, true) => FbxLoadMode::Both,
@@ -868,8 +2297,47 @@ impl ViewerApp {
             (false, false) => return,
         };
 
+        // AnimationOnly は軽い処理なので同期実行
+        if mode == FbxLoadMode::AnimationOnly {
+            if let Some(pkg) = pkg_context {
+                if let Some(asset) = pkg.assets.get(pkg.fbx_index) {
+                    if let Ok(anims) =
+                        crate::fbx::animation::load_fbx_animation_from_data(&asset.data)
+                    {
+                        let fbx_name = asset.filename();
+                        for anim in anims {
+                            let display_name = if anim.name == "animation" {
+                                fbx_name.clone()
+                            } else {
+                                format!("{} ({})", fbx_name, anim.name)
+                            };
+                            let anim = Arc::new(anim);
+                            if let Some(ref loaded) = self.loaded {
+                                let state = AnimationState::new(
+                                    Arc::clone(&anim),
+                                    &loaded.ir,
+                                    &loaded.gpu_model,
+                                );
+                                self.anim.library.push((
+                                    display_name,
+                                    pkg.source_path.clone(),
+                                    anim,
+                                ));
+                                self.anim.active_index = Some(self.anim.library.len() - 1);
+                                self.anim.state = Some(state);
+                            }
+                        }
+                    }
+                }
+            } else {
+                self.try_load_fbx_animation(&path);
+            }
+            return;
+        }
+
+        // ModelOnly / Both → BGスレッドでパース
         if let Some(pkg) = pkg_context {
-            // unitypackage 経由: source_override を構築
+            // unitypackage 経由: source_override を構築して PendingPkgModelLoad → BG
             let source_override = if let Some(nested) = pkg.nested_archive_source {
                 Some(nested)
             } else if let Some(ref snap) = pkg.archive_snapshot {
@@ -881,55 +2349,36 @@ impl ViewerApp {
             } else {
                 None
             };
-            let pkg_idx_ref = pkg.pkg_index.as_deref();
-            match self.load_fbx_from_assets(
-                &pkg.assets,
-                pkg.fbx_index,
-                &pkg.source_path,
-                mode,
-                source_override,
-                pkg_idx_ref,
-            ) {
-                Ok(()) => {
-                    log::info!("Model loaded from package: {}", pkg.source_path.display());
-                    self.convert_message = None;
-                }
-                Err(e) => {
-                    log::error!("Load failed: {e}");
-                    self.convert_message = Some(ConvertMessage::failure(format!(
-                        "ファイルを読み込めませんでした。\n詳細: {e}"
-                    )));
-                    self.pending.multi_load = None;
-                }
-            }
+            self.spawn_bg_pkg_load(PendingPkgModelLoad {
+                assets: pkg.assets,
+                fbx_index: pkg.fbx_index,
+                model_type: super::helpers::PkgModelType::Fbx,
+                source_path: pkg.source_path,
+                shown: true, // spawn 即実行
+                append: false,
+                suppress_tex_match: false,
+                archive_snapshot: pkg.archive_snapshot,
+                nested_archive_source: source_override,
+                pkg_index: pkg.pkg_index,
+                batch_progress: None,
+                skip_anim_check: true,
+            });
         } else {
-            // ファイル直接
-            match mode {
-                FbxLoadMode::Both | FbxLoadMode::ModelOnly => match self.try_load_fbx(&path) {
-                    Ok(()) => {
-                        log::info!("FBX model loaded: {}", path.display());
-                        self.convert_message = None;
-                        self.anim.state = None;
-                        self.anim.library.clear();
-                        self.anim.active_index = None;
-
-                        if mode == FbxLoadMode::Both {
-                            self.try_load_fbx_animation(&path);
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Load failed: {e}");
-                        self.convert_message = Some(ConvertMessage::failure(format!(
-                            "ファイルを読み込めませんでした。\n詳細: {e}"
-                        )));
-                    }
+            // ファイル直接 → spawn_bg_load
+            self.preloaded = preloaded;
+            let auto_fbx_anim = mode == FbxLoadMode::Both;
+            self.cancel_tex_match_preview();
+            self.normalize_pose = false;
+            self.normalize_to_tstance = false;
+            self.spawn_bg_load(
+                path,
+                super::pending::BgLoadKind::Initial {
+                    format: FileFormat::Fbx,
+                    auto_fbx_anim,
                 },
-                FbxLoadMode::AnimationOnly => {
-                    self.try_load_fbx_animation(&path);
-                }
-            }
+                FileFormat::Fbx,
+            );
         }
-        self.preloaded = None;
     }
 
     fn try_load_fbx(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
@@ -1003,6 +2452,7 @@ impl ViewerApp {
                 nested_archive_source: None,
                 pkg_index: Some(pkg_index),
                 batch_progress: None,
+                skip_anim_check: false,
             });
         } else {
             // 複数 → 選択ダイアログを表示
@@ -1026,6 +2476,7 @@ impl ViewerApp {
     }
 
     /// unitypackage をアペンドモードで読み込み
+    #[allow(dead_code)]
     fn try_load_unitypackage_for_append(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         // ファイル消失前に一時パス判定を確定（canonicalize がファイル存在を前提とするため）
         let is_temp =
@@ -1072,6 +2523,7 @@ impl ViewerApp {
                 nested_archive_source: None,
                 pkg_index: Some(pkg_index),
                 batch_progress: None,
+                skip_anim_check: false,
             });
         } else {
             let checked = vec![false; model_list.len()];
@@ -1095,6 +2547,7 @@ impl ViewerApp {
     }
 
     /// アーカイブをアペンドモードで読み込み
+    #[allow(dead_code)]
     fn try_load_archive_for_append(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         self.try_load_archive_impl(path, true)
     }
@@ -1148,7 +2601,8 @@ impl ViewerApp {
         Ok(())
     }
 
-    /// アーカイブからモデルを読み込み
+    /// アーカイブからモデルを読み込み（同期フォールバック。通常は spawn_bg_archive_load を使用）
+    #[allow(dead_code)]
     pub(super) fn load_model_from_archive(
         &mut self,
         pending: PendingArchiveLoad,
@@ -1202,7 +2656,8 @@ impl ViewerApp {
         }
     }
 
-    /// アーカイブ内 .unitypackage を展開し、既存の unitypackage 読み込みフローへ接続
+    /// アーカイブ内 .unitypackage を展開し、既存の unitypackage 読み込みフローへ接続（同期フォールバック）
+    #[allow(dead_code)]
     fn load_unitypackage_from_archive(
         &mut self,
         pkg_data: Vec<u8>,
@@ -1260,6 +2715,7 @@ impl ViewerApp {
                 nested_archive_source,
                 pkg_index: Some(pkg_index),
                 batch_progress: None,
+                skip_anim_check: false,
             });
         } else {
             log::info!("Archive .unitypackage: found {} models:", model_list.len());
@@ -1286,141 +2742,18 @@ impl ViewerApp {
         Ok(())
     }
 
-    /// アーカイブバンドルから IrModel を構築
+    /// アーカイブバンドルから IrModel を構築（フリー関数へ委譲）
     fn build_ir_from_archive_bundle(
         &self,
         bundle: &crate::archive::ModelBundle,
         source_path: &Path,
     ) -> anyhow::Result<IrModel> {
-        use crate::archive::ArchiveModelKind;
-        match bundle.kind {
-            ArchiveModelKind::Pmx => {
-                let pmx_model = crate::pmx::reader::read_pmx_from_data(&bundle.model.data)?;
-                let mut ir = crate::pmx::extract::pmx_to_ir_with_aux(
-                    &pmx_model,
-                    std::path::Path::new("."),
-                    Some(&bundle.aux_files),
-                )?;
-                if self.normalize_pose {
-                    ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                        &mut ir.bones,
-                        &mut ir.meshes,
-                        &mut ir.morphs,
-                        &mut ir.physics,
-                        crate::convert::coord::gltf_pos_to_pmx,
-                    );
-                }
-                Ok(ir)
-            }
-            ArchiveModelKind::Pmd => {
-                let pmd_model = crate::pmd::reader::read_pmd_from_data(&bundle.model.data)?;
-                let mut ir = crate::pmd::extract::pmd_to_ir_with_aux(
-                    &pmd_model,
-                    &bundle.model.path,
-                    Some(&bundle.aux_files),
-                )?;
-                if self.normalize_pose {
-                    ir.astance_result = crate::intermediate::pose::normalize_pose_to_tstance_full(
-                        &mut ir.bones,
-                        &mut ir.meshes,
-                        &mut ir.morphs,
-                        &mut ir.physics,
-                        crate::convert::coord::gltf_pos_to_pmx,
-                    );
-                }
-                Ok(ir)
-            }
-            ArchiveModelKind::Fbx => {
-                let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
-                    &bundle.model.data,
-                    Some(source_path),
-                    self.normalize_pose,
-                    self.normalize_to_tstance,
-                )?;
-                let label = format!(
-                    "archive({})",
-                    source_path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                );
-                crate::unitypackage::embed_textures_into_ir_with_label(
-                    &mut ir,
-                    &bundle.textures,
-                    &label,
-                );
-                Ok(ir)
-            }
-            ArchiveModelKind::Vrm | ArchiveModelKind::Glb => {
-                let glb = vrm::loader::load_glb_from_data(&bundle.model.data)?;
-                let version = vrm::detect::detect_version(&glb.document);
-                let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
-                let ir = vrm::extract::extract_ir_model_with_options(
-                    &glb.document,
-                    &glb.buffers,
-                    &glb.images,
-                    &glb.vrm_extension,
-                    &version,
-                    &all_extensions,
-                    self.normalize_pose,
-                )?;
-                Ok(ir)
-            }
-            ArchiveModelKind::Obj => {
-                let base_dir = bundle
-                    .model
-                    .path
-                    .parent()
-                    .unwrap_or(std::path::Path::new("."));
-                let name = bundle
-                    .model
-                    .path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("Model");
-                let ir = crate::obj::extract::load_obj_from_data(
-                    &bundle.model.data,
-                    name,
-                    base_dir,
-                    Some(&bundle.aux_files),
-                )?;
-                Ok(ir)
-            }
-            ArchiveModelKind::Stl => {
-                let name = bundle
-                    .model
-                    .path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("Model");
-                let ir = crate::stl::extract::load_stl_from_data(&bundle.model.data, name)?;
-                Ok(ir)
-            }
-            ArchiveModelKind::DirectX => {
-                let base_dir = bundle
-                    .model
-                    .path
-                    .parent()
-                    .unwrap_or(std::path::Path::new("."));
-                let name = bundle
-                    .model
-                    .path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("Model");
-                let ir = crate::directx::extract::load_x_from_data(
-                    &bundle.model.data,
-                    name,
-                    base_dir,
-                    Some(&bundle.aux_files),
-                )?;
-                Ok(ir)
-            }
-            ArchiveModelKind::UnityPackage => {
-                // load_model_from_archive で先に分岐済み。ここに到達することはない
-                anyhow::bail!("UnityPackage は build_ir_from_archive_bundle では処理できません")
-            }
-        }
+        build_ir_from_archive_bundle_bg(
+            bundle,
+            source_path,
+            self.normalize_pose,
+            self.normalize_to_tstance,
+        )
     }
 
     /// ReloadableSource::Archive からIrModelを構築（reload/append共通）
@@ -1637,7 +2970,7 @@ impl ViewerApp {
                 let pkg_src = self.tex.pkg_textures.as_deref().unwrap_or(&[]);
                 let name_to_data: HashMap<&str, &[u8]> = pkg_src
                     .iter()
-                    .map(|(name, data)| (name.as_str(), data.as_slice()))
+                    .map(|(name, data)| (name.as_str(), data.as_ref()))
                     .collect();
                 let mat_count = self
                     .loaded
@@ -1684,12 +3017,12 @@ impl ViewerApp {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
-                let fbx_data = prepared.fbx_data.to_vec();
-                // PackageTexture → (String, Vec<u8>) 変換（既存 pkg_textures 形式）
-                let legacy_textures: Vec<(String, Vec<u8>)> = prepared
+                let fbx_data = Arc::clone(&prepared.fbx_data);
+                // PackageTexture → (String, Arc<[u8]>) 変換（既存 pkg_textures 形式）
+                let legacy_textures: Vec<(String, Arc<[u8]>)> = prepared
                     .textures
                     .iter()
-                    .map(|t| (t.display_name.to_string(), t.data.to_vec()))
+                    .map(|t| (t.display_name.to_string(), Arc::clone(&t.data)))
                     .collect();
                 (
                     fbx_data,
@@ -1877,18 +3210,9 @@ impl ViewerApp {
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
         let mat_count = ir.materials.len();
-        let (smooth, clear, nmap, bloom) =
-            Self::per_mat_or_default_display(&self.material_display, mat_count);
-        let gpu_model = super::super::mesh::build_gpu_model(
-            &ir,
-            &glb.images,
-            device,
-            queue,
-            &smooth,
-            &clear,
-            &nmap,
-            &bloom,
-        )?;
+        let mat_flags = Self::per_mat_or_default_display(&self.material_display, mat_count);
+        let gpu_model =
+            super::super::mesh::build_gpu_model(&ir, &glb.images, device, queue, &mat_flags)?;
 
         Self::encode_ir_textures_as_png(&mut ir, &glb.images);
         let source =
@@ -1951,9 +3275,9 @@ impl ViewerApp {
             .collect();
 
         // レガシー形式のテクスチャリストも構築（pkg_textures 用）
-        let legacy_textures: Vec<(String, Vec<u8>)> = textures
+        let legacy_textures: Vec<(String, Arc<[u8]>)> = textures
             .iter()
-            .map(|t| (t.display_name.to_string(), t.data.to_vec()))
+            .map(|t| (t.display_name.to_string(), Arc::clone(&t.data)))
             .collect();
 
         let mut base_ir: Option<crate::intermediate::types::IrModel> = None;
@@ -2605,18 +3929,9 @@ impl ViewerApp {
             let device = &self.render_state.device;
             let queue = &self.render_state.queue;
             let mc = ir.materials.len();
-            let (smooth, clear, nmap, bloom) =
-                Self::per_mat_or_default_display(&self.material_display, mc);
-            let gpu_model = super::super::mesh::build_gpu_model(
-                &ir,
-                &glb.images,
-                device,
-                queue,
-                &smooth,
-                &clear,
-                &nmap,
-                &bloom,
-            )?;
+            let mat_flags = Self::per_mat_or_default_display(&self.material_display, mc);
+            let gpu_model =
+                super::super::mesh::build_gpu_model(&ir, &glb.images, device, queue, &mat_flags)?;
             Self::encode_ir_textures_as_png(&mut ir, &glb.images);
 
             let source = ReloadableSource::Snapshot {
@@ -2646,18 +3961,9 @@ impl ViewerApp {
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
         let mc = ir.materials.len();
-        let (smooth, clear, nmap, bloom) =
-            Self::per_mat_or_default_display(&self.material_display, mc);
-        let gpu_model = super::super::mesh::build_gpu_model(
-            &ir,
-            &glb.images,
-            device,
-            queue,
-            &smooth,
-            &clear,
-            &nmap,
-            &bloom,
-        )?;
+        let mat_flags = Self::per_mat_or_default_display(&self.material_display, mc);
+        let gpu_model =
+            super::super::mesh::build_gpu_model(&ir, &glb.images, device, queue, &mat_flags)?;
 
         // IrTexture を PNG エンコード済みに変換（convert_ir_to_pmx で統一的に使えるように）
         Self::encode_ir_textures_as_png(&mut ir, &glb.images);
@@ -2692,7 +3998,7 @@ impl ViewerApp {
 
     /// リロード失敗時にスナップショットから状態を復元する。
     /// 旧モデルがそのまま残るので、`save_reload_snapshot` で退避した全フィールドをそのまま書き戻す。
-    fn restore_snapshot_on_failure(&mut self, snap: ReloadSnapshot) {
+    pub(super) fn restore_snapshot_on_failure(&mut self, snap: ReloadSnapshot) {
         self.camera = snap.camera;
         self.morph_weights = snap.morph_weights;
         self.morph_dirty = true;
@@ -2794,90 +4100,147 @@ impl ViewerApp {
         // スナップショットに状態を退避
         let snap = self.save_reload_snapshot();
 
-        // unitypackage の場合は再展開せず FBX として再読み込み
         let ext = source.extension_lower();
-        let result = match &source {
+
+        // Archive/UnityPackage: 同期パスを維持（状態管理が複雑なため）
+        match &source {
             ReloadableSource::Archive {
                 inner_kind,
                 original_path,
                 archive_bytes,
                 selected_entry_path,
-            } if *inner_kind == crate::archive::ArchiveModelKind::UnityPackage => self
-                .reload_archive_unitypackage(
+            } if *inner_kind == crate::archive::ArchiveModelKind::UnityPackage => {
+                let result = self.reload_archive_unitypackage(
                     original_path,
                     archive_bytes.as_ref(),
                     selected_entry_path,
                     &source,
                     &snap.pkg_textures,
                     &snap.pkg_tex_assignments,
-                ),
-            _ if ext == "unitypackage" => {
-                self.reload_unitypackage(&source, &snap.pkg_textures, &snap.pkg_tex_assignments)
+                );
+                self.finish_reload_sync(result, snap);
+                return;
             }
-            _ => self.reload_from_source(&source),
+            _ if ext == "unitypackage" => {
+                let result = self.reload_unitypackage(
+                    &source,
+                    &snap.pkg_textures,
+                    &snap.pkg_tex_assignments,
+                );
+                self.finish_reload_sync(result, snap);
+                return;
+            }
+            _ => {}
+        }
+
+        // File/Snapshot: BG パイプライン経由で非ブロッキング リロード
+        let (path, preloaded) = match &source {
+            ReloadableSource::File(path) => (path.clone(), None),
+            ReloadableSource::Snapshot {
+                original_path,
+                main_bytes,
+                aux_files,
+            } => {
+                let preloaded = Some(PreloadedData {
+                    path: original_path.clone(),
+                    main_bytes: Arc::clone(main_bytes),
+                    aux_files: aux_files.clone(),
+                });
+                (original_path.clone(), preloaded)
+            }
+            ReloadableSource::Archive { .. } => {
+                // Archive (非 UnityPackage) は同期フォールバック
+                let result = self.reload_from_source(&source);
+                self.finish_reload_sync(result, snap);
+                return;
+            }
         };
 
-        // リロード失敗時は状態変更をスキップして早期リターン
+        // BG ロード完了後にスナップショットを復元するため保存
+        self.reload_snapshot = Some(snap);
+
+        // 既存の BG パイプラインにディスパッチ
+        self.pending
+            .bg_state
+            .submit_dispatch(super::pending::PendingLoadDispatch {
+                path,
+                append: false,
+                overlay: super::pending::PendingOverlay::WaitingOverlay,
+                preloaded,
+            });
+    }
+
+    /// 同期リロードの完了処理（Archive/UnityPackage パス用）
+    fn finish_reload_sync(&mut self, result: anyhow::Result<()>, snap: ReloadSnapshot) {
         if let Err(e) = result {
             log::error!("Reload failed: {e}");
             self.convert_message = Some(ConvertMessage::failure(format!("リロード失敗: {e}")));
             self.restore_snapshot_on_failure(snap);
             return;
         }
+        self.remerge_appended_models(&snap);
+        self.restore_snapshot_on_success(snap);
+    }
 
-        // 追加モデルを再マージ（ベースモデルが正しく再ロードされた場合のみ）
-        // 再ロード成功 = loaded の appended_models が空（新規 LoadedModel が作られた）
-        if let Some(ref loaded) = self.loaded {
-            if loaded.appended_models.is_empty() && !snap.appended_models.is_empty() {
-                // リロード中フラグON（テクスチャ選択ダイアログ抑制）
-                self.suppress_tex_match = true;
-                for appended in &snap.appended_models {
-                    match &appended.source {
-                        ReloadableSource::Archive { inner_kind, .. }
-                            if *inner_kind == crate::archive::ArchiveModelKind::UnityPackage =>
-                        {
-                            // アーカイブ内 unitypackage は同期的にアペンド
-                            self.reload_append_unitypackage(
-                                &appended.source,
-                                appended.pkg_model_name.as_deref(),
-                                appended.pkg_model.as_ref(),
-                                &snap.pkg_tex_assignments,
-                            );
-                        }
-                        _ if appended.source.extension_lower() == "unitypackage" => {
-                            // 通常の unitypackage は同期的にアペンド（遅延処理を避ける）
-                            self.reload_append_unitypackage(
-                                &appended.source,
-                                appended.pkg_model_name.as_deref(),
-                                appended.pkg_model.as_ref(),
-                                &snap.pkg_tex_assignments,
-                            );
-                        }
-                        _ => {
-                            self.append_model_from_source(
-                                &appended.source,
-                                appended.pkg_model_name.as_deref(),
-                                appended.pkg_model.as_ref(),
-                            );
-                        }
-                    }
+    /// BG リロード完了後のスナップショット復元（GPU ビルド完了後に呼ばれる）
+    pub(super) fn finish_reload_from_snapshot(&mut self) {
+        let Some(snap) = self.reload_snapshot.take() else {
+            return;
+        };
+        self.remerge_appended_models(&snap);
+        self.restore_snapshot_on_success(snap);
+    }
+
+    /// 追加モデルを再マージする（リロード完了後に実行）
+    fn remerge_appended_models(&mut self, snap: &ReloadSnapshot) {
+        let has_appended = self
+            .loaded
+            .as_ref()
+            .is_some_and(|l| l.appended_models.is_empty())
+            && !snap.appended_models.is_empty();
+        if !has_appended {
+            return;
+        }
+        self.suppress_tex_match = true;
+        for appended in &snap.appended_models {
+            match &appended.source {
+                ReloadableSource::Archive { inner_kind, .. }
+                    if *inner_kind == crate::archive::ArchiveModelKind::UnityPackage =>
+                {
+                    self.reload_append_unitypackage(
+                        &appended.source,
+                        appended.pkg_model_name.as_deref(),
+                        appended.pkg_model.as_ref(),
+                        &snap.pkg_tex_assignments,
+                    );
                 }
-                self.suppress_tex_match = false;
-                // リロード経由の再アペンドではテクスチャ選択ダイアログを抑制
-                self.cancel_tex_match_preview();
-                // アペンド失敗のエラーメッセージは保持、成功メッセージのみクリア
-                if let Some(ref msg) = self.convert_message {
-                    if matches!(
-                        msg.result,
-                        ConvertResult::Success(_) | ConvertResult::Warning(_)
-                    ) {
-                        self.convert_message = None;
-                    }
+                _ if appended.source.extension_lower() == "unitypackage" => {
+                    self.reload_append_unitypackage(
+                        &appended.source,
+                        appended.pkg_model_name.as_deref(),
+                        appended.pkg_model.as_ref(),
+                        &snap.pkg_tex_assignments,
+                    );
+                }
+                _ => {
+                    self.append_model_from_source(
+                        &appended.source,
+                        appended.pkg_model_name.as_deref(),
+                        appended.pkg_model.as_ref(),
+                    );
                 }
             }
         }
-
-        self.restore_snapshot_on_success(snap);
+        self.suppress_tex_match = false;
+        self.cancel_tex_match_preview();
+        if let Some(ref msg) = self.convert_message {
+            if matches!(
+                msg.result,
+                ConvertResult::Success(_) | ConvertResult::Warning(_)
+            ) {
+                self.convert_message = None;
+            }
+        }
     }
 
     /// ReloadableSource からモデルを再読み込み（load_file の UI 分岐を回避）
@@ -3031,17 +4394,14 @@ impl ViewerApp {
                             let device = &self.render_state.device;
                             let queue = &self.render_state.queue;
                             let mc = ir.materials.len();
-                            let (smooth, clear, nmap, bloom) =
+                            let mat_flags =
                                 Self::per_mat_or_default_display(&self.material_display, mc);
                             let gpu_model = super::super::mesh::build_gpu_model(
                                 &ir,
                                 &glb.images,
                                 device,
                                 queue,
-                                &smooth,
-                                &clear,
-                                &nmap,
-                                &bloom,
+                                &mat_flags,
                             )?;
                             Self::encode_ir_textures_as_png(&mut ir, &glb.images);
                             self.finish_load_with_gpu(ir, gpu_model, source.clone())
@@ -3327,7 +4687,7 @@ impl ViewerApp {
     fn reload_unitypackage(
         &mut self,
         source: &ReloadableSource,
-        saved_pkg_textures: &Option<Vec<(String, Vec<u8>)>>,
+        saved_pkg_textures: &Option<Vec<(String, Arc<[u8]>)>>,
         saved_pkg_tex_assignments: &HashMap<usize, String>,
     ) -> anyhow::Result<()> {
         use std::borrow::Cow;
@@ -3486,10 +4846,10 @@ impl ViewerApp {
             );
 
             // pkg_textures を legacy 形式で保持
-            let legacy_textures: Vec<(String, Vec<u8>)> = prepared
+            let legacy_textures: Vec<(String, Arc<[u8]>)> = prepared
                 .textures
                 .iter()
-                .map(|t| (t.display_name.to_string(), t.data.to_vec()))
+                .map(|t| (t.display_name.to_string(), Arc::clone(&t.data)))
                 .collect();
             if !legacy_textures.is_empty() {
                 self.tex.pkg_textures = Some(legacy_textures);
@@ -3501,7 +4861,7 @@ impl ViewerApp {
                 let pkg_src = self.tex.pkg_textures.as_deref().unwrap_or(&[]);
                 let name_to_data: HashMap<&str, &[u8]> = pkg_src
                     .iter()
-                    .map(|(name, data)| (name.as_str(), data.as_slice()))
+                    .map(|(name, data)| (name.as_str(), data.as_ref()))
                     .collect();
                 let mut name_to_ir: HashMap<String, usize> = HashMap::new();
                 for (mat_idx, tex_name) in saved_pkg_tex_assignments {
@@ -3628,7 +4988,7 @@ impl ViewerApp {
         if !saved_pkg_tex_assignments.is_empty() && !pkg_src.is_empty() {
             let name_to_data: HashMap<&str, &[u8]> = pkg_src
                 .iter()
-                .map(|(name, data)| (name.as_str(), data.as_slice()))
+                .map(|(name, data)| (name.as_str(), data.as_ref()))
                 .collect();
             let mut name_to_ir: HashMap<String, usize> = HashMap::new();
             for (mat_idx, tex_name) in saved_pkg_tex_assignments {
@@ -3712,7 +5072,7 @@ impl ViewerApp {
         path: &Path,
         prefab_entry_path: &str,
         archive_source: &ReloadableSource,
-        saved_pkg_textures: &Option<Vec<(String, Vec<u8>)>>,
+        saved_pkg_textures: &Option<Vec<(String, Arc<[u8]>)>>,
         saved_pkg_tex_assignments: &HashMap<usize, String>,
     ) -> anyhow::Result<()> {
         let pkg_index = Arc::new(crate::unitypackage::build_unity_package_index(
@@ -3754,7 +5114,7 @@ impl ViewerApp {
                 let pkg_src = self.tex.pkg_textures.as_deref().unwrap_or(&[]);
                 let name_to_data: HashMap<&str, &[u8]> = pkg_src
                     .iter()
-                    .map(|(name, data)| (name.as_str(), data.as_slice()))
+                    .map(|(name, data)| (name.as_str(), data.as_ref()))
                     .collect();
                 saved_pkg_tex_assignments
                     .iter()
@@ -3782,7 +5142,7 @@ impl ViewerApp {
         archive_bytes: Option<&Arc<[u8]>>,
         selected_entry_path: &str,
         archive_source: &ReloadableSource,
-        saved_pkg_textures: &Option<Vec<(String, Vec<u8>)>>,
+        saved_pkg_textures: &Option<Vec<(String, Arc<[u8]>)>>,
         saved_pkg_tex_assignments: &HashMap<usize, String>,
     ) -> anyhow::Result<()> {
         let owned;
@@ -3918,7 +5278,7 @@ impl ViewerApp {
         if !saved_pkg_tex_assignments.is_empty() && !pkg_src.is_empty() {
             let name_to_data: HashMap<&str, &[u8]> = pkg_src
                 .iter()
-                .map(|(name, data)| (name.as_str(), data.as_slice()))
+                .map(|(name, data)| (name.as_str(), data.as_ref()))
                 .collect();
             let mut name_to_ir: HashMap<String, usize> = HashMap::new();
             for (mat_idx, tex_name) in saved_pkg_tex_assignments {
@@ -4074,6 +5434,7 @@ impl ViewerApp {
     }
 
     /// モデルを既存モデルに追加（マージ）
+    #[allow(dead_code)]
     pub(super) fn append_model(&mut self, path: PathBuf) {
         log::info!("Append file: {}", path.display());
         let ext = crate::path_ext_lower(&path);
@@ -4351,7 +5712,7 @@ impl ViewerApp {
         let normalize_tstance = self.normalize_to_tstance;
         let mut pkg_unmatched: Vec<usize> = Vec::new();
         let mut pkg_model_name: Option<String> = None;
-        let mut pkg_textures_to_add: Vec<(String, Vec<u8>)> = Vec::new();
+        let mut pkg_textures_to_add: Vec<(String, Arc<[u8]>)> = Vec::new();
         // PkgModelLocator 構築用: assets 消費前に pathname を取得
         let asset_pathname: Option<String> = assets.get(model_index).map(|a| a.pathname.clone());
         let ir_result: anyhow::Result<IrModel> = (|| -> anyhow::Result<IrModel> {
@@ -4448,7 +5809,7 @@ impl ViewerApp {
                     // レガシー形式テクスチャリスト（pkg_textures 追加用）
                     pkg_textures_to_add = textures
                         .iter()
-                        .map(|t| (t.display_name.to_string(), t.data.to_vec()))
+                        .map(|t| (t.display_name.to_string(), Arc::clone(&t.data)))
                         .collect();
 
                     let mut base_ir: Option<IrModel> = None;
@@ -4681,13 +6042,16 @@ impl ViewerApp {
         let mc = loaded.ir.materials.len();
         self.material_display
             .resize_with(mc, MaterialDisplayState::default);
-        let (smooth, clear, nmap, bloom) = Self::extract_per_mat_vecs(&self.material_display);
-        match super::super::mesh::build_gpu_model_from_ir(
-            &loaded.ir, device, queue, &smooth, &clear, &nmap, &bloom,
-        ) {
+        let mat_flags = Self::extract_per_mat_vecs(&self.material_display);
+        match super::super::mesh::build_gpu_model_from_ir(&loaded.ir, device, queue, &mat_flags) {
             Ok(mut gpu_model) => {
                 if let Some(ref renderer) = self.renderer {
-                    renderer.prepare_mmd_resources(device, &mut gpu_model, &loaded.ir, &bloom);
+                    renderer.prepare_mmd_resources(
+                        device,
+                        &mut gpu_model,
+                        &loaded.ir,
+                        &mat_flags.emissive,
+                    );
                 }
                 if let Some(tex_id) = self.viewport_texture_id.take() {
                     let mut renderer = self.render_state.renderer.write();
@@ -4848,27 +6212,7 @@ impl ViewerApp {
                 );
 
                 // temp/非temp を統一して PendingLoadDispatch に投入
-                let preloaded = if is_temp_path(&model_path) {
-                    match std::fs::read(&model_path) {
-                        Ok(bytes) => {
-                            let mut aux = HashMap::new();
-                            if let Some(dir) = model_path.parent() {
-                                collect_image_files_recursive(dir, dir, &mut aux);
-                            }
-                            Some(PreloadedData {
-                                path: model_path.clone(),
-                                main_bytes: bytes.into(),
-                                aux_files: aux,
-                            })
-                        }
-                        Err(e) => {
-                            log::error!("Temp file prefetch failed: {e}");
-                            None
-                        }
-                    }
-                } else {
-                    None
-                };
+                // temp ファイルの先読みは BG スレッドに委譲（UI スレッドをブロックしない）
                 let append = shift_held && has_loaded_model && is_appendable;
                 self.pending
                     .bg_state
@@ -4876,7 +6220,7 @@ impl ViewerApp {
                         path: model_path,
                         append,
                         overlay: super::pending::PendingOverlay::WaitingOverlay,
-                        preloaded,
+                        preloaded: None,
                     });
             }
 

@@ -317,10 +317,10 @@ fn build_ir_model(
 
         ir_meshes.push(IrMesh {
             name: model.name.clone(),
-            vertices,
-            indices: mesh.indices.clone(),
+            vertices: vertices.into(),
+            indices: Arc::new(mesh.indices.clone()),
             material_index: mat_idx,
-            morph_targets: vec![],
+            morph_targets: Arc::new(Vec::new()),
             node_index: 0,
             uvs1: vec![],
         });

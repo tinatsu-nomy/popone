@@ -300,10 +300,10 @@ pub fn extract_ir_model_from_fbx_with_options(
 
             let mut ir_mesh = IrMesh {
                 name: inst.geometry.name.clone(),
-                vertices: ir_vertices,
-                indices,
+                vertices: ir_vertices.into(),
+                indices: indices.into(),
                 material_index: mat_index,
-                morph_targets: Vec::new(),
+                morph_targets: Arc::new(Vec::new()),
                 node_index: 0,
                 uvs1: Vec::new(),
             };

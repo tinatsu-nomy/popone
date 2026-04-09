@@ -171,7 +171,7 @@ fn apply_mesh_corrections(
     let mut global_offset = 0usize;
 
     for mesh in meshes.iter_mut() {
-        for (local_vi, vert) in mesh.vertices.iter_mut().enumerate() {
+        for (local_vi, vert) in mesh.vertices_mut().iter_mut().enumerate() {
             // この頂点に影響する補正の加重平均を計算
             let mut total_weight = 0.0f32;
             let mut blended_pos = Vec3::ZERO;

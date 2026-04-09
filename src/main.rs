@@ -10,6 +10,7 @@ use popone::{convert, intermediate, pmx, vrm};
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -512,10 +513,10 @@ fn run_main(mut args: Args) -> Result<()> {
                 );
             } else {
                 // フォールバック: 既存のファイル名マッチング
-                let textures: Vec<(String, Vec<u8>)> = prepared
+                let textures: Vec<(String, Arc<[u8]>)> = prepared
                     .textures
                     .iter()
-                    .map(|t| (t.display_name.to_string(), t.data.to_vec()))
+                    .map(|t| (t.display_name.to_string(), Arc::clone(&t.data)))
                     .collect();
                 popone::unitypackage::embed_textures_into_ir(&mut ir, &textures);
             }
@@ -902,10 +903,10 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                     &prefab_label,
                 );
             } else {
-                let textures: Vec<(String, Vec<u8>)> = prepared
+                let textures: Vec<(String, Arc<[u8]>)> = prepared
                     .textures
                     .iter()
-                    .map(|t| (t.display_name.to_string(), t.data.to_vec()))
+                    .map(|t| (t.display_name.to_string(), Arc::clone(&t.data)))
                     .collect();
                 popone::unitypackage::embed_textures_into_ir(&mut ir, &textures);
             }

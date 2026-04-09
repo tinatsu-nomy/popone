@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::color::{linear_f32_to_rgba8, rgba8_to_linear_f32};
 use crate::intermediate::types::IrModel;
 use anyhow::{Context, Result};
@@ -41,7 +43,7 @@ pub fn upload_rgba_to_gpu_with_mips(
     width: u32,
     height: u32,
     label: Option<&str>,
-    mip_chain: Option<&[(u32, u32, Vec<u8>)]>,
+    mip_chain: Option<&[(u32, u32, Arc<[u8]>)]>,
 ) -> (wgpu::TextureView, wgpu::TextureView) {
     let max_dim = device.limits().max_texture_dimension_2d;
     let (upload_owned, upload_w, upload_h) = if width > max_dim || height > max_dim {
@@ -350,69 +352,66 @@ pub fn upload_textures_from_ir(
     queue: &wgpu::Queue,
 ) -> Result<Vec<(wgpu::TextureView, wgpu::TextureView)>> {
     let mut views = Vec::with_capacity(ir.textures.len());
+    for i in 0..ir.textures.len() {
+        views.push(upload_single_texture(&ir.textures[i], i, device, queue));
+    }
+    Ok(views)
+}
 
-    for (i, tex) in ir.textures.iter().enumerate() {
-        let is_psd = is_psd_filename(&tex.filename);
-        if tex.data.is_empty() {
-            log::warn!("Texture '{}' data is empty (index {})", tex.filename, i);
-            views.push(upload_rgba_to_gpu(
-                device,
-                queue,
-                &[255, 0, 255, 255],
-                1,
-                1,
-                Some(&format!("texture_{i}")),
-            ));
-            continue;
-        }
-        // 生 RGBA バイパス（VRM BG ロードパスで PNG エンコード/デコードの往復を回避）
-        if let crate::intermediate::types::TextureData::RawRgba {
-            ref pixels,
-            width,
-            height,
-        } = tex.data
-        {
-            let label = format!("texture_{i}");
-            views.push(upload_rgba_to_gpu_with_mips(
-                device,
-                queue,
-                pixels,
-                width,
-                height,
-                Some(&label),
-                tex.mip_chain.as_deref(),
-            ));
-            continue;
-        }
-        let decoded =
-            match decode_image_to_rgba_with_hint(tex.data.as_bytes(), is_psd, Some(&tex.mime_type))
-            {
-                Ok(d) => d,
-                Err(e) => {
-                    log::warn!(
-                        "Texture '{}' decode failed: {} (index {}, {} bytes)",
-                        tex.filename,
-                        e,
-                        i,
-                        tex.data.len()
-                    );
-                    (vec![255, 0, 255, 255], 1, 1)
-                }
-            };
-
-        let (rgba_data, width, height) = decoded;
-        let label = format!("texture_{i}");
-        views.push(upload_rgba_to_gpu(
+/// 1 枚のテクスチャを GPU にアップロードする（フレーム分割用に公開）
+pub fn upload_single_texture(
+    tex: &crate::intermediate::types::IrTexture,
+    index: usize,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> (wgpu::TextureView, wgpu::TextureView) {
+    let is_psd = is_psd_filename(&tex.filename);
+    if tex.data.is_empty() {
+        log::warn!("Texture '{}' data is empty (index {})", tex.filename, index);
+        return upload_rgba_to_gpu(
             device,
             queue,
-            &rgba_data,
+            &[255, 0, 255, 255],
+            1,
+            1,
+            Some(&format!("texture_{index}")),
+        );
+    }
+    // 生 RGBA バイパス（BG ロードパスで事前デコード済み）
+    if let crate::intermediate::types::TextureData::RawRgba {
+        ref pixels,
+        width,
+        height,
+    } = tex.data
+    {
+        let label = format!("texture_{index}");
+        return upload_rgba_to_gpu_with_mips(
+            device,
+            queue,
+            pixels,
             width,
             height,
             Some(&label),
-        ));
+            tex.mip_chain.as_deref(),
+        );
     }
-
-    Ok(views)
+    let decoded =
+        match decode_image_to_rgba_with_hint(tex.data.as_bytes(), is_psd, Some(&tex.mime_type)) {
+            Ok(d) => d,
+            Err(e) => {
+                log::warn!(
+                    "Texture '{}' decode failed: {} (index {}, {} bytes)",
+                    tex.filename,
+                    e,
+                    index,
+                    tex.data.len()
+                );
+                (vec![255, 0, 255, 255], 1, 1)
+            }
+        };
+    let (rgba_data, width, height) = decoded;
+    let label = format!("texture_{index}");
+    upload_rgba_to_gpu(device, queue, &rgba_data, width, height, Some(&label))
 }
 
 // decode_psd, is_psd_filename は上部で crate::psd から re-export 済み

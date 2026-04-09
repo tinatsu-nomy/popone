@@ -7,6 +7,21 @@ use std::sync::Arc;
 use eframe::egui;
 use eframe::wgpu;
 
+/// PSD→PNG バックグラウンド変換の結果型
+type PsdConversionResult = anyhow::Result<Vec<u8>>;
+
+/// PSD→PNG バックグラウンド変換の保留状態
+pub struct PendingPsdConversion {
+    /// 変換結果の受信チャネル
+    pub rx: std::sync::mpsc::Receiver<PsdConversionResult>,
+    /// 変換完了後に差し替える IrTexture のインデックス
+    pub tex_idx: usize,
+    /// 変換完了後に設定する PNG ファイル名（例: "foo.png"）
+    pub png_filename: String,
+    /// 元の表示名（ログ出力用）
+    pub display_name: String,
+}
+
 use super::helpers::{is_temp_path, TextureSource};
 use super::{ConvertMessage, GpuModel, ViewerApp};
 use crate::intermediate::types::TextureData;
@@ -22,7 +37,7 @@ pub struct TextureState {
     /// unitypackageテクスチャ手動割当ダイアログ
     pub pending_match: Option<PendingTexMatch>,
     /// unitypackage内テクスチャ（モデル読み込み中保持）
-    pub pkg_textures: Option<Vec<(String, Vec<u8>)>>,
+    pub pkg_textures: Option<Vec<(String, Arc<[u8]>)>>,
     /// pkg_textures のサムネイル TextureId キャッシュ
     pub pkg_thumb_cache: Vec<Option<egui::TextureId>>,
     /// 同一材質名への同時テクスチャ割り当て
@@ -33,6 +48,8 @@ pub struct TextureState {
     pub last_dir: Option<PathBuf>,
     /// 非同期テクスチャファイルダイアログ（材質Index, 結果受信チャネル）
     pub pending_file_dialog: Option<(usize, std::sync::mpsc::Receiver<Option<PathBuf>>)>,
+    /// PSD→PNG バックグラウンド変換の保留リスト
+    pub pending_psd_conversions: Vec<PendingPsdConversion>,
 }
 
 impl Default for TextureState {
@@ -48,6 +65,7 @@ impl Default for TextureState {
             pkg_popup_filter: String::new(),
             last_dir: None,
             pending_file_dialog: None,
+            pending_psd_conversions: Vec::new(),
         }
     }
 }
@@ -189,6 +207,47 @@ impl ViewerApp {
         }
     }
 
+    /// pkg_textures の新規追加分のみサムネイルを生成して追記する（差分更新）。
+    /// `start_index` 以降のエントリが新規追加分。
+    pub fn append_pkg_thumb_cache(&mut self, start_index: usize) {
+        let Some(ref pkg) = self.tex.pkg_textures else {
+            return;
+        };
+        if start_index >= pkg.len() {
+            return;
+        }
+        let device = &self.render_state.device;
+        let queue = &self.render_state.queue;
+        let mut renderer = self.render_state.renderer.write();
+        const THUMB_SIZE: u32 = 64;
+
+        for (name, data) in pkg[start_index..].iter() {
+            let is_psd = super::super::texture::is_psd_filename(name);
+            match super::super::texture::create_thumbnail_rgba(data, is_psd, THUMB_SIZE) {
+                Ok(rgba) => {
+                    let (view, _) = super::super::texture::upload_rgba_to_gpu(
+                        device,
+                        queue,
+                        &rgba,
+                        THUMB_SIZE,
+                        THUMB_SIZE,
+                        Some("pkg_thumb"),
+                    );
+                    let tex_id = renderer.register_native_texture(
+                        device,
+                        &view,
+                        eframe::wgpu::FilterMode::Linear,
+                    );
+                    self.tex.pkg_thumb_cache.push(Some(tex_id));
+                }
+                Err(e) => {
+                    log::warn!("Thumbnail generation failed: {} - {}", name, e);
+                    self.tex.pkg_thumb_cache.push(None);
+                }
+            }
+        }
+    }
+
     /// サムネイルキャッシュをクリア
     pub(super) fn clear_pkg_thumb_cache(&mut self) {
         let mut renderer = self.render_state.renderer.write();
@@ -199,32 +258,52 @@ impl ViewerApp {
 
     /// 指定材質に外部テクスチャを割り当て（ファイルパスから）
     pub fn assign_texture_to_material(&mut self, material_index: usize, path: &Path) {
-        // 一時パスの場合はキャッシュ
-        let tex_source = if is_temp_path(path) {
-            let tex_data = match std::fs::read(path) {
-                Ok(d) => d,
-                Err(e) => {
-                    log::error!("File read failed: {e}");
-                    self.convert_message = Some(ConvertMessage::failure(format!(
-                        "テクスチャ読み込み失敗: {e}"
-                    )));
-                    return;
-                }
-            };
-            let ext_lower = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
+        // ファイルを1回だけ読み込む（二重読み込み回避）
+        let tex_data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(e) => {
+                log::error!("File read failed: {e}");
+                self.convert_message = Some(ConvertMessage::failure(format!(
+                    "テクスチャ読み込み失敗: {e}"
+                )));
+                return;
+            }
+        };
+        let ext_lower = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let data_arc = Arc::from(tex_data.into_boxed_slice());
+        // Cached として渡し、assign_texture_source_to_material 内での再読み込みを回避
+        let cached_source = TextureSource::Cached {
+            original_name: path.to_string_lossy().into_owned(),
+            data: Arc::clone(&data_arc),
+            is_psd: ext_lower == "psd",
+        };
+        // 履歴用: 一時パスは Cached、通常パスは File で保存（reload 時に再読み込み可能に）
+        let history_source = if is_temp_path(path) {
             TextureSource::Cached {
                 original_name: path.to_string_lossy().into_owned(),
-                data: Arc::from(tex_data.into_boxed_slice()),
+                data: data_arc,
                 is_psd: ext_lower == "psd",
             }
         } else {
             TextureSource::File(path.to_path_buf())
         };
-        self.assign_texture_source_to_material(material_index, &tex_source);
+        self.assign_texture_source_to_material(material_index, &cached_source);
+        // 履歴を上書き（通常ファイルパスの場合は File で保存し、メモリ使用量を抑える）
+        self.tex
+            .assignments
+            .insert(material_index, history_source.clone());
+        if self.tex.link_same_name {
+            if let Some(ref loaded) = self.loaded {
+                let siblings = loaded.same_name_siblings(material_index);
+                for sib_idx in siblings {
+                    self.tex.assignments.insert(sib_idx, history_source.clone());
+                }
+            }
+        }
     }
 
     /// 指定材質に TextureSource を割り当て
@@ -233,7 +312,7 @@ impl ViewerApp {
         material_index: usize,
         tex_source: &TextureSource,
     ) {
-        // テクスチャデータを取得
+        // TextureSource からバイト列を取得
         let (tex_data, is_psd, display_name) = match tex_source {
             TextureSource::File(path) => {
                 let data = match std::fs::read(path) {
@@ -264,70 +343,108 @@ impl ViewerApp {
             } => (data.to_vec(), *is_psd, original_name.clone()),
         };
 
+        if !self.assign_texture_core(material_index, &tex_data, is_psd, &display_name) {
+            return;
+        }
+
+        // File source: assign_texture_to_material that wraps this handles history override
+        self.tex
+            .assignments
+            .insert(material_index, tex_source.clone());
+        if self.tex.link_same_name {
+            if let Some(ref loaded) = self.loaded {
+                let siblings = loaded.same_name_siblings(material_index);
+                for sib_idx in siblings {
+                    self.tex.assignments.insert(sib_idx, tex_source.clone());
+                }
+            }
+        }
+
+        self.update_mat_cache();
+    }
+
+    /// パッケージ内テクスチャデータを材質に割り当て（バイト列から直接）
+    /// 成功時は true、デコード/アップロード失敗時は false を返す
+    pub fn assign_texture_data_to_material(
+        &mut self,
+        material_index: usize,
+        tex_name: &str,
+        tex_data: &[u8],
+    ) -> bool {
+        let is_psd = super::super::texture::is_psd_filename(tex_name);
+        if !self.assign_texture_core(material_index, tex_data, is_psd, tex_name) {
+            return false;
+        }
+        self.update_mat_cache();
+        true
+    }
+
+    /// GPU upload, IrTexture registration, material update, PSD BG conversion,
+    /// linked sibling assignment -- shared by both file-path and raw-byte callers.
+    /// Returns false on upload failure or missing loaded model.
+    fn assign_texture_core(
+        &mut self,
+        material_index: usize,
+        tex_data: &[u8],
+        is_psd: bool,
+        display_name: &str,
+    ) -> bool {
+        let device = &self.render_state.device;
+        let queue = &self.render_state.queue;
+
+        let (texture_view, _texture_view_unorm) =
+            match super::super::texture::upload_texture_from_bytes(tex_data, is_psd, device, queue)
+            {
+                Ok(views) => views,
+                Err(e) => {
+                    log::error!("Texture upload failed: {e}");
+                    self.convert_message = Some(ConvertMessage::failure(format!(
+                        "テクスチャ読み込み失敗: {e}"
+                    )));
+                    return false;
+                }
+            };
+
+        let Some(ref mut loaded) = self.loaded else {
+            return false;
+        };
+
+        let basename = Path::new(display_name)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
         let ext_lower = if is_psd {
             "psd".to_string()
         } else {
-            // display_name から拡張子を取得
-            Path::new(&display_name)
+            Path::new(display_name)
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_lowercase()
         };
 
-        let device = &self.render_state.device;
-        let queue = &self.render_state.queue;
-
-        // GPU テクスチャをアップロード（読み込み済みバイト列を使用）
-        let (texture_view, _texture_view_unorm) =
-            match super::super::texture::upload_texture_from_bytes(&tex_data, is_psd, device, queue)
-            {
-                Ok(views) => views,
-                Err(e) => {
-                    log::error!("Texture load failed: {e}");
-                    self.convert_message = Some(ConvertMessage::failure(format!(
-                        "テクスチャ読み込み失敗: {e}"
-                    )));
-                    return;
-                }
-            };
-
-        // IrModel にテクスチャを追加・材質を更新
-        let Some(ref mut loaded) = self.loaded else {
-            return;
-        };
-
-        let basename = Path::new(&display_name)
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-
-        // PSD の場合は PNG に変換して保存
-        let (ir_data, ir_filename, ir_mime) = if is_psd {
-            match Self::psd_to_png(&tex_data) {
-                Ok(png_data) => (
-                    png_data,
-                    format!("{}.png", basename),
-                    "image/png".to_string(),
-                ),
-                Err(e) => {
-                    log::error!("PSD->PNG conversion failed: {e}");
-                    self.convert_message =
-                        Some(ConvertMessage::failure(format!("PSD→PNG 変換失敗: {e}")));
-                    return;
-                }
-            }
+        // PSD: keep raw PSD data temporarily; non-PSD: derive filename/mime from display_name
+        let (ir_data, ir_filename, ir_mime, spawn_psd_bg) = if is_psd {
+            let psd_filename = format!("{}.psd", basename);
+            (
+                tex_data.to_vec(),
+                psd_filename,
+                "image/vnd.adobe.photoshop".to_string(),
+                true,
+            )
         } else {
-            let filename = Path::new(&display_name)
+            let filename = Path::new(display_name)
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
             let mime = crate::intermediate::types::mime_for_ext(&ext_lower);
-            (tex_data, filename, mime.to_string())
+            (tex_data.to_vec(), filename, mime.to_string(), false)
         };
 
+        // Reuse existing IrTexture with same name+content (dedup)
         let tex_idx = loaded
             .ir
             .textures
@@ -346,39 +463,44 @@ impl ViewerApp {
                         filename: ir_filename,
                         data: TextureData::Encoded(Arc::from(ir_data)),
                         mime_type: ir_mime,
-                        source_path: display_name.clone(),
+                        source_path: display_name.to_string(),
                         mip_chain: None,
                     });
                 idx
             });
-        let mat = &mut loaded.ir.materials[material_index];
-        mat.texture_index = Some(tex_idx);
-        match mat.base_color_tex_info.as_mut() {
-            Some(info) => info.index = tex_idx,
-            None => {
-                mat.base_color_tex_info = Some(
-                    crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
-                )
-            }
-        }
-        mat.apply_textured_defaults();
 
-        // GPU DrawCall 更新（材質固有のサンプラー情報を維持）
+        // PSD BG conversion
+        if spawn_psd_bg {
+            let psd_data = loaded.ir.textures[tex_idx].data.as_bytes().to_vec();
+            let png_filename = format!("{}.png", basename);
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result = crate::psd::psd_to_png(&psd_data);
+                let _ = tx.send(result);
+            });
+            log::info!("PSD->PNG background conversion started: {}", display_name);
+            self.tex.pending_psd_conversions.push(PendingPsdConversion {
+                rx,
+                tex_idx,
+                png_filename,
+                display_name: display_name.to_string(),
+            });
+        }
+
+        Self::apply_texture_to_material(&mut loaded.ir.materials[material_index], tex_idx);
+
+        // GPU DrawCall update
         let texture_bgl = match self.renderer {
             Some(ref r) => r.texture_bgl(),
-            None => return,
+            None => return false,
         };
-        let sampler_info = loaded.ir.materials[material_index]
-            .base_color_tex_info
-            .as_ref()
-            .map(|ti| ti.sampler)
-            .unwrap_or_default();
-        loaded.gpu_model.assign_texture_to_material(
+        Self::update_gpu_bind(
+            &mut loaded.gpu_model,
             material_index,
             &texture_view,
             device,
             texture_bgl,
-            &sampler_info,
+            &loaded.ir.materials[material_index],
         );
 
         log::info!(
@@ -388,120 +510,28 @@ impl ViewerApp {
             display_name
         );
 
-        // 割り当て履歴を記録（reload_current 時の復元用）
-        self.tex
-            .assignments
-            .insert(material_index, tex_source.clone());
-
-        // 同一材質名への連動割り当て（同一 MaterialGroup 内に限定）
+        // Linked sibling assignment
         if self.tex.link_same_name {
             let siblings = loaded.same_name_siblings(material_index);
             for sib_idx in siblings {
-                let sib_mat = &mut loaded.ir.materials[sib_idx];
-                sib_mat.texture_index = Some(tex_idx);
-                match sib_mat.base_color_tex_info.as_mut() {
-                    Some(info) => info.index = tex_idx,
-                    None => {
-                        sib_mat.base_color_tex_info = Some(
-                            crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
-                        )
-                    }
-                }
-                sib_mat.apply_textured_defaults();
-                let sib_sampler_info = loaded.ir.materials[sib_idx]
-                    .base_color_tex_info
-                    .as_ref()
-                    .map(|ti| ti.sampler)
-                    .unwrap_or_default();
-                loaded.gpu_model.assign_texture_to_material(
+                Self::apply_texture_to_material(&mut loaded.ir.materials[sib_idx], tex_idx);
+                Self::update_gpu_bind(
+                    &mut loaded.gpu_model,
                     sib_idx,
                     &texture_view,
                     device,
                     texture_bgl,
-                    &sib_sampler_info,
+                    &loaded.ir.materials[sib_idx],
                 );
-                self.tex.assignments.insert(sib_idx, tex_source.clone());
                 log::info!("  Linked assignment: mat[{}]", sib_idx);
             }
         }
 
-        // 材質キャッシュ更新
-        self.update_mat_cache();
+        true
     }
 
-    /// パッケージ内テクスチャデータを材質に割り当て（バイト列から直接）
-    /// 成功時は true、デコード/アップロード失敗時は false を返す
-    pub fn assign_texture_data_to_material(
-        &mut self,
-        material_index: usize,
-        tex_name: &str,
-        tex_data: &[u8],
-    ) -> bool {
-        let is_psd = super::super::texture::is_psd_filename(tex_name);
-
-        let device = &self.render_state.device;
-        let queue = &self.render_state.queue;
-
-        let (texture_view, _texture_view_unorm) =
-            match super::super::texture::upload_texture_from_bytes(tex_data, is_psd, device, queue)
-            {
-                Ok(views) => views,
-                Err(e) => {
-                    log::error!("Texture decode failed: {e}");
-                    self.convert_message = Some(ConvertMessage::failure(format!(
-                        "テクスチャデコード失敗: {e}"
-                    )));
-                    return false;
-                }
-            };
-
-        let Some(ref mut loaded) = self.loaded else {
-            return false;
-        };
-
-        // IrModel にテクスチャを追加
-        let basename = std::path::Path::new(tex_name)
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let (ir_data, ir_filename, ir_mime) = if is_psd {
-            match Self::psd_to_png(tex_data) {
-                Ok(png_data) => (
-                    png_data,
-                    format!("{}.png", basename),
-                    "image/png".to_string(),
-                ),
-                Err(e) => {
-                    log::warn!("PSD->PNG conversion failed (for IrTexture): {e}");
-                    (tex_data.to_vec(), tex_name.to_string(), String::new())
-                }
-            }
-        } else {
-            (tex_data.to_vec(), tex_name.to_string(), String::new())
-        };
-
-        // 同名同内容の IrTexture が既に存在する場合は再利用（重複防止）
-        let tex_idx = loaded
-            .ir
-            .textures
-            .iter()
-            .position(|t| t.filename == ir_filename && t.data.as_bytes() == ir_data)
-            .unwrap_or_else(|| {
-                let idx = loaded.ir.textures.len();
-                loaded
-                    .ir
-                    .textures
-                    .push(crate::intermediate::types::IrTexture {
-                        filename: ir_filename,
-                        data: TextureData::Encoded(Arc::from(ir_data)),
-                        mime_type: ir_mime,
-                        source_path: tex_name.to_string(),
-                        mip_chain: None,
-                    });
-                idx
-            });
-        let mat = &mut loaded.ir.materials[material_index];
+    /// Set texture_index and base_color_tex_info on a material.
+    fn apply_texture_to_material(mat: &mut crate::intermediate::types::IrMaterial, tex_idx: usize) {
         mat.texture_index = Some(tex_idx);
         match mat.base_color_tex_info.as_mut() {
             Some(info) => info.index = tex_idx,
@@ -512,77 +542,34 @@ impl ViewerApp {
             }
         }
         mat.apply_textured_defaults();
+    }
 
-        // GPU DrawCall 更新（材質固有のサンプラー情報を維持）
-        let texture_bgl = match self.renderer {
-            Some(ref r) => r.texture_bgl(),
-            None => return false,
-        };
-        let sampler_info = loaded.ir.materials[material_index]
+    /// Update GPU bind group for a material and clear stale MMD bind group.
+    fn update_gpu_bind(
+        gpu_model: &mut GpuModel,
+        material_index: usize,
+        texture_view: &wgpu::TextureView,
+        device: &wgpu::Device,
+        texture_bgl: &wgpu::BindGroupLayout,
+        mat: &crate::intermediate::types::IrMaterial,
+    ) {
+        let sampler_info = mat
             .base_color_tex_info
             .as_ref()
             .map(|ti| ti.sampler)
             .unwrap_or_default();
-        loaded.gpu_model.assign_texture_to_material(
+        gpu_model.assign_texture_to_material(
             material_index,
-            &texture_view,
+            texture_view,
             device,
             texture_bgl,
             &sampler_info,
         );
-        // MMD 描画パスが古い mmd_texture_bind_group を優先しないようクリア
-        for draw in &mut loaded.gpu_model.draws {
+        for draw in &mut gpu_model.draws {
             if draw.material_index == material_index {
                 draw.mmd_texture_bind_group = None;
             }
         }
-
-        log::info!(
-            "Package texture assignment: mat[{}] '{}' <- {}",
-            material_index,
-            loaded.ir.materials[material_index].name,
-            tex_name,
-        );
-
-        // 同一材質名への連動割り当て（同一 MaterialGroup 内に限定）
-        if self.tex.link_same_name {
-            let siblings = loaded.same_name_siblings(material_index);
-            for sib_idx in siblings {
-                let sib_mat = &mut loaded.ir.materials[sib_idx];
-                sib_mat.texture_index = Some(tex_idx);
-                match sib_mat.base_color_tex_info.as_mut() {
-                    Some(info) => info.index = tex_idx,
-                    None => {
-                        sib_mat.base_color_tex_info = Some(
-                            crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
-                        )
-                    }
-                }
-                sib_mat.apply_textured_defaults();
-                let sib_sampler_info = loaded.ir.materials[sib_idx]
-                    .base_color_tex_info
-                    .as_ref()
-                    .map(|ti| ti.sampler)
-                    .unwrap_or_default();
-                loaded.gpu_model.assign_texture_to_material(
-                    sib_idx,
-                    &texture_view,
-                    device,
-                    texture_bgl,
-                    &sib_sampler_info,
-                );
-                // MMD bind group もクリア
-                for draw in &mut loaded.gpu_model.draws {
-                    if draw.material_index == sib_idx {
-                        draw.mmd_texture_bind_group = None;
-                    }
-                }
-                log::info!("  Linked assignment: mat[{}]", sib_idx);
-            }
-        }
-
-        self.update_mat_cache();
-        true
     }
 
     /// 1枚のテクスチャをプレビューダイアログで開く
@@ -799,18 +786,16 @@ impl ViewerApp {
             .to_string_lossy()
             .to_string();
 
-        let (ir_data, ir_filename, ir_mime) = if is_psd {
-            match Self::psd_to_png(&tex_data) {
-                Ok(png_data) => (
-                    png_data,
-                    format!("{}.png", basename),
-                    "image/png".to_string(),
-                ),
-                Err(e) => {
-                    log::error!("PSD->PNG conversion failed: {e}");
-                    return;
-                }
-            }
+        // PSD の場合は一時的に PSD 生データで IrTexture を作成し、BG スレッドで PNG 変換
+        let (ir_data, ir_filename, ir_mime, spawn_psd_bg) = if is_psd {
+            // 変換完了まで実データと一致するメタ情報を保持
+            let psd_filename = format!("{}.psd", basename);
+            (
+                tex_data.clone(),
+                psd_filename,
+                "image/vnd.adobe.photoshop".to_string(),
+                true,
+            )
         } else {
             let filename = path
                 .file_name()
@@ -823,7 +808,14 @@ impl ViewerApp {
                 .unwrap_or("")
                 .to_lowercase();
             let mime = crate::intermediate::types::mime_for_ext(&ext_l);
-            (tex_data, filename, mime.to_string())
+            (tex_data, filename, mime.to_string(), false)
+        };
+
+        // BG PSD 変換完了後に設定する PNG ファイル名
+        let png_filename_for_bg = if spawn_psd_bg {
+            Some(format!("{}.png", basename))
+        } else {
+            None
         };
 
         let tex_idx = loaded.ir.textures.len();
@@ -837,6 +829,24 @@ impl ViewerApp {
                 source_path: path.display().to_string(),
                 mip_chain: None,
             });
+
+        // PSD の場合は BG スレッドで PNG 変換を開始
+        if spawn_psd_bg {
+            let psd_data = loaded.ir.textures[tex_idx].data.as_bytes().to_vec();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result = crate::psd::psd_to_png(&psd_data);
+                let _ = tx.send(result);
+            });
+            let display = path.display().to_string();
+            log::info!("PSD->PNG background conversion started: {}", display);
+            self.tex.pending_psd_conversions.push(PendingPsdConversion {
+                rx,
+                tex_idx,
+                png_filename: png_filename_for_bg.unwrap(),
+                display_name: display,
+            });
+        }
 
         // 選択した材質の texture_index を更新
         let path_buf = path.clone();
@@ -1241,5 +1251,70 @@ impl ViewerApp {
         } else {
             ConvertMessage::failure(msg)
         });
+    }
+
+    /// PSD→PNG バックグラウンド変換の結果をポーリングし、IrTexture を差し替え
+    pub(super) fn poll_pending_psd_conversions(&mut self) {
+        if self.tex.pending_psd_conversions.is_empty() {
+            return;
+        }
+
+        let loaded = match self.loaded.as_mut() {
+            Some(l) => l,
+            None => {
+                // モデルがアンロードされた場合は全て破棄
+                self.tex.pending_psd_conversions.clear();
+                return;
+            }
+        };
+
+        // 完了した変換を逆順に処理（インデックスをずらさないため）
+        let mut i = 0;
+        while i < self.tex.pending_psd_conversions.len() {
+            match self.tex.pending_psd_conversions[i].rx.try_recv() {
+                Ok(Ok(png_data)) => {
+                    let conv = self.tex.pending_psd_conversions.remove(i);
+                    // IrTexture のデータ・ファイル名・MIME を PSD から PNG に差し替え
+                    if conv.tex_idx < loaded.ir.textures.len() {
+                        let tex = &mut loaded.ir.textures[conv.tex_idx];
+                        tex.data = TextureData::Encoded(Arc::from(png_data));
+                        tex.filename = conv.png_filename;
+                        tex.mime_type = "image/png".to_string();
+                        log::info!(
+                            "PSD->PNG background conversion completed: {} (tex_idx={})",
+                            conv.display_name,
+                            conv.tex_idx,
+                        );
+                    } else {
+                        log::warn!(
+                            "PSD->PNG conversion result discarded (tex_idx {} out of range): {}",
+                            conv.tex_idx,
+                            conv.display_name,
+                        );
+                    }
+                    // i は進めない（remove でずれたため）
+                }
+                Ok(Err(e)) => {
+                    let conv = self.tex.pending_psd_conversions.remove(i);
+                    log::warn!(
+                        "PSD->PNG background conversion failed: {} - {}",
+                        conv.display_name,
+                        e,
+                    );
+                    // 変換失敗時は PSD 生データのまま IrTexture に残る
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // まだ変換中
+                    i += 1;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    let conv = self.tex.pending_psd_conversions.remove(i);
+                    log::warn!(
+                        "PSD->PNG background conversion thread disconnected: {}",
+                        conv.display_name,
+                    );
+                }
+            }
+        }
     }
 }

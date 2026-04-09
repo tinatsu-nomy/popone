@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use glam::Vec3;
 
@@ -66,22 +67,23 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
 
         new_meshes.push(IrMesh {
             name: mesh.name.clone(),
-            vertices: mesh
-                .vertices
-                .iter()
-                .map(|v| IrVertex {
-                    position: v.position,
-                    normal: v.normal,
-                    uv: v.uv,
-                    tangent: v.tangent,
-                    weights: v.weights,
-                    weight_count: v.weight_count,
-                    edge_scale: v.edge_scale,
-                })
-                .collect(),
-            indices: mesh.indices.clone(),
+            vertices: Arc::new(
+                mesh.vertices
+                    .iter()
+                    .map(|v| IrVertex {
+                        position: v.position,
+                        normal: v.normal,
+                        uv: v.uv,
+                        tangent: v.tangent,
+                        weights: v.weights,
+                        weight_count: v.weight_count,
+                        edge_scale: v.edge_scale,
+                    })
+                    .collect(),
+            ),
+            indices: Arc::clone(&mesh.indices),
             material_index: new_mat_idx,
-            morph_targets: mesh.morph_targets.clone(),
+            morph_targets: Arc::clone(&mesh.morph_targets),
             node_index: mesh.node_index,
             uvs1: mesh.uvs1.clone(),
         });
@@ -399,10 +401,10 @@ mod tests {
         };
         IrMesh {
             name: name.to_string(),
-            vertices,
-            indices,
+            vertices: vertices.into(),
+            indices: indices.into(),
             material_index: mat_idx,
-            morph_targets: Vec::new(),
+            morph_targets: Arc::new(Vec::new()),
             node_index: 0,
             uvs1: Vec::new(),
         }

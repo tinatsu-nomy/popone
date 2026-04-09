@@ -3024,8 +3024,7 @@ impl GpuRenderer {
     }
 
     /// 必要なパイプラインセットが未生成なら遅延生成する
-    fn ensure_pipelines(&mut self, device: &wgpu::Device, use_unorm: bool) {
-        let msaa = self.current_msaa;
+    pub(crate) fn ensure_pipelines(&mut self, device: &wgpu::Device, use_unorm: bool, msaa: bool) {
         // 既に生成済みなら何もしない
         let already = match (msaa, use_unorm) {
             (true, false) => self.pipelines_msaa_srgb.is_some(),
@@ -3435,7 +3434,7 @@ impl GpuRenderer {
         let use_unorm = can_use_unorm_frame(model, params.material_visibility, mmd_solid);
 
         // パイプラインセットの遅延生成（未作成なら初回のみコンパイル）
-        self.ensure_pipelines(device, use_unorm);
+        self.ensure_pipelines(device, use_unorm, self.current_msaa);
 
         let offscreen = self
             .offscreen

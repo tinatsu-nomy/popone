@@ -16,8 +16,31 @@ use crate::intermediate::types::{
 
 use super::gpu::{self, Vertex};
 
+/// Per-material build flags bundled into a single struct to keep
+/// function signatures compact and prevent parallel-slice mismatch.
+#[derive(Debug, Clone)]
+pub struct MaterialBuildFlags {
+    pub smooth: Vec<bool>,
+    pub clear: Vec<bool>,
+    pub normal_map: Vec<bool>,
+    pub emissive: Vec<bool>,
+}
+
+impl MaterialBuildFlags {
+    /// All-default flags for `mat_count` materials
+    /// (smooth/clear off, normal_map/emissive on).
+    pub fn default_for(mat_count: usize) -> Self {
+        Self {
+            smooth: vec![false; mat_count],
+            clear: vec![false; mat_count],
+            normal_map: vec![true; mat_count],
+            emissive: vec![true; mat_count],
+        }
+    }
+}
+
 /// GPU空間で重複排除・座標変換済みのモーフデータ
-enum GpuMorphEntry {
+pub(crate) enum GpuMorphEntry {
     /// 頂点モーフ: (gpu_vi, pos_delta, normal_delta, tangent_delta)
     Vertex(Vec<(u32, [f32; 3], [f32; 3], [f32; 3])>),
     /// グループモーフ: (サブモーフIndex, ウェイト)
@@ -213,7 +236,7 @@ impl GpuModel {
 
         for (mi, mesh) in ir.meshes.iter_mut().enumerate() {
             let global_offset = mesh_offsets[mi];
-            for (local_vi, v) in mesh.vertices.iter_mut().enumerate() {
+            for (local_vi, v) in mesh.vertices_mut().iter_mut().enumerate() {
                 let global_vi = global_offset + local_vi;
                 if let Some(&gpu_vi) = self.global_to_gpu.get(global_vi) {
                     if let Some(gpu_v) = self.base_vertices.get(gpu_vi as usize) {
@@ -381,22 +404,10 @@ pub fn build_gpu_model(
     images: &[gltf::image::Data],
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    smooth_per_mat: &[bool],
-    clear_per_mat: &[bool],
-    normal_map_per_mat: &[bool],
-    emissive_per_mat: &[bool],
+    flags: &MaterialBuildFlags,
 ) -> Result<GpuModel> {
     let gpu_textures = super::texture::upload_textures(ir, images, device, queue)?;
-    build_gpu_model_inner(
-        ir,
-        gpu_textures,
-        device,
-        queue,
-        smooth_per_mat,
-        clear_per_mat,
-        normal_map_per_mat,
-        emissive_per_mat,
-    )
+    build_gpu_model_inner(ir, gpu_textures, device, queue, flags)
 }
 
 /// IrMinFilter を wgpu の (min_filter, mipmap_filter) ペアに変換する
@@ -483,34 +494,75 @@ pub fn build_gpu_model_from_ir(
     ir: &IrModel,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    smooth_per_mat: &[bool],
-    clear_per_mat: &[bool],
-    normal_map_per_mat: &[bool],
-    emissive_per_mat: &[bool],
+    flags: &MaterialBuildFlags,
 ) -> Result<GpuModel> {
     let gpu_textures = super::texture::upload_textures_from_ir(ir, device, queue)?;
-    build_gpu_model_inner(
-        ir,
-        gpu_textures,
-        device,
-        queue,
-        smooth_per_mat,
-        clear_per_mat,
-        normal_map_per_mat,
-        emissive_per_mat,
-    )
+    build_gpu_model_inner(ir, gpu_textures, device, queue, flags)
 }
 
-fn build_gpu_model_inner(
-    ir: &IrModel,
-    gpu_textures_dual: Vec<(wgpu::TextureView, wgpu::TextureView)>,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    smooth_per_mat: &[bool],
-    clear_per_mat: &[bool],
-    normal_map_per_mat: &[bool],
-    emissive_per_mat: &[bool],
-) -> Result<GpuModel> {
+/// MToon 補助テクスチャの参照情報（CPU フェーズ用）
+pub(crate) struct AuxTexRef {
+    pub tex_index: Option<usize>,
+    pub sampler: IrSamplerInfo,
+    /// true = sRGB ビュー使用, false = linear/Unorm ビュー使用
+    pub use_srgb: bool,
+}
+
+/// MToon 補助テクスチャ参照（8 スロット）
+pub(crate) struct AuxTexRefs {
+    pub matcap: AuxTexRef,
+    pub shade: AuxTexRef,
+    pub shift: AuxTexRef,
+    pub rim: AuxTexRef,
+    pub uv_mask: AuxTexRef,
+    pub outline_width: AuxTexRef,
+    pub emissive: AuxTexRef,
+    pub normal: AuxTexRef,
+}
+
+/// 材質ごとの描画計画（GPU bind group 作成前の CPU 側データ）
+#[allow(dead_code)]
+pub(crate) struct CpuDrawPlan {
+    pub index_offset: u32,
+    pub index_count: u32,
+    pub cull_mode: CullMode,
+    pub is_alpha: bool,
+    pub render_queue: RenderQueue,
+    pub render_queue_offset: i32,
+    pub alpha_cutoff: f32,
+    pub material_index: usize,
+    pub render_style: RenderStyle,
+    pub has_edge: bool,
+    pub has_outline: bool,
+    pub center: glam::Vec3,
+    // Bind group 構築用メタデータ
+    pub base_tex_index: Option<usize>,
+    pub base_sampler: IrSamplerInfo,
+    pub material_params: gpu::MaterialParams,
+    pub needs_aux: bool,
+    pub aux_refs: Option<AuxTexRefs>,
+}
+
+/// CPU プリプロセスフェーズの出力（GPU API 不要）
+pub(crate) struct CpuPrepResult {
+    pub all_vertices: Vec<Vertex>,
+    pub all_indices: Vec<u32>,
+    pub global_to_gpu: Vec<u32>,
+    pub draw_plans: Vec<CpuDrawPlan>,
+    pub has_alpha: bool,
+    pub use_vrm0_coords: bool,
+    pub cached_bbox: (Vec3, Vec3),
+    pub base_vertices: Vec<Vertex>,
+    pub gpu_morphs: Vec<GpuMorphEntry>,
+    pub edge_scales: Option<Vec<f32>>,
+}
+
+/// CPU プリプロセスフェーズ: 頂点変換・法線平滑化・モーフ前計算（GPU API 呼び出しなし）
+pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result<CpuPrepResult> {
+    let smooth_per_mat = &flags.smooth;
+    let clear_per_mat = &flags.clear;
+    let normal_map_per_mat = &flags.normal_map;
+    let emissive_per_mat = &flags.emissive;
     let pos_fn = if ir.source_format.is_vrm0() {
         gltf_pos_to_pmx_v0
     } else {
@@ -526,7 +578,7 @@ fn build_gpu_model_inner(
     let total_indices: usize = ir.meshes.iter().map(|m| m.indices.len()).sum();
     let mut all_vertices: Vec<Vertex> = Vec::with_capacity(total_verts);
     let mut all_indices: Vec<u32> = Vec::with_capacity(total_indices);
-    let mut draws: Vec<DrawCall> = Vec::with_capacity(ir.materials.len());
+    let mut draw_plans: Vec<CpuDrawPlan> = Vec::with_capacity(ir.materials.len());
     let mut has_alpha = false;
 
     // グローバル頂点Index → GPU頂点Index マッピング
@@ -538,20 +590,7 @@ fn build_gpu_model_inner(
     // 法線累積カウント（平均化用）
     let mut normal_accum: Vec<([f32; 3], u32)> = Vec::with_capacity(total_verts);
 
-    let texture_bgl = gpu::create_texture_bind_group_layout(device);
-    // サンプラーキャッシュ: IrSamplerInfo → wgpu::Sampler（重複生成を回避）
-    let mut sampler_cache: HashMap<IrSamplerInfo, wgpu::Sampler> = HashMap::new();
-    // デフォルトサンプラー（sampler 情報がないテクスチャ用）
     let default_sampler_info = IrSamplerInfo::default();
-    ensure_sampler(&mut sampler_cache, device, &default_sampler_info);
-
-    let material_bgl = gpu::create_material_bind_group_layout(device);
-    let mtoon_aux_bgl = gpu::create_mtoon_aux_bind_group_layout_pub(device);
-
-    // デフォルトテクスチャビュー（MToon 補助 bind group 用）
-    let default_white_view = gpu::create_white_texture_view_srgb(device, queue);
-    let default_black_view = gpu::create_black_texture_view_pub(device, queue);
-    let default_flat_normal_view = gpu::create_flat_normal_texture_view(device, queue);
 
     // 各メッシュのグローバル頂点オフセット（メッシュ元順序）
     let mut mesh_global_offsets = Vec::with_capacity(ir.meshes.len());
@@ -661,25 +700,14 @@ fn build_gpu_model_inner(
 
         let index_count = all_indices.len() as u32 - index_offset;
 
-        // テクスチャ bind group（sRGB ビューを使用 — 標準描画用）
-        // 材質の base_color_tex_info からサンプラー情報を取得
-        let base_sampler_info = mat
+        // ベースカラーテクスチャのサンプラー情報
+        let base_sampler = mat
             .base_color_tex_info
             .as_ref()
-            .map(|ti| &ti.sampler)
-            .unwrap_or(&default_sampler_info);
-        // 材質用サンプラーを事前にキャッシュに登録
-        ensure_sampler(&mut sampler_cache, device, base_sampler_info);
-        let tex_bg = mat.texture_index.and_then(|ti| {
-            gpu_textures_dual.get(ti).map(|(srgb_view, _)| {
-                let sampler = sampler_cache
-                    .get(base_sampler_info)
-                    .expect("ensure_sampler で登録済み");
-                gpu::create_texture_bind_group(device, &texture_bgl, srgb_view, sampler)
-            })
-        });
+            .map(|ti| ti.sampler)
+            .unwrap_or(default_sampler_info);
 
-        // 材質 bind group
+        // 材質パラメータ（純粋な計算 — GPU API 不要）
         let diffuse = mat.diffuse;
         let mp = mat.mtoon();
         let shade_color = mp.shade_color.unwrap_or(Vec3::ZERO).to_array();
@@ -688,167 +716,110 @@ fn build_gpu_model_inner(
             OutlineWidthMode::WorldCoordinates => 1.0,
             OutlineWidthMode::ScreenCoordinates => 2.0,
         };
-        let mat_bg = gpu::create_material_bind_group(
-            device,
-            &material_bgl,
-            &gpu::MaterialParams {
-                diffuse: diffuse.to_array(),
-                shade_color,
-                is_mtoon: mat.is_mtoon(),
-                shading_toony: mp.shading_toony_factor,
-                shading_shift: mp.shading_shift_factor,
-                outline_width: mp.outline_width_factor,
-                outline_mode,
-                outline_color: mat.edge_color.to_array(),
-                outline_lighting_mix: mp.outline_lighting_mix,
-                rim_color: mp.parametric_rim_color.to_array(),
-                rim_fresnel_power: mp.parametric_rim_fresnel_power,
-                rim_lift: mp.parametric_rim_lift,
-                rim_lighting_mix: mp.rim_lighting_mix,
-                has_matcap: mp.matcap_texture.is_some(),
-                matcap_factor: mp.matcap_factor.to_array(),
-                has_shade_multiply_tex: mp.shade_texture.is_some(),
-                has_shading_shift_tex: mp.shading_shift_texture.is_some(),
-                shading_shift_tex_scale: mp.shading_shift_texture_scale,
-                has_rim_multiply_tex: mp.rim_multiply_texture.is_some(),
-                uv_anim_scroll_x: mp.uv_animation_scroll_x_speed,
-                uv_anim_scroll_y: mp.uv_animation_scroll_y_speed,
-                uv_anim_rotation: mp.uv_animation_rotation_speed,
-                has_uv_anim_mask: mp.uv_animation_mask_texture.is_some(),
-                // alphaMode エンコーディング: OPAQUE=-1.0, MASK=cutoff(>=0.0), BLEND=-0.5
-                alpha_cutoff: match mat.alpha_mode {
-                    AlphaMode::Opaque => -1.0,
-                    AlphaMode::Mask => mat.alpha_cutoff, // 0.0 も合法値
-                    _ => -0.5,                           // Blend / BlendZWrite
-                },
-                base_uv: gpu::pack_uv_params(mat.base_color_tex_info.as_ref()),
-                shade_uv: gpu::pack_uv_params(mp.shade_texture.as_ref()),
-                shift_uv: gpu::pack_uv_params(mp.shading_shift_texture.as_ref()),
-                rim_uv: gpu::pack_uv_params(mp.rim_multiply_texture.as_ref()),
-                outline_uv: gpu::pack_uv_params(mp.outline_width_texture.as_ref()),
-                uv_mask_uv: gpu::pack_uv_params(mp.uv_animation_mask_texture.as_ref()),
-                emissive_factor: if emissive_per_mat.get(mat_idx).copied().unwrap_or(true) {
-                    mat.emissive_factor.to_array()
-                } else {
-                    [0.0; 3]
-                },
-                has_emissive_tex: mat.emissive_texture.is_some()
-                    && emissive_per_mat.get(mat_idx).copied().unwrap_or(true),
-                emissive_uv: gpu::pack_uv_params(mat.emissive_texture.as_ref()),
-                has_normal_tex: mat.normal_texture.is_some()
-                    && normal_map_per_mat.get(mat_idx).copied().unwrap_or(true),
-                normal_scale: mat.normal_texture_scale,
-                normal_uv: gpu::pack_uv_params(mat.normal_texture.as_ref()),
-                gi_equalization_factor: mp.gi_equalization_factor,
-                outline_width_channel: mp.outline_width_tex_channel.to_f32(),
-                uv_anim_mask_channel: mp.uv_anim_mask_tex_channel.to_f32(),
-                matcap_uv: gpu::pack_uv_params(mp.matcap_texture.as_ref()),
+        let material_params = gpu::MaterialParams {
+            diffuse: diffuse.to_array(),
+            shade_color,
+            is_mtoon: mat.is_mtoon(),
+            shading_toony: mp.shading_toony_factor,
+            shading_shift: mp.shading_shift_factor,
+            outline_width: mp.outline_width_factor,
+            outline_mode,
+            outline_color: mat.edge_color.to_array(),
+            outline_lighting_mix: mp.outline_lighting_mix,
+            rim_color: mp.parametric_rim_color.to_array(),
+            rim_fresnel_power: mp.parametric_rim_fresnel_power,
+            rim_lift: mp.parametric_rim_lift,
+            rim_lighting_mix: mp.rim_lighting_mix,
+            has_matcap: mp.matcap_texture.is_some(),
+            matcap_factor: mp.matcap_factor.to_array(),
+            has_shade_multiply_tex: mp.shade_texture.is_some(),
+            has_shading_shift_tex: mp.shading_shift_texture.is_some(),
+            shading_shift_tex_scale: mp.shading_shift_texture_scale,
+            has_rim_multiply_tex: mp.rim_multiply_texture.is_some(),
+            uv_anim_scroll_x: mp.uv_animation_scroll_x_speed,
+            uv_anim_scroll_y: mp.uv_animation_scroll_y_speed,
+            uv_anim_rotation: mp.uv_animation_rotation_speed,
+            has_uv_anim_mask: mp.uv_animation_mask_texture.is_some(),
+            // alphaMode エンコーディング: OPAQUE=-1.0, MASK=cutoff(>=0.0), BLEND=-0.5
+            alpha_cutoff: match mat.alpha_mode {
+                AlphaMode::Opaque => -1.0,
+                AlphaMode::Mask => mat.alpha_cutoff, // 0.0 も合法値
+                _ => -0.5,                           // Blend / BlendZWrite
             },
-        );
+            base_uv: gpu::pack_uv_params(mat.base_color_tex_info.as_ref()),
+            shade_uv: gpu::pack_uv_params(mp.shade_texture.as_ref()),
+            shift_uv: gpu::pack_uv_params(mp.shading_shift_texture.as_ref()),
+            rim_uv: gpu::pack_uv_params(mp.rim_multiply_texture.as_ref()),
+            outline_uv: gpu::pack_uv_params(mp.outline_width_texture.as_ref()),
+            uv_mask_uv: gpu::pack_uv_params(mp.uv_animation_mask_texture.as_ref()),
+            emissive_factor: if emissive_per_mat.get(mat_idx).copied().unwrap_or(true) {
+                mat.emissive_factor.to_array()
+            } else {
+                [0.0; 3]
+            },
+            has_emissive_tex: mat.emissive_texture.is_some()
+                && emissive_per_mat.get(mat_idx).copied().unwrap_or(true),
+            emissive_uv: gpu::pack_uv_params(mat.emissive_texture.as_ref()),
+            has_normal_tex: mat.normal_texture.is_some()
+                && normal_map_per_mat.get(mat_idx).copied().unwrap_or(true),
+            normal_scale: mat.normal_texture_scale,
+            normal_uv: gpu::pack_uv_params(mat.normal_texture.as_ref()),
+            gi_equalization_factor: mp.gi_equalization_factor,
+            outline_width_channel: mp.outline_width_tex_channel.to_f32(),
+            uv_anim_mask_channel: mp.uv_anim_mask_tex_channel.to_f32(),
+            matcap_uv: gpu::pack_uv_params(mp.matcap_texture.as_ref()),
+        };
 
-        // MToon 補助テクスチャ bind group（group 3）
+        // MToon 補助テクスチャ参照（group 3）
         // MToon 材質だけでなく emissiveTexture を持つ非 MToon 材質にも必要
         let needs_aux =
             mat.is_mtoon() || mat.emissive_texture.is_some() || mat.normal_texture.is_some();
-        let mtoon_aux_bg = if needs_aux {
-            let get_srgb = |idx: Option<usize>| -> Option<&wgpu::TextureView> {
-                idx.and_then(|ti| gpu_textures_dual.get(ti).map(|(srgb, _)| srgb))
-            };
-            let get_linear = |idx: Option<usize>| -> Option<&wgpu::TextureView> {
-                idx.and_then(|ti| gpu_textures_dual.get(ti).map(|(_, unorm)| unorm))
-            };
-            let default_white = &default_white_view;
-            let default_black = &default_black_view;
-            let matcap_view =
-                get_srgb(mp.matcap_texture.as_ref().map(|t| t.index)).unwrap_or(default_black);
-            let shade_mul_view =
-                get_srgb(mp.shade_texture.as_ref().map(|t| t.index)).unwrap_or(default_white);
-            // shadingShiftTexture: 仕様でリニア色空間と規定（Unorm ビュー使用）
-            let shift_view = get_linear(mp.shading_shift_texture.as_ref().map(|t| t.index))
-                .unwrap_or(default_white);
-            let rim_mul_view = get_srgb(mp.rim_multiply_texture.as_ref().map(|t| t.index))
-                .unwrap_or(default_white);
-            // uvAnimationMaskTexture: 仕様でリニア色空間と規定（Unorm ビュー使用）
-            let uv_mask_view = get_linear(mp.uv_animation_mask_texture.as_ref().map(|t| t.index))
-                .unwrap_or(default_white);
-            // outlineWidthMultiplyTexture: 仕様でリニア色空間と規定（Gチャンネル参照）
-            let outline_width_view = get_linear(mp.outline_width_texture.as_ref().map(|t| t.index))
-                .unwrap_or(default_white);
-            // emissiveTexture: sRGB 色空間
-            let emissive_view =
-                get_srgb(mat.emissive_texture.as_ref().map(|t| t.index)).unwrap_or(default_white);
-            // normalTexture: リニア色空間（Unorm ビュー使用）
-            let normal_view = get_linear(mat.normal_texture.as_ref().map(|t| t.index))
-                .unwrap_or(&default_flat_normal_view);
-            // テクスチャごとに sampler を事前登録（glTF texture 単位 sampler に準拠）
-            let sampler_of = |ti: Option<&IrTextureInfo>| -> IrSamplerInfo {
-                ti.map(|t| t.sampler).unwrap_or_default()
-            };
-            let matcap_si = sampler_of(mp.matcap_texture.as_ref());
-            let shade_si = sampler_of(mp.shade_texture.as_ref());
-            let shift_si = sampler_of(mp.shading_shift_texture.as_ref());
-            let rim_si = sampler_of(mp.rim_multiply_texture.as_ref());
-            let uv_mask_si = sampler_of(mp.uv_animation_mask_texture.as_ref());
-            let outline_si = sampler_of(mp.outline_width_texture.as_ref());
-            let emissive_si = sampler_of(mat.emissive_texture.as_ref());
-            let normal_si = sampler_of(mat.normal_texture.as_ref());
-            for si in [
-                &matcap_si,
-                &shade_si,
-                &shift_si,
-                &rim_si,
-                &uv_mask_si,
-                &outline_si,
-                &emissive_si,
-                &normal_si,
-            ] {
-                ensure_sampler(&mut sampler_cache, device, si);
-            }
-            let expect_msg = "ensure_sampler で登録済み";
-            let matcap_sampler = sampler_cache.get(&matcap_si).expect(expect_msg);
-            let shade_sampler = sampler_cache.get(&shade_si).expect(expect_msg);
-            let shift_sampler = sampler_cache.get(&shift_si).expect(expect_msg);
-            let rim_sampler = sampler_cache.get(&rim_si).expect(expect_msg);
-            let uv_mask_sampler = sampler_cache.get(&uv_mask_si).expect(expect_msg);
-            let outline_sampler = sampler_cache.get(&outline_si).expect(expect_msg);
-            let emissive_sampler = sampler_cache.get(&emissive_si).expect(expect_msg);
-            let normal_sampler = sampler_cache.get(&normal_si).expect(expect_msg);
-            Some(gpu::create_mtoon_aux_bind_group(
-                device,
-                &mtoon_aux_bgl,
-                gpu::AuxTexEntry {
-                    view: matcap_view,
-                    sampler: matcap_sampler,
+        let sampler_of = |ti: Option<&IrTextureInfo>| -> IrSamplerInfo {
+            ti.map(|t| t.sampler).unwrap_or_default()
+        };
+        let aux_refs = if needs_aux {
+            Some(AuxTexRefs {
+                matcap: AuxTexRef {
+                    tex_index: mp.matcap_texture.as_ref().map(|t| t.index),
+                    sampler: sampler_of(mp.matcap_texture.as_ref()),
+                    use_srgb: true,
                 },
-                gpu::AuxTexEntry {
-                    view: shade_mul_view,
-                    sampler: shade_sampler,
+                shade: AuxTexRef {
+                    tex_index: mp.shade_texture.as_ref().map(|t| t.index),
+                    sampler: sampler_of(mp.shade_texture.as_ref()),
+                    use_srgb: true,
                 },
-                gpu::AuxTexEntry {
-                    view: shift_view,
-                    sampler: shift_sampler,
+                shift: AuxTexRef {
+                    tex_index: mp.shading_shift_texture.as_ref().map(|t| t.index),
+                    sampler: sampler_of(mp.shading_shift_texture.as_ref()),
+                    use_srgb: false,
                 },
-                gpu::AuxTexEntry {
-                    view: rim_mul_view,
-                    sampler: rim_sampler,
+                rim: AuxTexRef {
+                    tex_index: mp.rim_multiply_texture.as_ref().map(|t| t.index),
+                    sampler: sampler_of(mp.rim_multiply_texture.as_ref()),
+                    use_srgb: true,
                 },
-                gpu::AuxTexEntry {
-                    view: uv_mask_view,
-                    sampler: uv_mask_sampler,
+                uv_mask: AuxTexRef {
+                    tex_index: mp.uv_animation_mask_texture.as_ref().map(|t| t.index),
+                    sampler: sampler_of(mp.uv_animation_mask_texture.as_ref()),
+                    use_srgb: false,
                 },
-                gpu::AuxTexEntry {
-                    view: outline_width_view,
-                    sampler: outline_sampler,
+                outline_width: AuxTexRef {
+                    tex_index: mp.outline_width_texture.as_ref().map(|t| t.index),
+                    sampler: sampler_of(mp.outline_width_texture.as_ref()),
+                    use_srgb: false,
                 },
-                gpu::AuxTexEntry {
-                    view: emissive_view,
-                    sampler: emissive_sampler,
+                emissive: AuxTexRef {
+                    tex_index: mat.emissive_texture.as_ref().map(|t| t.index),
+                    sampler: sampler_of(mat.emissive_texture.as_ref()),
+                    use_srgb: true,
                 },
-                gpu::AuxTexEntry {
-                    view: normal_view,
-                    sampler: normal_sampler,
+                normal: AuxTexRef {
+                    tex_index: mat.normal_texture.as_ref().map(|t| t.index),
+                    sampler: sampler_of(mat.normal_texture.as_ref()),
+                    use_srgb: false,
                 },
-            ))
+            })
         } else {
             None
         };
@@ -891,7 +862,7 @@ fn build_gpu_model_inner(
             glam::Vec3::ZERO
         };
 
-        draws.push(DrawCall {
+        draw_plans.push(CpuDrawPlan {
             index_offset,
             index_count,
             cull_mode: mat.cull_mode,
@@ -899,18 +870,16 @@ fn build_gpu_model_inner(
             render_queue,
             render_queue_offset: mp.render_queue_offset,
             alpha_cutoff: mat.alpha_cutoff,
-            texture_bind_group: tex_bg,
-            material_bind_group: mat_bg,
             material_index: mat_idx,
             render_style,
             has_edge,
             has_outline,
             center,
-            mtoon_aux_bind_group: mtoon_aux_bg,
-            mmd_material_buf: None,
-            mmd_material_bind_group: None,
-            mmd_aux_bind_group: None,
-            mmd_texture_bind_group: None,
+            base_tex_index: mat.texture_index,
+            base_sampler,
+            material_params,
+            needs_aux,
+            aux_refs,
         });
     }
 
@@ -931,7 +900,7 @@ fn build_gpu_model_inner(
 
     // カスタム法線クリア: 対象材質の頂点のみジオメトリから法線を再計算
     if any_clear {
-        recalculate_normals_selective(&mut all_vertices, &all_indices, &draws, clear_per_mat);
+        recalculate_normals_selective(&mut all_vertices, &all_indices, &draw_plans, clear_per_mat);
     }
 
     // normal 再計算後の tangent 再直交化（Gram-Schmidt）
@@ -1009,63 +978,222 @@ fn build_gpu_model_inner(
         (min, max)
     };
 
+    // エッジスケール計算（MMD エッジ専用、CPU のみ）
+    let has_mmd = draw_plans
+        .iter()
+        .any(|d| d.render_style == RenderStyle::Mmd);
+    let edge_scales = if has_mmd {
+        let mut scales = vec![1.0f32; all_vertices.len()];
+        let mut global_vi = 0usize;
+        for mesh in &ir.meshes {
+            for v in mesh.vertices.iter() {
+                if let Some(&gpu_vi) = global_to_gpu.get(global_vi) {
+                    scales[gpu_vi as usize] = scales[gpu_vi as usize].min(v.edge_scale);
+                }
+                global_vi += 1;
+            }
+        }
+        Some(scales)
+    } else {
+        None
+    };
+
+    Ok(CpuPrepResult {
+        all_vertices,
+        all_indices,
+        global_to_gpu,
+        draw_plans,
+        has_alpha,
+        use_vrm0_coords: ir.source_format.is_vrm0(),
+        cached_bbox,
+        base_vertices,
+        gpu_morphs,
+        edge_scales,
+    })
+}
+
+/// GPU ファイナライズフェーズ: CPU 前計算結果から GPU リソースを生成
+pub(crate) fn gpu_finalize_model(
+    prep: CpuPrepResult,
+    gpu_textures_dual: Vec<(wgpu::TextureView, wgpu::TextureView)>,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Result<GpuModel> {
+    let texture_bgl = gpu::create_texture_bind_group_layout(device);
+    let material_bgl = gpu::create_material_bind_group_layout(device);
+    let mtoon_aux_bgl = gpu::create_mtoon_aux_bind_group_layout_pub(device);
+
+    // サンプラーキャッシュ: IrSamplerInfo → wgpu::Sampler（重複生成を回避）
+    let mut sampler_cache: HashMap<IrSamplerInfo, wgpu::Sampler> = HashMap::new();
+    let default_sampler_info = IrSamplerInfo::default();
+    ensure_sampler(&mut sampler_cache, device, &default_sampler_info);
+
+    // デフォルトテクスチャビュー（MToon 補助 bind group 用）
+    let default_white_view = gpu::create_white_texture_view_srgb(device, queue);
+    let default_black_view = gpu::create_black_texture_view_pub(device, queue);
+    let default_flat_normal_view = gpu::create_flat_normal_texture_view(device, queue);
+
+    let mut draws: Vec<DrawCall> = Vec::with_capacity(prep.draw_plans.len());
+
+    for plan in &prep.draw_plans {
+        // ベースカラーテクスチャ bind group（sRGB ビュー使用）
+        ensure_sampler(&mut sampler_cache, device, &plan.base_sampler);
+        let tex_bg = plan.base_tex_index.and_then(|ti| {
+            gpu_textures_dual.get(ti).map(|(srgb_view, _)| {
+                let sampler = sampler_cache
+                    .get(&plan.base_sampler)
+                    .expect("ensure_sampler で登録済み");
+                gpu::create_texture_bind_group(device, &texture_bgl, srgb_view, sampler)
+            })
+        });
+
+        // 材質 bind group
+        let mat_bg = gpu::create_material_bind_group(device, &material_bgl, &plan.material_params);
+
+        // MToon 補助テクスチャ bind group（group 3）
+        let mtoon_aux_bg = if let Some(ref aux) = plan.aux_refs {
+            let resolve = |r: &AuxTexRef| -> Option<&wgpu::TextureView> {
+                r.tex_index.and_then(|idx| {
+                    gpu_textures_dual
+                        .get(idx)
+                        .map(|(srgb, unorm)| if r.use_srgb { srgb } else { unorm })
+                })
+            };
+            let matcap_view = resolve(&aux.matcap).unwrap_or(&default_black_view);
+            let shade_mul_view = resolve(&aux.shade).unwrap_or(&default_white_view);
+            let shift_view = resolve(&aux.shift).unwrap_or(&default_white_view);
+            let rim_mul_view = resolve(&aux.rim).unwrap_or(&default_white_view);
+            let uv_mask_view = resolve(&aux.uv_mask).unwrap_or(&default_white_view);
+            let outline_width_view = resolve(&aux.outline_width).unwrap_or(&default_white_view);
+            let emissive_view = resolve(&aux.emissive).unwrap_or(&default_white_view);
+            let normal_view = resolve(&aux.normal).unwrap_or(&default_flat_normal_view);
+
+            // テクスチャごとに sampler を事前登録
+            for si in [
+                &aux.matcap.sampler,
+                &aux.shade.sampler,
+                &aux.shift.sampler,
+                &aux.rim.sampler,
+                &aux.uv_mask.sampler,
+                &aux.outline_width.sampler,
+                &aux.emissive.sampler,
+                &aux.normal.sampler,
+            ] {
+                ensure_sampler(&mut sampler_cache, device, si);
+            }
+            let expect_msg = "ensure_sampler で登録済み";
+            let matcap_sampler = sampler_cache.get(&aux.matcap.sampler).expect(expect_msg);
+            let shade_sampler = sampler_cache.get(&aux.shade.sampler).expect(expect_msg);
+            let shift_sampler = sampler_cache.get(&aux.shift.sampler).expect(expect_msg);
+            let rim_sampler = sampler_cache.get(&aux.rim.sampler).expect(expect_msg);
+            let uv_mask_sampler = sampler_cache.get(&aux.uv_mask.sampler).expect(expect_msg);
+            let outline_sampler = sampler_cache
+                .get(&aux.outline_width.sampler)
+                .expect(expect_msg);
+            let emissive_sampler = sampler_cache.get(&aux.emissive.sampler).expect(expect_msg);
+            let normal_sampler = sampler_cache.get(&aux.normal.sampler).expect(expect_msg);
+            Some(gpu::create_mtoon_aux_bind_group(
+                device,
+                &mtoon_aux_bgl,
+                gpu::AuxTexEntry {
+                    view: matcap_view,
+                    sampler: matcap_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: shade_mul_view,
+                    sampler: shade_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: shift_view,
+                    sampler: shift_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: rim_mul_view,
+                    sampler: rim_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: uv_mask_view,
+                    sampler: uv_mask_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: outline_width_view,
+                    sampler: outline_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: emissive_view,
+                    sampler: emissive_sampler,
+                },
+                gpu::AuxTexEntry {
+                    view: normal_view,
+                    sampler: normal_sampler,
+                },
+            ))
+        } else {
+            None
+        };
+
+        draws.push(DrawCall {
+            index_offset: plan.index_offset,
+            index_count: plan.index_count,
+            cull_mode: plan.cull_mode,
+            is_alpha: plan.is_alpha,
+            render_queue: plan.render_queue,
+            render_queue_offset: plan.render_queue_offset,
+            alpha_cutoff: plan.alpha_cutoff,
+            texture_bind_group: tex_bg,
+            material_bind_group: mat_bg,
+            material_index: plan.material_index,
+            render_style: plan.render_style,
+            has_edge: plan.has_edge,
+            has_outline: plan.has_outline,
+            center: plan.center,
+            mtoon_aux_bind_group: mtoon_aux_bg,
+            mmd_material_buf: None,
+            mmd_material_bind_group: None,
+            mmd_aux_bind_group: None,
+            mmd_texture_bind_group: None,
+        });
+    }
+
     let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("model_vbuf"),
-        contents: bytemuck::cast_slice(&all_vertices),
+        contents: bytemuck::cast_slice(&prep.all_vertices),
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
     });
 
     let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("model_ibuf"),
-        contents: bytemuck::cast_slice(&all_indices),
+        contents: bytemuck::cast_slice(&prep.all_indices),
         usage: wgpu::BufferUsages::INDEX,
     });
 
     // エッジスケールバッファ（MMD エッジ専用）
-    // MToon アウトラインは GPU 側で outlineWidthMultiplyTexture をサンプリングするため不要
-    // 注意: smooth_normals は材質ごとに制御され、vertex_dedup は材質ごとに
-    // clear されるため、material 境界を越えた頂点統合は発生しない
-    let has_mmd = draws.iter().any(|d| d.render_style == RenderStyle::Mmd);
-    let edge_scale_buf = if has_mmd {
-        let mut edge_scales = vec![1.0f32; all_vertices.len()];
-        let mut global_vi = 0usize;
-        for mesh in &ir.meshes {
-            for v in &mesh.vertices {
-                if let Some(&gpu_vi) = global_to_gpu.get(global_vi) {
-                    edge_scales[gpu_vi as usize] = edge_scales[gpu_vi as usize].min(v.edge_scale);
-                }
-                global_vi += 1;
-            }
-        }
-        Some(
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("edge_scale_buf"),
-                contents: bytemuck::cast_slice(&edge_scales),
-                usage: wgpu::BufferUsages::VERTEX,
-            }),
-        )
-    } else {
-        None
-    };
+    let edge_scale_buf = prep.edge_scales.as_ref().map(|scales| {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("edge_scale_buf"),
+            contents: bytemuck::cast_slice(scales),
+            usage: wgpu::BufferUsages::VERTEX,
+        })
+    });
 
-    let morph_work = Vec::with_capacity(base_vertices.len());
+    let morph_work = Vec::with_capacity(prep.base_vertices.len());
     let (gpu_texture_views, gpu_texture_views_unorm): (Vec<_>, Vec<_>) =
         gpu_textures_dual.into_iter().unzip();
     Ok(GpuModel {
         vertex_buf,
         index_buf,
         draws,
-        has_alpha,
+        has_alpha: prep.has_alpha,
         edge_scale_buf,
         gpu_texture_views,
         gpu_texture_views_unorm,
-        base_vertices,
-        base_indices: all_indices,
-        global_to_gpu,
-        use_vrm0_coords: ir.source_format.is_vrm0(),
-        cached_bbox,
+        base_vertices: prep.base_vertices,
+        base_indices: prep.all_indices,
+        global_to_gpu: prep.global_to_gpu,
+        use_vrm0_coords: prep.use_vrm0_coords,
+        cached_bbox: prep.cached_bbox,
         morph_work,
-        gpu_morphs,
+        gpu_morphs: prep.gpu_morphs,
         morph_visited: Vec::new(),
         last_weights: Vec::new(),
         morph_cache_dirty: false,
@@ -1073,11 +1201,22 @@ fn build_gpu_model_inner(
     })
 }
 
+pub fn build_gpu_model_inner(
+    ir: &IrModel,
+    gpu_textures_dual: Vec<(wgpu::TextureView, wgpu::TextureView)>,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    flags: &MaterialBuildFlags,
+) -> Result<GpuModel> {
+    let prep = cpu_prep_model(ir, flags)?;
+    gpu_finalize_model(prep, gpu_textures_dual, device, queue)
+}
+
 /// カスタム法線クリア（材質選択版）: clear_per_mat が true の材質の頂点のみ法線を再計算
 fn recalculate_normals_selective(
     vertices: &mut [Vertex],
     indices: &[u32],
-    draws: &[DrawCall],
+    draws: &[CpuDrawPlan],
     clear_per_mat: &[bool],
 ) {
     use std::collections::{HashMap, HashSet};

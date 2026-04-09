@@ -90,7 +90,7 @@ pub struct PkgMaterialKey {
 // ── 既存コード ──
 
 /// FBXデータ、ファイル名、テクスチャ一覧のタプル型
-pub type FbxWithTextures = (Vec<u8>, String, Vec<(String, Vec<u8>)>);
+pub type FbxWithTextures = (Arc<[u8]>, String, Vec<(String, Arc<[u8]>)>);
 
 /// 展開されたアセット情報
 pub struct ExtractedAsset {
@@ -320,11 +320,11 @@ pub fn take_fbx_and_textures(
 
     let fbx_asset = &assets[fbx_index];
     let fbx_name = fbx_asset.filename();
-    let fbx_data = fbx_asset.data.to_vec();
+    let fbx_data = Arc::clone(&fbx_asset.data);
 
     // テクスチャ（画像ファイル）を収集（FBX 自身を除外）
     let texture_exts = ["png", "jpg", "jpeg", "tga", "bmp", "psd", "tif", "tiff"];
-    let textures: Vec<(String, Vec<u8>)> = assets
+    let textures: Vec<(String, Arc<[u8]>)> = assets
         .iter()
         .enumerate()
         .filter(|&(i, _)| i != fbx_index)
@@ -334,7 +334,7 @@ pub fn take_fbx_and_textures(
         })
         .map(|(_, a)| {
             let name = a.filename();
-            (name, a.data.to_vec())
+            (name, Arc::clone(&a.data))
         })
         .collect();
 
@@ -360,7 +360,7 @@ pub fn find_vrm_list(assets: &[ExtractedAsset]) -> Vec<(usize, String)> {
 }
 
 /// 展開済みアセットから指定VRMを参照ベースで取得する
-pub fn take_vrm(assets: &[ExtractedAsset], vrm_index: usize) -> Result<(Vec<u8>, String)> {
+pub fn take_vrm(assets: &[ExtractedAsset], vrm_index: usize) -> Result<(Arc<[u8]>, String)> {
     if vrm_index >= assets.len() {
         return Err(PoponeError::UnityPackage(format!(
             "VRMインデックスが範囲外: {vrm_index}"
@@ -368,7 +368,7 @@ pub fn take_vrm(assets: &[ExtractedAsset], vrm_index: usize) -> Result<(Vec<u8>,
     }
     let vrm_asset = &assets[vrm_index];
     let vrm_name = vrm_asset.filename();
-    let vrm_data = vrm_asset.data.to_vec();
+    let vrm_data = Arc::clone(&vrm_asset.data);
     log::info!(
         ".unitypackage extract: VRM={} ({}KB)",
         vrm_name,
@@ -429,17 +429,17 @@ pub fn extract_fbx_from_unitypackage(
 /// unitypackage内テクスチャをIrModelの材質に自動割り当て
 /// 材質の source_texture_name とテクスチャファイル名をマッチングする
 /// 戻り値: 未割当材質のインデックス一覧
-pub fn embed_textures_into_ir(
+pub fn embed_textures_into_ir<T: AsRef<[u8]>>(
     ir: &mut crate::intermediate::types::IrModel,
-    textures: &[(String, Vec<u8>)],
+    textures: &[(String, T)],
 ) -> Vec<usize> {
     embed_textures_into_ir_with_label(ir, textures, "package")
 }
 
 /// テクスチャ埋め込み（ソースラベル指定版）
-pub fn embed_textures_into_ir_with_label(
+pub fn embed_textures_into_ir_with_label<T: AsRef<[u8]>>(
     ir: &mut crate::intermediate::types::IrModel,
-    textures: &[(String, Vec<u8>)],
+    textures: &[(String, T)],
     source_label: &str,
 ) -> Vec<usize> {
     if textures.is_empty() {
@@ -449,7 +449,7 @@ pub fn embed_textures_into_ir_with_label(
     // ファイル名 → データのマップ（小文字キー）
     let tex_map: HashMap<String, &[u8]> = textures
         .iter()
-        .map(|(name, data)| (name.to_lowercase(), data.as_slice()))
+        .map(|(name, data)| (name.to_lowercase(), data.as_ref()))
         .collect();
 
     // ステム（拡張子なし） → フルキーの逆引きマップ（ステム一致高速化）

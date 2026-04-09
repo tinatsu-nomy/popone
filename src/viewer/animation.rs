@@ -637,7 +637,7 @@ fn build_skinning_data(
 
     let mut global_vi = 0usize;
     for mesh in &ir.meshes {
-        for v in &mesh.vertices {
+        for v in mesh.vertices.iter() {
             if global_vi < g2g.len() {
                 let gpu_vi = g2g[global_vi] as usize;
                 if gpu_vi < gpu_vert_count {
