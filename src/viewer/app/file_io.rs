@@ -985,7 +985,7 @@ fn cpu_parse_source_inner(
                         prefab_name: None,
                         prefab_entry_path: None,
                     };
-                    return Ok((ir, source, Some(BgLoadKind::PkgInitial(Box::new(payload)))));
+                    Ok((ir, source, Some(BgLoadKind::PkgInitial(Box::new(payload)))))
                 }
                 PkgModelType::Vrm => {
                     check_cancel(cancel)?;
@@ -1028,7 +1028,7 @@ fn cpu_parse_source_inner(
                         prefab_name: None,
                         prefab_entry_path: None,
                     };
-                    return Ok((ir, source, Some(BgLoadKind::PkgInitial(Box::new(payload)))));
+                    Ok((ir, source, Some(BgLoadKind::PkgInitial(Box::new(payload)))))
                 }
                 PkgModelType::Prefab => {
                     check_cancel(cancel)?;
@@ -1166,7 +1166,7 @@ fn cpu_parse_source_inner(
                         prefab_name: Some(prefab_filename),
                         prefab_entry_path: Some(prefab_entry_path),
                     };
-                    return Ok((ir, source, Some(BgLoadKind::PkgInitial(Box::new(payload)))));
+                    Ok((ir, source, Some(BgLoadKind::PkgInitial(Box::new(payload)))))
                 }
             }
         } // CpuParseInput::PkgModel
@@ -1262,6 +1262,18 @@ fn cpu_parse_source_inner(
             let contents = crate::archive::list_models(&archive_data, format)?;
 
             check_cancel(cancel)?;
+
+            // 7z: 展開済みエントリがあれば元の圧縮データを解放（メモリピーク削減）
+            // リロードにはディスク再読み込みを使用（is_temp の場合は保持）
+            let archive_data = if format == crate::archive::ArchiveFormat::SevenZ && !is_temp {
+                log::debug!(
+                    "7z: releasing {} bytes of compressed data (entries already extracted)",
+                    archive_data.len()
+                );
+                Arc::from([] as [u8; 0])
+            } else {
+                archive_data
+            };
 
             let bg_kind = super::pending::BgLoadKind::ArchiveIndexed {
                 archive_data,
@@ -2561,7 +2573,7 @@ impl ViewerApp {
             is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path);
         let archive_data: Arc<[u8]> = self.read_or_preloaded(path)?;
 
-        let ext = crate::path_ext_lower(&path);
+        let ext = crate::path_ext_lower(path);
         let format = crate::archive::archive_format_from_ext(&ext)
             .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
 
@@ -2772,7 +2784,7 @@ impl ViewerApp {
             &owned
         };
 
-        let ext = crate::path_ext_lower(&original_path);
+        let ext = crate::path_ext_lower(original_path);
         let format = crate::archive::archive_format_from_ext(&ext)
             .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
 
@@ -2806,7 +2818,7 @@ impl ViewerApp {
             &owned
         };
 
-        let ext = crate::path_ext_lower(&original_path);
+        let ext = crate::path_ext_lower(original_path);
         let format = crate::archive::archive_format_from_ext(&ext)
             .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
 
@@ -3433,7 +3445,7 @@ impl ViewerApp {
 
     /// 拡張子に基づいてアニメーションファイルを読み込む
     pub fn load_animation_file(&mut self, path: &std::path::Path) {
-        let ext = crate::path_ext_lower(&path);
+        let ext = crate::path_ext_lower(path);
         match ext.as_str() {
             "glb" | "gltf" => self.try_load_gltf_animation(path),
             "fbx" => self.try_load_fbx_animation(path),
@@ -3762,10 +3774,7 @@ impl ViewerApp {
                 }
                 // .txt ファイル
                 let txt_path = path.with_extension("txt");
-                let txt_name = txt_path
-                    .file_name()
-                    .map(|f| PathBuf::from(f))
-                    .unwrap_or_default();
+                let txt_name = txt_path.file_name().map(PathBuf::from).unwrap_or_default();
                 if let Some(data) = preloaded_aux.and_then(|a| a.get(&txt_name)) {
                     aux.insert(txt_name, Arc::clone(data));
                 } else if let Ok(data) = std::fs::read(&txt_path) {
@@ -3906,7 +3915,7 @@ impl ViewerApp {
 
     fn try_load_vrm(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         // .gltf は外部バッファ参照を持つためスナップショット化しない（.glb/.vrm のみ対象）
-        let ext_lower = crate::path_ext_lower(&path);
+        let ext_lower = crate::path_ext_lower(path);
         let source = if (is_temp_path(path)
             || self.preloaded.as_ref().is_some_and(|pl| pl.path == path))
             && ext_lower != "gltf"
@@ -4250,7 +4259,7 @@ impl ViewerApp {
         let result: anyhow::Result<()> = (|| {
             match source {
                 ReloadableSource::File(path) => {
-                    let ext = crate::path_ext_lower(&path);
+                    let ext = crate::path_ext_lower(path);
                     match detect_format(&ext) {
                         FileFormat::Fbx => self.try_load_fbx(path),
                         FileFormat::Pmx => self.try_load_pmx(path),
@@ -4266,7 +4275,7 @@ impl ViewerApp {
                     main_bytes,
                     aux_files,
                 } => {
-                    let ext = crate::path_ext_lower(&original_path);
+                    let ext = crate::path_ext_lower(original_path);
                     match detect_format(&ext) {
                         FileFormat::Fbx => {
                             // 外部テクスチャがある場合、ユニーク名の一時ディレクトリに復元（TempDir の Drop で自動削除）。
@@ -4463,7 +4472,7 @@ impl ViewerApp {
         let ir_result: anyhow::Result<IrModel> = (|| -> anyhow::Result<IrModel> {
             match &source_clone {
                 ReloadableSource::File(path) => {
-                    let ext = crate::path_ext_lower(&path);
+                    let ext = crate::path_ext_lower(path);
                     match detect_format(&ext) {
                         FileFormat::Fbx => {
                             let ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
@@ -4516,7 +4525,7 @@ impl ViewerApp {
                     main_bytes,
                     aux_files,
                 } => {
-                    let ext = crate::path_ext_lower(&original_path);
+                    let ext = crate::path_ext_lower(original_path);
                     match detect_format(&ext) {
                         FileFormat::Fbx => {
                             // 固定名だと BG ロード並行時にディレクトリが衝突するため、tempfile で毎回ユニーク名を生成する。
@@ -4684,6 +4693,7 @@ impl ViewerApp {
     }
 
     /// unitypackage 再読み込み（FBX/VRM再展開 + テクスチャ復元）
+    #[allow(clippy::type_complexity)]
     fn reload_unitypackage(
         &mut self,
         source: &ReloadableSource,
@@ -5065,6 +5075,7 @@ impl ViewerApp {
     }
 
     /// Prefab モデルのリロード（pkg_index を再構築して load_prefab_from_assets を呼び直す）
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn reload_as_prefab(
         &mut self,
         archive_data: &[u8],
@@ -5136,6 +5147,7 @@ impl ViewerApp {
     }
 
     /// アーカイブ(ZIP/7z)内 .unitypackage のリロード
+    #[allow(clippy::type_complexity)]
     fn reload_archive_unitypackage(
         &mut self,
         original_path: &Path,
@@ -5153,7 +5165,7 @@ impl ViewerApp {
             &owned
         };
 
-        let ext = crate::path_ext_lower(&original_path);
+        let ext = crate::path_ext_lower(original_path);
         let format = crate::archive::archive_format_from_ext(&ext)
             .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
 
@@ -5631,19 +5643,18 @@ impl ViewerApp {
                                 }
                                 let normalized = main_tex.replace('\\', "/");
                                 let key = PathBuf::from(&normalized);
-                                if !aux.contains_key(&key) {
+                                if let std::collections::hash_map::Entry::Vacant(e) = aux.entry(key)
+                                {
                                     if let Ok(data) = std::fs::read(pmd_dir.join(&normalized)) {
-                                        aux.insert(key, Arc::from(data.into_boxed_slice()));
+                                        e.insert(Arc::from(data.into_boxed_slice()));
                                     }
                                 }
                             }
                         }
                         let txt_path = path.with_extension("txt");
                         if let Ok(data) = std::fs::read(&txt_path) {
-                            let txt_name = txt_path
-                                .file_name()
-                                .map(|f| PathBuf::from(f))
-                                .unwrap_or_default();
+                            let txt_name =
+                                txt_path.file_name().map(PathBuf::from).unwrap_or_default();
                             aux.insert(txt_name, Arc::from(data.into_boxed_slice()));
                         }
                     } else if ext == "obj" || ext == "x" {

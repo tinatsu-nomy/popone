@@ -1091,6 +1091,7 @@ impl TextureData {
 
 /// 中間テクスチャ
 #[derive(Debug, Clone)]
+#[allow(clippy::type_complexity)]
 pub struct IrTexture {
     /// ファイル名（���力時に使用）
     pub filename: String,

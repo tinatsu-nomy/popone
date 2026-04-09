@@ -157,8 +157,8 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
     // ── Phase 4: old_morph_idx → new_morph_idx リマップ構築 ──
     let mut morph_remap: HashMap<usize, usize> = HashMap::new();
     let mut new_idx = 0usize;
-    for i in 0..morph_count {
-        if morph_alive[i] {
+    for (i, &alive) in morph_alive.iter().enumerate() {
+        if alive {
             morph_remap.insert(i, new_idx);
             new_idx += 1;
         }

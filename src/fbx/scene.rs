@@ -368,7 +368,6 @@ impl<'a> FbxScene<'a> {
     /// ルートレベルの同名ノードの ordinal を計算
     fn compute_root_sibling_ordinal(&self, target_id: i64, name: &str) -> usize {
         // ルートレベル = 親 Model がないすべての Model
-        let mut ordinal = 0;
         let mut root_models: Vec<_> = self
             .objects
             .values()
@@ -383,11 +382,10 @@ impl<'a> FbxScene<'a> {
             .collect();
         root_models.sort_by_key(|o| o.id);
 
-        for m in root_models {
+        for (ordinal, m) in root_models.into_iter().enumerate() {
             if m.id == target_id {
                 return ordinal;
             }
-            ordinal += 1;
         }
         0
     }

@@ -3,40 +3,67 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.2.40](#v0240)
+    - [Security](#security)
+    - [Improvements](#improvements)
+    - [Bug Fixes](#bug-fixes)
+    - [Code Quality](#code-quality)
   - [v0.2.39](#v0239)
     - [Performance](#performance)
     - [New Features](#new-features)
-    - [Bug Fixes](#bug-fixes)
+    - [Bug Fixes](#bug-fixes-1)
     - [Architecture](#architecture)
     - [Refactoring](#refactoring)
   - [v0.2.38](#v0238)
     - [Performance](#performance-1)
-    - [Improvements](#improvements)
-  - [v0.2.37](#v0237)
-    - [Bug Fixes](#bug-fixes-1)
-  - [v0.2.36](#v0236)
     - [Improvements](#improvements-1)
-  - [v0.2.35](#v0235)
+  - [v0.2.37](#v0237)
+    - [Bug Fixes](#bug-fixes-2)
+  - [v0.2.36](#v0236)
     - [Improvements](#improvements-2)
+  - [v0.2.35](#v0235)
+    - [Improvements](#improvements-3)
     - [Documentation](#documentation)
   - [v0.2.34](#v0234)
     - [New Features](#new-features-1)
-    - [Improvements](#improvements-3)
+    - [Improvements](#improvements-4)
   - [v0.2.33](#v0233)
     - [New Features](#new-features-2)
-    - [Improvements](#improvements-4)
+    - [Improvements](#improvements-5)
   - [v0.2.32](#v0232)
     - [New Features](#new-features-3)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements)
   - [v0.2.31](#v0231)
     - [New Features](#new-features-4)
-    - [Improvements](#improvements-5)
+    - [Improvements](#improvements-6)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.2.40
+
+### Security
+
+- **Texture path traversal prevention** — `sanitize_rel_path()` strips `..` components and Windows drive letters (e.g. `C:`) from texture relative paths before joining with the model base directory. Applied to all 4 direct-disk loading paths: DirectX .x, OBJ, PMX, and PMD. Archive-based loading was already protected by `normalize_archive_path()`. This prevents malicious model files from reading arbitrary files outside the model directory
+- **Absolute path bypass prevention** — `sanitize_rel_path()` additionally strips any path component containing `:` (Windows drive letters), preventing absolute paths like `C:/secret.png` from bypassing `base_dir.join()` constraints
+
+### Improvements
+
+- **Settings stored in `%LOCALAPPDATA%\popone`** — Configuration (`popone.toml`), texture history (`popone_history.json`), and logs are now stored in `%LOCALAPPDATA%\popone` on Windows instead of next to the executable. This prevents write failures when installed in read-only locations (e.g. `Program Files`). Existing files are automatically migrated on first launch. Falls back to the exe directory on non-Windows platforms
+- **7z memory peak reduction** — After extracting entries from a 7z archive, the original compressed data is immediately released when the source file is persistent (non-temp). Previously both compressed and decompressed data were held simultaneously
+- **Configurable log level and retention** — Added `[log]` section to `popone.toml` with `level` (error/warn/info/debug, default: debug) and `keep` (log file retention count, default: 5). Config is loaded before logger initialization so settings take effect immediately
+
+### Bug Fixes
+
+- **Shader [Auto] not restored after manual override** — Switching the shader from Auto to another mode (e.g. Unlit) and back to Auto did not restore the original Auto-selected shader. `set_shader_selection(Auto)` set `auto_shader = true` but did not recalculate `use_mmd_path`, which remained at the value set by the previous override. Fixed by calling `normalize_shader_state()` after every UI shader selection change
+- **HDR emissive materials defaulting to OFF** — Materials with `emissive_factor` components exceeding 1.0 (via `KHR_materials_emissive_strength`) had their per-material emissive toggle initialized to OFF. This caused VRM 1.0 models like Seed-san to lose emission on load. Removed the HDR auto-detection; all materials now default to emissive ON
+
+### Code Quality
+
+- **Clippy clean (`-D warnings`)** — Resolved all 96 clippy warnings: 57 auto-fixed, 25 manually fixed (iterator patterns, `copy_from_slice`, `Box`-wrapped large enum variant, struct literal initialization), 12 structural warnings suppressed with `#[allow]` (`too_many_arguments`, `type_complexity`)
 
 ## v0.2.39
 

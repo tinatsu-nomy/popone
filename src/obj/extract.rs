@@ -139,10 +139,9 @@ fn resolve_sidecar(
         // archive/snapshot 由来: ディスクフォールバックしない
         return None;
     }
-    // ディスクから読む（通常ファイル読み込み時のみ）
-    // ".." を含む相対パスをそのまま保持（OS が解決する）
-    let rel_slash = PathBuf::from(rel.to_string_lossy().replace('\\', "/"));
-    let full_path = base_dir.join(&rel_slash);
+    // ディスクから読む — パストラバーサル防止のため正規化
+    let sanitized = crate::sanitize_rel_path(&rel.to_string_lossy());
+    let full_path = base_dir.join(&sanitized);
     std::fs::read(&full_path).ok()
 }
 

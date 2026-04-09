@@ -170,7 +170,7 @@ pub fn extract_ir_model_from_fbx_with_options(
                 })
                 .unwrap_or([0.0; 3]);
 
-            let raw_normal = mesh::get_normal(normals.as_ref(), &normal_indices, poly_vert_idx);
+            let raw_normal = mesh::get_normal(normals.as_ref(), normal_indices, poly_vert_idx);
             let normal = if has_model_transform {
                 let n = normal_matrix
                     .transform_vector3(Vec3::from(raw_normal))
@@ -182,7 +182,7 @@ pub fn extract_ir_model_from_fbx_with_options(
 
             let uv = mesh::get_uv(
                 uvs.as_ref(),
-                &uv_indices,
+                uv_indices,
                 &uv_mapping,
                 poly_vert_idx,
                 actual_idx,
@@ -273,9 +273,7 @@ pub fn extract_ir_model_from_fbx_with_options(
                         let src = &w[i];
                         let mut arr = [(0usize, 0.0f32); 4];
                         let n = src.len().min(4);
-                        for j in 0..n {
-                            arr[j] = src[j];
-                        }
+                        arr[..n].copy_from_slice(&src[..n]);
                         (arr, n as u8)
                     })
                     .unwrap_or(([(0, 0.0); 4], 0));

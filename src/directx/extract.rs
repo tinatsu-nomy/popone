@@ -82,9 +82,9 @@ fn resolve_texture(
         return None;
     }
 
-    // ディスクから読む（".." を含む相対パスはそのまま OS が解決する）
-    let rel_original = PathBuf::from(&normalized);
-    let full_path = base_dir.join(&rel_original);
+    // ディスクから読む — パストラバーサル防止のため正規化
+    let rel = crate::sanitize_rel_path(&normalized);
+    let full_path = base_dir.join(&rel);
     std::fs::read(&full_path).ok()
 }
 
@@ -102,7 +102,7 @@ fn compute_world_transform(frames: &[parser::XFrame], frame_index: usize) -> gla
     // ルートから順に積算
     let mut world = glam::Mat4::IDENTITY;
     for &i in chain.iter().rev() {
-        world = world * frames[i].transform;
+        world *= frames[i].transform;
     }
     world
 }
@@ -290,8 +290,7 @@ fn x_to_ir(
             let normals_data = mesh.normals.as_ref();
 
             for (tri_idx, tri) in mesh.indices.chunks_exact(3).enumerate() {
-                for k in 0..3 {
-                    let pos_idx = tri[k];
+                for (k, &pos_idx) in tri.iter().enumerate() {
                     // 法線インデックスの取得
                     let norm_idx = if let Some(nd) = normals_data {
                         let fn_idx = tri_idx * 3 + k;

@@ -6,6 +6,61 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
+// Application data directory
+// ---------------------------------------------------------------------------
+
+/// アプリケーションデータディレクトリを返す。
+/// Windows: `%LOCALAPPDATA%\popone`（書き込み可能なユーザー領域）
+/// それ以外: 実行ファイルの隣
+pub fn data_dir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            let dir = PathBuf::from(local).join("popone");
+            if std::fs::create_dir_all(&dir).is_ok() {
+                return dir;
+            }
+        }
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// exe 隣接の設定ファイルを data_dir に移行する（初回のみ）。
+/// 移行元と移行先が同じディレクトリの場合は何もしない。
+pub fn migrate_from_exe_dir(data_dir: &Path) {
+    let exe_dir = match std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
+        Some(d) => d,
+        None => return,
+    };
+    // 同一ディレクトリなら移行不要
+    if exe_dir == data_dir {
+        return;
+    }
+    for name in &["popone.toml", "popone_history.json"] {
+        let old = exe_dir.join(name);
+        let new_path = data_dir.join(name);
+        if old.exists() && !new_path.exists() {
+            if std::fs::rename(&old, &new_path).is_ok() {
+                log::info!("Migrated {} -> {}", old.display(), new_path.display());
+            } else if std::fs::copy(&old, &new_path).is_ok() {
+                let _ = std::fs::remove_file(&old);
+                log::info!(
+                    "Migrated {} -> {} (copy)",
+                    old.display(),
+                    new_path.display()
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AppConfig (popone.toml)
 // ---------------------------------------------------------------------------
 
@@ -14,6 +69,44 @@ pub struct AppConfig {
     pub window: Option<WindowConfig>,
     #[serde(default)]
     pub directory: DirectoryConfig,
+    #[serde(default)]
+    pub log: LogConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogConfig {
+    /// ログレベル (error, warn, info, debug)
+    #[serde(default = "LogConfig::default_level")]
+    pub level: String,
+    /// ログファイル保持数
+    #[serde(default = "LogConfig::default_keep")]
+    pub keep: usize,
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            level: Self::default_level(),
+            keep: Self::default_keep(),
+        }
+    }
+}
+
+impl LogConfig {
+    fn default_level() -> String {
+        "debug".to_string()
+    }
+
+    fn default_keep() -> usize {
+        5
+    }
+
+    /// ログレベル文字列を `log::LevelFilter` に変換
+    pub fn level_filter(&self) -> log::LevelFilter {
+        self.level
+            .parse::<log::LevelFilter>()
+            .unwrap_or(log::LevelFilter::Debug)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,14 +150,14 @@ pub struct DirectoryConfig {
 // AppConfig I/O
 // ---------------------------------------------------------------------------
 
-pub fn config_path(exe_dir: &Path) -> PathBuf {
-    exe_dir.join("popone.toml")
+pub fn config_path(dir: &Path) -> PathBuf {
+    dir.join("popone.toml")
 }
 
 /// 設定ファイルを読み込む。ファイルが存在しない・解析失敗の場合は None。
 /// 本体が存在せず `.bak` がある場合はバックアップから復旧する。
-pub fn load_config(exe_dir: &Path) -> Option<AppConfig> {
-    let path = config_path(exe_dir);
+pub fn load_config(dir: &Path) -> Option<AppConfig> {
+    let path = config_path(dir);
     recover_from_bak(&path);
     let text = std::fs::read_to_string(&path).ok()?;
     match toml::from_str::<AppConfig>(&text) {
@@ -79,8 +172,8 @@ pub fn load_config(exe_dir: &Path) -> Option<AppConfig> {
     }
 }
 
-pub fn save_config(exe_dir: &Path, config: &AppConfig) {
-    let path = config_path(exe_dir);
+pub fn save_config(dir: &Path, config: &AppConfig) {
+    let path = config_path(dir);
     match toml::to_string_pretty(config) {
         Ok(text) => {
             if let Err(e) = atomic_write(&path, text.as_bytes()) {
@@ -129,12 +222,12 @@ pub struct TextureHistoryEntry {
 // TextureHistory I/O
 // ---------------------------------------------------------------------------
 
-pub fn history_path(exe_dir: &Path) -> PathBuf {
-    exe_dir.join("popone_history.json")
+pub fn history_path(dir: &Path) -> PathBuf {
+    dir.join("popone_history.json")
 }
 
-pub fn load_texture_history(exe_dir: &Path) -> TextureHistoryFile {
-    let path = history_path(exe_dir);
+pub fn load_texture_history(dir: &Path) -> TextureHistoryFile {
+    let path = history_path(dir);
     recover_from_bak(&path);
     match std::fs::read_to_string(&path) {
         Ok(text) => match serde_json::from_str::<TextureHistoryFile>(&text) {
@@ -155,8 +248,8 @@ pub fn load_texture_history(exe_dir: &Path) -> TextureHistoryFile {
     }
 }
 
-pub fn save_texture_history(exe_dir: &Path, history: &TextureHistoryFile) {
-    let path = history_path(exe_dir);
+pub fn save_texture_history(dir: &Path, history: &TextureHistoryFile) {
+    let path = history_path(dir);
     match serde_json::to_string_pretty(history) {
         Ok(json) => {
             if let Err(e) = atomic_write(&path, json.as_bytes()) {
@@ -246,9 +339,8 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         if let Err(e) = std::fs::rename(path, &bak) {
             // バックアップ作成失敗 → tmp を直接上書き（元ファイルは残る）
             log::warn!("Backup creation failed (direct overwrite): {e}");
-            return std::fs::copy(&tmp, path).map(|_| ()).and_then(|_| {
+            return std::fs::copy(&tmp, path).map(|_| ()).map(|_| {
                 let _ = std::fs::remove_file(&tmp);
-                Ok(())
             });
         }
         if let Err(e) = std::fs::rename(&tmp, path) {
@@ -279,8 +371,6 @@ mod tests {
             y: 50.0,
             width: 1280.0,
             height: 720.0,
-
-            ..Default::default()
         };
         // 微小な差 (< 1px) → 変更なし
         assert!(!cfg.is_significantly_different(100.5, 50.3, 1280.2, 720.1));
@@ -371,6 +461,7 @@ mod tests {
                 last_model: Some("C:\\Test".into()),
                 last_texture: None,
             },
+            ..Default::default()
         };
         let text = toml::to_string_pretty(&cfg).unwrap();
         let parsed: AppConfig = toml::from_str(&text).unwrap();

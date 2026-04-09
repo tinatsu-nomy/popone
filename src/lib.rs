@@ -17,7 +17,7 @@ pub mod vrm;
 #[cfg(feature = "viewer")]
 pub mod viewer;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// パスの拡張子を小文字で返す（拡張子なし・非UTF-8の場合は空文字列）
 pub fn path_ext_lower(path: &Path) -> String {
@@ -27,12 +27,48 @@ pub fn path_ext_lower(path: &Path) -> String {
         .to_lowercase()
 }
 
+/// 相対パスを正規化し、ディレクトリトラバーサルを防止する。
+/// バックスラッシュをスラッシュに変換し、"."/".." を解決する。
+/// ".." がルートを超えて遡ろうとする場合は無視し、警告ログを出力する。
+/// Windows ドライブレター（`C:` 等）も除去し、絶対パスによるベースディレクトリ
+/// すり抜けを防ぐ。
+pub fn sanitize_rel_path(raw: &str) -> PathBuf {
+    let s = raw.replace('\\', "/");
+    let mut out: Vec<&str> = Vec::new();
+    let mut traversal_blocked = false;
+    for component in s.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                if out.pop().is_none() {
+                    traversal_blocked = true;
+                }
+            }
+            // ドライブレター "C:" 等を除去（絶対パスによるベースディレクトリすり抜け防止）
+            c if c.contains(':') => {
+                traversal_blocked = true;
+            }
+            c => out.push(c),
+        }
+    }
+    if traversal_blocked {
+        log::warn!("Path traversal blocked: {}", raw);
+    }
+    PathBuf::from(out.join("/"))
+}
+
 /// ログメモリバッファ（上限付き、累計オフセット追跡）
 /// VecDeque を使用し、先頭切り詰め（drain）を O(1) で行う。
 pub struct LogBuffer {
     pub data: std::collections::VecDeque<u8>,
     /// 累計書き込みバイト数（drain しても減らない）
     pub total_written: usize,
+}
+
+impl Default for LogBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LogBuffer {
@@ -464,7 +500,7 @@ pub fn sanitize_filename(name: &str) -> Option<String> {
         })
         .collect();
     // 末尾の空白・ピリオドを除去
-    let trimmed = sanitized.trim_end_matches(|c: char| c == ' ' || c == '.');
+    let trimmed = sanitized.trim_end_matches([' ', '.']);
     if trimmed.is_empty() {
         return None;
     }
@@ -476,7 +512,7 @@ pub fn sanitize_filename(name: &str) -> Option<String> {
             .nth(MAX_FILENAME_CHARS)
             .map_or(trimmed.len(), |(i, _)| i);
         // 切り詰め後の末尾空白・ピリオドも除去
-        trimmed[..end].trim_end_matches(|c: char| c == ' ' || c == '.')
+        trimmed[..end].trim_end_matches([' ', '.'])
     } else {
         trimmed
     };
@@ -582,6 +618,82 @@ pub mod test_util {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_rel_path_normal() {
+        assert_eq!(
+            sanitize_rel_path("textures/body.png"),
+            PathBuf::from("textures/body.png")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_rel_path_backslash() {
+        assert_eq!(
+            sanitize_rel_path("textures\\body.png"),
+            PathBuf::from("textures/body.png")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_rel_path_dot() {
+        assert_eq!(
+            sanitize_rel_path("./textures/body.png"),
+            PathBuf::from("textures/body.png")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_rel_path_dotdot_resolved() {
+        // "a/../b" → "b" (正当な ".." 解決)
+        assert_eq!(sanitize_rel_path("a/../b.png"), PathBuf::from("b.png"));
+    }
+
+    #[test]
+    fn test_sanitize_rel_path_traversal_blocked() {
+        // ルートを超える ".." は無視される
+        assert_eq!(
+            sanitize_rel_path("../../../etc/passwd"),
+            PathBuf::from("etc/passwd")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_rel_path_traversal_mixed() {
+        assert_eq!(
+            sanitize_rel_path("a/../../secret.txt"),
+            PathBuf::from("secret.txt")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_rel_path_empty() {
+        assert_eq!(sanitize_rel_path(""), PathBuf::from(""));
+    }
+
+    #[test]
+    fn test_sanitize_rel_path_only_dotdot() {
+        assert_eq!(sanitize_rel_path(".."), PathBuf::from(""));
+    }
+
+    #[test]
+    fn test_sanitize_rel_path_absolute_drive_letter() {
+        // Windows ドライブレター付き絶対パスはドライブ部分を除去
+        assert_eq!(
+            sanitize_rel_path("C:/secret.png"),
+            PathBuf::from("secret.png")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_rel_path_absolute_drive_backslash() {
+        assert_eq!(
+            sanitize_rel_path("D:\\Windows\\System32\\secret.dll"),
+            PathBuf::from("Windows/System32/secret.dll")
+        );
+    }
+
     #[test]
     fn test_vrm_to_pmx_end_to_end() {
         let Some(input) = crate::test_util::try_test_file(crate::test_util::seed_san_vrm()) else {

@@ -2891,9 +2891,11 @@ Material:
     #[test]
     fn test_embed_assigns_normal_when_base_already_exists() {
         let mut ir = crate::intermediate::types::IrModel::default();
-        let mut mat = crate::intermediate::types::IrMaterial::default();
-        mat.name = "Body".into();
-        mat.texture_index = Some(0); // ベースカラーは既にある
+        let mat = crate::intermediate::types::IrMaterial {
+            name: "Body".into(),
+            texture_index: Some(0), // ベースカラーは既にある
+            ..Default::default()
+        };
         ir.materials.push(mat);
         ir.textures.push(crate::intermediate::types::IrTexture {
             filename: "base.png".into(),
@@ -2938,8 +2940,10 @@ Material:
     fn test_embed_unmatched_based_on_base_texture_only() {
         // ベースカラーなし + ノーマルマップありでも unmatched に入る
         let mut ir = crate::intermediate::types::IrModel::default();
-        let mut mat = crate::intermediate::types::IrMaterial::default();
-        mat.name = "Body".into();
+        let mat = crate::intermediate::types::IrMaterial {
+            name: "Body".into(),
+            ..Default::default()
+        };
         ir.materials.push(mat);
 
         let textures = vec![PackageTexture {
@@ -2974,9 +2978,11 @@ Material:
         // 同じノーマルマップ GUID を2つの材質で共有
         let mut ir = crate::intermediate::types::IrModel::default();
         for name in &["Body", "Face"] {
-            let mut mat = crate::intermediate::types::IrMaterial::default();
-            mat.name = (*name).into();
-            mat.texture_index = Some(0);
+            let mat = crate::intermediate::types::IrMaterial {
+                name: (*name).into(),
+                texture_index: Some(0),
+                ..Default::default()
+            };
             ir.materials.push(mat);
         }
         ir.textures.push(crate::intermediate::types::IrTexture {

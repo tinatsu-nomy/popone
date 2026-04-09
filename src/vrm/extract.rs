@@ -46,8 +46,8 @@ use crate::vrm::{
 
 /// VRM拡張JSONを1回だけデシリアライズした結果を保持する列挙型
 enum VrmTyped {
-    V0(VrmV0),
-    V1(VrmV1),
+    V0(Box<VrmV0>),
+    V1(Box<VrmV1>),
     /// VRM 拡張なしの plain GLB
     Unknown,
 }
@@ -193,11 +193,13 @@ pub fn extract_ir_model_with_options(
     all_extensions: &Value,
     normalize_pose: bool,
 ) -> Result<IrModel> {
-    let mut model = IrModel::default();
-    model.source_format = if matches!(version, VrmVersion::V0) {
-        SourceFormat::Vrm0
-    } else {
-        SourceFormat::Vrm1
+    let mut model = IrModel {
+        source_format: if matches!(version, VrmVersion::V0) {
+            SourceFormat::Vrm0
+        } else {
+            SourceFormat::Vrm1
+        },
+        ..Default::default()
     };
 
     // VRM拡張JSONを1回だけデシリアライズ（以後 typed を参照渡しで使い回す）
@@ -207,14 +209,14 @@ pub fn extract_ir_model_with_options(
                 log::warn!("VrmV0 deserialization error: {}", e);
                 VrmV0::default()
             });
-            VrmTyped::V0(v0)
+            VrmTyped::V0(Box::new(v0))
         }
         VrmVersion::V1 => {
             let v1: VrmV1 = serde_json::from_value(vrm_ext.clone()).unwrap_or_else(|e| {
                 log::warn!("VrmV1 deserialization error: {}", e);
                 VrmV1::default()
             });
-            VrmTyped::V1(v1)
+            VrmTyped::V1(Box::new(v1))
         }
         VrmVersion::Unknown => VrmTyped::Unknown,
     };
@@ -395,6 +397,7 @@ fn extract_meta_comment(typed: &VrmTyped) -> String {
 /// linear f32 空間で縮小してから sRGB に戻すことで色空間的に正確なダウンサンプリングを行う。
 /// バックグラウンドスレッドで実行されるため UI への影響はない。
 /// sRGB↔linear 変換は LUT 実装で `powf` 呼び出しを排除済み。
+#[allow(clippy::type_complexity)]
 fn generate_mip_chain(rgba: &[u8], width: u32, height: u32) -> Option<Vec<(u32, u32, Arc<[u8]>)>> {
     if rgba.len() != (width * height * 4) as usize {
         return None;
@@ -951,8 +954,7 @@ fn extract_materials(
                 let range_max = 1.0 + (shift_0x - 1.0) * toony_0x; // lerp(1, shift, toony)
                 mtoon.shading_toony_factor =
                     ((2.0 - (range_max - range_min)) * 0.5).clamp(0.0, 1.0);
-                mtoon.shading_shift_factor =
-                    ((range_max + range_min) * 0.5 * -1.0).clamp(-1.0, 1.0);
+                mtoon.shading_shift_factor = (-(range_max + range_min) * 0.5).clamp(-1.0, 1.0);
 
                 // _BumpMap / _BumpScale（法線マップ）
                 if let Some(tex_info) = resolve_tex("_BumpMap", true) {
@@ -994,7 +996,7 @@ fn extract_materials(
                 // _UvAnimScrollX / _UvAnimScrollY / _UvAnimRotation
                 mtoon.uv_animation_scroll_x_speed = get_float("_UvAnimScrollX", 0.0);
                 // Y 反転（UniVRM 準拠: invertY = -1）
-                mtoon.uv_animation_scroll_y_speed = get_float("_UvAnimScrollY", 0.0) * -1.0;
+                mtoon.uv_animation_scroll_y_speed = -get_float("_UvAnimScrollY", 0.0);
                 // 回転: rotations/sec → rad/sec（× 2π）
                 mtoon.uv_animation_rotation_speed =
                     get_float("_UvAnimRotation", 0.0) * std::f32::consts::TAU;
@@ -2627,6 +2629,7 @@ fn extract_morphs_v0(
     Ok(morphs)
 }
 
+#[allow(clippy::type_complexity)]
 fn extract_morphs_v1(
     _document: &gltf::Document,
     v1: &VrmV1,
@@ -2900,9 +2903,11 @@ mod tests {
         let mut mats = Vec::new();
         let mut props = Vec::new();
         for (alpha, rq) in entries {
-            let mut m = IrMaterial::default();
-            m.alpha_mode = alpha.clone();
-            m.mtoon = Some(MtoonParams::default());
+            let m = IrMaterial {
+                alpha_mode: *alpha,
+                mtoon: Some(MtoonParams::default()),
+                ..Default::default()
+            };
             mats.push(m);
             props.push(VrmMaterialProperty {
                 name: String::new(),
@@ -2979,8 +2984,8 @@ mod tests {
         let (mut mats, props) = make_test_data(&queues);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
         // rank: 0, -1, -2, ..., -9, -9 (clamp)
-        for i in 0..10 {
-            assert_eq!(mats[i].mtoon().render_queue_offset, -(i as i32));
+        for (i, mat) in mats.iter().take(10).enumerate() {
+            assert_eq!(mat.mtoon().render_queue_offset, -(i as i32));
         }
         assert_eq!(mats[10].mtoon().render_queue_offset, -9); // clamped
     }
@@ -3036,8 +3041,8 @@ mod tests {
             .collect();
         let (mut mats, props) = make_test_data(&queues);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
-        for i in 0..10 {
-            assert_eq!(mats[i].mtoon().render_queue_offset, i as i32);
+        for (i, mat) in mats.iter().take(10).enumerate() {
+            assert_eq!(mat.mtoon().render_queue_offset, i as i32);
         }
         assert_eq!(mats[10].mtoon().render_queue_offset, 9); // clamped
     }

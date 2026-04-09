@@ -358,7 +358,7 @@ impl AnimationState {
                     my_rot = my_rest_rot * applied;
                 } else {
                     // 非ローカル付与: 現在の回転にデルタを乗算（モデル空間）
-                    my_rot = my_rot * applied;
+                    my_rot *= applied;
                 }
                 changed = true;
             }
@@ -430,6 +430,7 @@ impl AnimationState {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compute_global_recursive_static(
         skin: &SkinningData,
         animation: &VrmaAnimation,

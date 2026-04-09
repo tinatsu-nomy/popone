@@ -44,13 +44,10 @@ pub fn extract_filtered(data: &[u8], max_total_bytes: u64) -> Result<Vec<Archive
         let size = entry.size();
         // saturating_add でオーバーフロー安全な事前チェック
         if total.saturating_add(size) > max_total_bytes {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "展開サイズ上限超過: {} + {} > {} bytes",
-                    total, size, max_total_bytes
-                ),
-            )
+            return Err(std::io::Error::other(format!(
+                "展開サイズ上限超過: {} + {} > {} bytes",
+                total, size, max_total_bytes
+            ))
             .into());
         }
 
@@ -69,13 +66,10 @@ pub fn extract_filtered(data: &[u8], max_total_bytes: u64) -> Result<Vec<Archive
             }
             read_total += n as u64;
             if read_total > remaining {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!(
-                        "展開サイズ上限超過（実読込）: {} + {} > {} bytes",
-                        total, read_total, max_total_bytes
-                    ),
-                )
+                return Err(std::io::Error::other(format!(
+                    "展開サイズ上限超過（実読込）: {} + {} > {} bytes",
+                    total, read_total, max_total_bytes
+                ))
                 .into());
             }
             buf.extend_from_slice(&chunk[..n]);

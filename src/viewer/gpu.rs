@@ -1695,7 +1695,7 @@ impl GpuRenderer {
             label: Some("camera_uniform"),
             size: <CameraUniform as encase::ShaderType>::METADATA
                 .min_size()
-                .get() as u64,
+                .get(),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -3475,12 +3475,10 @@ impl GpuRenderer {
                 } else {
                     (&offscreen.color_view_unorm, None)
                 }
+            } else if let Some(ref msaa_view) = offscreen.msaa_color_view {
+                (msaa_view, Some(&offscreen.color_view))
             } else {
-                if let Some(ref msaa_view) = offscreen.msaa_color_view {
-                    (msaa_view, Some(&offscreen.color_view))
-                } else {
-                    (&offscreen.color_view, None)
-                }
+                (&offscreen.color_view, None)
             };
 
         // クリアカラー補正: Unorm ターゲットに書く値は egui が sRGB デコードするため事前エンコード
@@ -3513,7 +3511,7 @@ impl GpuRenderer {
                 color_attachments: &[
                     Some(wgpu::RenderPassColorAttachment {
                         view: color_view,
-                        resolve_target: resolve_target,
+                        resolve_target,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color {
                                 r: bg,
@@ -3604,7 +3602,7 @@ impl GpuRenderer {
                 label: Some("pass2_overlay"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: color_view,
-                    resolve_target: resolve_target,
+                    resolve_target,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
@@ -3700,7 +3698,7 @@ impl GpuRenderer {
         let g = &params.display.ambient_ground_color;
         CameraUniform {
             view_proj: params.camera.view_proj(aspect),
-            light_dir: light_dir,
+            light_dir,
             light_intensity: params.display.light_intensity,
             ambient: glam::Vec3::new(s[0] * ai, s[1] * ai, s[2] * ai),
             shader_mode: params.display.shader_override as u32,
@@ -3746,7 +3744,7 @@ impl GpuRenderer {
             || self.cache_sort_vert_ptr != vert_ptr
             || self
                 .cache_sort_eye
-                .map_or(true, |prev_eye| prev_eye.to_array() != eye.to_array())
+                .is_none_or(|prev_eye| prev_eye.to_array() != eye.to_array())
             || work_sorted_indices.len() != draw_count;
 
         if !sort_needed {
@@ -4149,7 +4147,7 @@ impl GpuRenderer {
 
             // 不透明材質のエッジをその場で描画（Wire モードではスキップ）
             if !use_wireframe && can_edge && !draw.is_alpha && draw.has_edge {
-                if let (Some(ref mmd_mat_bg), Some(ref edge_scale_buf), Some(ref edge_pipeline)) = (
+                if let (Some(ref mmd_mat_bg), Some(edge_scale_buf), Some(edge_pipeline)) = (
                     &draw.mmd_material_bind_group,
                     model.edge_scale_buf.as_ref(),
                     ps.pipeline_mmd_edge.as_ref(),
@@ -4738,6 +4736,7 @@ pub struct AuxTexEntry<'a> {
 }
 
 /// MToon 補助テクスチャ bind group を作成（テクスチャごとに sampler を持つ）
+#[allow(clippy::too_many_arguments)]
 pub fn create_mtoon_aux_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -5128,6 +5127,7 @@ enum BoneShape {
 /// out_tails: LineList 用（テール三角形）— 最背面
 /// out_fill:  TriangleList 用（マーカー塗りつぶし面）— 中間
 /// out_lines: LineList 用（マーカー外枠・✕）— 最前面
+#[allow(clippy::too_many_arguments)]
 fn generate_bone_vertices(
     out_tails: &mut Vec<GridVertex>,
     out_fill: &mut Vec<GridVertex>,

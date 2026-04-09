@@ -372,9 +372,9 @@ fn extract_vrma_extension(document: &gltf::Document) -> Result<Value> {
             return Ok(val.clone());
         }
     }
-    return Err(PoponeError::Other(
+    Err(PoponeError::Other(
         "VRMC_vrm_animation 拡張が見つかりません".into(),
-    ));
+    ))
 }
 
 /// VRMA拡張 + glTFアニメーションをパース

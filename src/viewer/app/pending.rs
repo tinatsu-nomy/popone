@@ -707,9 +707,7 @@ impl ViewerApp {
             Some("処理中...")
         } else if self.export.pending_mkdir.is_some() {
             Some("ディレクトリ作成中...")
-        } else if is_converting_bg {
-            Some("PMX変換中...")
-        } else if self.pending.convert.is_some() {
+        } else if is_converting_bg || self.pending.convert.is_some() {
             Some("PMX変換中...")
         } else if self.export.pending_uv_bg.is_some() {
             Some("UVマップ出力中...")
@@ -796,14 +794,14 @@ impl ViewerApp {
                 .cancel
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             log::info!("User cancelled bg load (req={})", handle.request_id);
-        } else if let BackgroundLoadState::PendingDispatch { prior_loading, .. } =
-            std::mem::replace(&mut self.pending.bg_state, BackgroundLoadState::Idle)
+        } else if let BackgroundLoadState::PendingDispatch {
+            prior_loading: Some(handle),
+            ..
+        } = std::mem::replace(&mut self.pending.bg_state, BackgroundLoadState::Idle)
         {
-            if let Some(handle) = prior_loading {
-                handle
-                    .cancel
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-            }
+            handle
+                .cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         // 待機中の全ての遅延処理をクリア
         self.pending.pkg_load = None;

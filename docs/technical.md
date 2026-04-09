@@ -544,6 +544,7 @@ The viewer renders rigid bodies and joints in PMX space. `rb.position` and `join
 - PMD: `parse_pmd_texture_slots` separates main/sphere textures via `*` delimiter. `.sph`→multiply, `.spa`→add. Toon textures registered with file existence check, falling back to shared toon if not found
 - MIME hint: Infer MIME type from extension and explicitly specify via `image::load_from_memory_with_format` (TGA has no magic number so auto-detection fails). `.sph/.spa` treated as `image/bmp`
 - UnityPackage textures: `embed_textures_into_ir` derives MIME type from file extension via `mime_for_ext`. Without MIME hints, TGA/BMP auto-detection fails and falls back to magenta
+- **Path sanitization (v0.2.40)**: All disk-based texture loading paths (DirectX .x, OBJ, PMX, PMD) apply `sanitize_rel_path()` before `base_dir.join()`. This strips `..` components (preventing directory traversal) and `:` characters (preventing Windows absolute path bypass via drive letters like `C:`). Archive-based loading uses `normalize_archive_path()` instead
 
 ### Mipmap Generation (v0.2.26, optimized in v0.2.27)
 
@@ -789,7 +790,7 @@ Override modes (Unlit / GGX / Normal) output texture alpha directly without `app
 
 ### State Normalization
 
-`normalize_shader_state()` is called on all model load / rebuild / append paths. Only Auto mode auto-sets `use_mmd_path` based on model format. Explicit user selections are preserved across model loads.
+`normalize_shader_state()` is called on all model load / rebuild / append paths, and also on UI shader selection changes (v0.2.40). Only Auto mode auto-sets `use_mmd_path` based on model format. Explicit user selections are preserved across model loads.
 
 The edge drawing UI (ON/OFF toggle and thickness slider) is shown both when MMD mode is explicitly selected and when Auto mode has `use_mmd_path == true` (i.e., PMX/PMD loaded).
 
@@ -1172,7 +1173,7 @@ Bloom intermediate buffers use `Rgba16Float` (v0.2.26; previously `Rgba8Unorm`) 
 
 - **glTF materials**: When `emissive_per_mat[i]` is false, `MaterialUniform.emissive_factor` is zeroed and `has_emissive_tex` is set to false. Both the shader's `lit += emissive` and `out.bloom = vec4(bloom_color, ...)` become zero
 - **PMX/PMD materials**: When `emissive_per_mat[i]` is false, `MmdMaterialUniform.bloom_emissive` is zeroed
-- **HDR auto-detection**: Materials with any `emissive_factor` component exceeding 1.0 are initialized with default OFF. Prevents white-out in the viewer which lacks tonemapping
+- **Default**: All materials are initialized with emissive ON (v0.2.40). HDR emissive values (via `KHR_materials_emissive_strength`) are clamped by the GPU; no auto-OFF logic
 
 ### PMX/PMD Self-Emissive Material Bloom Detection
 
@@ -1760,7 +1761,7 @@ Matched files are stored in `aux_files: HashMap<PathBuf, Arc<[u8]>>` with model 
 
 #### Security
 
-- **Path traversal defense**: `normalize_archive_path` rejects `..` and absolute paths
+- **Path traversal defense**: `normalize_archive_path` rejects `..` and absolute paths in archive entries. Direct disk loading uses `sanitize_rel_path()` (v0.2.40) to strip `..` and drive letters
 - **Shift_JIS filenames**: `name_raw()` → UTF-8 → Shift_JIS fallback (`enclosed_name()` not used due to CP437 misparse)
 - **Zip bomb protection**: ZIP uses `take(limit)` for hard limits, 7z uses chunked reading to verify actual bytes read (`saturating_add` for overflow safety)
 - **ZIP PMX/PMD budget**: Second `extract_files` call receives `remaining = MAX_TOTAL_BYTES - model_size`
@@ -2107,7 +2108,7 @@ Group header rows use the layout `▶ [S] [C] [N] [B] [☑] GroupName`, implemen
 | `[S]` | `smooth_normals_per_mat` | Batch toggle normal smoothing for all materials in the group (compatible with normal maps: smoothing TBN base normals improves polygon edge visibility) |
 | `[C]` | `clear_normals_per_mat` | Batch toggle custom normal clear for all materials in the group (compatible with normal maps) |
 | `[N]` | `normal_map_per_mat` | Batch toggle normal map application for normal-mapped materials. When OFF, `MaterialUniform.has_normal_tex` is zeroed, skipping normal map sampling in the shader |
-| `[B]` | `emissive_per_mat` | Batch toggle emissive for emissive materials. When OFF, `emissive_factor` is zeroed, disabling both `lit += emissive` and MRT bloom output. HDR emissive (component > 1.0) defaults to OFF |
+| `[B]` | `emissive_per_mat` | Batch toggle emissive for emissive materials. When OFF, `emissive_factor` is zeroed, disabling both `lit += emissive` and MRT bloom output |
 | `[☑]` | `material_visibility` | Batch toggle visibility for all DrawCalls in the group |
 
 Header row hover detection uses `contains_pointer()` (rect-based). `hovered()` is not suitable because child widgets (buttons, etc.) consume the hover event.
@@ -2714,8 +2715,9 @@ The only difference between sRGB and Unorm variants is the final transform appli
 
 ### Settings File (popone.toml)
 
-Placed in the same directory as the exe. Stores window position (`outer_rect` coordinates), size (`inner_rect` coordinates), and last-opened directories.
+Stored in `%LOCALAPPDATA%\popone` on Windows (v0.2.40), falling back to the exe directory on other platforms. `persistence::data_dir()` determines the path, and `migrate_from_exe_dir()` moves existing files from the old exe-adjacent location on first launch. Stores window position/size, last-opened directories, and log settings.
 
+- **Log settings (v0.2.40)**: `[log]` section with `level` (error/warn/info/debug, default: debug) and `keep` (log file retention count, default: 5). Config is loaded before logger initialization so settings take effect from the first log message. Invalid `level` values fall back to `debug`
 - **Position**: Saved from `outer_rect.min`, restored via `ViewportCommand::OuterPosition`. No drift due to coordinate system consistency
 - **Size**: Saved from `inner_rect` width/height, restored via `with_inner_size`
 - **Change detection**: 1px epsilon comparison. Position/size not updated while maximized or minimized

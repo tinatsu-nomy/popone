@@ -233,7 +233,7 @@ fn build_entries<'a>(
 /// [0, 1] 範囲内の値はそのまま保持（1.0 % 1.0 = 0.0 への丸めを防止）
 #[inline]
 fn fract_uv(v: f32) -> f32 {
-    if v >= 0.0 && v <= 1.0 {
+    if (0.0..=1.0).contains(&v) {
         return v;
     }
     let f = v % 1.0;
@@ -618,6 +618,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::reversed_empty_ranges)]
     fn test_validate_groups_rejects_reversed_range() {
         let groups = vec![("A".to_string(), 3..1)];
         let result = validate_groups(&groups, 5);

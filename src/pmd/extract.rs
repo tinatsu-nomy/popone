@@ -70,10 +70,7 @@ fn load_material_names(
     materials: &mut [IrMaterial],
 ) {
     let txt_path = pmd_path.with_extension("txt");
-    let txt_filename = txt_path
-        .file_name()
-        .map(|f| PathBuf::from(f))
-        .unwrap_or_default();
+    let txt_filename = txt_path.file_name().map(PathBuf::from).unwrap_or_default();
 
     // aux_files があればそこから、なければファイルシステムから読む
     let data = if let Some(aux) = aux_files {
@@ -261,7 +258,8 @@ fn extract_textures(
     for toon_name in &pmd.toon_textures {
         if !toon_name.is_empty() && !tex_paths.contains(toon_name) {
             let normalized = toon_name.replace('\\', "/");
-            let full_path = pmd_dir.join(&normalized);
+            let sanitized = crate::sanitize_rel_path(&normalized);
+            let full_path = pmd_dir.join(&sanitized);
             // aux_files にあるか、ファイルシステムに存在する場合のみ登録
             let exists = if let Some(aux) = aux_files {
                 aux.contains_key(&PathBuf::from(&normalized))
@@ -278,7 +276,8 @@ fn extract_textures(
         .iter()
         .map(|tex_path| {
             let normalized = tex_path.replace('\\', "/");
-            let full_path = pmd_dir.join(&normalized);
+            let sanitized = crate::sanitize_rel_path(&normalized);
+            let full_path = pmd_dir.join(&sanitized);
             let filename = Path::new(&normalized)
                 .file_name()
                 .map(|f| f.to_string_lossy().into_owned())

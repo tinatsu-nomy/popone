@@ -180,9 +180,10 @@ fn extract_textures(
     pmx.textures
         .iter()
         .map(|tex_path| {
-            // パス区切りを正規化
+            // パス区切りを正規化 — パストラバーサル防止のためサニタイズ
             let normalized = tex_path.replace('\\', "/");
-            let full_path = pmx_dir.join(&normalized);
+            let sanitized = crate::sanitize_rel_path(&normalized);
+            let full_path = pmx_dir.join(&sanitized);
             let filename = Path::new(&normalized)
                 .file_name()
                 .map(|f| f.to_string_lossy().into_owned())

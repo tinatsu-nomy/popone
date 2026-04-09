@@ -325,8 +325,10 @@ mod tests {
 
     #[test]
     fn compute_fit_ortho_ignores_depth() {
-        let mut cam = OrbitCamera::default();
-        cam.perspective = false;
+        let cam = OrbitCamera {
+            perspective: false,
+            ..Default::default()
+        };
         let thin = Vec3::new(-1.0, 0.0, -1.0);
         let thin_max = Vec3::new(1.0, 5.0, 1.0);
         let deep = Vec3::new(-1.0, 0.0, -20.0);
@@ -339,9 +341,11 @@ mod tests {
 
     #[test]
     fn compute_fit_side_view_uses_depth() {
-        let mut cam = OrbitCamera::default();
-        cam.yaw = std::f32::consts::FRAC_PI_2; // 側面ビュー
-                                               // Y高さを小さくし、Z奥行きを大きくして幅基準が支配的になるケース
+        let mut cam = OrbitCamera {
+            yaw: std::f32::consts::FRAC_PI_2, // 側面ビュー
+            ..Default::default()
+        };
+        // Y高さを小さくし、Z奥行きを大きくして幅基準が支配的になるケース
         let min = Vec3::new(-1.0, 0.0, -10.0);
         let max = Vec3::new(1.0, 5.0, 10.0);
         let (_, dist_side, _) = cam.compute_fit(min, max, 1920.0, 1080.0);

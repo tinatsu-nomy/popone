@@ -999,20 +999,28 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
     #[cfg(not(target_os = "windows"))]
     let can_rotate = true;
 
-    let logs_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("logs")))
-        .unwrap_or_else(|| std::path::PathBuf::from("logs"));
+    // アプリデータディレクトリ（%LOCALAPPDATA%\popone）
+    let data_dir = popone::viewer::app::persistence::data_dir();
+    popone::viewer::app::persistence::migrate_from_exe_dir(&data_dir);
+
+    // セッション設定の読み込み（ログ設定に先立って読み込む）
+    let app_config = popone::viewer::app::persistence::load_config(&data_dir);
+    let log_config = app_config
+        .as_ref()
+        .map(|c| c.log.clone())
+        .unwrap_or_default();
+
+    let logs_dir = data_dir.join("logs");
     let _ = std::fs::create_dir_all(&logs_dir);
     if can_rotate {
-        rotate_logs(&logs_dir, 5);
+        rotate_logs(&logs_dir, log_config.keep);
     }
 
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
     let log_path = logs_dir.join(format!("popone_{timestamp}.log"));
     let log_buffer: SharedLogBuffer =
         std::sync::Arc::new(std::sync::Mutex::new(popone::LogBuffer::new()));
-    setup_logging(log::LevelFilter::Debug, None, Some(log_buffer.clone()))?;
+    setup_logging(log_config.level_filter(), None, Some(log_buffer.clone()))?;
 
     {
         let panic_log = log_path.clone();
@@ -1047,13 +1055,6 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
         width: w,
         height: h,
     };
-
-    // セッション設定の読み込み
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let app_config = popone::viewer::app::persistence::load_config(&exe_dir);
 
     // NativeOptions: 保存済み設定があればサイズを適用（位置は初回フレームで適用）
     let inner_size = app_config
@@ -1105,7 +1106,7 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
         log_path,
         log_buffer,
         initial_file,
-        exe_dir,
+        data_dir,
         app_config,
     )
 }
@@ -1117,7 +1118,7 @@ fn run_viewer_inner(
     log_path: PathBuf,
     log_buffer: SharedLogBuffer,
     initial_file: Option<PathBuf>,
-    exe_dir: PathBuf,
+    data_dir: PathBuf,
     app_config: Option<popone::viewer::app::persistence::AppConfig>,
 ) -> Result<()> {
     eframe::run_native(
@@ -1125,7 +1126,7 @@ fn run_viewer_inner(
         options,
         Box::new(move |cc| {
             let mut app = popone::viewer::app::ViewerApp::new(
-                cc, logs_dir, log_path, log_buffer, exe_dir, app_config,
+                cc, logs_dir, log_path, log_buffer, data_dir, app_config,
             );
             if let Some(path) = initial_file {
                 app.pending.bg_state.submit_dispatch(

@@ -1311,7 +1311,7 @@ fn format_number(n: usize) -> String {
     let len = s.len();
     let mut result = String::with_capacity(len + (len.saturating_sub(1)) / 3);
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(c);
@@ -1708,6 +1708,7 @@ fn show_tab_display(
     });
     if sel != app.display.shader_selection() {
         app.display.set_shader_selection(sel);
+        app.normalize_shader_state();
     }
 
     // MToon アウトラインを持つ Standard draw があるかで有効判定
@@ -1860,37 +1861,34 @@ fn show_tab_display(
     let mut do_save_history = false;
     let mut do_recall_history = false;
     ui.horizontal(|ui| {
-        if !app.tex.assignments.is_empty() {
-            if ui
+        if !app.tex.assignments.is_empty()
+            && ui
                 .button(egui::RichText::new("テクスチャリセット").text_style(small.clone()))
                 .clicked()
-            {
-                app.tex.assignments.clear();
-                app.tex.pkg_assignments.clear();
-                app.pending.reload = Some(PendingOverlay::WaitingOverlay);
-            }
+        {
+            app.tex.assignments.clear();
+            app.tex.pkg_assignments.clear();
+            app.pending.reload = Some(PendingOverlay::WaitingOverlay);
         }
         if tex_history_key.is_some() {
-            if has_file_assignments {
-                if ui
+            if has_file_assignments
+                && ui
                     .button(egui::RichText::new("テクスチャ保存").text_style(small.clone()))
                     .clicked()
-                {
-                    // 既に履歴がある場合は確認フラグ、なければ即保存
-                    if tex_history_has_entry {
-                        app.pending.confirm_save_tex_history = true;
-                    } else {
-                        do_save_history = true;
-                    }
+            {
+                // 既に履歴がある場合は確認フラグ、なければ即保存
+                if tex_history_has_entry {
+                    app.pending.confirm_save_tex_history = true;
+                } else {
+                    do_save_history = true;
                 }
             }
-            if tex_history_has_entry {
-                if ui
+            if tex_history_has_entry
+                && ui
                     .button(egui::RichText::new("テクスチャ呼出").text_style(small.clone()))
                     .clicked()
-                {
-                    do_recall_history = true;
-                }
+            {
+                do_recall_history = true;
             }
         }
     });
@@ -2051,7 +2049,7 @@ fn show_tab_display(
                     let all_on = !eligible.is_empty()
                         && eligible
                             .iter()
-                            .all(|&mi| app.material_display.get(mi).map_or(true, |d| d.normal_map));
+                            .all(|&mi| app.material_display.get(mi).is_none_or(|d| d.normal_map));
                     let resp = ui.add_enabled(
                         !eligible.is_empty(),
                         egui::SelectableLabel::new(all_on, "N"),
@@ -2077,7 +2075,7 @@ fn show_tab_display(
                     let all_on = !eligible.is_empty()
                         && eligible
                             .iter()
-                            .all(|&mi| app.material_display.get(mi).map_or(true, |d| d.emissive));
+                            .all(|&mi| app.material_display.get(mi).is_none_or(|d| d.emissive));
                     let resp = ui.add_enabled(
                         !eligible.is_empty(),
                         egui::SelectableLabel::new(all_on, "B"),
@@ -2647,18 +2645,19 @@ fn collect_material_tex_indices(
     }
     // MToon 追加テクスチャ
     if let Some(ref mtoon) = mat.mtoon {
-        for opt_info in [
+        for info in [
             &mtoon.shade_texture,
             &mtoon.shading_shift_texture,
             &mtoon.matcap_texture,
             &mtoon.rim_multiply_texture,
             &mtoon.outline_width_texture,
             &mtoon.uv_animation_mask_texture,
-        ] {
-            if let Some(ref info) = opt_info {
-                if !out.contains(&info.index) {
-                    out.push(info.index);
-                }
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !out.contains(&info.index) {
+                out.push(info.index);
             }
         }
     }
@@ -2899,7 +2898,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             // デフォルトディレクトリ: PMX出力パスがあればその親、なければモデルファイルの親
             let default_dir = default_path
                 .parent()
-                .filter(|d| d.as_os_str().len() > 0)
+                .filter(|d| !d.as_os_str().is_empty())
                 .map(|d| d.to_path_buf())
                 .or_else(|| {
                     app.loaded.as_ref().map(|l| {

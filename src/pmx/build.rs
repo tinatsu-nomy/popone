@@ -1800,9 +1800,9 @@ fn build_weight(weights: &[(usize, f32)]) -> PmxWeightType {
                 // top4 内の最小ウェイトを探し、現在の値が大きければ置換
                 let mut min_idx = 0;
                 let mut min_w = top4[0].1;
-                for j in 1..4 {
-                    if top4[j].1 < min_w {
-                        min_w = top4[j].1;
+                for (j, &(_, tw)) in top4.iter().enumerate().skip(1) {
+                    if tw < min_w {
+                        min_w = tw;
                         min_idx = j;
                     }
                 }
@@ -2376,7 +2376,7 @@ fn build_joints(ir: &IrModel, scale: f32) -> Vec<PmxJoint> {
 /// [0, 1] 範囲内の値はそのまま保持（1.0 % 1.0 = 0.0 への丸めを防止）
 #[inline]
 fn fract_uv(v: f32) -> f32 {
-    if v >= 0.0 && v <= 1.0 {
+    if (0.0..=1.0).contains(&v) {
         return v;
     }
     let f = v % 1.0;

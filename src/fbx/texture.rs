@@ -15,6 +15,12 @@ pub struct TextureSearchCache {
     map: Option<HashMap<String, PathBuf>>,
 }
 
+impl Default for TextureSearchCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TextureSearchCache {
     pub fn new() -> Self {
         Self { map: None }
@@ -237,19 +243,16 @@ fn decode_image_data_with_ext(
     }
 
     // まず自動判別を試行
-    match image::load_from_memory(data) {
-        Ok(img) => {
-            let rgba = img.to_rgba8();
-            let width = rgba.width();
-            let height = rgba.height();
-            return Some(TextureData {
-                name: name.to_string(),
-                rgba: rgba.into_raw(),
-                width,
-                height,
-            });
-        }
-        Err(_) => {}
+    if let Ok(img) = image::load_from_memory(data) {
+        let rgba = img.to_rgba8();
+        let width = rgba.width();
+        let height = rgba.height();
+        return Some(TextureData {
+            name: name.to_string(),
+            rgba: rgba.into_raw(),
+            width,
+            height,
+        });
     }
 
     // TGA 等マジックナンバーのない形式は拡張子からフォーマットを推定してリトライ

@@ -299,13 +299,10 @@ impl Parser {
     /// "Cube.001" → Ident("Cube") + Num(".001") を結合して "Cube.001" を返す
     fn read_optional_name(&mut self) -> String {
         let mut name = String::new();
-        loop {
-            match self.peek() {
-                Some(Token::Ident(_)) | Some(Token::Num(_)) => match self.next() {
-                    Some(Token::Ident(s)) => name.push_str(s),
-                    Some(Token::Num(s)) => name.push_str(s),
-                    _ => break,
-                },
+        while let Some(Token::Ident(_)) | Some(Token::Num(_)) = self.peek() {
+            match self.next() {
+                Some(Token::Ident(s)) => name.push_str(s),
+                Some(Token::Num(s)) => name.push_str(s),
                 _ => break,
             }
         }

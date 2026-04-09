@@ -477,8 +477,8 @@ pub struct ViewerApp {
     pub next_instance_id: u32,
     /// スプラッシュ画像テクスチャ（モデル未ロード時に表示）
     splash_texture: Option<egui::TextureHandle>,
-    /// exe ディレクトリ（設定・履歴ファイルの保存先）
-    pub exe_dir: PathBuf,
+    /// アプリデータディレクトリ（設定・履歴ファイルの保存先）
+    pub data_dir: PathBuf,
     /// セッション設定
     pub app_config: persistence::AppConfig,
     /// 設定変更フラグ（on_exit で保存するか判定）
@@ -572,7 +572,7 @@ impl ViewerApp {
         logs_dir: PathBuf,
         log_path: PathBuf,
         log_buffer: crate::SharedLogBuffer,
-        exe_dir: PathBuf,
+        data_dir: PathBuf,
         app_config: Option<persistence::AppConfig>,
     ) -> Self {
         let render_state = cc
@@ -619,10 +619,12 @@ impl ViewerApp {
         let app_config = app_config.unwrap_or_default();
 
         // テクスチャ履歴を読み込み
-        let texture_history = persistence::load_texture_history(&exe_dir);
+        let texture_history = persistence::load_texture_history(&data_dir);
 
-        let mut tex = TextureState::default();
-        tex.last_dir = last_texture_dir;
+        let tex = TextureState {
+            last_dir: last_texture_dir,
+            ..Default::default()
+        };
 
         Self {
             loaded: None,
@@ -667,7 +669,7 @@ impl ViewerApp {
             start_time: Instant::now(),
             next_instance_id: 1,
             splash_texture,
-            exe_dir,
+            data_dir,
             app_config,
             config_dirty: false,
             pending_window_restore,
@@ -860,6 +862,7 @@ impl ViewerApp {
     }
 
     /// Append 操作の GPU ビルドを遅延実行（PkgAppend ペイロード付き版）
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start_deferred_append_gpu_build_ext(
         &mut self,
         mut other_ir: IrModel,
@@ -1261,7 +1264,7 @@ impl ViewerApp {
     ///
     /// - Auto: モデル形式に応じて Standard/MMD を自動判定
     /// - Mtoon/Unlit/GGX/Normal/MMD: ユーザー選択を維持（整合性チェックのみ）
-    fn normalize_shader_state(&mut self) {
+    pub(crate) fn normalize_shader_state(&mut self) {
         let has_mmd = self.loaded.as_ref().is_some_and(|l| {
             l.gpu_model
                 .draws
@@ -1521,18 +1524,7 @@ impl ViewerApp {
 
     /// 材質ごとのデフォルト表示状態を生成（HDR emissive はエミッシブ OFF）
     fn default_material_display(ir: &IrModel) -> Vec<MaterialDisplayState> {
-        ir.materials
-            .iter()
-            .map(|m| {
-                let ef = m.emissive_factor;
-                // 任意成分が 1.0 を超える場合は HDR → デフォルト OFF
-                let emissive = !(ef.x > 1.0 || ef.y > 1.0 || ef.z > 1.0);
-                MaterialDisplayState {
-                    emissive,
-                    ..Default::default()
-                }
-            })
-            .collect()
+        vec![MaterialDisplayState::default(); ir.materials.len()]
     }
 
     /// `material_display` から `MaterialBuildFlags` を展開する
@@ -1791,7 +1783,7 @@ impl eframe::App for ViewerApp {
 
         // トップバー
         egui::TopBottomPanel::top("top_bar")
-            .frame(panel_frame.clone())
+            .frame(panel_frame)
             .show(ctx, |bar| {
                 bar.horizontal(|ui| {
                     // トップバーボタン: 通常時は透明背景、ホバー時はグローバルテーマのブルーが効く
@@ -1814,13 +1806,12 @@ impl eframe::App for ViewerApp {
                         self.open_file_dialog(ctx);
                     }
 
-                    if self.loaded.is_some() {
-                        if menu_btn(ui, "追加")
+                    if self.loaded.is_some()
+                        && menu_btn(ui, "追加")
                             .on_hover_text("モデルを追加読み込み（Shift+D&Dでも可）")
                             .clicked()
-                        {
-                            self.open_append_dialog(ctx);
-                        }
+                    {
+                        self.open_append_dialog(ctx);
                     }
 
                     if menu_btn(ui, "ログ").clicked() {
@@ -1863,7 +1854,7 @@ impl eframe::App for ViewerApp {
 
         // ステータスバー: ファイルパス + 統計
         egui::TopBottomPanel::bottom("status_bar")
-            .frame(panel_frame.clone())
+            .frame(panel_frame)
             .show(ctx, |ui| {
                 ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
                 ui.horizontal_centered(|ui| {
@@ -1913,7 +1904,7 @@ impl eframe::App for ViewerApp {
 
         // ショートカットヒントバー（ステータスバーの上）
         egui::TopBottomPanel::bottom("shortcut_hints")
-            .frame(panel_frame.clone())
+            .frame(panel_frame)
             .show(ctx, |ui| {
                 let hint_color = egui::Color32::WHITE;
                 let hint_font = egui::FontId::proportional(10.0);
@@ -2277,6 +2268,6 @@ impl eframe::App for ViewerApp {
             .last_dir
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned());
-        persistence::save_config(&self.exe_dir, &self.app_config);
+        persistence::save_config(&self.data_dir, &self.app_config);
     }
 }

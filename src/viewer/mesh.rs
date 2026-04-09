@@ -40,6 +40,7 @@ impl MaterialBuildFlags {
 }
 
 /// GPU空間で重複排除・座標変換済みのモーフデータ
+#[allow(clippy::type_complexity)]
 pub(crate) enum GpuMorphEntry {
     /// 頂点モーフ: (gpu_vi, pos_delta, normal_delta, tangent_delta)
     Vertex(Vec<(u32, [f32; 3], [f32; 3], [f32; 3])>),

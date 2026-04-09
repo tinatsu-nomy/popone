@@ -1165,7 +1165,7 @@ impl ViewerApp {
 
         let count = entries.len();
         self.texture_history.history.insert(key, entries);
-        super::persistence::save_texture_history(&self.exe_dir, &self.texture_history);
+        super::persistence::save_texture_history(&self.data_dir, &self.texture_history);
         self.convert_message = Some(ConvertMessage::success(format!(
             "テクスチャ履歴を保存しました ({count}件)"
         )));

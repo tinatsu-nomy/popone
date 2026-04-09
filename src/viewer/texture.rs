@@ -36,6 +36,7 @@ pub fn upload_rgba_to_gpu(
 
 /// 事前生成されたミップチェーンを受け取る版。
 /// `mip_chain` が Some なら CPU ミップ生成をスキップし、直接 GPU アップロードする。
+#[allow(clippy::type_complexity)]
 pub fn upload_rgba_to_gpu_with_mips(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

@@ -317,11 +317,9 @@ fn parse_property(cursor: &mut Cursor<&[u8]>) -> Result<FbxProperty> {
             Ok(FbxProperty::Binary(buf))
         }
 
-        _ => {
-            return Err(PoponeError::FbxParse(format!(
-                "Unknown property type code: 0x{type_code:02x}"
-            )))
-        }
+        _ => Err(PoponeError::FbxParse(format!(
+            "Unknown property type code: 0x{type_code:02x}"
+        ))),
     }
 }
 

@@ -556,6 +556,7 @@ impl BloomPass {
     /// Bloom パスを実行し、composite 結果の TextureView を返す。
     /// `bloom_input`: MRT の bloom 出力（emissive-only、downsample 入力）
     /// `scene_view`: 元のシーンカラー（composite でブレンドする元画像）
+    #[allow(clippy::too_many_arguments)]
     pub fn execute<'a>(
         &'a mut self,
         device: &wgpu::Device,
@@ -740,11 +741,12 @@ mod tests {
     use glam::Vec3;
 
     fn make_mat(specular: Vec3, specular_power: f32, ambient: Vec3) -> IrMaterial {
-        let mut mat = IrMaterial::default();
-        mat.specular = specular;
-        mat.specular_power = specular_power;
-        mat.ambient = ambient;
-        mat
+        IrMaterial {
+            specular,
+            specular_power,
+            ambient,
+            ..Default::default()
+        }
     }
 
     #[test]
