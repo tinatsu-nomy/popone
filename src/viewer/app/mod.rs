@@ -1592,7 +1592,25 @@ impl ViewerApp {
 
     /// 材質ごとのデフォルト表示状態を生成（HDR emissive はエミッシブ OFF）
     fn default_material_display(ir: &IrModel) -> Vec<MaterialDisplayState> {
-        vec![MaterialDisplayState::default(); ir.materials.len()]
+        // HDR エミッシブ材質（emissive_factor のいずれか成分が 1.0 超）は
+        // デフォルトで emission OFF にする。
+        // シェーダーは `lit = lighting + rim + emissive` と加算するため、
+        // 係数 > 1.0 だと表面全体に flat な明るさが加わり、例えば lilToon
+        // Screen ブレンドを 0.5 減衰した後でも辛うじて > 1.0 になる材質
+        // （Shinano_face の attenuated [0.89, 0.96, 1.06] など）がテクスチャを
+        // 覆い隠して白飛びする。ユーザーが手動で ON にすれば従来通り有効化できる。
+        // v0.2.40 で一度削除したが、HDR 材質のビューア表示不具合を招いたため復活。
+        ir.materials
+            .iter()
+            .map(|m| {
+                let ef = m.emissive_factor;
+                let emissive = !(ef.x > 1.0 || ef.y > 1.0 || ef.z > 1.0);
+                MaterialDisplayState {
+                    emissive,
+                    ..Default::default()
+                }
+            })
+            .collect()
     }
 
     /// `material_display` から `MaterialBuildFlags` を展開する
