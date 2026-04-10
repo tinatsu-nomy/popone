@@ -118,6 +118,10 @@ pub struct PendingLoadDispatch {
     pub overlay: PendingOverlay,
     /// D&D temp ファイルの先読みデータ（self.preloaded から移動）
     pub preloaded: Option<PreloadedData>,
+    /// reload_current 経由の dispatch かどうか。true の場合、route_load_dispatch は
+    /// 新規ロード向けの状態リセット（normalize_pose 等）をスキップし、ユーザーが
+    /// 現モデルに設定した値を保持したまま BG パースへ進む。
+    pub is_reload: bool,
 }
 
 /// バックグラウンド CPU パースの結果
@@ -994,6 +998,7 @@ impl ViewerApp {
                         append,
                         overlay: PendingOverlay::WaitingOverlay,
                         preloaded: None,
+                        is_reload: false,
                     });
                 }
                 self.pending.file_dialog = None;

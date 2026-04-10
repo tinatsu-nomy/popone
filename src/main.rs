@@ -1135,6 +1135,7 @@ fn run_viewer_inner(
                         append: false,
                         overlay: popone::viewer::app::pending::PendingOverlay::WaitingOverlay,
                         preloaded: None,
+                        is_reload: false,
                     },
                 );
             }

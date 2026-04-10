@@ -1323,6 +1323,10 @@ pub(crate) struct ReloadSnapshot {
     pmx_output_path: String,
     model_display_name: String,
     export_visible_only: bool,
+    /// リロード前にユーザーが開いていたサイドパネルタブ。
+    /// finish_load_with_gpu が一旦 Info にリセットした後、復元時に書き戻すことで
+    /// [出力] タブ等での再ロード操作後もタブが維持される。
+    side_panel_tab: super::SidePanelTab,
     tex_assignments: HashMap<usize, TextureSource>,
     pkg_tex_assignments: HashMap<usize, String>,
     pkg_textures: Option<Vec<(String, Arc<[u8]>)>>,
@@ -1401,6 +1405,7 @@ impl ViewerApp {
 
         let path = dispatch.path;
         let append = dispatch.append;
+        let is_reload = dispatch.is_reload;
         let ext = crate::path_ext_lower(&path);
         let format = detect_format(&ext);
 
@@ -1545,8 +1550,12 @@ impl ViewerApp {
         let auto_fbx_anim = format == FileFormat::Fbx && self.inspect_fbx(&path).has_anim;
 
         // スタンスのみ事前リセット（シェーダーは finish_load_with_gpu 成功時にリセット）
-        self.normalize_pose = false;
-        self.normalize_to_tstance = false;
+        // ただしリロード経由の dispatch では、ユーザーが [出力] タブ等で設定した
+        // Aスタンス/Tスタンス変換フラグを保持する必要があるのでスキップする。
+        if !is_reload {
+            self.normalize_pose = false;
+            self.normalize_to_tstance = false;
+        }
 
         self.spawn_bg_load(
             path,
@@ -4048,6 +4057,7 @@ impl ViewerApp {
             pmx_output_path: std::mem::take(&mut self.export.pmx_output_path),
             model_display_name: std::mem::take(&mut self.export.model_display_name),
             export_visible_only: self.export.export_visible_only,
+            side_panel_tab: self.side_panel_tab,
             tex_assignments: std::mem::take(&mut self.tex.assignments),
             pkg_tex_assignments: std::mem::take(&mut self.tex.pkg_assignments),
             pkg_textures: self.tex.pkg_textures.take(),
@@ -4069,6 +4079,9 @@ impl ViewerApp {
         self.export.pmx_output_path = snap.pmx_output_path;
         self.export.model_display_name = snap.model_display_name;
         self.export.export_visible_only = snap.export_visible_only;
+        // [出力] タブ等からの再ロード失敗時、finish_load_with_gpu に到達していなければ
+        // side_panel_tab は変わっていないが、途中まで進んだ場合の取りこぼしを防ぐため復元する
+        self.side_panel_tab = snap.side_panel_tab;
         if let Some(pkg) = snap.pkg_textures {
             self.tex.pkg_textures = Some(pkg);
         }
@@ -4117,6 +4130,9 @@ impl ViewerApp {
         self.export.export_visible_only = snap.export_visible_only;
         // リロードで復元した model_display_name をタイトルバーに反映
         self.refresh_derived_from_display_name();
+        // 再ロード前に開いていたサイドパネルタブを復元
+        // （finish_load_with_gpu は新規ロードと同じ扱いで Info に戻すので、後追いで上書き）
+        self.side_panel_tab = snap.side_panel_tab;
 
         // テクスチャ割り当てを復元（ファイルパス分のみ。pkg分はreload_unitypackage内で処理済み）
         let saved_link = self.tex.link_same_name;
@@ -4225,6 +4241,7 @@ impl ViewerApp {
         self.reload_snapshot = Some(snap);
 
         // 既存の BG パイプラインにディスパッチ
+        // is_reload: true でユーザーが設定した normalize_pose 等を保持させる
         self.pending
             .bg_state
             .submit_dispatch(super::pending::PendingLoadDispatch {
@@ -4232,6 +4249,7 @@ impl ViewerApp {
                 append: false,
                 overlay: super::pending::PendingOverlay::WaitingOverlay,
                 preloaded,
+                is_reload: true,
             });
     }
 
@@ -6288,6 +6306,7 @@ impl ViewerApp {
                         append,
                         overlay: super::pending::PendingOverlay::WaitingOverlay,
                         preloaded: None,
+                        is_reload: false,
                     });
             }
 

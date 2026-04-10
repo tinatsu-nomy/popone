@@ -1781,6 +1781,7 @@ impl eframe::App for ViewerApp {
                         append: false,
                         overlay: pending::PendingOverlay::WaitingOverlay,
                         preloaded: None,
+                        is_reload: false,
                     });
             }
         }
