@@ -10,6 +10,15 @@ Latest release: **[popone-v0.2.41.exe](https://github.com/tinatsu-nomy/popone/re
 
 All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
+## Screenshots
+
+![Model Info](assets/screen_shot1.png)
+![Expression Morphs](assets/screen_shot2.png)
+![Wireframe](assets/screen_shot3.png)
+![Solid + Wire](assets/screen_shot4.png)
+
+> Model: [Alicia Solid](https://3d.nicovideo.jp/alicia/) — (C) DWANGO Co., Ltd. / Character Design: 黒星紅白
+
 ## Disclaimer
 
 - The author assumes no responsibility for any issues arising from the use of this tool.

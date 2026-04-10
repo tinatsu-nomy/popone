@@ -10,6 +10,15 @@ VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x を 3D 表示します。
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
+## スクリーンショット
+
+![モデル情報](assets/screen_shot1.png)
+![表情モーフ](assets/screen_shot2.png)
+![ワイヤーフレーム](assets/screen_shot3.png)
+![ソリッド + ワイヤー](assets/screen_shot4.png)
+
+> モデル: [Alicia Solid](https://3d.nicovideo.jp/alicia/) — (C) DWANGO Co., Ltd. / キャラクターデザイン：黒星紅白
+
 ## 注意事項
 
 - 本ツールの使用により発生したいかなる問題についても、作者は一切の責任を負いません。
