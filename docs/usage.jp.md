@@ -234,6 +234,9 @@ popone <入力> [出力.pmx] [オプション]
   --raw-structure         元のボーン構造で出力（標準ボーン挿入スキップ＋元のボーン名維持）
   --scale <FLOAT>         PMX出力倍率（デフォルト: 1.0）
   --model-name <NAME>     アーカイブ内のモデルファイル名を指定（ZIP/7z用）
+  --fbx-name <NAME>       .unitypackage 内の FBX ファイル名を指定。省略時は
+                          ファイルサイズ最大の FBX を自動選択（本体モデルは
+                          アニメーション・小道具より大きい傾向のヒューリスティック）
   --list-models           アーカイブ内のモデル一覧を表示して終了（ZIP/7z用）
   --log-level <LEVEL>     ログレベル（error/warn/info/debug、デフォルト: info）
 ```

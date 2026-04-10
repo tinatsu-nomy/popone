@@ -234,6 +234,9 @@ Options:
   --raw-structure         Export with original bone structure (skip standard bone insertion + keep original bone names)
   --scale <FLOAT>         PMX export scale multiplier (default: 1.0)
   --model-name <NAME>     Specify model filename inside archive (for ZIP/7z)
+  --fbx-name <NAME>       Specify FBX filename inside .unitypackage. When omitted,
+                          auto-selects the largest FBX by file size (heuristic:
+                          main model files are typically larger than animations or props)
   --list-models           List models inside archive and exit (for ZIP/7z)
   --log-level <LEVEL>     Log level (error/warn/info/debug, default: info)
 ```

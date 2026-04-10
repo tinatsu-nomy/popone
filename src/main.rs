@@ -48,7 +48,7 @@ struct Args {
     #[arg(long, default_value = "info")]
     log_level: String,
 
-    /// unitypackage内のFBXファイル名を指定（省略時は最初のFBXを使用）
+    /// unitypackage内のFBXファイル名を指定（省略時はファイルサイズ最大のFBXを自動選択）
     #[arg(long)]
     fbx_name: Option<String>,
 
