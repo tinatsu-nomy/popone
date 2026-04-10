@@ -2760,7 +2760,8 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         source_path.parent().unwrap_or(std::path::Path::new("."))
                     });
                 let converted_dir = crate::next_converted_dir(base_dir);
-                let pmx_stem = crate::sanitize_filename(&loaded.ir.name).unwrap_or_else(|| {
+                // Prefab 経由ロード時は Prefab 名を優先（default_pmx_stem で吸収）
+                let pmx_stem = loaded.default_pmx_stem().unwrap_or_else(|| {
                     source_path
                         .file_stem()
                         .unwrap_or_default()

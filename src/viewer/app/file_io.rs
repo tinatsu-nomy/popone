@@ -2066,11 +2066,20 @@ impl ViewerApp {
                 }
 
                 // Prefab: prefab_name / prefab_entry_path を設定
-                if let Some(ref mut loaded) = self.loaded {
+                let prefab_was_set = if let Some(ref mut loaded) = self.loaded {
                     if payload.prefab_name.is_some() {
                         loaded.prefab_name = payload.prefab_name;
                         loaded.prefab_entry_path = payload.prefab_entry_path;
+                        true
+                    } else {
+                        false
                     }
+                } else {
+                    false
+                };
+                // Prefab 名が確定したら PMX 出力ファイル名を Prefab 名ベースに差し替え
+                if prefab_was_set {
+                    self.refresh_pmx_output_path_from_loaded();
                 }
 
                 // Prefab: fbx_ranges から MaterialGroup を構築
@@ -3438,6 +3447,9 @@ impl ViewerApp {
                 loaded.material_groups = new_groups;
             }
         }
+
+        // Prefab 名が確定したので、PMX 出力ファイル名を Prefab 名ベースに差し替え
+        self.refresh_pmx_output_path_from_loaded();
 
         // モデル読み込み時はアニメーションをクリア
         self.anim.state = None;

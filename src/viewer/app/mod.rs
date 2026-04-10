@@ -107,6 +107,22 @@ pub struct LoadedModel {
 }
 
 impl LoadedModel {
+    /// PMX 出力ファイル名の stem を決定する。
+    /// Prefab 経由ロード時は Prefab 名（拡張子除去＋サニタイズ）を優先し、
+    /// それ以外は `ir.name` をサニタイズして返す。サニタイズ失敗時は `None`。
+    pub fn default_pmx_stem(&self) -> Option<String> {
+        if let Some(ref prefab) = self.prefab_name {
+            let stem = std::path::Path::new(prefab)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            if let Some(sanitized) = crate::sanitize_filename(&stem) {
+                return Some(sanitized);
+            }
+        }
+        crate::sanitize_filename(&self.ir.name)
+    }
+
     /// 同名の sibling 材質インデックスを返す（同一 MaterialGroup 内に限定）
     /// `link_same_name` のスコープ制限に使用
     pub fn same_name_siblings(&self, mat_idx: usize) -> Vec<usize> {
@@ -525,6 +541,24 @@ impl ViewerApp {
     pub(crate) fn fresh_request_id(&mut self) -> u64 {
         self.next_request_id = self.next_request_id.wrapping_add(1);
         self.next_request_id
+    }
+
+    /// `loaded.prefab_name` が設定された直後に呼び出し、`pmx_output_path` の
+    /// ファイル名部分を Prefab 名ベースに差し替える。ディレクトリ部分
+    /// （`converted_modelXX/`）は `finish_load_with_gpu` で確定済みのものを維持する。
+    pub(crate) fn refresh_pmx_output_path_from_loaded(&mut self) {
+        let Some(ref loaded) = self.loaded else {
+            return;
+        };
+        let Some(stem) = loaded.default_pmx_stem() else {
+            return;
+        };
+        let current = std::path::PathBuf::from(&self.export.pmx_output_path);
+        let Some(parent) = current.parent() else {
+            return;
+        };
+        let new_path = parent.join(format!("{stem}.pmx"));
+        self.export.pmx_output_path = new_path.to_string_lossy().into_owned();
     }
 
     /// GPU パイプラインの段階的ウォームアップ（スプラッシュ画面表示中に1フェーズずつ実行）。
