@@ -242,10 +242,17 @@ pub fn build_pmx_model_with_options(
     }
 
     // 全データ揃った後に標準ボーン挿入（頂点・剛体・既存ボーンのindex調整もここで）
+    // 静的メッシュ (OBJ/STL/DirectX 等) やヒューマノイド未マッピングの FBX は、
+    // VRM ヒューマノイドボーン名が 1 本もセットされていない。
+    // MMD 標準ボーン（センター/グルーブ/腰/足IK/IK親/IK先）はヒューマノイド前提なので
+    // 挿入対象外として扱い、不要なダミー足IK 等が付かないようにする。
+    let has_humanoid_mapping = ir.bones.iter().any(|b| b.vrm_bone_name.is_some());
     if options.raw_structure {
         log::info!("Skipping standard bone insertion (raw_structure)");
     } else if no_source_bones {
         log::info!("Skipping standard bone insertion (no original bones)");
+    } else if !has_humanoid_mapping {
+        log::info!("Skipping standard bone insertion (no humanoid bone mapping)");
     } else {
         insert_standard_bones(&mut model)?;
     }
