@@ -5,11 +5,19 @@ fn main() {
     }
 
     // アイコンリソース埋め込み（ホストが Windows の場合のみ: rc.exe が必要）
+    // Windows SDK が未インストールの場合はスキップし、アイコンなしでビルドを継続する
     #[cfg(windows)]
     {
         let mut res = winres::WindowsResource::new();
         res.set_icon("assets/popone_icon.ico");
-        res.compile().expect("exe アイコンリソースのコンパイル失敗");
+        match res.compile() {
+            Ok(_) => {}
+            Err(e) => {
+                println!(
+                    "cargo:warning=exe icon resource skipped (Windows SDK / rc.exe not found): {e}"
+                );
+            }
+        }
     }
 
     // ビューア有効時はスタックサイズを 8 MB に拡大

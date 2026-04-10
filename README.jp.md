@@ -6,7 +6,7 @@ VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x を 3D 表示します。
 
 ## ダウンロード
 
-最新リリース: **[popone-v0.2.40.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.40/popone-v0.2.40.exe)**
+最新リリース: **[popone-v0.2.41.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.41/popone-v0.2.41.exe)**
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -18,9 +18,26 @@ VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x を 3D 表示します。
 
 [0BSD License](LICENSE) — 帰属表示なしで自由に利用・改変・再配布できます。
 
+同梱のサードパーティアセット（フォント等）はそれぞれ独自のライセンスに従います。
+詳細は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照してください。
+
 ## 使い方
 
 詳細は [使い方](docs/usage.jp.md) を参照。
+
+## ソースからのビルド
+
+[Rust](https://www.rust-lang.org/tools/install)（stable）が必要です。
+
+```bash
+# CLI のみ（VRM/FBX/PMX 変換）
+cargo build --release
+
+# ビューア付き（3D ビューア GUI）
+cargo build --release --features viewer
+```
+
+Windows では exe にアイコンを埋め込むために [Windows SDK](https://developer.microsoft.com/windows/downloads/windows-sdk/)（`rc.exe`）の導入を推奨します。未インストールの場合もビルドは成功しますが、exe にカスタムアイコンが付きません。
 
 ## 依存クレート
 

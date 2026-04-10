@@ -71,6 +71,40 @@ pub struct AppConfig {
     pub directory: DirectoryConfig,
     #[serde(default)]
     pub log: LogConfig,
+    #[serde(default)]
+    pub theme: ThemeConfig,
+}
+
+/// GUI テーマカラー設定。値は 6 桁の 16 進数 (例: "4A90D9", "#4A90D9")。
+/// 未指定の項目はデフォルトのダークテーマ色にフォールバックする。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ThemeConfig {
+    /// パネル・ウィンドウ背景色 (デフォルト: "1D1D1D")
+    pub panel_bg: Option<String>,
+    /// ボーダー色 (デフォルト: "333333")
+    pub border: Option<String>,
+    /// アクセントカラー — ホバー・選択 (デフォルト: "4A90D9")
+    pub accent: Option<String>,
+    /// テキスト色 (デフォルト: "D0D0D0")
+    pub text: Option<String>,
+    /// ウィジェット背景色 (デフォルト: "252525")
+    pub widget_bg: Option<String>,
+    /// アクティブ（クリック中）色 (デフォルト: "2A5A8A")
+    pub active: Option<String>,
+}
+
+impl ThemeConfig {
+    /// 16 進数カラー文字列 ("RRGGBB" or "#RRGGBB") を (r, g, b) に変換
+    pub fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
+        let s = s.trim().trim_start_matches('#');
+        if s.len() != 6 {
+            return None;
+        }
+        let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+        Some((r, g, b))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

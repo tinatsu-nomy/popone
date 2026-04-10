@@ -6,7 +6,7 @@ A 3D viewer for VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x files.
 
 ## Download
 
-Latest release: **[popone-v0.2.40.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.40/popone-v0.2.40.exe)**
+Latest release: **[popone-v0.2.41.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.2.41/popone-v0.2.41.exe)**
 
 All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -19,9 +19,26 @@ All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
 [0BSD License](LICENSE) — Free to use, modify, and redistribute without attribution.
 
+Bundled third-party assets (fonts, etc.) are under their own licenses.
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details.
+
 ## Usage
 
 See [Usage](docs/usage.md) for details.
+
+## Building from Source
+
+Requires [Rust](https://www.rust-lang.org/tools/install) (stable).
+
+```bash
+# CLI only (VRM/FBX/PMX converter)
+cargo build --release
+
+# With viewer (3D viewer GUI)
+cargo build --release --features viewer
+```
+
+On Windows, [Windows SDK](https://developer.microsoft.com/windows/downloads/windows-sdk/) is recommended for embedding the exe icon (`rc.exe`). If not installed, the build will succeed but the exe will have no custom icon.
 
 ## Dependencies
 

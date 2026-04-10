@@ -2702,6 +2702,7 @@ sRGB 版と Unorm 版の差分は `compute_mmd_lighting()` の戻り値に対す
 Windows では `%LOCALAPPDATA%\popone` に配置（v0.2.40）、他プラットフォームでは exe と同じディレクトリにフォールバック。`persistence::data_dir()` でパスを決定し、初回起動時に `migrate_from_exe_dir()` で旧 exe 隣接ファイルを自動移行。ウィンドウの位置・サイズ、最後に開いたディレクトリ、ログ設定を保存する。
 
 - **ログ設定（v0.2.40）**: `[log]` セクションで `level`（error/warn/info/debug、デフォルト: debug）と `keep`（ログファイル保持数、デフォルト: 5）を設定可能。設定はロガー初期化前に読み込まれるため、最初のログメッセージから反映。不正な `level` 値は `debug` にフォールバック
+- **テーマカラー（v0.2.41）**: `[theme]` セクションで 6 色をオプション指定: `panel_bg`（デフォルト: `1D1D1D`）、`border`（`333333`）、`accent`（`4A90D9`）、`text`（`D0D0D0`）、`widget_bg`（`252525`）、`active`（`2A5A8A`）。`"RRGGBB"` または `"#RRGGBB"` 形式を受容。`ThemeConfig::parse_hex()` が `#` プレフィックスを除去し 6 文字長を検証して `(u8, u8, u8)` を返す。解決済みの色は `ViewerApp.theme_panel_bg` / `theme_border` にキャッシュし、毎フレームのパネル描画で使用。`setup_dark_theme()` が解決済みの色を egui `Visuals`（panel_fill / window_fill / widget 状態 / selection / border stroke）に適用。未指定の項目はハードコード定数（`DARK_PANEL_BG`、`DARK_BORDER_COLOR`）にフォールバック
 - **位置**: `outer_rect.min` で保存、`ViewportCommand::OuterPosition` で復元。座標系一致によりドリフトなし
 - **サイズ**: `inner_rect` の width/height で保存、`with_inner_size` で復元
 - **変更検知**: 1px イプシロン比較。最大化・最小化中は位置・サイズを更新しない

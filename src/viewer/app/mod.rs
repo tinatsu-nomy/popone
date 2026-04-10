@@ -489,6 +489,10 @@ pub struct ViewerApp {
     pub texture_history: persistence::TextureHistoryFile,
     /// ダークテーマ適用済みフラグ（update初回で再適用、eframeのスタイルリセット対策）
     dark_theme_applied: bool,
+    /// テーマから解決済みのパネル背景色
+    theme_panel_bg: egui::Color32,
+    /// テーマから解決済みのボーダー色
+    theme_border: egui::Color32,
     /// バックグラウンドロードの世代番号カウンタ。`fresh_request_id` 呼び出しごとに +1。
     /// 旧ロードの結果を識別して破棄するために使用する。
     pub(crate) next_request_id: u64,
@@ -581,10 +585,15 @@ impl ViewerApp {
             .expect("wgpu render state required");
 
         // 日本語フォント読み込み
-        Self::setup_japanese_font(&cc.egui_ctx);
+        Self::setup_cjk_fonts(&cc.egui_ctx);
 
-        // ダークテーマ（Blender/Substance Painter 風）
-        Self::setup_dark_theme(&cc.egui_ctx);
+        // ダークテーマ（Blender/Substance Painter 風）— popone.toml [theme] で色変更可能
+        let theme = app_config
+            .as_ref()
+            .map(|c| &c.theme)
+            .cloned()
+            .unwrap_or_default();
+        Self::setup_dark_theme(&cc.egui_ctx, &theme);
 
         // スプラッシュ画像読み込み
         let splash_texture = Self::load_splash_texture(&cc.egui_ctx);
@@ -675,6 +684,8 @@ impl ViewerApp {
             pending_window_restore,
             texture_history,
             dark_theme_applied: false,
+            theme_panel_bg: Self::theme_color(&theme.panel_bg, DARK_PANEL_BG),
+            theme_border: Self::theme_color(&theme.border, DARK_BORDER_COLOR),
             next_request_id: 0,
             reload_snapshot: None,
             heartbeat: super::watchdog::start(Duration::from_secs(5), Duration::from_secs(2)),
@@ -694,25 +705,34 @@ impl ViewerApp {
             .clone()
     }
 
-    fn setup_japanese_font(ctx: &egui::Context) {
-        // Noto Sans JP（OFL ライセンス）をバイナリに組み込み
+    fn setup_cjk_fonts(ctx: &egui::Context) {
+        // Noto Sans JP（OFL ライセンス）— 日本語プライマリ
         const NOTO_SANS_JP: &[u8] = include_bytes!("../../../assets/NotoSansJP-Regular.ttf");
+        // Noto Sans SC（OFL ライセンス）— 簡体字フォールバック
+        const NOTO_SANS_SC: &[u8] = include_bytes!("../../../assets/NotoSansSC-Regular.otf");
 
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
             "noto_jp".to_owned(),
             egui::FontData::from_static(NOTO_SANS_JP).into(),
         );
-        fonts
+        fonts.font_data.insert(
+            "noto_sc".to_owned(),
+            egui::FontData::from_static(NOTO_SANS_SC).into(),
+        );
+        // JP → SC の順にフォールバック（JP にないグリフを SC で補完）
+        let proportional = fonts
             .families
             .get_mut(&egui::FontFamily::Proportional)
-            .expect("Proportional フォントファミリーは常に存在")
-            .insert(0, "noto_jp".to_owned());
-        fonts
+            .expect("Proportional フォントファミリーは常に存在");
+        proportional.insert(0, "noto_sc".to_owned());
+        proportional.insert(0, "noto_jp".to_owned());
+        let monospace = fonts
             .families
             .get_mut(&egui::FontFamily::Monospace)
-            .expect("Monospace フォントファミリーは常に存在")
-            .push("noto_jp".to_owned());
+            .expect("Monospace フォントファミリーは常に存在");
+        monospace.push("noto_jp".to_owned());
+        monospace.push("noto_sc".to_owned());
         ctx.set_fonts(fonts);
     }
 
@@ -727,30 +747,42 @@ impl ViewerApp {
     }
 
     /// v0 デザイン準拠のダークテーマを適用
-    fn setup_dark_theme(ctx: &egui::Context) {
+    /// hex 文字列を Color32 に変換（デフォルト値つき）
+    fn theme_color(opt: &Option<String>, default: egui::Color32) -> egui::Color32 {
+        opt.as_ref()
+            .and_then(|s| persistence::ThemeConfig::parse_hex(s))
+            .map(|(r, g, b)| egui::Color32::from_rgb(r, g, b))
+            .unwrap_or(default)
+    }
+
+    fn setup_dark_theme(ctx: &egui::Context, theme: &persistence::ThemeConfig) {
         let mut visuals = egui::Visuals::dark();
 
-        // パネル・ウィンドウ背景: #1D1D1D
-        visuals.panel_fill = DARK_PANEL_BG;
-        visuals.window_fill = DARK_PANEL_BG;
+        let panel_bg = Self::theme_color(&theme.panel_bg, DARK_PANEL_BG);
+        let border = Self::theme_color(&theme.border, DARK_BORDER_COLOR);
+        let accent = Self::theme_color(&theme.accent, egui::Color32::from_rgb(0x4A, 0x90, 0xD9));
+        let text_color = Self::theme_color(&theme.text, egui::Color32::from_gray(0xD0));
+        let widget_bg =
+            Self::theme_color(&theme.widget_bg, egui::Color32::from_rgb(0x25, 0x25, 0x25));
+        let active_color =
+            Self::theme_color(&theme.active, egui::Color32::from_rgb(0x2A, 0x5A, 0x8A));
 
-        // ボーダー: #333333
-        let border = DARK_BORDER_COLOR;
+        // パネル・ウィンドウ背景
+        visuals.panel_fill = panel_bg;
+        visuals.window_fill = panel_bg;
+
+        // ボーダー
         let border_stroke = egui::Stroke::new(1.0, border);
         visuals.window_stroke = border_stroke;
 
-        // アクセントカラー
-        let accent = egui::Color32::from_rgb(0x4A, 0x90, 0xD9);
-
-        // ウィジェット共通テキスト色: #D0D0D0
-        let fg = egui::Stroke::new(1.0, egui::Color32::from_gray(0xD0));
+        // ウィジェット共通テキスト色
+        let fg = egui::Stroke::new(1.0, text_color);
 
         // noninteractive（ラベル・セパレータ等）
         visuals.widgets.noninteractive.bg_stroke = border_stroke;
         visuals.widgets.noninteractive.fg_stroke = fg;
 
         // inactive（ボタン通常時）
-        let widget_bg = egui::Color32::from_rgb(0x25, 0x25, 0x25);
         visuals.widgets.inactive.bg_fill = widget_bg;
         visuals.widgets.inactive.weak_bg_fill = widget_bg;
         visuals.widgets.inactive.bg_stroke = border_stroke;
@@ -763,9 +795,8 @@ impl ViewerApp {
         visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
 
         // active（クリック中）
-        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(0x2A, 0x5A, 0x8A);
-        visuals.widgets.active.bg_stroke =
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(0x2A, 0x5A, 0x8A));
+        visuals.widgets.active.bg_fill = active_color;
+        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, active_color);
         visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
 
         // open（展開中のComboBox等）
@@ -1409,6 +1440,8 @@ impl ViewerApp {
             prefab_entry_path: None,
         });
 
+        // 新規ロード時: サイドパネルを情報タブに戻す
+        self.side_panel_tab = SidePanelTab::Info;
         // 新規ロード時: シェーダーを初期値にリセットしてからモデル形式に応じて正規化
         self.display.shader_override = ShaderOverride::Default;
         self.display.use_mmd_path = false;
@@ -1696,7 +1729,7 @@ impl eframe::App for ViewerApp {
         // ダークテーマ: new() での設定が eframe の初期化で上書きされる場合があるため
         // update() 初回で再適用する（以降はフラグで1回のみ）
         if !self.dark_theme_applied {
-            Self::setup_dark_theme(ctx);
+            Self::setup_dark_theme(ctx, &self.app_config.theme);
             self.dark_theme_applied = true;
         }
 
@@ -1774,8 +1807,8 @@ impl eframe::App for ViewerApp {
         self.process_keyboard_shortcuts(ctx);
 
         // ダークテーマ: パネル背景を明示的に設定（テーマ自体は new() で1回だけ設定済み）
-        let dark_panel = DARK_PANEL_BG;
-        let dark_border = egui::Stroke::new(1.0, DARK_BORDER_COLOR);
+        let dark_panel = self.theme_panel_bg;
+        let dark_border = egui::Stroke::new(1.0, self.theme_border);
         let panel_frame = egui::Frame::new()
             .fill(dark_panel)
             .stroke(dark_border)
@@ -1787,7 +1820,7 @@ impl eframe::App for ViewerApp {
             .show(ctx, |bar| {
                 bar.horizontal(|ui| {
                     // トップバーボタン: 通常時は透明背景、ホバー時はグローバルテーマのブルーが効く
-                    let border33 = DARK_BORDER_COLOR;
+                    let border33 = self.theme_border;
                     ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
                     ui.visuals_mut().widgets.inactive.bg_fill = egui::Color32::TRANSPARENT;
                     ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border33);

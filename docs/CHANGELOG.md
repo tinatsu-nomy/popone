@@ -3,9 +3,12 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.2.41](#v0241)
+    - [Improvements](#improvements)
+    - [Documentation & Build](#documentation--build)
   - [v0.2.40](#v0240)
     - [Security](#security)
-    - [Improvements](#improvements)
+    - [Improvements](#improvements-1)
     - [Bug Fixes](#bug-fixes)
     - [Code Quality](#code-quality)
   - [v0.2.39](#v0239)
@@ -16,32 +19,47 @@
     - [Refactoring](#refactoring)
   - [v0.2.38](#v0238)
     - [Performance](#performance-1)
-    - [Improvements](#improvements-1)
+    - [Improvements](#improvements-2)
   - [v0.2.37](#v0237)
     - [Bug Fixes](#bug-fixes-2)
   - [v0.2.36](#v0236)
-    - [Improvements](#improvements-2)
-  - [v0.2.35](#v0235)
     - [Improvements](#improvements-3)
+  - [v0.2.35](#v0235)
+    - [Improvements](#improvements-4)
     - [Documentation](#documentation)
   - [v0.2.34](#v0234)
     - [New Features](#new-features-1)
-    - [Improvements](#improvements-4)
+    - [Improvements](#improvements-5)
   - [v0.2.33](#v0233)
     - [New Features](#new-features-2)
-    - [Improvements](#improvements-5)
+    - [Improvements](#improvements-6)
   - [v0.2.32](#v0232)
     - [New Features](#new-features-3)
     - [Code Quality & Performance Improvements](#code-quality--performance-improvements)
   - [v0.2.31](#v0231)
     - [New Features](#new-features-4)
-    - [Improvements](#improvements-6)
+    - [Improvements](#improvements-7)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.2.41
+
+### Improvements
+
+- **Chinese text display support** — Added `NotoSansSC-Regular.otf` (Simplified Chinese) as a fallback font after `NotoSansJP-Regular.ttf`. Model names, author names, and other metadata from Chinese-region VRM/FBX models now render correctly instead of showing □ (tofu). The font fallback chain is JP → SC → egui default
+- **Info tab auto-switch on model load** — The side panel now automatically switches to the Info tab when a new model is loaded, so the user immediately sees the model metadata. Append loading does not change the current tab
+- **Configurable theme colors** — Added `[theme]` section to `popone.toml`. Six key colors are customizable: `panel_bg`, `border`, `accent`, `text`, `widget_bg`, `active`. Values are 6-digit hex strings (e.g. `"4A90D9"` or `"#4A90D9"`). Unspecified fields fall back to the default dark theme
+
+### Documentation & Build
+
+- **Third-party license notices** — Added `THIRD_PARTY_NOTICES.md` documenting the SIL Open Font License for the bundled fonts (NotoSansJP + NotoSansSC). The license section in both READMEs now references this file, clearly separating code license (0BSD) from bundled asset licenses
+- **GitHub Actions CI** — Added `.github/workflows/ci.yml` with Windows runner: format check (`cargo fmt`), clippy lint (`-D warnings`), build (CLI + viewer), and test suite
+- **Building from Source documentation** — Added build instructions to both READMEs, including Windows SDK recommendation for exe icon embedding
+- **Graceful icon embedding** — `build.rs` no longer panics when Windows SDK (`rc.exe`) is unavailable; instead it emits a warning and produces an exe without a custom icon
 
 ## v0.2.40
 
