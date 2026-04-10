@@ -162,6 +162,26 @@ fn pre_decode_textures(ir: &mut IrModel, cancel: &std::sync::Arc<std::sync::atom
                         width,
                         height,
                     };
+                    // PSD はデコード後 PNG として出力する必要がある（image crate は PSD エンコード未対応）。
+                    // ここでファイル名と MIME を PNG に更新することで、後段の
+                    // write_all_textures_from_ir_opt_cancel が拡張子だけを見て誤って psd_to_png を
+                    // 呼び生 RGBA を PSD 扱いしてしまう不具合を防ぐ。
+                    if is_psd {
+                        let stem = std::path::Path::new(&tex.filename)
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned();
+                        let old_name = std::mem::replace(&mut tex.filename, format!("{stem}.png"));
+                        tex.mime_type = "image/png".to_string();
+                        log::info!(
+                            "Pre-decode PSD->PNG: '{}' -> '{}' ({}x{})",
+                            old_name,
+                            tex.filename,
+                            width,
+                            height
+                        );
+                    }
                 }
                 Err(e) => {
                     log::warn!(
