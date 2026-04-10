@@ -2913,28 +2913,22 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             .add_enabled(!uv_dialog_active, egui::Button::new("UVマップ出力"))
             .clicked()
         {
-            let default_path = if app.export.pmx_output_path.is_empty() {
-                std::path::PathBuf::from("uvmap.psd")
+            // デフォルトディレクトリ: モデルをロードしたディレクトリ（ソースファイルの親）
+            // アーカイブの場合は display_path がアーカイブ本体を指すため、
+            // 自動的にアーカイブの置かれたディレクトリが採用される。
+            let default_dir = app.loaded.as_ref().map(|l| {
+                l.source
+                    .display_path()
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .to_path_buf()
+            });
+            // デフォルトファイル名: model_display_name があればそれ、無ければ "uvmap"
+            let file_name = Some(if app.export.model_display_name.is_empty() {
+                "uvmap.psd".to_string()
             } else {
-                std::path::PathBuf::from(&app.export.pmx_output_path).with_extension("psd")
-            };
-            // デフォルトディレクトリ: PMX出力パスがあればその親、なければモデルファイルの親
-            let default_dir = default_path
-                .parent()
-                .filter(|d| !d.as_os_str().is_empty())
-                .map(|d| d.to_path_buf())
-                .or_else(|| {
-                    app.loaded.as_ref().map(|l| {
-                        l.source
-                            .display_path()
-                            .parent()
-                            .unwrap_or(std::path::Path::new("."))
-                            .to_path_buf()
-                    })
-                });
-            let file_name = default_path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned());
+                format!("{}.psd", app.export.model_display_name)
+            });
             // ダイアログ結果受信後に使う材質グループ情報をキャプチャ
             let uv_groups: Vec<(String, std::ops::Range<usize>)> =
                 if let Some(ref loaded) = app.loaded {
