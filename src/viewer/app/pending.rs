@@ -1134,21 +1134,30 @@ impl ViewerApp {
         let queue = &render_state.queue;
         let total = gb.ir.textures.len();
 
-        // Phase 1: テクスチャアップロード（フレーム分割）
-        if gb.next_tex < total && gb.cpu_prep_rx.is_none() {
-            let end = (gb.next_tex + GPU_UPLOAD_BATCH).min(total);
-            for i in gb.next_tex..end {
-                let view = super::super::texture::upload_single_texture(
-                    &gb.ir.textures[i],
-                    i,
-                    device,
-                    queue,
-                );
-                gb.gpu_textures.push(view);
+        // Phase 1: テクスチャアップロード（フレーム分割）+ 完了後の Phase 2 起動。
+        // cpu_prep_rx が None の間のみ実行する（Phase 2 起動後は何もしない）。
+        // total == 0 （例: MTL 解決失敗で材質=デフォルトのみの OBJ 等）のケースでは
+        // アップロード対象が無いまま直ちに Phase 2 起動へ進む必要がある。
+        // 旧実装は外側 if に `gb.next_tex < total` を含めていたため、total==0 で
+        // Phase 1 ブロック全体がスキップされ、Phase 2 の起動にも到達せず
+        // GPU 構築が永久ハングしていた。
+        if gb.cpu_prep_rx.is_none() {
+            // 残りテクスチャを 1 バッチだけアップロード（total==0 ならこのブロックはスキップ）
+            if gb.next_tex < total {
+                let end = (gb.next_tex + GPU_UPLOAD_BATCH).min(total);
+                for i in gb.next_tex..end {
+                    let view = super::super::texture::upload_single_texture(
+                        &gb.ir.textures[i],
+                        i,
+                        device,
+                        queue,
+                    );
+                    gb.gpu_textures.push(view);
+                }
+                gb.next_tex = end;
             }
-            gb.next_tex = end;
 
-            // テクスチャ完了 → Phase 2: BG スレッドで CPU prep 開始
+            // Phase 1 完了（0 本含む）→ Phase 2: BG スレッドで CPU prep 開始
             if gb.next_tex >= total {
                 log::info!(
                     "[gpu_build] Phase 1 done: {total} textures uploaded, spawning BG cpu_prep"
