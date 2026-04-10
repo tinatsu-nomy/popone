@@ -645,6 +645,10 @@ pub struct ExportState {
     pub output_log: bool,
     /// PMX出力パス（テキストボックス編集用）
     pub pmx_output_path: String,
+    /// ユーザーに表示するモデル名（拡張子なし）。
+    /// タイトルバー表示と PMX 出力ファイル名の両方に使われる。
+    /// 初期値はロード元に応じて自動設定され、UI から編集可能。
+    pub model_display_name: String,
     /// 表示材質のみPMX出力（デフォルト: false）
     pub export_visible_only: bool,
     /// UVマップ出力解像度
@@ -672,6 +676,7 @@ impl Default for ExportState {
         Self {
             output_log: false,
             pmx_output_path: String::new(),
+            model_display_name: String::new(),
             export_visible_only: false,
             uv_map_size: crate::convert::uvmap::DEFAULT_UV_SIZE,
             no_physics: false,

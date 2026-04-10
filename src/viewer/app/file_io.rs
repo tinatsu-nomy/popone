@@ -1321,6 +1321,7 @@ pub(crate) struct ReloadSnapshot {
     material_display: Vec<MaterialDisplayState>,
     material_filter: String,
     pmx_output_path: String,
+    model_display_name: String,
     export_visible_only: bool,
     tex_assignments: HashMap<usize, TextureSource>,
     pkg_tex_assignments: HashMap<usize, String>,
@@ -2065,21 +2066,27 @@ impl ViewerApp {
                     }
                 }
 
-                // Prefab: prefab_name / prefab_entry_path を設定
-                let prefab_was_set = if let Some(ref mut loaded) = self.loaded {
-                    if payload.prefab_name.is_some() {
-                        loaded.prefab_name = payload.prefab_name;
-                        loaded.prefab_entry_path = payload.prefab_entry_path;
-                        true
+                // Prefab: prefab_name / prefab_entry_path を設定し、
+                // model_display_name を Prefab 名（拡張子除去＋サニタイズ）に上書き
+                let new_display_name: Option<String> = if let Some(ref mut loaded) = self.loaded {
+                    if let Some(ref prefab_filename) = payload.prefab_name {
+                        let stem = std::path::Path::new(prefab_filename)
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy();
+                        let sanitized = crate::sanitize_filename(&stem);
+                        loaded.prefab_name = payload.prefab_name.clone();
+                        loaded.prefab_entry_path = payload.prefab_entry_path.clone();
+                        sanitized
                     } else {
-                        false
+                        None
                     }
                 } else {
-                    false
+                    None
                 };
-                // Prefab 名が確定したら PMX 出力ファイル名を Prefab 名ベースに差し替え
-                if prefab_was_set {
-                    self.refresh_pmx_output_path_from_loaded();
+                if let Some(name) = new_display_name {
+                    self.export.model_display_name = name;
+                    self.refresh_derived_from_display_name();
                 }
 
                 // Prefab: fbx_ranges から MaterialGroup を構築
@@ -3448,8 +3455,20 @@ impl ViewerApp {
             }
         }
 
-        // Prefab 名が確定したので、PMX 出力ファイル名を Prefab 名ベースに差し替え
-        self.refresh_pmx_output_path_from_loaded();
+        // Prefab 名が確定したので、model_display_name を Prefab 名ベースに上書きし、
+        // タイトルバーと PMX 出力ファイル名の両方を差し替える
+        if let Some(ref loaded) = self.loaded {
+            if let Some(ref prefab_filename) = loaded.prefab_name {
+                let stem = std::path::Path::new(prefab_filename)
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                if let Some(sanitized) = crate::sanitize_filename(&stem) {
+                    self.export.model_display_name = sanitized;
+                }
+            }
+        }
+        self.refresh_derived_from_display_name();
 
         // モデル読み込み時はアニメーションをクリア
         self.anim.state = None;
@@ -4027,6 +4046,7 @@ impl ViewerApp {
             material_display: std::mem::take(&mut self.material_display),
             material_filter: std::mem::take(&mut self.material_filter),
             pmx_output_path: std::mem::take(&mut self.export.pmx_output_path),
+            model_display_name: std::mem::take(&mut self.export.model_display_name),
             export_visible_only: self.export.export_visible_only,
             tex_assignments: std::mem::take(&mut self.tex.assignments),
             pkg_tex_assignments: std::mem::take(&mut self.tex.pkg_assignments),
@@ -4047,6 +4067,7 @@ impl ViewerApp {
         self.material_display = snap.material_display;
         self.material_filter = snap.material_filter;
         self.export.pmx_output_path = snap.pmx_output_path;
+        self.export.model_display_name = snap.model_display_name;
         self.export.export_visible_only = snap.export_visible_only;
         if let Some(pkg) = snap.pkg_textures {
             self.tex.pkg_textures = Some(pkg);
@@ -4092,7 +4113,10 @@ impl ViewerApp {
         }
         self.material_filter = snap.material_filter;
         self.export.pmx_output_path = snap.pmx_output_path;
+        self.export.model_display_name = snap.model_display_name;
         self.export.export_visible_only = snap.export_visible_only;
+        // リロードで復元した model_display_name をタイトルバーに反映
+        self.refresh_derived_from_display_name();
 
         // テクスチャ割り当てを復元（ファイルパス分のみ。pkg分はreload_unitypackage内で処理済み）
         let saved_link = self.tex.link_same_name;

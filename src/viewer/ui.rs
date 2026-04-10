@@ -2737,6 +2737,24 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             app.export.output_base_dir = None;
         }
     });
+
+    // モデル名編集（タイトルバー表示 + PMX 出力ファイル名の両方に反映）
+    // モデル未ロード時はグレーアウト
+    ui.horizontal(|ui| {
+        ui.label("モデル名:");
+        ui.add_enabled_ui(has_model && !is_processing, |ui| {
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut app.export.model_display_name)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("(拡張子なし)"),
+            );
+            if response.changed() {
+                // TextEdit からの変更はユーザー入力のため、サニタイズはせずそのまま反映。
+                // タイトルバー・PMX 出力ファイル名に即時反映する。
+                app.refresh_derived_from_display_name();
+            }
+        });
+    });
     ui.separator();
 
     // PMX/PMD ロード時は PMX 変換関連をグレーアウト
@@ -2760,14 +2778,18 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         source_path.parent().unwrap_or(std::path::Path::new("."))
                     });
                 let converted_dir = crate::next_converted_dir(base_dir);
-                // Prefab 経由ロード時は Prefab 名を優先（default_pmx_stem で吸収）
-                let pmx_stem = loaded.default_pmx_stem().unwrap_or_else(|| {
-                    source_path
-                        .file_stem()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned()
-                });
+                // ユーザーが編集可能な model_display_name を優先。未設定時のみフォールバック。
+                let pmx_stem = if !app.export.model_display_name.is_empty() {
+                    app.export.model_display_name.clone()
+                } else {
+                    crate::sanitize_filename(&loaded.ir.name).unwrap_or_else(|| {
+                        source_path
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                };
                 let output_path = converted_dir.join(format!("{}.pmx", pmx_stem));
                 app.export.pmx_output_path = output_path.to_string_lossy().into_owned();
                 // 出力ディレクトリ作成を BG スレッドで実行（ネットワークドライブ対策）

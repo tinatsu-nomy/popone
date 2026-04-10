@@ -107,22 +107,6 @@ pub struct LoadedModel {
 }
 
 impl LoadedModel {
-    /// PMX 出力ファイル名の stem を決定する。
-    /// Prefab 経由ロード時は Prefab 名（拡張子除去＋サニタイズ）を優先し、
-    /// それ以外は `ir.name` をサニタイズして返す。サニタイズ失敗時は `None`。
-    pub fn default_pmx_stem(&self) -> Option<String> {
-        if let Some(ref prefab) = self.prefab_name {
-            let stem = std::path::Path::new(prefab)
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy();
-            if let Some(sanitized) = crate::sanitize_filename(&stem) {
-                return Some(sanitized);
-            }
-        }
-        crate::sanitize_filename(&self.ir.name)
-    }
-
     /// 同名の sibling 材質インデックスを返す（同一 MaterialGroup 内に限定）
     /// `link_same_name` のスコープ制限に使用
     pub fn same_name_siblings(&self, mat_idx: usize) -> Vec<usize> {
@@ -543,21 +527,32 @@ impl ViewerApp {
         self.next_request_id
     }
 
-    /// `loaded.prefab_name` が設定された直後に呼び出し、`pmx_output_path` の
-    /// ファイル名部分を Prefab 名ベースに差し替える。ディレクトリ部分
-    /// （`converted_modelXX/`）は `finish_load_with_gpu` で確定済みのものを維持する。
-    pub(crate) fn refresh_pmx_output_path_from_loaded(&mut self) {
-        let Some(ref loaded) = self.loaded else {
+    /// `self.export.model_display_name` の変更に伴い、派生状態（ウィンドウタイトル、
+    /// `pmx_output_path` のファイル名部分）を再生成する。
+    ///
+    /// - ウィンドウタイトル: `POPONE Model Viewer v{ver} - {model_display_name}` を次フレームで適用。
+    /// - `pmx_output_path`: 親ディレクトリ（`converted_modelXX/`）は維持し、ファイル名のみ
+    ///   `{model_display_name}.pmx` に差し替える。`pmx_output_path` が空、または
+    ///   `model_display_name` が空の場合はパス更新をスキップする。
+    ///
+    /// 呼び出し元:
+    /// - Prefab 名が後から確定した直後（file_io.rs の PkgInitial / 同期 Prefab ロード経路）
+    /// - UI の TextEdit でユーザーが名前を編集したとき
+    /// - リロード成功後の snapshot 復元時
+    pub(crate) fn refresh_derived_from_display_name(&mut self) {
+        self.window_title = Some(format!(
+            "POPONE Model Viewer v{} - {}",
+            env!("CARGO_PKG_VERSION"),
+            self.export.model_display_name,
+        ));
+        if self.export.pmx_output_path.is_empty() || self.export.model_display_name.is_empty() {
             return;
-        };
-        let Some(stem) = loaded.default_pmx_stem() else {
-            return;
-        };
+        }
         let current = std::path::PathBuf::from(&self.export.pmx_output_path);
         let Some(parent) = current.parent() else {
             return;
         };
-        let new_path = parent.join(format!("{stem}.pmx"));
+        let new_path = parent.join(format!("{}.pmx", self.export.model_display_name));
         self.export.pmx_output_path = new_path.to_string_lossy().into_owned();
     }
 
@@ -1435,13 +1430,20 @@ impl ViewerApp {
             .as_deref()
             .unwrap_or_else(|| path.parent().unwrap_or(std::path::Path::new(".")));
         let converted_dir = crate::next_converted_dir(base_dir);
-        let pmx_stem = crate::sanitize_filename(&ir.name).unwrap_or_else(|| {
-            path.file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        });
-        let pmx_name = format!("{}.pmx", pmx_stem);
+        // モデル表示名の初期値（拡張子なし）:
+        //   - 通常のファイル (FBX/VRM/PMX/...) → そのファイル名
+        //   - アーカイブ (zip/7z/unitypackage) → アーカイブファイル名
+        //     (ReloadableSource::Archive の display_path はアーカイブ本体を指す)
+        //   - Prefab は後段（file_io.rs の PkgInitial/同期 Prefab ロード経路）で Prefab 名に上書き
+        //   - 追加 (append) はこの関数を経由しないため自動的に維持される
+        let initial_display_name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(crate::sanitize_filename)
+            .or_else(|| crate::sanitize_filename(&ir.name))
+            .unwrap_or_else(|| "model".to_string());
+        self.export.model_display_name = initial_display_name.clone();
+        let pmx_name = format!("{initial_display_name}.pmx");
         self.export.pmx_output_path = converted_dir.join(&pmx_name).to_string_lossy().into_owned();
 
         // キャッシュ構築
@@ -1451,7 +1453,6 @@ impl ViewerApp {
         // テクスチャ割当ログ出力
         ir.log_texture_assignments();
 
-        let format_name = ir.source_format.label().to_string();
         let model_name = ir.name.clone();
         let mat_count = ir.materials.len();
         let draw_count = gpu_model.draws.len();
@@ -1482,11 +1483,11 @@ impl ViewerApp {
         self.display.auto_shader = true;
         self.normalize_shader_state();
 
-        // ウィンドウタイトル更新
+        // ウィンドウタイトル更新（model_display_name ベース）
         self.window_title = Some(format!(
             "POPONE Model Viewer v{} - {}",
             env!("CARGO_PKG_VERSION"),
-            format_name,
+            self.export.model_display_name,
         ));
 
         if let Some(ref mut renderer) = self.renderer {
@@ -1885,13 +1886,25 @@ impl eframe::App for ViewerApp {
                         helpers::open_directory(&self.logs_dir);
                     }
 
-                    if let Some(ref loaded) = self.loaded {
+                    // モデル名（編集可能）。タイトルバー表示 + PMX 出力ファイル名の両方に反映。
+                    // 右側パネルの「モデル名:」TextEdit と同じ値を共有する。
+                    if self.loaded.is_some() {
                         ui.separator();
                         ui.label(
-                            egui::RichText::new(&loaded.ir.name)
-                                .color(egui::Color32::WHITE)
+                            egui::RichText::new("モデル名:")
+                                .color(egui::Color32::from_gray(0xB0))
                                 .size(11.0),
                         );
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut self.export.model_display_name)
+                                .desired_width(240.0)
+                                .text_color(egui::Color32::WHITE)
+                                .font(egui::FontId::proportional(12.0))
+                                .hint_text("(拡張子なし)"),
+                        );
+                        if response.changed() {
+                            self.refresh_derived_from_display_name();
+                        }
                     }
 
                     // 右端にフィット/リセットボタン
