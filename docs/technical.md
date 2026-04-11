@@ -90,6 +90,7 @@
     - [FBX Direct Selection: Prefab-Aware Reload](#fbx-direct-selection-prefab-aware-reload)
     - [Reload Stable Key: PkgModelLocator](#reload-stable-key-pkgmodellocator)
     - [reload_unitypackage Texture Restoration](#reload_unitypackage-texture-restoration)
+    - [Reload User State Preservation (v0.3.0)](#reload-user-state-preservation-v030)
     - [IrTexture Deduplication in assign_texture_source_to_material](#irtexture-deduplication-in-assign_texture_source_to_material)
   - [GPU Pipeline Warm-up & Model Build Optimization](#gpu-pipeline-warm-up--model-build-optimization)
     - [Pipeline Warm-up (`WarmupPhase`)](#pipeline-warm-up-warmupphase)
@@ -1304,6 +1305,49 @@ When restoring manually assigned textures during UnityPackage reload, the same P
 On PSD→PNG conversion failure, `continue` skips the material assignment (consistent with normal path failure behavior).
 
 `name_to_ir: HashMap<String, usize>` cache prevents duplicate IrTexture additions for the same texture name. Package texture names are guaranteed unique, so `tex_name` alone is sufficient as a key.
+
+### Reload User State Preservation (v0.3.0)
+
+Reloads triggered via `reload_current()` go through the same `finish_load_with_gpu` path as fresh loads, so values that should be "reset on fresh load but preserved on reload" — the side panel tab, stance conversion flags, and the user-edited model display name — were being lost unintentionally. v0.3.0 addresses this via two channels:
+
+#### ① `ReloadSnapshot` extensions
+
+In addition to the existing `pmx_output_path` / `material_display` / `camera` fields, the following are now saved and restored:
+
+| Field | Reason |
+|---|---|
+| `side_panel_tab: SidePanelTab` | `finish_load_with_gpu` resets it to `Info`; `restore_snapshot_on_success` writes it back so toggling A/T stance on the `[出力]` tab stays on that tab |
+| `model_display_name: String` | Preserves the model name the user typed in the top bar / right panel (which doubles as the PMX output filename) |
+
+Restoration order:
+
+```
+reload_current()
+ → save_reload_snapshot() copies side_panel_tab / model_display_name
+ → BG path identical to fresh load → finish_load_with_gpu() resets both
+ → restore_snapshot_on_success() writes them back from the snapshot
+  - self.side_panel_tab = snap.side_panel_tab
+  - self.export.model_display_name = snap.model_display_name
+  - self.refresh_derived_from_display_name() regenerates window title + pmx_output_path
+```
+
+Fresh loads (file dialog, D&D, IPC, etc.) do not go through `save_reload_snapshot()`, so `finish_load_with_gpu`'s `Info` reset stays in effect and the side panel starts from the `[情報]` tab as before.
+
+#### ② `PendingLoadDispatch::is_reload` flag
+
+`route_load_dispatch()` is the shared entry for both fresh loads and reloads, and unconditionally reset `self.normalize_pose = false` / `normalize_to_tstance = false` just before calling `spawn_bg_load` — intended as a safety reset for fresh loads. Because reloads also traverse this path, the stance flags were always `false` by the time the BG parse ran, and `extract_ir_model_with_options(..., normalize_pose=true)` never took the A-stance branch. Result: A/T stance conversion did nothing.
+
+Fix: add `is_reload: bool` to `PendingLoadDispatch`. Only dispatches originating from `reload_current()` set it to `true`, and `route_load_dispatch` skips the reset when the flag is set:
+
+```rust
+if !is_reload {
+    self.normalize_pose = false;
+    self.normalize_to_tstance = false;
+}
+self.spawn_bg_load(path, BgLoadKind::Initial { ... }, format);
+```
+
+The other four dispatch call sites (file dialog, D&D, IPC, startup `initial_file`) all pass `is_reload: false` explicitly, preserving the original "fresh loads reset stance flags" intent.
 
 ### IrTexture Deduplication in assign_texture_source_to_material
 

@@ -3,7 +3,7 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.3.0 (Unreleased)](#v030-unreleased)
+  - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -11,13 +11,6 @@
 
 [日本語](CHANGELOG.jp.md)
 
-## v0.3.0 (Unreleased)
+## v0.3.0 (2026-04-11)
 
-Initial public release baseline. See [ROADMAP](ROADMAP.md) for items targeted for this release and beyond.
-
-Highlights under consideration:
-
-- **Expression material binds** — `materialColorBinds` / `textureTransformBinds` for VRM 1.0 Expression playback (shader side is ready; Expression pipeline connection required)
-- **Unity `.anim` residuals** — Accurate muscle range via `HumanTrait`, axis verification for foot/hand/fingers, Foot IK, blend-shape curves
-- **Import options** — OBJ / STL unit and coordinate-system selection dialog polish
-- **Background load internals** — `CpuParseInput` `ArchiveEntry` / `Reload` variants
+Initial public release. Focused on documentation MECE restructuring, UX improvements, and UnityPackage-related bug fixes.
