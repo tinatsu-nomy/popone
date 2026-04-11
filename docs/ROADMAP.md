@@ -3,7 +3,7 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Roadmap](#roadmap)
-  - [Targeted for v0.3.0](#targeted-for-v030)
+  - [Targeted for v0.5.0](#targeted-for-v050)
     - [Expression Material Binds (VRM 1.0)](#expression-material-binds-vrm-10)
     - [OBJ / STL Import Options UI Polish](#obj--stl-import-options-ui-polish)
     - [Background Load Internals Cleanup](#background-load-internals-cleanup)
@@ -28,9 +28,11 @@
 
 This document tracks planned work, future improvements, and external feature requests for `popone`. Items in this list are **not** yet implemented. Completed work is recorded in [CHANGELOG.md](CHANGELOG.md).
 
-Current target: **v0.3.0**
+Current target: **v0.5.0**
 
-## Targeted for v0.3.0
+> **Note:** v0.4.0 shipped a focused log-viewer feature ([CHANGELOG.md](CHANGELOG.md#v040-2026-04-11)). The carry-over items below were originally targeted for v0.3.0 but have not yet been delivered, and are now planned for v0.5.0.
+
+## Targeted for v0.5.0
 
 ### Expression Material Binds (VRM 1.0)
 

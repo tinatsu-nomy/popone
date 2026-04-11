@@ -5,6 +5,7 @@ pub mod camera;
 pub mod export_filter;
 pub mod gpu;
 pub mod grid;
+pub mod log_viewer;
 pub mod mesh;
 #[cfg(target_os = "windows")]
 pub mod single_instance;

@@ -73,6 +73,56 @@ pub struct AppConfig {
     pub log: LogConfig,
     #[serde(default)]
     pub theme: ThemeConfig,
+    #[serde(default)]
+    pub log_viewer: LogViewerConfig,
+}
+
+/// ログビュアーウインドウの設定（表示状態・位置・サイズ・レベルフィルタ）。
+///
+/// 全フィールド `#[serde(default)]` で後方互換性を担保している。既存の `popone.toml`
+/// に `[log_viewer]` セクションが無くてもデフォルト値で起動する。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogViewerConfig {
+    /// 起動時にログビュアーを自動表示するか。初期 false。
+    #[serde(default)]
+    pub visible: bool,
+    /// ウインドウ左上座標 (x, y)。None = OS 任せのデフォルト位置。
+    #[serde(default)]
+    pub position: Option<[f32; 2]>,
+    /// ウインドウ内寸 (width, height)。None = デフォルト 720x480。
+    #[serde(default)]
+    pub size: Option<[f32; 2]>,
+    #[serde(default = "LogViewerConfig::default_true")]
+    pub show_error: bool,
+    #[serde(default = "LogViewerConfig::default_true")]
+    pub show_warn: bool,
+    #[serde(default = "LogViewerConfig::default_true")]
+    pub show_info: bool,
+    #[serde(default)]
+    pub show_debug: bool,
+    #[serde(default = "LogViewerConfig::default_true")]
+    pub follow_tail: bool,
+}
+
+impl LogViewerConfig {
+    fn default_true() -> bool {
+        true
+    }
+}
+
+impl Default for LogViewerConfig {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            position: None,
+            size: None,
+            show_error: true,
+            show_warn: true,
+            show_info: true,
+            show_debug: false,
+            follow_tail: true,
+        }
+    }
 }
 
 /// GUI テーマカラー設定。値は 6 桁の 16 進数 (例: "4A90D9", "#4A90D9")。
@@ -107,21 +157,24 @@ impl ThemeConfig {
     }
 }
 
+/// ログ設定（現在は出力レベルのみ）。
+///
+/// 旧バージョンには `keep`（古いログファイル保持数）フィールドがあったが、v0.4.0 で
+/// ログ出力が「ユーザ明示の手動エクスポート + パニック時のクラッシュダンプ」に集約され
+/// たため、自動ローテーションを廃止して `keep` フィールドも削除した。
+/// 既存 popone.toml に `keep = N` が残っていても serde が未知フィールドを無視するため
+/// 後方互換性は維持される。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogConfig {
     /// ログレベル (error, warn, info, debug)
     #[serde(default = "LogConfig::default_level")]
     pub level: String,
-    /// ログファイル保持数
-    #[serde(default = "LogConfig::default_keep")]
-    pub keep: usize,
 }
 
 impl Default for LogConfig {
     fn default() -> Self {
         Self {
             level: Self::default_level(),
-            keep: Self::default_keep(),
         }
     }
 }
@@ -129,10 +182,6 @@ impl Default for LogConfig {
 impl LogConfig {
     fn default_level() -> String {
         "debug".to_string()
-    }
-
-    fn default_keep() -> usize {
-        5
     }
 
     /// ログレベル文字列を `log::LevelFilter` に変換

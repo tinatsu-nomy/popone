@@ -986,18 +986,17 @@ fn run_viewer_with_file(input: PathBuf) -> Result<()> {
 /// ビューア共通起動（ログ・パニックフック・NativeOptions 設定）
 #[cfg(feature = "viewer")]
 fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
-    // シングルインスタンス: ログ初期化前に判定（不要なログファイル生成・ローテーション防止）
+    // シングルインスタンス: 既存インスタンスへの転送を試みる
     #[cfg(target_os = "windows")]
-    let can_rotate = {
+    {
         use popone::viewer::single_instance::InstanceCheck;
         match popone::viewer::single_instance::try_send_to_existing(initial_file.as_deref()) {
             InstanceCheck::Forwarded => return Ok(()),
-            InstanceCheck::Primary => true,
-            InstanceCheck::FallbackStart => false, // 既存検出済み→ログ削除しない
+            // Primary / FallbackStart は両方とも続行（v0.4.0 以降はログローテーションを
+            // 行わないので両者を区別する必要がない）
+            InstanceCheck::Primary | InstanceCheck::FallbackStart => {}
         }
-    };
-    #[cfg(not(target_os = "windows"))]
-    let can_rotate = true;
+    }
 
     // アプリデータディレクトリ（%LOCALAPPDATA%\popone）
     let data_dir = popone::viewer::app::persistence::data_dir();
@@ -1012,9 +1011,9 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
 
     let logs_dir = data_dir.join("logs");
     let _ = std::fs::create_dir_all(&logs_dir);
-    if can_rotate {
-        rotate_logs(&logs_dir, log_config.keep);
-    }
+    // v0.4.0 で「パニックログ以外は保存しない」方針に変えたうえ、ログ保存もユーザの
+    // 明示操作（ログビュアー内「ログ保存」ボタン）に集約したため、自動ローテーションは
+    // 廃止した。生成されるファイルはすべてユーザ意図のものなので勝手に削除しない。
 
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
     let log_path = logs_dir.join(format!("popone_{timestamp}.log"));
@@ -1023,22 +1022,24 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
     setup_logging(log_config.level_filter(), None, Some(log_buffer.clone()))?;
 
     {
-        let panic_log = log_path.clone();
+        // パニックダンプは `popone_<ts>.log` への中継書き込みを介さず、最初から
+        // `panic_<ts>.log` に直接書き出す（1 クラッシュ＝1 ファイルに揃えるため）。
+        // v0.4.0 以降はログローテーションも廃止しているため、生成された panic ダンプは
+        // ユーザが手動削除するまでずっと残る。
+        let panic_dump_path = match log_path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => match name.strip_prefix("popone_") {
+                Some(rest) => log_path.with_file_name(format!("panic_{rest}")),
+                None => log_path.clone(),
+            },
+            None => log_path.clone(),
+        };
         let panic_buffer = log_buffer.clone();
         std::panic::set_hook(Box::new(move |info| {
             let bt = std::backtrace::Backtrace::force_capture();
             let msg = format!("[PANIC] {info}\n{bt}");
             log::error!("{msg}");
-            // メモリバッファをファイルにフラッシュ
-            flush_log_buffer(&panic_buffer, &panic_log);
-            // パニックログを panic_yyyymmdd_hhmmss.log としてコピー
-            if let Some(name) = panic_log.file_name().and_then(|n| n.to_str()) {
-                if let Some(rest) = name.strip_prefix("popone_") {
-                    let panic_name = format!("panic_{rest}");
-                    let panic_path = panic_log.with_file_name(panic_name);
-                    let _ = std::fs::copy(&panic_log, &panic_path);
-                }
-            }
+            // メモリバッファを panic_<ts>.log に直接フラッシュ（コピーは不要）
+            flush_log_buffer(&panic_buffer, &panic_dump_path);
         }));
     }
 
@@ -1143,26 +1144,4 @@ fn run_viewer_inner(
         }),
     )
     .map_err(|e| anyhow::anyhow!("ビューア起動失敗: {e}"))
-}
-
-/// logs ディレクトリ内の古いログファイルを削除（最新 keep 件を保持）
-#[cfg(feature = "viewer")]
-fn rotate_logs(logs_dir: &std::path::Path, keep: usize) {
-    let mut entries: Vec<_> = std::fs::read_dir(logs_dir)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("popone_") && n.ends_with(".log"))
-        })
-        .collect();
-    // ファイル名でソート（タイムスタンプ順）→ 降順
-    entries.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
-    // keep 件より古いものを削除
-    for entry in entries.into_iter().skip(keep) {
-        let _ = std::fs::remove_file(entry.path());
-    }
 }

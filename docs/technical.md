@@ -196,6 +196,7 @@
   - [Log Output](#log-output)
     - [Overall Log Structure](#overall-log-structure)
     - [Panic Log](#panic-log)
+    - [Log Viewer (Separate Window)](#log-viewer-separate-window)
   - [Single Instance](#single-instance)
   - [FPS Measurement](#fps-measurement)
   - [Watchdog — Main Thread Responsiveness Monitor](#watchdog--main-thread-responsiveness-monitor)
@@ -2821,7 +2822,105 @@ Vertex weight distribution: ... ← DEBUG: Vertex count distribution of BDEF1/BD
 
 ### Panic Log
 
-On panic, the current log file (`popone_yyyymmdd_hhmmss.log`) is copied to `panic_yyyymmdd_hhmmss.log`. Files with the `panic_` prefix are excluded from log rotation (`rotate_logs`) cleanup, so they persist until manually deleted.
+On panic, `flush_log_buffer` inside `panic.set_hook` writes the in-memory buffer directly to `panic_yyyymmdd_hhmmss.log`. v0.4.0 collapses crash dumps to "one file per crash" by removing the legacy "write to `popone_yyyymmdd_hhmmss.log`, then copy to `panic_*.log`" relay. Automatic log rotation (`rotate_logs`) was also removed in the same release, so generated `panic_*.log` files persist until manually deleted.
+
+### Log Viewer (Separate Window)
+
+Implemented in `popone/src/viewer/log_viewer.rs`. Opens an OS-level separate window from the top-bar "ログ" button and streams the contents of `SharedLogBuffer` in real time.
+
+#### Choice of egui API
+
+- **`ctx.show_viewport_deferred`** is used. The reason `immediate` was rejected: the main `update()` runs `render_to_texture` for the 3D scene every frame, and `immediate` viewports trigger a parent repaint whenever the child needs one, which would force the 3D scene to re-render on every log line. With `deferred`, the child viewport's repaint does not wake the parent (the relevant egui `context.rs` documentation explicitly says "parent and child repaint each other in immediate mode, prefer deferred when avoidable").
+- To satisfy the `Fn + Send + Sync + 'static` bound on the deferred closure, `SharedLogViewer = Arc<Mutex<LogViewerModel>>` is captured into the closure via `Arc::clone`. The `ViewerApp` only carries a single `log_viewer: SharedLogViewer` field.
+- A fixed `egui::ViewportId::from_hash_of("popone_log_viewer")` is used as the viewport identifier.
+
+#### `LogViewerModel` Layout
+
+| Field | Type | Purpose |
+|---|---|---|
+| `visible` | `bool` | Window visibility |
+| `last_offset` | `usize` | Previous read position into `SharedLogBuffer::total_written` |
+| `lines` | `VecDeque<LogLine>` | Parsed log lines (capped at 20,000) |
+| `filter_indices` | `Vec<usize>` | Indices into `lines` that pass the level filter (used by virtualized scroll) |
+| `filters` | `LevelFilters` | Per-level visibility flags (Error/Warn/Info/Debug) |
+| `follow_tail` | `bool` | Auto tail-follow toggle |
+| `apply_geometry` | `Option<([f32; 2], [f32; 2])>` | Position / size to pass to `ViewportBuilder` next frame (consumed via `take()`, then `None`) |
+| `last_geometry` | `Option<([f32; 2], [f32; 2])>` | Latest position / size read from the child viewport every frame (used for persistence) |
+| `tail_buffer` | `String` | Trailing fragment without `\n` (prepended to next ingest) |
+| `seeking_first_header` | `bool` | `true` until the first `[HEADER]` is seen (used to discard the leading byte-level fragment from `SharedLogBuffer` drain) |
+
+#### Log Line Parser
+
+Parses the `[HH:MM:SS.mmm][LEVEL] message` format with a hand-written parser (no `regex` dependency):
+
+1. Take the timestamp from the first `[` to the next `]`
+2. Take the level string from the following `[` to its `]`
+3. If the level string is one of `ERROR`/`WARN`/`INFO`/`DEBUG`/`TRACE`, store the corresponding `LogLevel`. Otherwise (e.g. `FATAL`), store `LogLevel::Unknown`
+4. If a line does not start with `[` and a previous `LogLine` exists, append it to the previous `message` with a `\n` separator (multi-line message support such as backtraces)
+5. While `seeking_first_header == true`, lines that don't start with `[` are discarded (the `SharedLogBuffer` drains by bytes, so the leading fragment after a viewer-side reopen may be incomplete)
+
+#### `filter_indices` Consistency
+
+When `lines` exceeds the 20,000 cap and entries are drained from the front, the indices stored in `filter_indices` become stale. In that case `filters_dirty = true` is set and `rebuild_filter_indices` rebuilds the index at the end of the next `ingest`. The same flag is set when filter checkboxes are toggled. Per-line append cost is O(1); only cap-exceed and filter changes pay the O(N) rebuild.
+
+#### Geometry Round-Trip
+
+Splitting `apply_geometry` and `last_geometry` into two fields lets the following scenarios all round-trip correctly:
+
+| Scenario | Behavior |
+|---|---|
+| Startup with `visible=true` and saved geometry | `from_config` initializes both fields from the config → first frame consumes `apply_geometry` via `take()` |
+| Startup with `visible=false` and saved geometry | `from_config` also initializes `last_geometry` from the config → `show_log_viewer`'s early return does not touch `apply_geometry` → toggle-open uses `show()` which keeps the existing `apply_geometry` |
+| In-session close → reopen | `hide()` snapshots `last_geometry` into `apply_geometry`; the next `show()` restores it |
+| Exit without ever opening the viewer | `last_geometry` stays at its config value → `export_config` preserves the original config |
+
+`hide()` and `show()` are `LogViewerModel` helpers that provide identical behavior whether the viewer is closed via the `×` button or via the top-bar toggle.
+
+#### `ViewerApp::show_log_viewer` Flow
+
+```rust
+fn show_log_viewer(&self, ctx: &egui::Context) {
+    // The visible check must run BEFORE take(), so that a hidden-at-startup session
+    // does not consume apply_geometry on the first frame.
+    let apply_geometry = {
+        let mut m = self.log_viewer.lock().unwrap_or_else(|p| p.into_inner());
+        if !m.visible { return; }
+        m.apply_geometry.take()
+    };
+    // Pass position to ViewportBuilder only when apply_geometry is Some
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title("popone - Log Viewer")
+        .with_inner_size([720.0, 480.0]);
+    if let Some((pos, size)) = apply_geometry {
+        builder = builder.with_position(egui::pos2(pos[0], pos[1])).with_inner_size(size);
+    }
+    // Arc clones for the deferred closure
+    let model = Arc::clone(&self.log_viewer);
+    let log_buffer = Arc::clone(&self.log_buffer);
+    let logs_dir = self.logs_dir.clone();
+    ctx.show_viewport_deferred(vp_id, builder, move |child_ctx, _| {
+        let mut m = model.lock().unwrap_or_else(|p| p.into_inner());
+        m.poll(&log_buffer);                          // Incremental ingest
+        m.draw(child_ctx, &log_buffer, &logs_dir);    // UI rendering
+        // Read the latest geometry from the child viewport into last_geometry
+        // close_requested → m.hide() snapshots last_geometry into apply_geometry
+        if m.visible {
+            child_ctx.request_repaint_after(Duration::from_millis(150));  // 150ms polling
+        }
+    });
+}
+```
+
+#### Minimizing `LogBuffer` Lock Hold Time
+
+While `log_buffer.lock()` is held, log-producing threads (`log::info!` etc.) block, so the lock duration is minimized:
+
+1. Take the `read_from_offset` result `String` (or, on manual save, the `Vec<u8>` byte snapshot)
+2. Update `last_offset`
+3. Drop the guard
+4. Run parsing, UI rendering, and file I/O entirely outside the lock
+
+The `LogViewerModel` mutex itself never appears on the log-producing path, so it can be held for the full duration of UI rendering without affecting log producers.
 
 ## Single Instance
 
@@ -2834,7 +2933,7 @@ When the viewer is already running and launched again, the file path is forwarde
 - **Handle management**: Pipe handles are wrapped in `WinHandle` (RAII newtype with `Drop` impl calling `CloseHandle`), preventing leaks on early returns, panics, or `continue` paths
 - **Focus**: `ViewportCommand::Minimized(false)` + `Focus` (restores from minimized state)
 - **Path normalization**: `std::fs::canonicalize()` before sending (CWD difference mitigation)
-- **Log preservation**: `InstanceCheck` tri-state (`Primary` / `Forwarded` / `FallbackStart`) skips log rotation when existing instance detected
+- **InstanceCheck tri-state**: `Primary` (primary instance start) / `Forwarded` (file path forwarded to existing instance, current process exits) / `FallbackStart` (fallback when existing-instance detection fails). v0.4.0 removed automatic log rotation, so `Primary` and `FallbackStart` now behave identically; the previous `can_rotate` variable that distinguished them was deleted in the same release
 
 ## FPS Measurement
 

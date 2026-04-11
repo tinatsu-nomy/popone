@@ -453,6 +453,8 @@ pub struct ViewerApp {
     pub log_path: PathBuf,
     /// ログメモリバッファ（ビューアモード用）
     pub log_buffer: crate::SharedLogBuffer,
+    /// ログビュアーウインドウのモデル（別 OS ウインドウとして show_viewport_deferred で描画）
+    pub log_viewer: super::log_viewer::SharedLogViewer,
     /// 最後にモデルファイルを開いたディレクトリ（ダイアログ経由のみ）
     pub last_model_dir: Option<PathBuf>,
     /// unitypackage 内で選択された FBX ファイル名（reload 時の照合用）
@@ -591,6 +593,76 @@ impl ViewerApp {
             WarmupPhase::Complete => {}
         }
     }
+
+    /// ログビュアーウインドウ（OS レベルの別ウインドウ）を描画する。
+    ///
+    /// `show_viewport_deferred` を使う理由: メイン `update()` は 3D の
+    /// `render_to_texture` を毎フレーム実行するため、`immediate` の「親子相互 repaint」
+    /// がログ流入のたびに 3D 再描画を誘発してしまう。`deferred` なら子 viewport の
+    /// 再描画は親を起こさない。
+    ///
+    /// クロージャは `Fn + Send + Sync + 'static` 制約があるので、`&mut self` を
+    /// キャプチャできない。`Arc::clone` した `log_viewer` / `log_buffer`, `PathBuf::clone`
+    /// した `logs_dir` を `move` で渡す。
+    fn show_log_viewer(&self, ctx: &egui::Context) {
+        // P1 修正: visible チェックを apply_geometry.take() より「先」に行う。
+        // 隠れたまま起動した最初のフレームで apply_geometry が消費されると、後で
+        // ユーザがボタンで開いたとき config 由来の保存位置が失われてしまうため。
+        let apply_geometry = {
+            let mut m = self.log_viewer.lock().unwrap_or_else(|p| p.into_inner());
+            if !m.visible {
+                return;
+            }
+            m.apply_geometry.take()
+        };
+
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title("popone - Log Viewer")
+            .with_inner_size([720.0, 480.0]);
+        if let Some((pos, size)) = apply_geometry {
+            builder = builder
+                .with_position(egui::pos2(pos[0], pos[1]))
+                .with_inner_size([size[0], size[1]]);
+        }
+
+        let vp_id = egui::ViewportId::from_hash_of("popone_log_viewer");
+        let model = Arc::clone(&self.log_viewer);
+        let log_buffer = Arc::clone(&self.log_buffer);
+        let logs_dir = self.logs_dir.clone();
+
+        ctx.show_viewport_deferred(vp_id, builder, move |child_ctx, _class| {
+            let mut m = model.lock().unwrap_or_else(|p| p.into_inner());
+
+            // 1. SharedLogBuffer からの増分取り込み
+            m.poll(&log_buffer);
+
+            // 2. UI 描画
+            m.draw(child_ctx, &log_buffer, &logs_dir);
+
+            // 3. 最新 geometry を記録（同セッション reopen + on_exit 保存用）
+            child_ctx.input(|i| {
+                if let (Some(outer), Some(inner)) =
+                    (i.viewport().outer_rect, i.viewport().inner_rect)
+                {
+                    m.last_geometry =
+                        Some(([outer.min.x, outer.min.y], [inner.width(), inner.height()]));
+                }
+            });
+
+            // 4. 閉じる検知（× ボタン）。hide() は last_geometry を apply_geometry に
+            //    スナップショットして次回 show 時の位置維持を担保する。
+            if child_ctx.input(|i| i.viewport().close_requested()) {
+                m.hide();
+            }
+
+            // 5. visible 中は 150ms 間隔で再描画（新規ログの遅延表示防止）
+            //    メイン update は 3 秒周期の自発 repaint しかしないので、ここで
+            //    子 viewport だけを起こす。deferred なので親 3D は影響を受けない
+            if m.visible {
+                child_ctx.request_repaint_after(std::time::Duration::from_millis(150));
+            }
+        });
+    }
 }
 
 /// ウィンドウ位置の初回フレーム検証・適用用
@@ -695,6 +767,9 @@ impl ViewerApp {
             logs_dir,
             log_path,
             log_buffer,
+            log_viewer: Arc::new(std::sync::Mutex::new(
+                super::log_viewer::LogViewerModel::from_config(&app_config.log_viewer),
+            )),
             last_model_dir,
             selected_fbx_name: None,
             selected_pkg_model: None,
@@ -1901,8 +1976,14 @@ impl eframe::App for ViewerApp {
                         self.open_append_dialog(ctx);
                     }
 
-                    if menu_btn(ui, "ログ").clicked() {
-                        helpers::open_directory(&self.logs_dir);
+                    if menu_btn(ui, "ログ")
+                        .on_hover_text("ログビュアーを別ウインドウで開く / 閉じる")
+                        .clicked()
+                    {
+                        // toggle_visible は閉じる際に last_geometry を apply_geometry に
+                        // スナップショットするので、再度開いたとき同じ位置で開く
+                        let mut m = self.log_viewer.lock().unwrap_or_else(|p| p.into_inner());
+                        m.toggle_visible();
                     }
 
                     // モデル名（編集可能）。タイトルバー表示 + PMX 出力ファイル名の両方に反映。
@@ -2347,14 +2428,22 @@ impl eframe::App for ViewerApp {
                     self.convert_message = None;
                 }
             });
+
+        // ログビュアーウインドウ（OS 別ウインドウ）を描画
+        // visible == false なら何もしない
+        self.show_log_viewer(ctx);
     }
 
     fn on_exit(&mut self) {
-        // ログバッファをファイルにフラッシュ
-        if let Ok(mut lb) = self.log_buffer.lock() {
-            if !lb.data.is_empty() {
-                let _ = std::fs::write(&self.log_path, lb.data.make_contiguous());
-            }
+        // 通常終了時はログバッファをファイルに書き出さない。
+        // 「パニックログ以外は保存しない」方針のため。panic 時は main.rs の
+        // panic フックが `flush_log_buffer` 経由で `panic_*.log` を独立に生成する。
+        // ユーザが明示的に保存したい場合はログビュアー内の「ログ保存」ボタンを使う。
+
+        // ログビュアーの表示状態・位置・サイズ・フィルタを config に反映
+        {
+            let m = self.log_viewer.lock().unwrap_or_else(|p| p.into_inner());
+            self.app_config.log_viewer = m.export_config();
         }
 
         // ディレクトリパスを config に反映

@@ -196,6 +196,7 @@
   - [ログ出力](#%E3%83%AD%E3%82%B0%E5%87%BA%E5%8A%9B)
     - [ログの全体構成](#%E3%83%AD%E3%82%B0%E3%81%AE%E5%85%A8%E4%BD%93%E6%A7%8B%E6%88%90)
     - [パニックログ](#%E3%83%91%E3%83%8B%E3%83%83%E3%82%AF%E3%83%AD%E3%82%B0)
+    - [ログビュアー（別ウインドウ）](#%E3%83%AD%E3%82%B0%E3%83%93%E3%83%A5%E3%82%A2%E3%83%BC%E5%88%A5%E3%82%A6%E3%82%A4%E3%83%B3%E3%83%89%E3%82%A6)
   - [シングルインスタンス](#%E3%82%B7%E3%83%B3%E3%82%B0%E3%83%AB%E3%82%A4%E3%83%B3%E3%82%B9%E3%82%BF%E3%83%B3%E3%82%B9)
   - [FPS 計測](#fps-%E8%A8%88%E6%B8%AC)
   - [ウォッチドッグ — メインスレッド応答性監視](#%E3%82%A6%E3%82%A9%E3%83%83%E3%83%81%E3%83%89%E3%83%83%E3%82%B0--%E3%83%A1%E3%82%A4%E3%83%B3%E3%82%B9%E3%83%AC%E3%83%83%E3%83%89%E5%BF%9C%E7%AD%94%E6%80%A7%E7%9B%A3%E8%A6%96)
@@ -2798,7 +2799,104 @@ Vertex weight distribution: ... ← DEBUG: BDEF1/BDEF2/BDEF4 の頂点数分布
 
 ### パニックログ
 
-パニック発生時に現在のログファイル（`popone_yyyymmdd_hhmmss.log`）を `panic_yyyymmdd_hhmmss.log` としてコピーする。`panic_` プレフィックスのファイルはログローテーション（`rotate_logs`）の削除対象外となるため、手動削除しない限り永続的に保持される。
+パニック発生時に `panic.set_hook` 内で `flush_log_buffer` がメモリバッファを `panic_yyyymmdd_hhmmss.log` に直接書き出す。v0.4.0 で 1 クラッシュ＝1 ファイルに統一するため、従来あった「`popone_yyyymmdd_hhmmss.log` に書き出してから `panic_*.log` にコピー」という中継経路を廃止した。同 v0.4.0 でログ自動ローテーション（`rotate_logs`）も廃止されたため、生成された `panic_*.log` はユーザが手動削除しない限り永続的に保持される。
+
+### ログビュアー（別ウインドウ）
+
+`popone/src/viewer/log_viewer.rs` で実装。トップバーの「ログ」ボタンで OS レベルの別ウインドウとして開かれ、`SharedLogBuffer` の内容をリアルタイムに表示する。
+
+#### 採用した egui API
+
+- **`ctx.show_viewport_deferred`** を採用。`immediate` を不採用とした理由: メイン `update()` は 3D の `render_to_texture` を毎フレーム実行するため、`immediate` の「親子相互 repaint」特性がログ流入のたびにメイン 3D シーンを再レンダリングさせてしまう。`deferred` なら子 viewport の repaint は親を起こさない（egui ドキュメント `context.rs` 該当箇所に「親子相互 repaint で低性能、避けるなら deferred を使え」と明記されている）。
+- `deferred` クロージャの `Fn + Send + Sync + 'static` 制約に対応するため、`SharedLogViewer = Arc<Mutex<LogViewerModel>>` をクロージャに `Arc::clone` で渡す。`ViewerApp` 側のフィールドは `log_viewer: SharedLogViewer` のみ。
+- `egui::ViewportId::from_hash_of("popone_log_viewer")` で固定 ID を生成。
+
+#### `LogViewerModel` の構造
+
+| フィールド | 型 | 用途 |
+|---|---|---|
+| `visible` | `bool` | ウインドウ表示状態 |
+| `last_offset` | `usize` | `SharedLogBuffer::total_written` の前回読み取り位置 |
+| `lines` | `VecDeque<LogLine>` | パース済みログ行（上限 20,000） |
+| `filter_indices` | `Vec<usize>` | フィルタ通過行の `lines` インデックス（仮想化スクロール用） |
+| `filters` | `LevelFilters` | レベル別表示フラグ（Error/Warn/Info/Debug） |
+| `follow_tail` | `bool` | 自動追尾 ON/OFF |
+| `apply_geometry` | `Option<([f32; 2], [f32; 2])>` | 次フレーム `ViewportBuilder` に渡す位置・サイズ（反映後 `take()` で消費し `None` に） |
+| `last_geometry` | `Option<([f32; 2], [f32; 2])>` | 子 viewport から毎フレーム読み取る最新位置・サイズ（永続化用） |
+| `tail_buffer` | `String` | `\n` 未完了の末尾断片（次回 ingest の先頭に連結） |
+| `seeking_first_header` | `bool` | 初回 `[HEADER]` を見るまで `true`（バイト単位 drain による先頭断片の破棄用） |
+
+#### ログ行パーサ
+
+`[HH:MM:SS.mmm][LEVEL] message` 形式を手書きパーサで解析（regex 依存なし）:
+
+1. 先頭の `[` から `]` までをタイムスタンプとして抽出
+2. 続く `[` から `]` までをレベル文字列として抽出
+3. レベル文字列が `ERROR`/`WARN`/`INFO`/`DEBUG`/`TRACE` のいずれかなら対応する `LogLevel`、それ以外（例: `FATAL`）は `LogLevel::Unknown` として記録
+4. `[` で始まらない行で直前 `LogLine` が存在する場合は `message` に `\n` 連結（バックトレースなどマルチラインメッセージ対応）
+5. `seeking_first_header == true` の間は `[` で始まらない行を捨てる（`SharedLogBuffer` がバイト単位で先頭 drain するため、初回読み取り時の先頭断片が壊れている可能性がある）
+
+#### `filter_indices` の整合性
+
+`lines` が上限 20,000 を超えて drain されると `filter_indices` のインデックスが stale になる。その場合は `filters_dirty = true` をセットし、次の `ingest` 末尾で `rebuild_filter_indices` で全再構築する。フィルタ変更時（チェックボックス操作）も同様。1 行追加時のコストは O(1)、上限超過 / フィルタ変更時のみ O(N)。
+
+#### 位置・サイズの往復
+
+`apply_geometry` と `last_geometry` を別フィールドで管理する設計により、以下の全シナリオで位置・サイズが正しく往復する:
+
+| シナリオ | 動作 |
+|---|---|
+| 起動時 `visible=true` で復元 | `from_config` が両方を config 値で初期化 → 初フレームで `apply_geometry` を `take()` して使用 |
+| 起動時 `visible=false` で隠した状態 | `from_config` が `last_geometry` を config 値で初期化 → `show_log_viewer` の早期 return で `apply_geometry` を消費しない → トグル開きで `show()` がそのまま使用 |
+| 同セッション内の閉じ→再開 | `hide()` が `last_geometry` を `apply_geometry` にスナップショット → 次回 `show()` で復元 |
+| 一度も開かずに終了 | `last_geometry` が config 値のまま → `export_config` が config を保持 |
+
+`hide()` と `show()` は `LogViewerModel` のヘルパーメソッドで、`× ボタン` 経由・トップバートグル経由の両方の閉じ経路で同じ動作を提供する。
+
+#### `ViewerApp::show_log_viewer` の流れ
+
+```rust
+fn show_log_viewer(&self, ctx: &egui::Context) {
+    // visible チェックを take() より「前」に行う（隠したまま起動時に apply_geometry を消費しないため）
+    let apply_geometry = {
+        let mut m = self.log_viewer.lock().unwrap_or_else(|p| p.into_inner());
+        if !m.visible { return; }
+        m.apply_geometry.take()
+    };
+    // ViewportBuilder に位置を渡す（apply_geometry が Some のときのみ）
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title("popone - Log Viewer")
+        .with_inner_size([720.0, 480.0]);
+    if let Some((pos, size)) = apply_geometry {
+        builder = builder.with_position(egui::pos2(pos[0], pos[1])).with_inner_size(size);
+    }
+    // クロージャに渡す Arc 群
+    let model = Arc::clone(&self.log_viewer);
+    let log_buffer = Arc::clone(&self.log_buffer);
+    let logs_dir = self.logs_dir.clone();
+    ctx.show_viewport_deferred(vp_id, builder, move |child_ctx, _| {
+        let mut m = model.lock().unwrap_or_else(|p| p.into_inner());
+        m.poll(&log_buffer);                          // インクリメンタル取り込み
+        m.draw(child_ctx, &log_buffer, &logs_dir);    // UI 描画
+        // 子 viewport から最新 geometry を読み取って last_geometry に記録
+        // close_requested → m.hide() で apply_geometry に last_geometry をスナップショット
+        if m.visible {
+            child_ctx.request_repaint_after(Duration::from_millis(150));  // 150ms ポーリング
+        }
+    });
+}
+```
+
+#### `LogBuffer` ロック保持時間の最小化
+
+`log_buffer.lock()` 中はログ出力スレッド側（`log::info!` 等）がブロックされるため、ロック保持時間を最小化する:
+
+1. `read_from_offset` の結果 `String`（または手動保存時はバイト列 `Vec<u8>`）を取得
+2. `last_offset` を更新
+3. ロックを解放
+4. パース・UI 描画・ファイル I/O はすべてロック外で実行
+
+`LogViewerModel` 自体の Mutex はログ出力経路に登場しないため、UI 描画中ずっと保持しても問題ない。
 
 ## シングルインスタンス
 
@@ -2811,7 +2909,7 @@ Vertex weight distribution: ... ← DEBUG: BDEF1/BDEF2/BDEF4 の頂点数分布
 - **ハンドル管理**: パイプハンドルを `WinHandle`（RAII newtype、`Drop` で `CloseHandle` 呼び出し）でラップし、早期リターン・パニック・`continue` パスでのリークを防止
 - **前面化**: `ViewportCommand::Minimized(false)` + `Focus`（最小化状態からも復帰）
 - **パス正規化**: 送信前に `std::fs::canonicalize()` で絶対パス化（CWD 差異対策）
-- **ログ保全**: `InstanceCheck` 3状態（`Primary` / `Forwarded` / `FallbackStart`）で、既存検出時はログローテーションをスキップ
+- **InstanceCheck 3状態**: `Primary`（プライマリインスタンス起動）/ `Forwarded`（既存インスタンスへファイルパスを転送して終了）/ `FallbackStart`（既存インスタンス検出失敗時のフォールバック起動）。v0.4.0 でログ自動ローテーションが廃止されたため、Primary と FallbackStart は実質同じ扱いとなり、両者を区別する `can_rotate` 変数も削除された
 
 ## FPS 計測
 
