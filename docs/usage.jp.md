@@ -166,6 +166,35 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - 表示枠の自動分類（Root / 表情 / 体(上) / 腕 / 指 / 足 / その他）
 - UV 正規化（0..1 範囲に補正）
 
+### 材質編集ドロワー（v0.5.0）
+
+表示タブの材質行にある「編」ボタンをクリックすると、材質編集ドロワーが開きます。
+
+- **編集可能パラメータ** — diffuse カラー、alpha モード / cutoff、shade color、shading toony / shift、outline カラー / 幅 / モード、パラメトリックリム、matcap factor、emissive factor、法線スケール、UV アニメ速度、render queue offset
+- **テクスチャスロット割当** — BaseColor / Emissive / Normal / Shade / ShadingShift / Rim / OutlineWidth / Matcap / UvAnimMask（11 スロット）。スロットボタンをクリックしてファイルダイアログで選択
+- **MToon 有効化 / 無効化** — 「MToon 有効化」チェックボックスで非 MToon 材質を MToon に昇格可能
+- **プリセット** — MToon 1.0 デフォルト / lilToon 標準 / PMX 互換（組込 3 種）
+- **リセット** — スロット単位の `×` ボタンで個別テクスチャを消去、「初期値に戻す」でロード時の状態に復元
+- **ライブプレビュー** — 変更は標準描画パスと MMD 互換描画パスの両方に即時反映
+- **永続化** — カラー / スカラー編集は `popone_history.json` に保存され、リロード時に復元
+- **PMX 非対応バッジ** — PMX で表現できないパラメータには「(PMX非対応)」マークとツールチップ（MME 出力には反映される旨を表示）
+
+### MME（ray-mmd）出力（v0.5.0）
+
+PMX 変換時に ray-mmd 2.0 用の `.fx` マテリアルファイルを同時生成します。
+
+1. 出力タブの PMX 変換セクションで「MME マテリアル (.fx) も出力」にチェック
+2.（任意）「フォルダ選択...」で ray-mmd ルートフォルダを設定。未設定時はカレントディレクトリ（`.\`）がフォールバック
+3. 通常通り PMX 変換を実行。PMX と同じ場所に `<モデル名>_mme/` フォルダが作成され:
+   - `material_<名称>.fx` — 材質ごとに 1 ファイル。ray-mmd 全パラメータ（Albedo / Normal / Smoothness / Metalness / Specular / Occlusion / Parallax / Emissive / Shading Model）をデフォルト値付きで展開
+   - `textures/` — `.fx` から参照される非 PMX テクスチャ（法線マップ、エミッシブマップ等）
+   - `README.txt` — MaterialMap 割当手順
+
+- **カテゴリ自動推定** — 材質名のキーワード（skin/body/face、hair、cloth/dress、eye/glass 等）から `CUSTOM_ENABLE` 値を選択（Standard / Skin / HairAniso / Glass / Cloth / ClearCoat / Emissive）
+- **手動上書き** — 材質編集ドロワーの「MME 出力 (ray-mmd)」セクションを展開し、ComboBox でカテゴリを手動選択可能
+- **エンコーディング** — `.fx` と `README.txt` は Shift-JIS + CR+LF（MMD / MME 環境向け）
+- **#include 先の警告** — `material_common_2.0.fxsub` が見つからない場合、変換結果に警告を表示（ファイル出力は継続）
+
 ## シェーダー対応状況
 
 VRM 0.0 の `materialProperties` に記録されたシェーダー情報を自動検出し、ビューア表示と PMX 変換に反映します。

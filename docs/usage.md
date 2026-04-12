@@ -166,6 +166,35 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - Auto-classified display frames (Root / Expression / Upper Body / Arms / Fingers / Legs / Other)
 - UV normalization (clamped to 0..1)
 
+### Material Editor (v0.5.0)
+
+Click the "編" button on any material row in the Display tab to open the Material Editor drawer.
+
+- **Editable parameters** — diffuse color, alpha mode/cutoff, shade color, shading toony/shift, outline color/width/mode, parametric rim, matcap factor, emissive factor, normal scale, UV animation speeds, render queue offset
+- **Texture slot assignment** — BaseColor, Emissive, Normal, Shade, ShadingShift, Rim, OutlineWidth, Matcap, UvAnimMask (11 slots). Click the slot button to open a file dialog
+- **MToon enable/disable** — "MToon 有効化" checkbox to promote a non-MToon material
+- **Presets** — MToon 1.0 Default, lilToon Standard, PMX Compatible (3 built-in presets)
+- **Reset** — Per-slot `×` button to clear individual textures, "初期値に戻す" to restore the material to its load-time state
+- **Live preview** — Changes are reflected immediately in both standard and MMD render paths
+- **Persistence** — Color/scalar edits are saved in `popone_history.json` and restored on reload
+- **PMX non-support badges** — Parameters not representable in PMX format are marked with "(PMX非対応)" with a tooltip indicating they are included in MME output
+
+### MME (ray-mmd) Output (v0.5.0)
+
+Generate ray-mmd 2.0 material `.fx` files alongside PMX conversion.
+
+1. In the Export tab, check "MME マテリアル (.fx) も出力" under the PMX conversion section
+2. (Optional) Click "フォルダ選択..." to set the ray-mmd root folder. Defaults to the current directory (`.\`) if not set
+3. Run PMX conversion as usual. A `<model>_mme/` folder will be created next to the PMX with:
+   - `material_<name>.fx` — One per material, with all ray-mmd parameters expanded (Albedo, Normal, Smoothness, Metalness, Specular, Occlusion, Parallax, Emissive, Shading Model)
+   - `textures/` — Non-PMX textures (normal maps, emissive maps, etc.) referenced by `.fx` files
+   - `README.txt` — MaterialMap assignment instructions
+
+- **Category auto-detection** — Material names are matched against keyword patterns (skin/body/face, hair, cloth/dress, eye/glass, etc.) to select the appropriate `CUSTOM_ENABLE` value (Standard/Skin/HairAniso/Glass/Cloth/ClearCoat/Emissive)
+- **Manual override** — Open the material editor and expand the "MME 出力 (ray-mmd)" section to manually select a category via ComboBox
+- **Encoding** — All `.fx` and `README.txt` files use Shift-JIS encoding with CR+LF line endings for MMD/MME compatibility
+- **Include path warning** — If `material_common_2.0.fxsub` is not found at the resolved path, a warning is shown (files are still written)
+
 ## Shader Support
 
 Shader information recorded in VRM 0.0 `materialProperties` is auto-detected and reflected in viewer display and PMX conversion.
