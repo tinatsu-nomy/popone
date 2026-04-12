@@ -75,6 +75,10 @@ pub struct AppConfig {
     pub theme: ThemeConfig,
     #[serde(default)]
     pub log_viewer: LogViewerConfig,
+    /// ray-mmd ルートフォルダ（§K.2 / Step 6）。MME 出力時の `#include` 相対パス解決に使用。
+    /// 未設定時は PMX 出力ダイアログの「MME 出力」チェックボックスが無効化される。
+    #[serde(default)]
+    pub ray_mmd_root: Option<String>,
 }
 
 /// ログビュアーウインドウの設定（表示状態・位置・サイズ・レベルフィルタ）。

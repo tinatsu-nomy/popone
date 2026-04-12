@@ -88,6 +88,10 @@ pub struct MaterialParamOverride {
 
     // ===== その他セクション (§E-8) =====
     pub render_queue_offset: Option<i32>,
+
+    // ===== MME カテゴリ上書き (§K.3 / Step 6) =====
+    /// ユーザーが手動で上書きした ray-mmd カテゴリ。`None` = 推定値を使用。
+    pub mme_kind: Option<crate::convert::mme::ray_mmd::RayMmdMaterialKind>,
 }
 
 impl MaterialParamOverride {
@@ -150,6 +154,8 @@ impl MaterialParamOverride {
             normal_texture_scale,
             // その他
             render_queue_offset,
+            // MME
+            mme_kind,
         );
     }
 
@@ -181,6 +187,7 @@ impl MaterialParamOverride {
             && self.emissive_factor.is_none()
             && self.normal_texture_scale.is_none()
             && self.render_queue_offset.is_none()
+            && self.mme_kind.is_none()
     }
 
     /// `pristine`（ロード直後の IR 材質値）と `current`（ユーザー編集後の IR 材質値）を

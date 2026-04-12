@@ -1052,6 +1052,8 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
     let mut pending_tex_request: Option<crate::intermediate::types::TextureSlot> = None;
     // Step 4-17: テクスチャスロットリセット要求 → closure 外でスロットをクリア
     let mut pending_tex_clear: Option<crate::intermediate::types::TextureSlot> = None;
+    // review_024 [P2]: MME カテゴリ「推定に戻す」→ closure 外で mme_kind を消去
+    let mut pending_mme_reset = false;
 
     egui::Window::new(window_title)
         .id(egui::Id::new("material_editor_window"))
@@ -1818,6 +1820,56 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                         dirty = true;
                     }
                 });
+
+            // ==================== MME 出力プレビュー (§K.3 / Step 6) ====================
+            egui::CollapsingHeader::new("MME 出力 (ray-mmd)")
+                .default_open(false)
+                .show(ui, |ui| {
+                    use crate::convert::mme::ray_mmd::{guess_ray_mmd_kind, RayMmdMaterialKind};
+
+                    let estimated = guess_ray_mmd_kind(mat);
+                    let current_override = app
+                        .material_overrides
+                        .get(&mat_idx)
+                        .and_then(|o| o.mme_kind);
+                    let current = current_override.unwrap_or(estimated);
+
+                    ui.horizontal(|ui| {
+                        ui.label("カテゴリ:");
+                        egui::ComboBox::from_id_salt("mme_kind_combo")
+                            .selected_text(current.label())
+                            .show_ui(ui, |ui| {
+                                for kind in RayMmdMaterialKind::ALL {
+                                    if ui
+                                        .selectable_label(current == kind, kind.label())
+                                        .clicked()
+                                        && current != kind
+                                    {
+                                        pending_override.mme_kind = Some(kind);
+                                        dirty = true;
+                                    }
+                                }
+                            });
+                        if current_override.is_some() && current != estimated {
+                            ui.small("※ 手動上書き中");
+                            if ui.small_button("推定に戻す").clicked() {
+                                // review_024 [P2]: merge_from は Some しか上書きしないので、
+                                // mme_kind を消すには closure 外で直接 None に設定する。
+                                pending_mme_reset = true;
+                            }
+                        }
+                    });
+
+                    ui.small(format!("推定: {}", estimated.label()));
+
+                    // ray-mmd ルート表示
+                    let root_label = app
+                        .app_config
+                        .ray_mmd_root
+                        .as_deref()
+                        .unwrap_or(".\\");
+                    ui.small(format!("ray-mmd: {}", root_label));
+                });
         });
 
     if dirty {
@@ -1828,6 +1880,13 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
         let entry = app.material_overrides.entry(mat_idx).or_default();
         entry.merge_from(&pending_override);
         app.mark_material_dirty(mat_idx);
+    }
+
+    // review_024 [P2]: MME カテゴリ「推定に戻す」
+    if pending_mme_reset {
+        if let Some(entry) = app.material_overrides.get_mut(&mat_idx) {
+            entry.mme_kind = None;
+        }
     }
 
     // Step 4-17: テクスチャスロットリセット `×`
@@ -2145,6 +2204,32 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
     let output_log = app.export.output_log;
     let log_buffer = Arc::clone(&app.log_buffer);
 
+    // MME 出力用データをキャプチャ（BG スレッドに move する）
+    let output_mme = app.export.output_mme;
+    let ray_mmd_root = if output_mme {
+        Some(
+            app.app_config
+                .ray_mmd_root
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from(".")),
+        )
+    } else {
+        None
+    };
+    // 各材質の手動カテゴリ上書き
+    let mme_kinds: std::collections::HashMap<
+        usize,
+        crate::convert::mme::ray_mmd::RayMmdMaterialKind,
+    > = if output_mme {
+        app.material_overrides
+            .iter()
+            .filter_map(|(idx, ov)| ov.mme_kind.map(|k| (*idx, k)))
+            .collect()
+    } else {
+        std::collections::HashMap::new()
+    };
+
     // 法線を即座に復元（BG スレッドは clone した IR を使うため、元 IR はすぐ戻せる）
     if let Some(saved) = saved_normals {
         if let Some(ref mut loaded) = app.loaded {
@@ -2200,6 +2285,38 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
                 if output_log {
                     msg += &format!("\nログ: {}", log_path.display());
                 }
+
+                // MME 出力
+                let mut mme_warning = false;
+                if output_mme {
+                    if let Some(ref root) = ray_mmd_root {
+                        let mme_dir = output_path.with_extension("").with_file_name(format!(
+                            "{}_mme",
+                            output_path
+                                .file_stem()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                        ));
+                        match emit_mme_files(&convert_ir, &mme_dir, root, &mme_kinds) {
+                            Ok(result) => {
+                                msg += &format!(
+                                    "\nMME: {} 材質の .fx を {} に出力",
+                                    result.count,
+                                    mme_dir.display()
+                                );
+                                if let Some(ref warn) = result.include_warning {
+                                    msg += &format!("\n⚠ {}", warn);
+                                    mme_warning = true;
+                                }
+                            }
+                            Err(e) => {
+                                msg += &format!("\n⚠ MME 出力に失敗: {e}");
+                                mme_warning = true;
+                            }
+                        }
+                    }
+                }
+
                 let has_warning = match primary_astance_result {
                     AStanceResult::NotFound => {
                         msg += &format!(
@@ -2217,7 +2334,7 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
                 super::app::pending::ConvertBgResult {
                     result: Ok(msg),
                     log_written: output_log,
-                    has_warning,
+                    has_warning: has_warning || mme_warning,
                     output_dir: output_path.parent().map(|d| d.to_path_buf()),
                 }
             }
@@ -2236,6 +2353,73 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
     });
 
     app.pending.convert_bg = Some(super::app::pending::PendingConvertBg { rx, cancel });
+}
+
+/// MME (.fx) 出力結果
+struct MmeEmitResult {
+    count: usize,
+    /// `#include` 先の fxsub が見つからない場合に警告メッセージを格納
+    include_warning: Option<String>,
+}
+
+/// MME (.fx) ファイル群を出力する。
+/// PMX 変換成功後に BG スレッドから呼び出される。
+fn emit_mme_files(
+    ir: &crate::intermediate::types::IrModel,
+    mme_dir: &std::path::Path,
+    ray_mmd_root: &std::path::Path,
+    mme_kinds: &std::collections::HashMap<usize, crate::convert::mme::ray_mmd::RayMmdMaterialKind>,
+) -> anyhow::Result<MmeEmitResult> {
+    use crate::convert::mme::ray_mmd;
+
+    std::fs::create_dir_all(mme_dir)?;
+
+    // #include 相対パス
+    let include_path = ray_mmd::resolve_include_path(ray_mmd_root, mme_dir);
+
+    // #include 先の存在確認（.fx は出力するが、存在しなければ警告を返す）
+    let fxsub_abs = mme_dir.join(&include_path);
+    let include_warning = if !fxsub_abs.exists() {
+        Some(format!(
+            "#include 先が見つかりません: {}\nray-mmd ルートを確認してください",
+            fxsub_abs.display()
+        ))
+    } else {
+        None
+    };
+
+    // 補助テクスチャ書き出し
+    let support_textures = ray_mmd::export_mme_support_textures(ir, mme_dir)?;
+
+    // .fx ファイル生成
+    let mut used_names = std::collections::HashSet::new();
+    let mut fx_manifest: Vec<(usize, String, ray_mmd::RayMmdMaterialKind)> = Vec::new();
+
+    for (mat_idx, mat) in ir.materials.iter().enumerate() {
+        let kind = mme_kinds
+            .get(&mat_idx)
+            .copied()
+            .unwrap_or_else(|| ray_mmd::guess_ray_mmd_kind(mat));
+        let fx_name = ray_mmd::make_fx_filename(&mat.name, &mut used_names);
+        let fx_content = ray_mmd::generate_fx(mat, kind, &include_path, &support_textures);
+
+        std::fs::write(mme_dir.join(&fx_name), fx_content)?;
+        fx_manifest.push((mat_idx, fx_name, kind));
+    }
+
+    // README.txt
+    ray_mmd::write_mme_readme(mme_dir, &fx_manifest)?;
+
+    log::info!(
+        "MME output: {} .fx files written to {}",
+        fx_manifest.len(),
+        mme_dir.display()
+    );
+
+    Ok(MmeEmitResult {
+        count: fx_manifest.len(),
+        include_warning,
+    })
 }
 
 /// 数値をカンマ区切りでフォーマット (例: 34059 → "34,059")
@@ -3854,6 +4038,60 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             }
             ui.end_row();
         });
+
+    // MME (ray-mmd) — PMX 変換のサブメニュー (§K.5 / Step 6)
+    ui.add_enabled(
+        has_model,
+        egui::Checkbox::new(&mut app.export.output_mme, "MME マテリアル (.fx) も出力"),
+    )
+    .on_disabled_hover_text("モデルがロードされていません");
+    if app.export.output_mme {
+        ui.indent("mme_settings", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("ray-mmd ルート:");
+                let dir_label = app
+                    .app_config
+                    .ray_mmd_root
+                    .clone()
+                    .unwrap_or_else(|| ".\\".to_string());
+                ui.label(
+                    egui::RichText::new(&dir_label)
+                        .small()
+                        .color(egui::Color32::from_gray(0x60)),
+                );
+            });
+            ui.horizontal(|ui| {
+                let dialog_active = app.export.pending_ray_mmd_dialog.is_some();
+                if ui
+                    .add_enabled(!dialog_active, egui::Button::new("フォルダ選択...").small())
+                    .clicked()
+                {
+                    let start_dir = app
+                        .app_config
+                        .ray_mmd_root
+                        .as_ref()
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| std::path::PathBuf::from("."));
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let repaint = ui.ctx().clone();
+                    std::thread::spawn(move || {
+                        let mut dialog =
+                            rfd::FileDialog::new().set_title("ray-mmd ルートフォルダを選択");
+                        if start_dir.exists() {
+                            dialog = dialog.set_directory(&start_dir);
+                        }
+                        let _ = tx.send(dialog.pick_folder());
+                        repaint.request_repaint();
+                    });
+                    app.export.pending_ray_mmd_dialog = Some(rx);
+                }
+                if app.app_config.ray_mmd_root.is_some() && ui.small_button("リセット").clicked()
+                {
+                    app.app_config.ray_mmd_root = None;
+                }
+            });
+        });
+    }
 
     ui.add_space(12.0);
 

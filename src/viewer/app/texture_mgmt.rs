@@ -1279,6 +1279,8 @@ impl ViewerApp {
 
         // v0.5.0 追加: 材質パラメータ編集差分（§I 最小永続化）
         // pristine_materials との diff を計算して保存する。
+        // review_025 [P2]: mme_kind は IrMaterial にないため diff_from では取れない。
+        // material_overrides から転写して保存に含める。
         let param_entries: Vec<super::persistence::MaterialParamOverrideEntry> = loaded
             .ir
             .materials
@@ -1286,7 +1288,17 @@ impl ViewerApp {
             .enumerate()
             .filter_map(|(mat_idx, mat)| {
                 let pristine = self.pristine_materials.get(mat_idx)?;
-                let diff = super::material_edit::MaterialParamOverride::diff_from(pristine, mat)?;
+                let mut diff =
+                    super::material_edit::MaterialParamOverride::diff_from(pristine, mat);
+                // mme_kind を material_overrides から転写
+                let mme_kind = self
+                    .material_overrides
+                    .get(&mat_idx)
+                    .and_then(|o| o.mme_kind);
+                if mme_kind.is_some() {
+                    diff.get_or_insert_with(Default::default).mme_kind = mme_kind;
+                }
+                let diff = diff?;
                 Some(super::persistence::MaterialParamOverrideEntry {
                     material_index: mat_idx,
                     material_name: mat.name.clone(),

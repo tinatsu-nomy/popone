@@ -665,12 +665,16 @@ pub struct ExportState {
     pub no_physics: bool,
     /// 元のボーン構造のまま出力（標準ボーン挿入スキップ）
     pub raw_structure: bool,
+    /// MME マテリアル (.fx) も出力するか (§K.5 / Step 6)
+    pub output_mme: bool,
     /// PMX出力倍率（デフォルト: 1.0）
     pub scale: f32,
     /// converted_modelXX の作成先ベースディレクトリ（None = ソースファイルと同じ場所）
     pub output_base_dir: Option<std::path::PathBuf>,
     /// 非同期フォルダ選択ダイアログ（PMX出力先）
     pub pending_folder_dialog: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
+    /// 非同期フォルダ選択ダイアログ（ray-mmd ルート）
+    pub pending_ray_mmd_dialog: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
     /// 非同期UVマップ保存ダイアログ
     pub pending_uv_dialog: Option<PendingUvExport>,
     /// UVマップ BG エクスポートの結果待ち
@@ -689,9 +693,11 @@ impl Default for ExportState {
             uv_map_size: crate::convert::uvmap::DEFAULT_UV_SIZE,
             no_physics: false,
             raw_structure: false,
+            output_mme: false,
             scale: 1.0,
             output_base_dir: None,
             pending_folder_dialog: None,
+            pending_ray_mmd_dialog: None,
             pending_uv_dialog: None,
             pending_uv_bg: None,
             pending_mkdir: None,
@@ -1289,6 +1295,7 @@ impl ViewerApp {
 
     fn poll_export_tasks(&mut self, ctx: &egui::Context) {
         self.poll_folder_dialog();
+        self.poll_ray_mmd_dialog();
         self.poll_uv_dialog(ctx);
         self.poll_uv_bg_export();
         self.poll_mkdir();
@@ -1304,6 +1311,20 @@ impl ViewerApp {
                 self.export.pending_folder_dialog = None;
             } else if !alive {
                 self.export.pending_folder_dialog = None;
+            }
+        }
+    }
+
+    fn poll_ray_mmd_dialog(&mut self) {
+        if let Some(ref rx) = self.export.pending_ray_mmd_dialog {
+            let mut alive = true;
+            if let Some(opt_dir) = Self::poll_receiver(rx, &mut alive) {
+                if let Some(dir) = opt_dir {
+                    self.app_config.ray_mmd_root = Some(dir.to_string_lossy().into_owned());
+                }
+                self.export.pending_ray_mmd_dialog = None;
+            } else if !alive {
+                self.export.pending_ray_mmd_dialog = None;
             }
         }
     }
