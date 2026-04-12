@@ -3,6 +3,7 @@
 pub mod file_io;
 pub mod helpers;
 pub mod material_edit;
+pub mod material_presets;
 pub mod pending;
 pub mod persistence;
 pub mod texture_mgmt;

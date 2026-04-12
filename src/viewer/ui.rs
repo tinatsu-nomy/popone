@@ -1112,18 +1112,62 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                 );
             }
 
-            // ==================== 初期値に戻す (§H / Step 2-11) ====================
-            //
-            // pristine_materials[mat_idx] のスナップショットから材質を復元し、
-            // material_overrides を消去して dirty を立てる。これにより
-            // 「ロード直後の状態に完全に巻き戻す」操作が 1 クリックで可能になる。
-            if mat_idx < app.pristine_materials.len()
-                && ui.button("初期値に戻す").clicked()
-            {
-                *mat = app.pristine_materials[mat_idx].clone();
-                app.material_overrides.remove(&mat_idx);
-                dirty = true;
-            }
+            // ==================== 初期値に戻す + プリセット (§H / §J / Step 5) ====================
+            ui.horizontal(|ui| {
+                // 初期値に戻す
+                // review_019 [P2-2]: tex.assignments と slot_texture_paths も消去して
+                // reload 後のテクスチャ復活を防ぐ。
+                if mat_idx < app.pristine_materials.len()
+                    && ui.button("初期値に戻す").clicked()
+                {
+                    *mat = app.pristine_materials[mat_idx].clone();
+                    app.material_overrides.remove(&mat_idx);
+                    app.tex.assignments.remove(&mat_idx);
+                    app.tex.pkg_assignments.remove(&mat_idx); // review_020 [P2]
+                    app.slot_texture_paths.retain(|&(idx, _), _| idx != mat_idx);
+                    dirty = true;
+                }
+
+                // プリセット ComboBox + 適用ボタン
+                use super::app::material_presets::MaterialPreset;
+                // egui の ComboBox は外部状態を持たないため、ラベル表示用に毎フレーム計算
+                ui.label("|");
+                let preset_id = ui.id().with("preset_combo");
+                let mut selected_preset: Option<MaterialPreset> = None;
+                egui::ComboBox::from_id_salt(preset_id)
+                    .selected_text("プリセット選択")
+                    .width(140.0)
+                    .show_ui(ui, |ui| {
+                        for p in MaterialPreset::ALL {
+                            if ui.selectable_label(false, p.label()).clicked() {
+                                selected_preset = Some(p);
+                            }
+                        }
+                    });
+                if let Some(preset) = selected_preset {
+                    let patch = preset.to_override();
+                    patch.apply_to(mat);
+                    // review_019 [P2-1]: merge_from ではなく diff_from で override を再計算。
+                    // プリセットに含まれない古い override（UV アニメ等）が積み残されるのを防ぐ。
+                    if mat_idx < app.pristine_materials.len() {
+                        let new_override = super::app::material_edit::MaterialParamOverride::diff_from(
+                            &app.pristine_materials[mat_idx],
+                            mat,
+                        );
+                        match new_override {
+                            Some(o) => { app.material_overrides.insert(mat_idx, o); }
+                            None => { app.material_overrides.remove(&mat_idx); }
+                        }
+                    }
+                    dirty = true;
+                    log::info!(
+                        "Preset applied: mat[{}] '{}' <- {}",
+                        mat_idx,
+                        mat.name,
+                        preset.label()
+                    );
+                }
+            });
             ui.separator();
 
             // ==================== §E-1 基本セクション ====================
@@ -1375,7 +1419,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
             //
             // 全て MtoonParams フィールドなので、読み取りは `mat.mtoon()`、変更時のみ
             // `mat.mtoon_mut()` を呼ぶパターン。
-            egui::CollapsingHeader::new("リム")
+            egui::CollapsingHeader::new("リム (PMX非対応)")
                 .default_open(false)
                 .show(ui, |ui| {
                     let (mut rim_rgb, mut fresnel_power, mut rim_lift, mut rim_mix) = {
@@ -1460,7 +1504,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                 });
 
             // ==================== §E-5 MatCap セクション ====================
-            egui::CollapsingHeader::new("MatCap")
+            egui::CollapsingHeader::new("MatCap (PMX非対応)")
                 .default_open(false)
                 .show(ui, |ui| {
                     let mut matcap_rgb = mat.mtoon().matcap_factor.to_array();
@@ -1482,7 +1526,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                 });
 
             // ==================== §E-6 UV アニメセクション ====================
-            egui::CollapsingHeader::new("UV アニメ")
+            egui::CollapsingHeader::new("UV アニメ (PMX非対応)")
                 .default_open(false)
                 .show(ui, |ui| {
                     let (mut scroll_x, mut scroll_y, mut rotation) = {
