@@ -397,6 +397,10 @@ pub struct PendingGpuBuild {
     pub(crate) cpu_prep_rx: Option<
         std::sync::mpsc::Receiver<anyhow::Result<(super::super::mesh::CpuPrepResult, IrModel)>>,
     >,
+    /// `reload_current` 経由の dispatch かどうか（Step 2-10 修正）。
+    /// `start_deferred_gpu_build` 時点の `self.reload_snapshot.is_some()` をキャプチャし、
+    /// `finish_load_with_gpu` まで確実に運ぶ。review_004 [P2] 対応。
+    pub is_reload: bool,
 }
 
 /// IR merge 前のサイズ情報スナップショット（ロールバック用）
@@ -1212,7 +1216,12 @@ impl ViewerApp {
                                 );
                             } else {
                                 let t1 = std::time::Instant::now();
-                                match self.finish_load_with_gpu(gb.ir, gpu_model, gb.source) {
+                                match self.finish_load_with_gpu(
+                                    gb.ir,
+                                    gpu_model,
+                                    gb.source,
+                                    gb.is_reload,
+                                ) {
                                     Ok(()) => {
                                         log::info!(
                                             "[gpu_build] finish_load_with_gpu done in {}ms",

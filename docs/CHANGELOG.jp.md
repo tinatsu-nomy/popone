@@ -11,6 +11,23 @@
 
 [English](CHANGELOG.md)
 
+## v0.5.0（WIP）
+
+MToon / lilToon の全パラメータを GUI で編集できる材質編集ドロワーと、MME（ray-mmd）向け `.fx` マテリアル生成機能を追加する予定。
+
+### 予定している新機能
+
+- **材質編集ドロワー** — 材質行に新設する `✎` ボタンから、独立フローティングウインドウ（`egui::Window`、既定幅 360px）を開く。セクション構成: 基本（diffuse / alpha mode / baseColor テクスチャ）、影（shade_color / shading_toony / shading_shift ＋テクスチャ）、アウトライン（edge_color / 幅モード / outline width テクスチャ）、リム（パラメトリックリム / rim multiply テクスチャ）、MatCap、UV アニメ、エミッシブ / 法線、その他、MME 出力プレビュー。
+- **MToon / lilToon 全パラメータ編集** — 25 個以上のカラー / スカラーと、補助テクスチャスロット（normal / emissive / shade / shadingShift / rim / outline / matcap / uvAnimMask）をすべて GUI 編集可能にする。編集値は標準描画パスと MMD 互換描画パスの両方に即時反映される。
+- **スロット単位・材質単位のリセット** — 各スロットカードに `×` ボタンを設置してそのスロットだけを消去可能。材質単位の「初期値に戻す」はロード時点のスナップショットから復元する。
+- **組み込みプリセット** — MToon 1.0 デフォルト / lilToon 標準 / PMX 互換 の 3 種類を同梱する。
+- **`popone_history.json` v2** — 履歴ファイルを「材質単位の編集レコード」（テクスチャスロット割当 ＋ カラー / スカラー差分 ＋ MME カテゴリ上書き）に再設計。v1 → v2 マイグレーションと `.bak` リカバリ付き。
+- **MME（ray-mmd）マテリアル生成** — Control タブで ray-mmd ルートフォルダを設定したときのみ、PMX 出力ダイアログに「MME 出力」チェックボックスが有効化される。チェックを入れると PMX と同じ場所に `mme/material_<名称>.fx` を書き出し、`CUSTOM_ENABLE` ベースのテンプレート（Standard / Skin / Subsurface / HairAniso / Glass / Cloth / ClearCoat / Emissive）で生成される。`#include` パスは `pathdiff` で相対化されるため、ユーザー環境の ray-mmd 配置場所に依存しない。PMX では扱えない補助テクスチャ（normal / emissive / matcap / rim / shading shift）は `mme/textures/` にコピーして相対パスで参照する。
+
+### 予定している挙動変更
+
+- **PMX 変換の判定主軸を `ShaderFamily::Mtoon` に切替**。旧来の `is_mtoon()`（`mtoon.is_some()` 判定）は材質編集 UI が非 MToon 材質にも MToon パラメータを表示するため、安直に使うと PMX 出力の ambient / specular が MToon 扱いに変わってしまう。副作用回避のため、UI から明示的に「MToon 有効化」チェックを入れるまで `shader_family` は変更しない。
+
 ## v0.4.0（2026-04-11）
 
 ログビュアー機能を別ウインドウで追加し、「ユーザの明示操作とパニック時以外はログファイルを生成しない」方針へ全面的に切り替えた。

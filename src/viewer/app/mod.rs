@@ -2,6 +2,7 @@
 
 pub mod file_io;
 pub mod helpers;
+pub mod material_edit;
 pub mod pending;
 pub mod persistence;
 pub mod texture_mgmt;
@@ -15,7 +16,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use eframe::egui_wgpu;
 
-use crate::intermediate::types::IrModel;
+use crate::intermediate::types::{IrMaterial, IrModel};
 use crate::unitypackage::PkgModelLocator;
 
 use super::animation::AnimationState;
@@ -414,6 +415,27 @@ pub struct ViewerApp {
     pub material_visibility: Vec<bool>,
     /// 材質ごとの描画状態（mat_idx でインデックス）
     pub material_display: Vec<MaterialDisplayState>,
+    /// 材質編集ドロワー（§C / §A）: 編集による bind group 再生成要求フラグ。
+    /// mat_idx でインデックス、update() 終端で拾って rebuild_material_bind_groups を呼ぶ。
+    pub material_dirty: Vec<bool>,
+    /// 材質編集ドロワー（§A）: 現在編集中の材質インデックス（None なら Window 非表示）。
+    pub editing_material_index: Option<usize>,
+    /// 材質編集ドロワー（§H）: ロード直後の IR 材質スナップショット。
+    /// 「初期値に戻す」ボタンから pristine_materials[mat_idx].clone() で復元する。
+    /// `finish_load_with_gpu` で material_overrides の `apply_to` 実行前にキャプチャされ、
+    /// reload 時も新 IR の値が pristine として設定される。
+    pub pristine_materials: Vec<IrMaterial>,
+
+    /// 材質編集ドロワー: mat_idx ごとのパラメータ上書き値。
+    ///
+    /// Step 2 で `MaterialParamOverride` struct に集約され、§E の全セクション
+    /// （基本 / 影 / アウトライン / リム / MatCap / UV アニメ / エミッシブ / 法線 / その他）の
+    /// カラー・スカラー値を一括管理する。A スタンス変換・T スタンス変換などで IR が再
+    /// ロードされても `MaterialParamOverride::apply_to()` で新 IR に再適用される。
+    ///
+    /// **Step 3 の移行計画**: 本フィールドは `MaterialEditRecord.param_override` に
+    /// 吸収され、`declarative_macro` による diff/apply 自動生成に置き換えられる予定。
+    pub material_overrides: std::collections::HashMap<usize, material_edit::MaterialParamOverride>,
     /// 材質フィルター文字列
     pub material_filter: String,
     /// 表情モーフフィルター文字列
@@ -746,6 +768,10 @@ impl ViewerApp {
             display: DisplaySettings::default(),
             material_visibility: Vec::new(),
             material_display: Vec::new(),
+            material_dirty: Vec::new(),
+            editing_material_index: None,
+            pristine_materials: Vec::new(),
+            material_overrides: std::collections::HashMap::new(),
             export: ExportState::default(),
             material_filter: String::new(),
             morph_filter: String::new(),
@@ -942,7 +968,7 @@ impl ViewerApp {
         };
         let mat_flags = Self::extract_per_mat_vecs(&display);
         let gpu_model = super::mesh::build_gpu_model_from_ir(&ir, device, queue, &mat_flags)?;
-        self.finish_load_with_gpu(ir, gpu_model, source)
+        self.finish_load_with_gpu(ir, gpu_model, source, false)
     }
 
     /// GPU テクスチャアップロードを分割して実行する版（BG パース完了後に使用）
@@ -960,6 +986,9 @@ impl ViewerApp {
         };
         let mat_flags = Self::extract_per_mat_vecs(&display);
 
+        // reload_snapshot が Some なら「reload_current 経由」であることをキャプチャし、
+        // GPU ビルド分割を経て finish_load_with_gpu まで確実に運ぶ (review_004 [P2] 対応)。
+        let is_reload = self.reload_snapshot.is_some();
         self.pending.gpu_build = Some(pending::PendingGpuBuild {
             gpu_textures: Vec::with_capacity(ir.textures.len()),
             next_tex: 0,
@@ -970,6 +999,7 @@ impl ViewerApp {
             source,
             append_info: None,
             cpu_prep_rx: None,
+            is_reload,
         });
     }
 
@@ -1100,6 +1130,7 @@ impl ViewerApp {
             source: helpers::ReloadableSource::File(std::path::PathBuf::new()), // ダミー（append 完了時に primary_source を使用）
             append_info: Some(Box::new(append_info)),
             cpu_prep_rx: None,
+            is_reload: false, // append は reload ではない
         });
     }
 
@@ -1435,7 +1466,29 @@ impl ViewerApp {
         ir: IrModel,
         mut gpu_model: super::mesh::GpuModel,
         source: ReloadableSource,
+        is_reload: bool,
     ) -> anyhow::Result<()> {
+        // 材質編集ドロワー（§A / P2 対応 / review_004 [P2] 完全対応）: 明示的 reload
+        // （A スタンス変換・T スタンス変換・reload_current 経由）のときだけ前回の
+        // 材質編集状態を保持し、それ以外（新規ロード・同じファイルを再オープン等）では
+        // 破棄する。
+        //
+        // `is_reload` は BG パイプライン経由では `PendingGpuBuild.is_reload` から渡され、
+        // 同期パス（直接 finish_load_with_gpu を呼ぶ経路）では `false` が渡される。
+        // `PendingGpuBuild.is_reload` は `start_deferred_gpu_build` 時点の
+        // `self.reload_snapshot.is_some()` をキャプチャしているため、GPU ビルド分割の
+        // 数フレームにわたるタイミング問題を回避できる。
+        log::debug!(
+            "finish_load_with_gpu: is_reload={}, material_overrides={}",
+            is_reload,
+            self.material_overrides.len(),
+        );
+        if !is_reload {
+            self.editing_material_index = None;
+            self.material_dirty.clear();
+            self.material_overrides.clear();
+        }
+
         // レンダラー初期化（まだなければ）または可視化キャッシュ無効化
         if self.renderer.is_none() {
             let device = &self.render_state.device;
@@ -1567,6 +1620,40 @@ impl ViewerApp {
 
         if let Some(ref mut renderer) = self.renderer {
             renderer.invalidate_normal_cache();
+        }
+
+        // 材質編集ドロワー（§H）: ロード直後の IR 材質値を pristine としてスナップショット。
+        // 「初期値に戻す」で pristine に復元する経路が使う。
+        // **重要**: override の apply_to 実行前にキャプチャしないと、apply 後の値が
+        // pristine になってしまい「初期値」の意味をなさなくなる。
+        if let Some(loaded) = self.loaded.as_ref() {
+            self.pristine_materials = loaded.ir.materials.clone();
+        }
+
+        // 材質編集ドロワー（§A / A スタンス対応）: reload なら `material_overrides` を
+        // 新 IR に一括再適用し、該当材質を dirty に立てて次フレームで bind group を再生成する。
+        // Step 2 では §E の全セクション（影 / アウトライン / リム / MatCap / UV アニメ /
+        // エミッシブ / 法線 / その他）のパラメータが `MaterialParamOverride` に集約されている
+        // ので、この 1 経路で A スタンス / T スタンス変換を挟んだ編集値保持がすべて機能する。
+        if is_reload && !self.material_overrides.is_empty() {
+            // `self.material_overrides` と `self.loaded` の同時借用を避けるため、先に適用対象の
+            // (mat_idx, override_clone) リストを作ってから `loaded` を mut で借用する。
+            let override_list: Vec<(usize, material_edit::MaterialParamOverride)> = self
+                .material_overrides
+                .iter()
+                .map(|(&i, o)| (i, o.clone()))
+                .collect();
+            if let Some(loaded) = self.loaded.as_mut() {
+                for (mat_idx, override_val) in override_list {
+                    if let Some(mat) = loaded.ir.materials.get_mut(mat_idx) {
+                        override_val.apply_to(mat);
+                        if self.material_dirty.len() <= mat_idx {
+                            self.material_dirty.resize(mat_idx + 1, false);
+                        }
+                        self.material_dirty[mat_idx] = true;
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -1708,6 +1795,59 @@ impl ViewerApp {
         } else {
             super::mesh::MaterialBuildFlags::default_for(mat_count)
         }
+    }
+
+    /// 材質編集ドロワー（§C / §E-1）: 指定材質を「次フレームで bind group 再生成」対象に追加する。
+    ///
+    /// ロード経路（material_display の再構築箇所）で `material_dirty` を逐一リサイズする代わりに、
+    /// このヘルパが必要に応じて `Vec<bool>` を拡張する。古いモデルで立ったフラグが残る懸念は
+    /// `apply_pending_material_rebuilds` 側で `ir.materials.len()` にクランプして処理するため、
+    /// 安全側に倒している。
+    pub fn mark_material_dirty(&mut self, mat_idx: usize) {
+        let needed = mat_idx + 1;
+        if self.material_dirty.len() < needed {
+            self.material_dirty.resize(needed, false);
+        }
+        self.material_dirty[mat_idx] = true;
+    }
+
+    /// 材質編集ドロワー（§C）: 立った `material_dirty` を拾って rebuild_material_bind_groups を
+    /// 呼び出し、標準パスと MMD 互換パスの両方で bind group を再生成する。
+    ///
+    /// `update()` 内で UI 描画後・wgpu 描画前に呼び出され、1 フレームで dirty が全消化される。
+    fn apply_pending_material_rebuilds(&mut self) {
+        if !self.material_dirty.iter().any(|&d| d) {
+            return;
+        }
+        let Some(renderer) = self.renderer.as_ref() else {
+            // renderer 未初期化（スプラッシュ中等）では dirty を握りつぶす
+            self.material_dirty.fill(false);
+            return;
+        };
+        let Some(loaded) = self.loaded.as_mut() else {
+            self.material_dirty.fill(false);
+            return;
+        };
+
+        let device = &self.render_state.device;
+        let mat_count = loaded.ir.materials.len();
+        let flags = Self::per_mat_or_default_display(&self.material_display, mat_count);
+        // 古いモデルの dirty が残っている可能性があるので ir.materials.len() にクランプ
+        let dirty_len = self.material_dirty.len().min(mat_count);
+
+        for mat_idx in 0..dirty_len {
+            if self.material_dirty[mat_idx] {
+                renderer.rebuild_material_bind_groups(
+                    device,
+                    &mut loaded.gpu_model,
+                    &loaded.ir,
+                    mat_idx,
+                    &flags,
+                );
+            }
+        }
+        // すべての dirty を消化（リサイズが古くてクランプ外でも全消去）
+        self.material_dirty.fill(false);
     }
 
     /// VRM の IrTexture（raw ピクセル）を PNG エンコード済みに変換
@@ -2027,6 +2167,16 @@ impl eframe::App for ViewerApp {
 
         // 右側パネル
         ui::show_side_panel(ctx, self);
+
+        // 材質編集ドロワー（§A）: editing_material_index が Some のときだけ表示される
+        // フローティング egui::Window。右パネル衝突を避けるためサイドパネルではなく
+        // Window 型ドロワーを採用（TODO-8: Id 固定で単一インスタンス）。
+        ui::show_material_editor_window(ctx, self);
+
+        // 材質編集による dirty フラグを消化（§C）:
+        // UI 操作で立った material_dirty を見て rebuild_material_bind_groups を呼び、
+        // 同フレーム内に標準パスと MMD 互換パスの bind group を両方更新する。
+        self.apply_pending_material_rebuilds();
 
         // テクスチャD&Dダイアログ + プレビュー同期
         ui::show_texture_drop_dialog(ctx, self);

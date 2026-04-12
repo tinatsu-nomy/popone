@@ -49,6 +49,57 @@ impl Default for IrSamplerInfo {
     }
 }
 
+/// 材質編集時にテクスチャを割り当てる先のスロットを表す enum（§B）。
+///
+/// `assign_texture_core` が slot 引数で受け取り、MToon 補助テクスチャの 8 スロット +
+/// 標準 3 スロット + MMD 専用 2 スロットを区別する。Step 1-4 時点では `BaseColor`
+/// のみ既存経路として機能し、その他のスロットは Step 2 以降で書き込み経路を追加する。
+///
+/// | Slot | 書き込み先 | 色空間 |
+/// |---|---|---|
+/// | `BaseColor` | `IrMaterial.texture_index` + `base_color_tex_info` | sRGB |
+/// | `Emissive` | `IrMaterial.emissive_texture` | sRGB |
+/// | `Normal` | `IrMaterial.normal_texture` | **Linear (Unorm view)** |
+/// | `ShadeMultiply` | `MtoonParams.shade_texture` | sRGB |
+/// | `ShadingShift` | `MtoonParams.shading_shift_texture` | Linear |
+/// | `RimMultiply` | `MtoonParams.rim_multiply_texture` | sRGB |
+/// | `OutlineWidth` | `MtoonParams.outline_width_texture` | Linear |
+/// | `Matcap` | `MtoonParams.matcap_texture` | sRGB |
+/// | `UvAnimMask` | `MtoonParams.uv_animation_mask_texture` | Linear |
+/// | `Sphere` / `Toon` | `sphere_texture_index` / `toon_texture_index` | sRGB (MMD 専用) |
+///
+/// `serde` 派生は Step 3 の `MaterialEditRecord` 永続化で `TextureSlotRecord<S>` の
+/// キーとして使う前提で先行付与している。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextureSlot {
+    BaseColor,
+    Emissive,
+    Normal,
+    ShadeMultiply,
+    ShadingShift,
+    RimMultiply,
+    OutlineWidth,
+    Matcap,
+    UvAnimMask,
+    Sphere,
+    Toon,
+}
+
+impl TextureSlot {
+    /// `true` の場合、GPU へのアップロードは Linear / Unorm ビューを使用する。
+    /// 通常値マップや UV マスクなど、sRGB デコードを挟んではいけないスロットを返す。
+    ///
+    /// このメソッドは `rebuild_mtoon_aux_bind_group` / `assign_texture_core` 側で
+    /// sRGB / Unorm のビューを選択するために使われる（§B の判定表に対応）。
+    pub fn is_linear(self) -> bool {
+        matches!(
+            self,
+            Self::Normal | Self::ShadingShift | Self::OutlineWidth | Self::UvAnimMask
+        )
+    }
+}
+
 /// MToon 補助テクスチャ情報（texCoord + KHR_texture_transform + sampler）
 #[derive(Clone, Debug)]
 pub struct IrTextureInfo {

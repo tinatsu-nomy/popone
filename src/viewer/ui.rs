@@ -970,6 +970,749 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     }
 }
 
+/// 材質編集ドロワー（§A）: 材質行の `編` ボタンから開かれるフローティング `egui::Window`。
+///
+/// - `editing_material_index` が `None` の場合は何もせず return
+/// - プラン TODO-8 に従い `Id::new("material_editor_window")` で固定、複数インスタンス化を防ぐ
+/// - `default_width(360.0)` + resizable + collapsible
+/// - Step 2 から §E の全セクション（基本 / 影 / アウトライン / リム / MatCap / UV アニメ /
+///   エミッシブ / 法線 / その他）を順次追加していく。
+///
+/// ## 編集経路の dirty 伝達（borrow checker 対策）
+///
+/// closure 内では `dirty: bool` のローカルフラグだけを立て、closure 外で
+/// `app.mark_material_dirty(mat_idx)` と `app.material_overrides` への書き込みを行う。
+/// これにより closure 内の `&mut app` と closure 外の `&mut app` を時間的に逐次化できる。
+/// IR への書き込みと `MaterialParamOverride` への記録は closure 内で同時に行い、
+/// reload 後の再適用（§A / A スタンス対応）も同じ値で一貫する。
+pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
+    use crate::intermediate::types::{MtoonParams, ShaderFamily};
+
+    let Some(mat_idx) = app.editing_material_index else {
+        return;
+    };
+
+    // 材質名と総数を immutable borrow で先に取得
+    let (mat_name, mat_count) = {
+        let Some(loaded) = app.loaded.as_ref() else {
+            app.editing_material_index = None;
+            return;
+        };
+        if mat_idx >= loaded.ir.materials.len() {
+            // モデル再ロード等で材質数が減った場合は閉じる
+            app.editing_material_index = None;
+            return;
+        }
+        (
+            loaded.ir.materials[mat_idx].name.clone(),
+            loaded.ir.materials.len(),
+        )
+    };
+
+    let window_title = format!("材質編集: {}", mat_name);
+    let mut is_open = true;
+    let mut dirty = false;
+
+    // 各セクションの編集結果を closure 外で反映するため、差分のみを一時バッファに保持する。
+    let mut pending_override = super::app::material_edit::MaterialParamOverride::new();
+
+    egui::Window::new(window_title)
+        .id(egui::Id::new("material_editor_window"))
+        .open(&mut is_open)
+        .resizable(true)
+        .collapsible(true)
+        .default_width(360.0)
+        .show(ctx, |ui| {
+            ui.label(
+                egui::RichText::new(format!("mat_idx: {} / {}", mat_idx, mat_count)).small(),
+            );
+            ui.separator();
+
+            let Some(loaded) = app.loaded.as_mut() else {
+                return;
+            };
+            let Some(mat) = loaded.ir.materials.get_mut(mat_idx) else {
+                return;
+            };
+
+            // ==================== MToon 有効化チェックボックス (§G / Step 2-10) ====================
+            //
+            // 材質の `shader_family` を明示的に `Mtoon` / `Other` に切替えるトグル。
+            // これにより PMX 変換の `shader_family` 主軸判定 (Step 2-9) と UI の意味が
+            // 1:1 で一致する。ユーザーがこのチェックを触らない限り、影・アウトライン等の
+            // セクションを展開・編集しても `shader_family` は変わらず、PMX 変換の挙動も
+            // 従来通りの非 MToon 経路を通る（review_005 [P1] の要件）。
+            //
+            // ON  → `shader_family = Mtoon` + `mtoon = Some(default)`（既存 mtoon は維持）
+            // OFF → `shader_family = Other` + `mtoon = None`（MToon セクションの編集値は失われる）
+            {
+                let mut mtoon_enabled = mat.shader_family == ShaderFamily::Mtoon;
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut mtoon_enabled, "MToon 有効化").changed() {
+                        if mtoon_enabled {
+                            mat.shader_family = ShaderFamily::Mtoon;
+                            if mat.mtoon.is_none() {
+                                mat.mtoon = Some(MtoonParams::default());
+                            }
+                            pending_override.enable_mtoon = Some(true);
+                        } else {
+                            mat.shader_family = ShaderFamily::Other;
+                            mat.mtoon = None;
+                            pending_override.enable_mtoon = Some(false);
+                        }
+                        dirty = true;
+                    }
+                    ui.small(match mat.shader_family {
+                        ShaderFamily::Mtoon => "(MToon として扱う)",
+                        ShaderFamily::Uts2 => "(UTS2 として扱う)",
+                        ShaderFamily::LilToon => "(lilToon として扱う)",
+                        ShaderFamily::Poiyomi => "(Poiyomi として扱う)",
+                        ShaderFamily::Other => "(非 MToon)",
+                    });
+                });
+                ui.small(
+                    "※ OFF→ON で既定値の MtoonParams が挿入されます。ON→OFF で MToon セクションの編集値は失われます。",
+                );
+            }
+
+            // ==================== 初期値に戻す (§H / Step 2-11) ====================
+            //
+            // pristine_materials[mat_idx] のスナップショットから材質を復元し、
+            // material_overrides を消去して dirty を立てる。これにより
+            // 「ロード直後の状態に完全に巻き戻す」操作が 1 クリックで可能になる。
+            if mat_idx < app.pristine_materials.len()
+                && ui.button("初期値に戻す").clicked()
+            {
+                *mat = app.pristine_materials[mat_idx].clone();
+                app.material_overrides.remove(&mat_idx);
+                dirty = true;
+            }
+            ui.separator();
+
+            // ==================== §E-1 基本セクション ====================
+            egui::CollapsingHeader::new("基本")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("diffuse:");
+                        let mut rgb = [mat.diffuse.x, mat.diffuse.y, mat.diffuse.z];
+                        if ui.color_edit_button_rgb(&mut rgb).changed() {
+                            mat.diffuse.x = rgb[0];
+                            mat.diffuse.y = rgb[1];
+                            mat.diffuse.z = rgb[2];
+                            pending_override.diffuse = Some(mat.diffuse);
+                            dirty = true;
+                        }
+                    });
+                });
+
+            // ==================== §E-2 影 (Shade) セクション ====================
+            //
+            // **重要 (review_005 [P1] 対応)**: 読み取りには `mat.mtoon()` を使い、
+            // ユーザーが実際に値を変更した瞬間にだけ `mat.mtoon_mut()` を呼んで副作用を
+            // 発生させる。`mat.mtoon_mut()` は `mtoon == None` のときに `MtoonParams::default()`
+            // を即座に挿入するため、「セクションを展開しただけ」で非 MToon 材質が MToon 扱いに
+            // 変わり、PMX 変換結果にまで影響してしまう問題があった（§G の主軸判定切替
+            // とセットで修正済み）。
+            egui::CollapsingHeader::new("影 (Shade)")
+                .default_open(false)
+                .show(ui, |ui| {
+                    // 読み取り: `mat.mtoon()` はデフォルト値参照なので副作用なし
+                    let (mut shade_color_rgb, mut shading_toony, mut shading_shift, mut gi_eq) = {
+                        let mp = mat.mtoon();
+                        (
+                            mp.shade_color.unwrap_or(glam::Vec3::ZERO).to_array(),
+                            mp.shading_toony_factor,
+                            mp.shading_shift_factor,
+                            mp.gi_equalization_factor,
+                        )
+                    };
+
+                    // ウィジェット（ここでは IR を触らない）
+                    let mut shade_changed = false;
+                    let mut toony_changed = false;
+                    let mut shift_changed = false;
+                    let mut gi_changed = false;
+
+                    ui.horizontal(|ui| {
+                        ui.label("shade_color:");
+                        if ui.color_edit_button_rgb(&mut shade_color_rgb).changed() {
+                            shade_changed = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("shading_toony:");
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut shading_toony, 0.0..=1.0)
+                                    .fixed_decimals(3),
+                            )
+                            .changed()
+                        {
+                            toony_changed = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("shading_shift:");
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut shading_shift, -1.0..=1.0)
+                                    .fixed_decimals(3),
+                            )
+                            .changed()
+                        {
+                            shift_changed = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("gi_equalization:");
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut gi_eq, 0.0..=1.0).fixed_decimals(3),
+                            )
+                            .changed()
+                        {
+                            gi_changed = true;
+                        }
+                    });
+
+                    // 変更があった場合のみ `mat.mtoon_mut()` を呼んで書き込む。
+                    // これにより非 MToon 材質で展開しただけでは mtoon が挿入されない。
+                    if shade_changed || toony_changed || shift_changed || gi_changed {
+                        let mp = mat.mtoon_mut();
+                        if shade_changed {
+                            let v = glam::Vec3::from_array(shade_color_rgb);
+                            mp.shade_color = Some(v);
+                            pending_override.shade_color = Some(v);
+                        }
+                        if toony_changed {
+                            mp.shading_toony_factor = shading_toony;
+                            pending_override.shading_toony_factor = Some(shading_toony);
+                        }
+                        if shift_changed {
+                            mp.shading_shift_factor = shading_shift;
+                            pending_override.shading_shift_factor = Some(shading_shift);
+                        }
+                        if gi_changed {
+                            mp.gi_equalization_factor = gi_eq;
+                            pending_override.gi_equalization_factor = Some(gi_eq);
+                        }
+                        dirty = true;
+                    }
+
+                    if !matches!(mat.shader_family, ShaderFamily::Mtoon | ShaderFamily::Uts2 | ShaderFamily::LilToon | ShaderFamily::Poiyomi) {
+                        ui.small("※ 「MToon 有効化」チェックで描画と出力に反映されます。");
+                    }
+                });
+
+            // ==================== §E-3 アウトラインセクション ====================
+            //
+            // - `edge_color` / `edge_size` は IrMaterial 直接フィールド（非 MToon）
+            // - `outline_width_mode` / `outline_width_factor` / `outline_lighting_mix` は
+            //   MtoonParams フィールドのため、読み取りは `mat.mtoon()`、変更時のみ
+            //   `mat.mtoon_mut()` を呼ぶ止血パターン（review_005 [P1] 対応）を踏襲する。
+            egui::CollapsingHeader::new("アウトライン")
+                .default_open(false)
+                .show(ui, |ui| {
+                    use crate::intermediate::types::OutlineWidthMode;
+
+                    // edge_color: IrMaterial 直接 (RGBA)
+                    ui.horizontal(|ui| {
+                        ui.label("edge_color:");
+                        let mut rgba = mat.edge_color.to_array();
+                        if ui
+                            .color_edit_button_rgba_unmultiplied(&mut rgba)
+                            .changed()
+                        {
+                            mat.edge_color = glam::Vec4::from_array(rgba);
+                            pending_override.edge_color = Some(mat.edge_color);
+                            dirty = true;
+                        }
+                    });
+
+                    // edge_size: IrMaterial 直接 (MMD エッジ用, PMX 書き出し時は 1.0 クランプ)
+                    ui.horizontal(|ui| {
+                        ui.label("edge_size:");
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut mat.edge_size, 0.0..=2.0)
+                                    .fixed_decimals(3),
+                            )
+                            .changed()
+                        {
+                            pending_override.edge_size = Some(mat.edge_size);
+                            dirty = true;
+                        }
+                    });
+
+                    // MToon アウトライン系（読み取りは mat.mtoon() 経由で副作用なし）
+                    let (mut width_mode, mut width_factor, mut lighting_mix) = {
+                        let mp = mat.mtoon();
+                        (
+                            mp.outline_width_mode,
+                            mp.outline_width_factor,
+                            mp.outline_lighting_mix,
+                        )
+                    };
+                    let mut width_mode_changed = false;
+                    let mut width_factor_changed = false;
+                    let mut lighting_mix_changed = false;
+
+                    // outline_width_mode: ComboBox
+                    ui.horizontal(|ui| {
+                        ui.label("width_mode:");
+                        let label_of = |m: OutlineWidthMode| match m {
+                            OutlineWidthMode::None => "None",
+                            OutlineWidthMode::WorldCoordinates => "World",
+                            OutlineWidthMode::ScreenCoordinates => "Screen",
+                        };
+                        egui::ComboBox::from_id_salt("outline_width_mode_combo")
+                            .selected_text(label_of(width_mode))
+                            .show_ui(ui, |ui| {
+                                for m in [
+                                    OutlineWidthMode::None,
+                                    OutlineWidthMode::WorldCoordinates,
+                                    OutlineWidthMode::ScreenCoordinates,
+                                ] {
+                                    if ui
+                                        .selectable_label(width_mode == m, label_of(m))
+                                        .clicked()
+                                        && width_mode != m
+                                    {
+                                        width_mode = m;
+                                        width_mode_changed = true;
+                                    }
+                                }
+                            });
+                    });
+
+                    // outline_width_factor: DragValue (world=m, screen=比率)
+                    ui.horizontal(|ui| {
+                        ui.label("width_factor:");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut width_factor)
+                                    .speed(0.001)
+                                    .range(0.0..=10.0),
+                            )
+                            .changed()
+                        {
+                            width_factor_changed = true;
+                        }
+                    });
+
+                    // outline_lighting_mix: Slider 0.0〜1.0
+                    ui.horizontal(|ui| {
+                        ui.label("lighting_mix:");
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut lighting_mix, 0.0..=1.0)
+                                    .fixed_decimals(3),
+                            )
+                            .changed()
+                        {
+                            lighting_mix_changed = true;
+                        }
+                    });
+
+                    // MToon 系は変更時のみ mtoon_mut()
+                    if width_mode_changed || width_factor_changed || lighting_mix_changed {
+                        let mp = mat.mtoon_mut();
+                        if width_mode_changed {
+                            mp.outline_width_mode = width_mode;
+                            pending_override.outline_width_mode = Some(width_mode);
+                        }
+                        if width_factor_changed {
+                            mp.outline_width_factor = width_factor;
+                            pending_override.outline_width_factor = Some(width_factor);
+                        }
+                        if lighting_mix_changed {
+                            mp.outline_lighting_mix = lighting_mix;
+                            pending_override.outline_lighting_mix = Some(lighting_mix);
+                        }
+                        dirty = true;
+                    }
+                });
+
+            // ==================== §E-4 リムセクション ====================
+            //
+            // 全て MtoonParams フィールドなので、読み取りは `mat.mtoon()`、変更時のみ
+            // `mat.mtoon_mut()` を呼ぶパターン。
+            egui::CollapsingHeader::new("リム")
+                .default_open(false)
+                .show(ui, |ui| {
+                    let (mut rim_rgb, mut fresnel_power, mut rim_lift, mut rim_mix) = {
+                        let mp = mat.mtoon();
+                        (
+                            mp.parametric_rim_color.to_array(),
+                            mp.parametric_rim_fresnel_power,
+                            mp.parametric_rim_lift,
+                            mp.rim_lighting_mix,
+                        )
+                    };
+                    let mut rim_color_changed = false;
+                    let mut fresnel_changed = false;
+                    let mut lift_changed = false;
+                    let mut mix_changed = false;
+
+                    ui.horizontal(|ui| {
+                        ui.label("rim_color:");
+                        if ui.color_edit_button_rgb(&mut rim_rgb).changed() {
+                            rim_color_changed = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("fresnel_power:");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut fresnel_power)
+                                    .speed(0.05)
+                                    .range(0.0..=100.0),
+                            )
+                            .changed()
+                        {
+                            fresnel_changed = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("rim_lift:");
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut rim_lift, 0.0..=1.0)
+                                    .fixed_decimals(3),
+                            )
+                            .changed()
+                        {
+                            lift_changed = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("lighting_mix:");
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut rim_mix, 0.0..=1.0)
+                                    .fixed_decimals(3),
+                            )
+                            .changed()
+                        {
+                            mix_changed = true;
+                        }
+                    });
+
+                    if rim_color_changed || fresnel_changed || lift_changed || mix_changed {
+                        let mp = mat.mtoon_mut();
+                        if rim_color_changed {
+                            let v = glam::Vec3::from_array(rim_rgb);
+                            mp.parametric_rim_color = v;
+                            pending_override.parametric_rim_color = Some(v);
+                        }
+                        if fresnel_changed {
+                            mp.parametric_rim_fresnel_power = fresnel_power;
+                            pending_override.parametric_rim_fresnel_power = Some(fresnel_power);
+                        }
+                        if lift_changed {
+                            mp.parametric_rim_lift = rim_lift;
+                            pending_override.parametric_rim_lift = Some(rim_lift);
+                        }
+                        if mix_changed {
+                            mp.rim_lighting_mix = rim_mix;
+                            pending_override.rim_lighting_mix = Some(rim_mix);
+                        }
+                        dirty = true;
+                    }
+                });
+
+            // ==================== §E-5 MatCap セクション ====================
+            egui::CollapsingHeader::new("MatCap")
+                .default_open(false)
+                .show(ui, |ui| {
+                    let mut matcap_rgb = mat.mtoon().matcap_factor.to_array();
+                    let mut matcap_changed = false;
+
+                    ui.horizontal(|ui| {
+                        ui.label("matcap_factor:");
+                        if ui.color_edit_button_rgb(&mut matcap_rgb).changed() {
+                            matcap_changed = true;
+                        }
+                    });
+
+                    if matcap_changed {
+                        let v = glam::Vec3::from_array(matcap_rgb);
+                        mat.mtoon_mut().matcap_factor = v;
+                        pending_override.matcap_factor = Some(v);
+                        dirty = true;
+                    }
+                });
+
+            // ==================== §E-6 UV アニメセクション ====================
+            egui::CollapsingHeader::new("UV アニメ")
+                .default_open(false)
+                .show(ui, |ui| {
+                    let (mut scroll_x, mut scroll_y, mut rotation) = {
+                        let mp = mat.mtoon();
+                        (
+                            mp.uv_animation_scroll_x_speed,
+                            mp.uv_animation_scroll_y_speed,
+                            mp.uv_animation_rotation_speed,
+                        )
+                    };
+                    let mut scroll_x_changed = false;
+                    let mut scroll_y_changed = false;
+                    let mut rotation_changed = false;
+
+                    ui.horizontal(|ui| {
+                        ui.label("scroll_x_speed:");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut scroll_x)
+                                    .speed(0.01)
+                                    .range(-100.0..=100.0),
+                            )
+                            .changed()
+                        {
+                            scroll_x_changed = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("scroll_y_speed:");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut scroll_y)
+                                    .speed(0.01)
+                                    .range(-100.0..=100.0),
+                            )
+                            .changed()
+                        {
+                            scroll_y_changed = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("rotation_speed:");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut rotation)
+                                    .speed(0.01)
+                                    .range(-100.0..=100.0),
+                            )
+                            .changed()
+                        {
+                            rotation_changed = true;
+                        }
+                    });
+
+                    if scroll_x_changed || scroll_y_changed || rotation_changed {
+                        let mp = mat.mtoon_mut();
+                        if scroll_x_changed {
+                            mp.uv_animation_scroll_x_speed = scroll_x;
+                            pending_override.uv_animation_scroll_x_speed = Some(scroll_x);
+                        }
+                        if scroll_y_changed {
+                            mp.uv_animation_scroll_y_speed = scroll_y;
+                            pending_override.uv_animation_scroll_y_speed = Some(scroll_y);
+                        }
+                        if rotation_changed {
+                            mp.uv_animation_rotation_speed = rotation;
+                            pending_override.uv_animation_rotation_speed = Some(rotation);
+                        }
+                        dirty = true;
+                    }
+                });
+
+            // ==================== §E-7 エミッシブ / 法線セクション ====================
+            //
+            // どちらも IrMaterial 直接フィールドなので、MToon 系の読み書き分離は不要。
+            //
+            // **review_006 [P2] 対応**: `emissive_factor` は HDR 値（> 1.0）を保持する必要がある
+            // （VRM の `KHR_materials_emissive_strength` で強度倍率が乗じられる）。しかし
+            // `color_edit_button_rgb` は内部的に 0..1 の線形 `Rgba` にクランプしてしまうので、
+            // 既存の HDR emissive を一度触っただけで発光が弱まってしまっていた。
+            //
+            // **採用案**: 色と強度を分離した UI。
+            // - 色 (0..1 の base_color): ColorPicker で直感的に選択
+            // - 強度 (0..100 の multiplier): DragValue で HDR レンジを扱える
+            // - 内部で `emissive_factor = base_color * intensity` を再計算
+            egui::CollapsingHeader::new("エミッシブ / 法線")
+                .default_open(false)
+                .show(ui, |ui| {
+                    // 現在の emissive_factor を (base_color, intensity) に分解
+                    let current = mat.emissive_factor;
+                    let intensity = current.max_element().max(0.0);
+                    let base_rgb_vec = if intensity > 1e-6 {
+                        current / intensity
+                    } else {
+                        glam::Vec3::ZERO
+                    };
+                    let mut base_rgb = base_rgb_vec.to_array();
+                    let mut intensity_edit = intensity;
+                    let mut color_changed = false;
+                    let mut intensity_changed = false;
+
+                    ui.horizontal(|ui| {
+                        ui.label("emissive:");
+                        if ui.color_edit_button_rgb(&mut base_rgb).changed() {
+                            color_changed = true;
+                        }
+                        ui.label("強度:");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut intensity_edit)
+                                    .speed(0.05)
+                                    .range(0.0..=100.0),
+                            )
+                            .changed()
+                        {
+                            intensity_changed = true;
+                        }
+                    });
+                    ui.small("※ 強度は HDR 倍率（1.0 超も可）。色のみ変更時に強度が 0 なら自動的に 1.0 へ。");
+
+                    if color_changed || intensity_changed {
+                        // 色を変えたが強度が 0 のままだと結果が [0,0,0] になって反映されない。
+                        // そこで「色を変えた かつ 強度が 0」の場合は強度を 1.0 にフォールバック。
+                        let effective_intensity =
+                            if color_changed && intensity_edit <= 1e-6 {
+                                1.0
+                            } else {
+                                intensity_edit
+                            };
+                        let new_v = glam::Vec3::from_array(base_rgb) * effective_intensity;
+                        mat.emissive_factor = new_v;
+                        pending_override.emissive_factor = Some(new_v);
+                        dirty = true;
+                    }
+
+                    // normal_texture_scale: f32 (デフォルト 1.0)
+                    ui.horizontal(|ui| {
+                        ui.label("normal_scale:");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut mat.normal_texture_scale)
+                                    .speed(0.01)
+                                    .range(0.0..=10.0),
+                            )
+                            .changed()
+                        {
+                            pending_override.normal_texture_scale =
+                                Some(mat.normal_texture_scale);
+                            dirty = true;
+                        }
+                    });
+                });
+
+            // ==================== §E-8 その他セクション ====================
+            //
+            // - `alpha_mode` / `alpha_cutoff` / `cull_mode` は IrMaterial 直接
+            // - `render_queue_offset` は MtoonParams フィールド（読み書き分離パターン）
+            egui::CollapsingHeader::new("その他")
+                .default_open(false)
+                .show(ui, |ui| {
+                    use crate::intermediate::types::{AlphaMode, CullMode};
+
+                    // alpha_mode: ComboBox (Opaque / Mask / BlendWithZWrite / Blend)
+                    ui.horizontal(|ui| {
+                        ui.label("alpha_mode:");
+                        let label_of = |m: AlphaMode| match m {
+                            AlphaMode::Opaque => "Opaque",
+                            AlphaMode::Mask => "Mask",
+                            AlphaMode::BlendWithZWrite => "BlendWithZWrite",
+                            AlphaMode::Blend => "Blend",
+                        };
+                        egui::ComboBox::from_id_salt("alpha_mode_combo")
+                            .selected_text(label_of(mat.alpha_mode))
+                            .show_ui(ui, |ui| {
+                                for m in [
+                                    AlphaMode::Opaque,
+                                    AlphaMode::Mask,
+                                    AlphaMode::BlendWithZWrite,
+                                    AlphaMode::Blend,
+                                ] {
+                                    if ui
+                                        .selectable_label(mat.alpha_mode == m, label_of(m))
+                                        .clicked()
+                                        && mat.alpha_mode != m
+                                    {
+                                        mat.alpha_mode = m;
+                                        pending_override.alpha_mode = Some(m);
+                                        dirty = true;
+                                    }
+                                }
+                            });
+                    });
+
+                    // alpha_cutoff: Slider 0.0〜1.0 (Mask モード時のみ実効)
+                    ui.horizontal(|ui| {
+                        ui.label("alpha_cutoff:");
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut mat.alpha_cutoff, 0.0..=1.0)
+                                    .fixed_decimals(3),
+                            )
+                            .changed()
+                        {
+                            pending_override.alpha_cutoff = Some(mat.alpha_cutoff);
+                            dirty = true;
+                        }
+                    });
+
+                    // cull_mode: ComboBox (Back / None / Front)
+                    ui.horizontal(|ui| {
+                        ui.label("cull_mode:");
+                        let label_of = |m: CullMode| match m {
+                            CullMode::Back => "Back (片面)",
+                            CullMode::None => "None (両面)",
+                            CullMode::Front => "Front",
+                        };
+                        egui::ComboBox::from_id_salt("cull_mode_combo")
+                            .selected_text(label_of(mat.cull_mode))
+                            .show_ui(ui, |ui| {
+                                for m in [CullMode::Back, CullMode::None, CullMode::Front] {
+                                    if ui
+                                        .selectable_label(mat.cull_mode == m, label_of(m))
+                                        .clicked()
+                                        && mat.cull_mode != m
+                                    {
+                                        mat.cull_mode = m;
+                                        pending_override.cull_mode = Some(m);
+                                        dirty = true;
+                                    }
+                                }
+                            });
+                    });
+
+                    // render_queue_offset: MtoonParams フィールド (BLEND 内ソート用)
+                    let mut rqo = mat.mtoon().render_queue_offset;
+                    let mut rqo_changed = false;
+                    ui.horizontal(|ui| {
+                        ui.label("render_queue_offset:");
+                        if ui
+                            .add(egui::DragValue::new(&mut rqo).speed(1).range(-9..=9))
+                            .changed()
+                        {
+                            rqo_changed = true;
+                        }
+                    });
+                    if rqo_changed {
+                        mat.mtoon_mut().render_queue_offset = rqo;
+                        pending_override.render_queue_offset = Some(rqo);
+                        dirty = true;
+                    }
+                });
+        });
+
+    if dirty {
+        // 編集差分を `material_overrides` にマージする（既存エントリがあれば上書き）。
+        // reload（A スタンス変換等）で新 IR が構築されても `apply_to()` で自動復元される。
+        // `merge_from` が全 24 フィールドを macro で一括処理するため、各セクション追加
+        // でもこの dirty 処理は 1 行のままで済む。
+        let entry = app.material_overrides.entry(mat_idx).or_default();
+        entry.merge_from(&pending_override);
+        app.mark_material_dirty(mat_idx);
+    }
+    if !is_open {
+        app.editing_material_index = None;
+    }
+}
+
 /// テクスチャD&D時の材質選択ダイアログ（複数選択＋リアルタイムプレビュー）
 pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     let Some(ref mut preview) = app.tex.pending_preview else {
@@ -2296,6 +3039,24 @@ fn show_tab_display(
                     }
                     if resp.hovered() { row_highlight = true; }
                     resp.on_hover_text("エミッシブ");
+                }
+
+                // [編] 材質編集ドロワー開閉（§A）。既存 [S][C][N][B] とは別列として扱い、
+                // クリックでフローティング Window をトグル表示。
+                // ※ 当初は `✎` (U+270E PENCIL) を使っていたが、組み込みの Noto Sans JP/SC には
+                //    絵文字字形が含まれず □ 表示になってしまうため、CJK 1 文字「編」に変更した。
+                {
+                    let is_editing = app.editing_material_index == Some(mat_idx);
+                    let resp = ui.selectable_label(is_editing, "編");
+                    if resp.clicked() {
+                        app.editing_material_index = if is_editing {
+                            None
+                        } else {
+                            Some(mat_idx)
+                        };
+                    }
+                    if resp.hovered() { row_highlight = true; }
+                    resp.on_hover_text("材質編集ドロワーを開く");
                 }
 
                 let cb = if let Some(tex_name) = display_tex {

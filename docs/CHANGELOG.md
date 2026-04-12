@@ -11,6 +11,23 @@
 
 [日本語](CHANGELOG.jp.md)
 
+## v0.5.0 (WIP)
+
+Material editor drawer with full-parameter editing for MToon + lilToon, and MME (ray-mmd) material file generator.
+
+### Planned New Features
+
+- **Material Editor Drawer** — A floating `egui::Window` (default 360 wide) opens from a new `✎` button on each material row. Sections: Basic (diffuse / alpha mode / base color texture), Shade (shade_color / shading_toony / shading_shift + texture), Outline (edge_color / width mode / outline width texture), Rim (parametric rim / rim multiply texture), MatCap, UV animation, Emissive / Normal, Other, and an MME output preview.
+- **Full MToon / lilToon parameter editing** — All 25+ colors, scalars, and aux texture slots (normal / emissive / shade / shadingShift / rim / outline / matcap / uvAnimMask) become editable. Edited values are reflected live on both the standard and MMD-compatible render paths.
+- **Per-slot and per-material reset** — Each texture slot has a `×` button to clear it; each material has a "reset to pristine" action that restores the state captured at load time.
+- **Built-in material presets** — MToon 1.0 default, lilToon standard, and PMX-compat presets ship out of the box.
+- **`popone_history.json` v2** — The history file now stores per-material edit records (texture slot assignments + color/scalar diffs + MME category override) with forward-compatible v1 → v2 migration and `.bak` recovery.
+- **MME (ray-mmd) material file generator** — When a ray-mmd root folder is configured in the Control tab, the PMX export dialog exposes an "MME output" checkbox. Checking it emits `mme/material_<name>.fx` files next to the PMX, using `CUSTOM_ENABLE`-based templates (Standard / Skin / Subsurface / HairAniso / Glass / Cloth / ClearCoat / Emissive). `#include` paths are resolved with `pathdiff` so they stay correct regardless of where the user's ray-mmd install lives. Non-PMX-capable textures (normal / emissive / matcap / rim / shading shift) referenced by materials are copied into `mme/textures/` and referenced with relative paths.
+
+### Planned Behavior Changes
+
+- **`ShaderFamily::Mtoon` is now the primary decision axis** for PMX conversion, replacing the older `is_mtoon()` (`mtoon.is_some()`) check. This lets the material editor safely surface MToon parameters on non-MToon materials without flipping the PMX export into MToon-style ambient/specular output. Users must explicitly tick an "Enable MToon" checkbox in the drawer to promote a material.
+
 ## v0.4.0 (2026-04-11)
 
 Added a separate-window log viewer and reworked log file persistence around the principle that no log files are written unless the user explicitly asks for them or a panic occurs.

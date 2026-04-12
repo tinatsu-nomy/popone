@@ -4,7 +4,7 @@ use glam::Vec3;
 use wgpu::util::DeviceExt;
 
 use super::camera::OrbitCamera;
-use super::mesh::{GpuModel, RenderQueue};
+use super::mesh::{DrawCall, GpuModel, MaterialBuildFlags, RenderQueue};
 use crate::intermediate::types::{CullMode, IrModel};
 
 /// MMD ライティングのアンビエントスケール（154/255 ≈ 0.604）
@@ -1521,6 +1521,21 @@ struct PipelineSet {
     pipeline_outline_mask: wgpu::RenderPipeline,
 }
 
+/// 補助テクスチャスロットで「未割当」を表すためのデフォルト TextureView 集合。
+///
+/// `GpuRenderer::new()` で一度だけ生成し、`rebuild_material_bind_groups()` から
+/// 参照するだけで bind group を作れるようにする（§D / TODO-4）。モデルごとに
+/// 複製しないため、GpuRenderer に持たせている。
+///
+/// - `white_srgb`: shade / rim / outline width などの sRGB スロット既定値
+/// - `black_srgb`: matcap の既定値（加算ゼロ）
+/// - `flat_normal_unorm`: normal map の既定値（(0,0,1) 相当）
+pub struct DefaultViews {
+    pub white_srgb: wgpu::TextureView,
+    pub black_srgb: wgpu::TextureView,
+    pub flat_normal_unorm: wgpu::TextureView,
+}
+
 pub struct GpuRenderer {
     /// MSAA パイプラインセット (sample_count=4, sRGB) — 遅延生成
     pipelines_msaa_srgb: Option<PipelineSet>,
@@ -1565,6 +1580,8 @@ pub struct GpuRenderer {
     default_mtoon_aux_bind_group: wgpu::BindGroup,
     /// 共通テクスチャサンプラー（毎回生成を回避）
     default_sampler: wgpu::Sampler,
+    /// 材質編集時の bind group 再生成に使う「未割当」デフォルト TextureView 集合（§D）
+    default_views: DefaultViews,
     /// グリッド頂点バッファ
     grid_vbuf: wgpu::Buffer,
     grid_vertex_count: u32,
@@ -1670,6 +1687,16 @@ struct OffscreenTarget {
 }
 
 impl GpuRenderer {
+    /// 材質編集時の bind group 再生成から参照する「未割当」既定 view 集合（§D）。
+    pub fn default_views(&self) -> &DefaultViews {
+        &self.default_views
+    }
+
+    /// 共通サンプラー。材質編集 UI の rebuild 経路からも使えるよう公開する（§D）。
+    pub fn default_sampler(&self) -> &wgpu::Sampler {
+        &self.default_sampler
+    }
+
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, _has_alpha: bool) -> Self {
         // Bind group layouts
         let camera_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1762,6 +1789,15 @@ impl GpuRenderer {
                 sampler: s,
             }, // normal: フラット
         );
+
+        // §D: bind group 生成で使い終わった view を DefaultViews に集約し、
+        // GpuRenderer が所有する。材質編集による rebuild_material_bind_groups
+        // から「未割当」スロット用に参照できるようになる。
+        let default_views = DefaultViews {
+            white_srgb: white_srgb_view,
+            black_srgb: black_view,
+            flat_normal_unorm: flat_normal_view,
+        };
 
         // Shader modules（パイプライン遅延生成のため保持）
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1989,6 +2025,7 @@ impl GpuRenderer {
             mtoon_aux_bgl,
             default_mtoon_aux_bind_group,
             default_sampler,
+            default_views,
             bone_tail: DynamicBuffer::new(),
             bone_fill: DynamicBuffer::new(),
             bone_line: DynamicBuffer::new(),
@@ -4307,115 +4344,207 @@ impl GpuRenderer {
         let mut draws = std::mem::take(&mut model.draws);
         let gpu_textures_unorm = &model.gpu_texture_views_unorm;
 
-        // MMD テクスチャ bind group 用サンプラー
-        let tex_sampler = &self.default_sampler;
-
         for draw in &mut draws {
             if draw.render_style != RenderStyle::Mmd {
                 continue;
             }
+            self.rebuild_mmd_for_draw(device, draw, ir, gpu_textures_unorm, emissive_per_mat);
+        }
 
-            let mat = &ir.materials[draw.material_index];
+        model.draws = draws;
+    }
 
-            // MmdMaterialUniform
-            let mut flags = 0u32;
-            if mat.sphere_texture_index.is_some() && mat.sphere_mode > 0 {
-                flags |= 1; // has_sphere
-                if mat.sphere_mode == 2 {
-                    flags |= 2; // sphere_add
-                }
+    /// 1 つの DrawCall に対する MMD 互換パスの bind group 3 系統（material / texture / aux）を
+    /// 再生成する（§C）。
+    ///
+    /// `prepare_mmd_resources` の一括処理と `rebuild_material_bind_groups` の per-material
+    /// 経路の両方から呼ばれる。`RenderStyle::Mmd` 以外が渡された場合は何もせず早期 return する。
+    fn rebuild_mmd_for_draw(
+        &self,
+        device: &wgpu::Device,
+        draw: &mut DrawCall,
+        ir: &IrModel,
+        gpu_textures_unorm: &[wgpu::TextureView],
+        emissive_per_mat: &[bool],
+    ) {
+        use super::mesh::RenderStyle;
+        if draw.render_style != RenderStyle::Mmd {
+            return;
+        }
+
+        let mat = &ir.materials[draw.material_index];
+        let tex_sampler = &self.default_sampler;
+
+        // MmdMaterialUniform
+        let mut flags = 0u32;
+        if mat.sphere_texture_index.is_some() && mat.sphere_mode > 0 {
+            flags |= 1; // has_sphere
+            if mat.sphere_mode == 2 {
+                flags |= 2; // sphere_add
             }
-            if mat.toon_texture_index.is_some() || mat.toon_shared_index.is_some() {
-                flags |= 4; // has_toon
-            }
+        }
+        if mat.toon_texture_index.is_some() || mat.toon_shared_index.is_some() {
+            flags |= 4; // has_toon
+        }
 
-            let bloom_emissive = if emissive_per_mat
-                .get(draw.material_index)
-                .copied()
-                .unwrap_or(true)
-            {
-                super::bloom::derive_pmx_bloom(mat).0
-            } else {
-                [0.0; 3]
-            };
+        let bloom_emissive = if emissive_per_mat
+            .get(draw.material_index)
+            .copied()
+            .unwrap_or(true)
+        {
+            super::bloom::derive_pmx_bloom(mat).0
+        } else {
+            [0.0; 3]
+        };
 
-            let uniform = MmdMaterialUniform {
-                ambient: mat.ambient.to_array(),
-                alpha: mat.diffuse.w.clamp(0.0, 1.0),
-                specular: mat.specular.to_array(),
-                specular_power: mat.specular_power,
-                diffuse_rgb: [mat.diffuse.x, mat.diffuse.y, mat.diffuse.z],
-                flags,
-                edge_color: mat.edge_color.to_array(),
-                edge_size: mat.edge_size,
-                bloom_emissive,
-            };
+        let uniform = MmdMaterialUniform {
+            ambient: mat.ambient.to_array(),
+            alpha: mat.diffuse.w.clamp(0.0, 1.0),
+            specular: mat.specular.to_array(),
+            specular_power: mat.specular_power,
+            diffuse_rgb: [mat.diffuse.x, mat.diffuse.y, mat.diffuse.z],
+            flags,
+            edge_color: mat.edge_color.to_array(),
+            edge_size: mat.edge_size,
+            bloom_emissive,
+        };
 
-            let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mmd_mat_uniform"),
-                contents: bytemuck::bytes_of(&uniform),
-                usage: wgpu::BufferUsages::UNIFORM,
+        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("mmd_mat_uniform"),
+            contents: bytemuck::bytes_of(&uniform),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mmd_mat_bg"),
+            layout: &self.mmd_material_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buf.as_entire_binding(),
+            }],
+        });
+
+        draw.mmd_material_buf = Some(buf);
+        draw.mmd_material_bind_group = Some(bind_group);
+
+        // MMD メインテクスチャ bind group（Unorm ビュー）
+        let mmd_tex_bg = mat.texture_index.and_then(|ti| {
+            gpu_textures_unorm.get(ti).map(|unorm_view| {
+                create_texture_bind_group(device, &self.texture_bgl, unorm_view, tex_sampler)
+            })
+        });
+        draw.mmd_texture_bind_group = mmd_tex_bg;
+
+        // sphere/toon aux bind group（Unorm ビュー）
+        let sphere_view = mat
+            .sphere_texture_index
+            .and_then(|i| gpu_textures_unorm.get(i));
+        let toon_view = mat
+            .toon_texture_index
+            .and_then(|i| gpu_textures_unorm.get(i))
+            .or_else(|| {
+                mat.toon_shared_index
+                    .map(|i| &self.shared_toon_textures_unorm[i as usize])
             });
 
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("mmd_mat_bg"),
-                layout: &self.mmd_material_bgl,
-                entries: &[wgpu::BindGroupEntry {
+        // sphere/toon がない場合は shared_toon_textures_unorm[0]（白グラデ）をフォールバック
+        let sv = sphere_view.unwrap_or(&self.shared_toon_textures_unorm[0]);
+        let tv = toon_view.unwrap_or(&self.shared_toon_textures_unorm[0]);
+
+        let aux_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mmd_aux_bg"),
+            layout: &self.mmd_aux_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: buf.as_entire_binding(),
-                }],
-            });
+                    resource: wgpu::BindingResource::TextureView(sv),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.shared_toon_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(tv),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.shared_toon_sampler),
+                },
+            ],
+        });
+        draw.mmd_aux_bind_group = Some(aux_bg);
+    }
 
-            draw.mmd_material_buf = Some(buf);
-            draw.mmd_material_bind_group = Some(bind_group);
+    /// 材質編集ドロワーからの dirty 通知を受けて、1 材質ぶんの全 bind group を再生成する（§C）。
+    ///
+    /// 標準パス（material_bind_group + mtoon_aux_bind_group）と MMD 互換パス
+    /// （mmd_material/mmd_texture/mmd_aux の 3 系統）の両方を同時に更新する。
+    /// `use_mmd_path` 切替時に編集が片方のパスで消えないように、必ず両方を走らせる。
+    ///
+    /// 現行 `DrawCall` は `wgpu::BindGroup` のみを保持して `wgpu::Buffer` ハンドルを持たないため
+    /// `queue.write_buffer` による部分更新は構造上不可能。bind group ごと再生成する方針で割り切り
+    /// （プラン §C に明記、将来最適化は DrawCall.material_buf 追加で別 PR にて実施）。
+    pub fn rebuild_material_bind_groups(
+        &self,
+        device: &wgpu::Device,
+        model: &mut GpuModel,
+        ir: &IrModel,
+        mat_idx: usize,
+        flags: &MaterialBuildFlags,
+    ) {
+        use super::mesh::{
+            build_aux_refs_for, build_material_params_for, rebuild_mtoon_aux_bind_group,
+            RenderStyle,
+        };
 
-            // MMD メインテクスチャ bind group（Unorm ビュー）
-            let mmd_tex_bg = mat.texture_index.and_then(|ti| {
-                gpu_textures_unorm.get(ti).map(|unorm_view| {
-                    create_texture_bind_group(device, &self.texture_bgl, unorm_view, tex_sampler)
-                })
-            });
-            draw.mmd_texture_bind_group = mmd_tex_bg;
+        if mat_idx >= ir.materials.len() {
+            return;
+        }
+        let mat = &ir.materials[mat_idx];
 
-            // sphere/toon aux bind group（Unorm ビュー）
-            let sphere_view = mat
-                .sphere_texture_index
-                .and_then(|i| gpu_textures_unorm.get(i));
-            let toon_view = mat
-                .toon_texture_index
-                .and_then(|i| gpu_textures_unorm.get(i))
-                .or_else(|| {
-                    mat.toon_shared_index
-                        .map(|i| &self.shared_toon_textures_unorm[i as usize])
-                });
+        // §C: 純関数で params / aux_refs を計算
+        let params = build_material_params_for(mat, mat_idx, flags);
+        let aux_refs = build_aux_refs_for(mat);
 
-            // sphere/toon がない場合は shared_toon_textures_unorm[0]（白グラデ）をフォールバック
-            let sv = sphere_view.unwrap_or(&self.shared_toon_textures_unorm[0]);
-            let tv = toon_view.unwrap_or(&self.shared_toon_textures_unorm[0]);
+        // 借用衝突を回避するため draws を一時的に奪う（prepare_mmd_resources と同じパターン）
+        let mut draws = std::mem::take(&mut model.draws);
+        let gpu_texture_views = &model.gpu_texture_views;
+        let gpu_texture_views_unorm = &model.gpu_texture_views_unorm;
 
-            let aux_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("mmd_aux_bg"),
-                layout: &self.mmd_aux_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(sv),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.shared_toon_sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(tv),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::Sampler(&self.shared_toon_sampler),
-                    },
-                ],
-            });
-            draw.mmd_aux_bind_group = Some(aux_bg);
+        for draw in &mut draws {
+            if draw.material_index != mat_idx {
+                continue;
+            }
+
+            // 標準パス: material_bind_group
+            draw.material_bind_group =
+                create_material_bind_group(device, &self.material_bgl, &params);
+
+            // 標準パス: mtoon_aux_bind_group（aux_refs が Some の材質のみ）
+            if let Some(refs) = &aux_refs {
+                draw.mtoon_aux_bind_group = Some(rebuild_mtoon_aux_bind_group(
+                    device,
+                    &self.mtoon_aux_bgl,
+                    refs,
+                    gpu_texture_views,
+                    gpu_texture_views_unorm,
+                    &self.default_views,
+                ));
+            } else {
+                draw.mtoon_aux_bind_group = None;
+            }
+
+            // MMD 互換パス: RenderStyle::Mmd のみ（prepare_mmd_resources と同じ条件）
+            if draw.render_style == RenderStyle::Mmd {
+                self.rebuild_mmd_for_draw(
+                    device,
+                    draw,
+                    ir,
+                    gpu_texture_views_unorm,
+                    &flags.emissive,
+                );
+            }
         }
 
         model.draws = draws;

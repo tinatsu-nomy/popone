@@ -3274,7 +3274,7 @@ impl ViewerApp {
         Self::encode_ir_textures_as_png(&mut ir, &glb.images);
         let source =
             source_override.unwrap_or_else(|| ReloadableSource::File(source_path.to_path_buf()));
-        self.finish_load_with_gpu(ir, gpu_model, source)
+        self.finish_load_with_gpu(ir, gpu_model, source, false)
     }
 
     /// Prefab エントリから参照先 FBX を解決してロード（複数 FBX マージ対応）
@@ -4008,7 +4008,7 @@ impl ViewerApp {
                 main_bytes: data,
                 aux_files: HashMap::new(),
             };
-            return self.finish_load_with_gpu(ir, gpu_model, source);
+            return self.finish_load_with_gpu(ir, gpu_model, source, false);
         } else {
             ReloadableSource::File(path.to_path_buf())
         };
@@ -4037,7 +4037,7 @@ impl ViewerApp {
         // IrTexture を PNG エンコード済みに変換（convert_ir_to_pmx で統一的に使えるように）
         Self::encode_ir_textures_as_png(&mut ir, &glb.images);
 
-        self.finish_load_with_gpu(ir, gpu_model, source)
+        self.finish_load_with_gpu(ir, gpu_model, source, false)
     }
 
     /// リロード前の状態をスナップショットとして退避する。
@@ -4487,7 +4487,7 @@ impl ViewerApp {
                                 &mat_flags,
                             )?;
                             Self::encode_ir_textures_as_png(&mut ir, &glb.images);
-                            self.finish_load_with_gpu(ir, gpu_model, source.clone())
+                            self.finish_load_with_gpu(ir, gpu_model, source.clone(), false)
                         }
                     }
                 }

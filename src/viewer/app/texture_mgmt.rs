@@ -24,7 +24,7 @@ pub struct PendingPsdConversion {
 
 use super::helpers::{is_temp_path, TextureSource};
 use super::{ConvertMessage, GpuModel, ViewerApp};
-use crate::intermediate::types::TextureData;
+use crate::intermediate::types::{TextureData, TextureSlot};
 
 /// テクスチャ割り当て・パッケージテクスチャ関連の状態
 pub struct TextureState {
@@ -343,7 +343,13 @@ impl ViewerApp {
             } => (data.to_vec(), *is_psd, original_name.clone()),
         };
 
-        if !self.assign_texture_core(material_index, &tex_data, is_psd, &display_name) {
+        if !self.assign_texture_core(
+            material_index,
+            TextureSlot::BaseColor,
+            &tex_data,
+            is_psd,
+            &display_name,
+        ) {
             return;
         }
 
@@ -372,7 +378,13 @@ impl ViewerApp {
         tex_data: &[u8],
     ) -> bool {
         let is_psd = super::super::texture::is_psd_filename(tex_name);
-        if !self.assign_texture_core(material_index, tex_data, is_psd, tex_name) {
+        if !self.assign_texture_core(
+            material_index,
+            TextureSlot::BaseColor,
+            tex_data,
+            is_psd,
+            tex_name,
+        ) {
             return false;
         }
         self.update_mat_cache();
@@ -382,13 +394,33 @@ impl ViewerApp {
     /// GPU upload, IrTexture registration, material update, PSD BG conversion,
     /// linked sibling assignment -- shared by both file-path and raw-byte callers.
     /// Returns false on upload failure or missing loaded model.
+    ///
+    /// `slot` 引数は §B で導入された `TextureSlot` enum に対応する。Step 1-4 時点では
+    /// `BaseColor` のみ既存経路で実装済み。他の補助スロット（Emissive / Normal /
+    /// ShadeMultiply / ShadingShift / RimMultiply / OutlineWidth / Matcap / UvAnimMask /
+    /// Sphere / Toon）は Step 2 以降で追加する予定で、現時点では `log::warn!` を出して
+    /// `false` を返すガード実装とする。
     fn assign_texture_core(
         &mut self,
         material_index: usize,
+        slot: TextureSlot,
         tex_data: &[u8],
         is_psd: bool,
         display_name: &str,
     ) -> bool {
+        // Step 1-4: 非 BaseColor スロットはまだ書き込み経路が無いため、呼ばれたら警告して false を返す。
+        // Step 2 以降で MToon 補助スロット（Emissive / Normal / ShadeMultiply / ...）の書き込みを追加する。
+        if slot != TextureSlot::BaseColor {
+            log::warn!(
+                "assign_texture_core: TextureSlot::{:?} is not yet wired (material {}, name {}); \
+                 Step 2 以降で実装予定",
+                slot,
+                material_index,
+                display_name
+            );
+            return false;
+        }
+
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
 
