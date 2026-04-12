@@ -426,6 +426,15 @@ pub struct ViewerApp {
     /// reload 時も新 IR の値が pristine として設定される。
     pub pristine_materials: Vec<IrMaterial>,
 
+    /// 材質編集ドロワー (Step 4-16b / review_016): 非 BaseColor テクスチャスロット割当の
+    /// ファイルパス記録。reload 時に再読込 + assign_texture_core で復元する。
+    /// key = (mat_idx, TextureSlot), value = ファイルパス。
+    /// 新モデルロード時 (is_reload = false) にクリアされる。
+    pub slot_texture_paths: std::collections::HashMap<
+        (usize, crate::intermediate::types::TextureSlot),
+        std::path::PathBuf,
+    >,
+
     /// 材質編集ドロワー: mat_idx ごとのパラメータ上書き値。
     ///
     /// Step 2 で `MaterialParamOverride` struct に集約され、§E の全セクション
@@ -771,6 +780,7 @@ impl ViewerApp {
             material_dirty: Vec::new(),
             editing_material_index: None,
             pristine_materials: Vec::new(),
+            slot_texture_paths: std::collections::HashMap::new(),
             material_overrides: std::collections::HashMap::new(),
             export: ExportState::default(),
             material_filter: String::new(),
@@ -1487,6 +1497,7 @@ impl ViewerApp {
             self.editing_material_index = None;
             self.material_dirty.clear();
             self.material_overrides.clear();
+            self.slot_texture_paths.clear();
         }
 
         // レンダラー初期化（まだなければ）または可視化キャッシュ無効化
@@ -1652,6 +1663,35 @@ impl ViewerApp {
                         }
                         self.material_dirty[mat_idx] = true;
                     }
+                }
+            }
+        }
+
+        // Step 4-16b / review_016 対応: 非 BaseColor テクスチャスロット割当の reload 復元。
+        // slot_texture_paths に記録されたファイルパスを再読込し、assign_texture_core で
+        // GPU にアップロード + IrMaterial のスロットフィールドに設定する。
+        if is_reload && !self.slot_texture_paths.is_empty() {
+            let paths: Vec<(
+                (usize, crate::intermediate::types::TextureSlot),
+                std::path::PathBuf,
+            )> = self
+                .slot_texture_paths
+                .iter()
+                .map(|(k, v)| (*k, v.clone()))
+                .collect();
+            for ((mat_idx, slot), path) in paths {
+                if let Ok(data) = std::fs::read(&path) {
+                    let ext = crate::path_ext_lower(&path);
+                    let is_psd = ext == "psd";
+                    let name = path.to_string_lossy().to_string();
+                    self.assign_texture_core(mat_idx, slot, &data, is_psd, &name);
+                } else {
+                    log::warn!(
+                        "Slot texture reload failed: mat[{}] {:?} <- {}",
+                        mat_idx,
+                        slot,
+                        path.display()
+                    );
                 }
             }
         }

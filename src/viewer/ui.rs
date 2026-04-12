@@ -122,7 +122,11 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     let _ = tx.send(dialog.pick_file());
                     repaint.request_repaint();
                 });
-                app.tex.pending_file_dialog = Some((mat_idx, rx));
+                app.tex.pending_file_dialog = Some((
+                    mat_idx,
+                    crate::intermediate::types::TextureSlot::BaseColor,
+                    rx,
+                ));
             }
         }
         Some(TexAssignRequest::PkgTexture(mat_idx, tex_idx)) => {
@@ -148,7 +152,7 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
     }
 
     // 非同期テクスチャファイルダイアログの結果をポーリング
-    if let Some((mat_idx, ref rx)) = app.tex.pending_file_dialog {
+    if let Some((mat_idx, slot, ref rx)) = app.tex.pending_file_dialog {
         match rx.try_recv() {
             Ok(Some(path)) => {
                 if let Some(dir) = path.parent() {
@@ -161,7 +165,35 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     .as_ref()
                     .is_some_and(|l| mat_idx < l.ir.materials.len());
                 if valid {
-                    app.assign_texture_to_material(mat_idx, &path);
+                    // Step 4-16b: slot に応じて割当経路を分岐
+                    if slot == crate::intermediate::types::TextureSlot::BaseColor {
+                        app.assign_texture_to_material(mat_idx, &path);
+                    } else {
+                        // 非 BaseColor: ファイルを読んで assign_texture_core(slot) で割当
+                        // review_016 対応: slot_texture_paths にパスを記録し、reload 時に復元可能にする
+                        if let Ok(data) = std::fs::read(&path) {
+                            let ext = path
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            let is_psd = ext == "psd";
+                            let name = path.to_string_lossy().to_string();
+                            if app.assign_texture_core(mat_idx, slot, &data, is_psd, &name) {
+                                app.slot_texture_paths.insert((mat_idx, slot), path.clone());
+                                // review_017 [P2-1]: same-name 連動分も slot_texture_paths に記録
+                                if app.tex.link_same_name {
+                                    if let Some(ref loaded) = app.loaded {
+                                        let siblings = loaded.same_name_siblings(mat_idx);
+                                        for sib in siblings {
+                                            app.slot_texture_paths
+                                                .insert((sib, slot), path.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 } else {
                     log::warn!(
                         "Texture dialog result discarded: material index {} out of range \
@@ -1016,6 +1048,11 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
     // 各セクションの編集結果を closure 外で反映するため、差分のみを一時バッファに保持する。
     let mut pending_override = super::app::material_edit::MaterialParamOverride::new();
 
+    // Step 4-16b: テクスチャ選択ボタンクリック → closure 外でファイルダイアログ起動
+    let mut pending_tex_request: Option<crate::intermediate::types::TextureSlot> = None;
+    // Step 4-17: テクスチャスロットリセット要求 → closure 外でスロットをクリア
+    let mut pending_tex_clear: Option<crate::intermediate::types::TextureSlot> = None;
+
     egui::Window::new(window_title)
         .id(egui::Id::new("material_editor_window"))
         .open(&mut is_open)
@@ -1599,6 +1636,46 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                     });
                 });
 
+            // ==================== テクスチャスロット (Step 4-16b) ====================
+            //
+            // 全補助テクスチャスロットの選択ボタンを 1 セクションに集約。
+            // クリック時に `pending_tex_request` に slot をセットし、closure 外で
+            // ファイルダイアログを起動する（borrow 分離）。スロットリセット `×` も同時に提供。
+            egui::CollapsingHeader::new("テクスチャスロット")
+                .default_open(false)
+                .show(ui, |ui| {
+                    use crate::intermediate::types::TextureSlot;
+
+                    let textures = &loaded.ir.textures;
+                    let mp = mat.mtoon();
+                    let slots: [(TextureSlot, &str, Option<usize>); 8] = [
+                        (TextureSlot::Emissive, "エミッシブ", mat.emissive_texture.as_ref().map(|t| t.index)),
+                        (TextureSlot::Normal, "法線", mat.normal_texture.as_ref().map(|t| t.index)),
+                        (TextureSlot::ShadeMultiply, "シェード", mp.shade_texture.as_ref().map(|t| t.index)),
+                        (TextureSlot::ShadingShift, "シェーディングシフト", mp.shading_shift_texture.as_ref().map(|t| t.index)),
+                        (TextureSlot::RimMultiply, "リム", mp.rim_multiply_texture.as_ref().map(|t| t.index)),
+                        (TextureSlot::OutlineWidth, "アウトライン幅", mp.outline_width_texture.as_ref().map(|t| t.index)),
+                        (TextureSlot::Matcap, "MatCap", mp.matcap_texture.as_ref().map(|t| t.index)),
+                        (TextureSlot::UvAnimMask, "UV アニメマスク", mp.uv_animation_mask_texture.as_ref().map(|t| t.index)),
+                    ];
+
+                    for (slot, label, tex_idx_opt) in &slots {
+                        ui.horizontal(|ui| {
+                            let tex_name = tex_idx_opt
+                                .and_then(|idx| textures.get(idx))
+                                .map(|t| t.filename.as_str());
+                            ui.label(format!("{}:", label));
+                            if ui.button(tex_name.unwrap_or("(未割当)")).clicked() {
+                                pending_tex_request = Some(*slot);
+                            }
+                            // Step 4-17: スロットリセット `×` ボタン
+                            if tex_idx_opt.is_some() && ui.small_button("×").clicked() {
+                                pending_tex_clear = Some(*slot);
+                            }
+                        });
+                    }
+                });
+
             // ==================== §E-8 その他セクション ====================
             //
             // - `alpha_mode` / `alpha_cutoff` / `cull_mode` は IrMaterial 直接
@@ -1708,6 +1785,75 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
         entry.merge_from(&pending_override);
         app.mark_material_dirty(mat_idx);
     }
+
+    // Step 4-17: テクスチャスロットリセット `×`
+    if let Some(slot) = pending_tex_clear {
+        // review_017 [P2-2]: slot_texture_paths からも削除して reload 後の復活を防ぐ
+        app.slot_texture_paths.remove(&(mat_idx, slot));
+        if let Some(loaded) = app.loaded.as_mut() {
+            if let Some(mat) = loaded.ir.materials.get_mut(mat_idx) {
+                use crate::intermediate::types::TextureSlot;
+                match slot {
+                    TextureSlot::Emissive => mat.emissive_texture = None,
+                    TextureSlot::Normal => mat.normal_texture = None,
+                    TextureSlot::ShadeMultiply => {
+                        if let Some(ref mut mp) = mat.mtoon {
+                            mp.shade_texture = None;
+                        }
+                    }
+                    TextureSlot::ShadingShift => {
+                        if let Some(ref mut mp) = mat.mtoon {
+                            mp.shading_shift_texture = None;
+                        }
+                    }
+                    TextureSlot::RimMultiply => {
+                        if let Some(ref mut mp) = mat.mtoon {
+                            mp.rim_multiply_texture = None;
+                        }
+                    }
+                    TextureSlot::OutlineWidth => {
+                        if let Some(ref mut mp) = mat.mtoon {
+                            mp.outline_width_texture = None;
+                        }
+                    }
+                    TextureSlot::Matcap => {
+                        if let Some(ref mut mp) = mat.mtoon {
+                            mp.matcap_texture = None;
+                        }
+                    }
+                    TextureSlot::UvAnimMask => {
+                        if let Some(ref mut mp) = mat.mtoon {
+                            mp.uv_animation_mask_texture = None;
+                        }
+                    }
+                    TextureSlot::BaseColor | TextureSlot::Sphere | TextureSlot::Toon => {}
+                }
+            }
+        }
+        app.mark_material_dirty(mat_idx);
+    }
+
+    // Step 4-16b: テクスチャ選択ボタンクリック → ファイルダイアログ起動
+    // closure 外で処理するため、app の borrow 衝突がない。
+    if let Some(slot) = pending_tex_request {
+        if app.tex.pending_file_dialog.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let repaint = ctx.clone();
+            let dir = app.tex.last_dir.clone();
+            std::thread::spawn(move || {
+                let mut dialog = rfd::FileDialog::new()
+                    .set_title("テクスチャ画像を選択")
+                    .add_filter("Image", &["png", "jpg", "jpeg", "tga", "bmp", "psd", "dds"]);
+                if let Some(ref d) = dir {
+                    dialog = dialog.set_directory(d);
+                }
+                let _ = tx.send(dialog.pick_file());
+                repaint.request_repaint();
+            });
+            app.tex.pending_file_dialog = Some((mat_idx, slot, rx));
+        }
+    }
+
     if !is_open {
         app.editing_material_index = None;
     }

@@ -28,6 +28,7 @@ Material editor drawer with full-parameter editing for MToon + lilToon, and MME 
 
 - **`ShaderFamily::Mtoon` is now the primary decision axis** for PMX conversion, replacing the older `is_mtoon()` (`mtoon.is_some()`) check. This lets the material editor safely surface MToon parameters on non-MToon materials without flipping the PMX export into MToon-style ambient/specular output. Users must explicitly tick an "Enable MToon" checkbox in the drawer to promote a material.
 
+
 ## v0.4.0 (2026-04-11)
 
 Added a separate-window log viewer and reworked log file persistence around the principle that no log files are written unless the user explicitly asks for them or a panic occurs.

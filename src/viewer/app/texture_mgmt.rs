@@ -46,8 +46,13 @@ pub struct TextureState {
     pub pkg_popup_filter: String,
     /// 最後にテクスチャファイルを開いたディレクトリ
     pub last_dir: Option<PathBuf>,
-    /// 非同期テクスチャファイルダイアログ（材質Index, 結果受信チャネル）
-    pub pending_file_dialog: Option<(usize, std::sync::mpsc::Receiver<Option<PathBuf>>)>,
+    /// 非同期テクスチャファイルダイアログ（材質Index, TextureSlot, 結果受信チャネル）
+    /// Step 4-16b: slot 情報を追加し、各セクションのテクスチャ選択ボタンから起動可能にした。
+    pub pending_file_dialog: Option<(
+        usize,
+        TextureSlot,
+        std::sync::mpsc::Receiver<Option<PathBuf>>,
+    )>,
     /// PSD→PNG バックグラウンド変換の保留リスト
     pub pending_psd_conversions: Vec<PendingPsdConversion>,
 }
@@ -395,12 +400,11 @@ impl ViewerApp {
     /// linked sibling assignment -- shared by both file-path and raw-byte callers.
     /// Returns false on upload failure or missing loaded model.
     ///
-    /// `slot` 引数は §B で導入された `TextureSlot` enum に対応する。Step 1-4 時点では
-    /// `BaseColor` のみ既存経路で実装済み。他の補助スロット（Emissive / Normal /
-    /// ShadeMultiply / ShadingShift / RimMultiply / OutlineWidth / Matcap / UvAnimMask /
-    /// Sphere / Toon）は Step 2 以降で追加する予定で、現時点では `log::warn!` を出して
-    /// `false` を返すガード実装とする。
-    fn assign_texture_core(
+    /// `slot` 引数は §B で導入された `TextureSlot` enum に対応する。Step 4-16a で
+    /// 全 11 スロットの書き込み経路を実装。BaseColor は既存の texture_bind_group
+    /// 即時更新、他のスロットは IrMaterial フィールド書き換え + `mark_material_dirty`
+    /// → `rebuild_material_bind_groups` で bind group 再生成。
+    pub(crate) fn assign_texture_core(
         &mut self,
         material_index: usize,
         slot: TextureSlot,
@@ -408,23 +412,10 @@ impl ViewerApp {
         is_psd: bool,
         display_name: &str,
     ) -> bool {
-        // Step 1-4: 非 BaseColor スロットはまだ書き込み経路が無いため、呼ばれたら警告して false を返す。
-        // Step 2 以降で MToon 補助スロット（Emissive / Normal / ShadeMultiply / ...）の書き込みを追加する。
-        if slot != TextureSlot::BaseColor {
-            log::warn!(
-                "assign_texture_core: TextureSlot::{:?} is not yet wired (material {}, name {}); \
-                 Step 2 以降で実装予定",
-                slot,
-                material_index,
-                display_name
-            );
-            return false;
-        }
-
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
 
-        let (texture_view, _texture_view_unorm) =
+        let (texture_view, texture_view_unorm) =
             match super::super::texture::upload_texture_from_bytes(tex_data, is_psd, device, queue)
             {
                 Ok(views) => views,
@@ -477,29 +468,33 @@ impl ViewerApp {
         };
 
         // Reuse existing IrTexture with same name+content (dedup)
-        let tex_idx = loaded
-            .ir
-            .textures
-            .iter()
-            .position(|t| {
-                t.filename == ir_filename
-                    && t.data.len() == ir_data.len()
-                    && t.data.as_bytes() == ir_data
-            })
-            .unwrap_or_else(|| {
-                let idx = loaded.ir.textures.len();
-                loaded
-                    .ir
-                    .textures
-                    .push(crate::intermediate::types::IrTexture {
-                        filename: ir_filename,
-                        data: TextureData::Encoded(Arc::from(ir_data)),
-                        mime_type: ir_mime,
-                        source_path: display_name.to_string(),
-                        mip_chain: None,
-                    });
-                idx
-            });
+        // review_012 [P1] 対応: 新規テクスチャの場合は gpu_texture_views にも push する。
+        // 既存テクスチャ再利用時は push しない（TODO-1: dedup 条件で整合維持）。
+        let existing_idx = loaded.ir.textures.iter().position(|t| {
+            t.filename == ir_filename
+                && t.data.len() == ir_data.len()
+                && t.data.as_bytes() == ir_data
+        });
+        let tex_idx = if let Some(idx) = existing_idx {
+            idx
+        } else {
+            let idx = loaded.ir.textures.len();
+            loaded
+                .ir
+                .textures
+                .push(crate::intermediate::types::IrTexture {
+                    filename: ir_filename,
+                    data: TextureData::Encoded(Arc::from(ir_data)),
+                    mime_type: ir_mime,
+                    source_path: display_name.to_string(),
+                    mip_chain: None,
+                });
+            // [P1] 新規テクスチャ: GPU view 配列にも追加（rebuild 時に tex_idx から引けるように）
+            loaded
+                .gpu_model
+                .push_gpu_texture_view(texture_view.clone(), texture_view_unorm.clone());
+            idx
+        };
 
         // PSD BG conversion
         if spawn_psd_bg {
@@ -519,26 +514,34 @@ impl ViewerApp {
             });
         }
 
-        Self::apply_texture_to_material(&mut loaded.ir.materials[material_index], tex_idx);
+        // Step 4-16a: slot に応じて IrMaterial の対応フィールドにテクスチャを設定
+        Self::apply_texture_to_slot(&mut loaded.ir.materials[material_index], slot, tex_idx);
 
-        // GPU DrawCall update
-        let texture_bgl = match self.renderer {
-            Some(ref r) => r.texture_bgl(),
-            None => return false,
-        };
-        Self::update_gpu_bind(
-            &mut loaded.gpu_model,
-            material_index,
-            &texture_view,
-            device,
-            texture_bgl,
-            &loaded.ir.materials[material_index],
-        );
+        // GPU DrawCall update:
+        // - BaseColor: 既存の texture_bind_group 即時更新（遅延なし）
+        // - 他のスロット: mark_material_dirty で次フレームに rebuild_material_bind_groups
+        //   が全 bind group を再生成（mtoon_aux_bind_group 含む）
+        let needs_immediate_gpu_update = slot == TextureSlot::BaseColor;
+        if needs_immediate_gpu_update {
+            let texture_bgl = match self.renderer {
+                Some(ref r) => r.texture_bgl(),
+                None => return false,
+            };
+            Self::update_gpu_bind(
+                &mut loaded.gpu_model,
+                material_index,
+                &texture_view,
+                device,
+                texture_bgl,
+                &loaded.ir.materials[material_index],
+            );
+        }
 
         log::info!(
-            "Texture assignment: mat[{}] '{}' <- {}",
+            "Texture assignment: mat[{}] '{}' slot={:?} <- {}",
             material_index,
             loaded.ir.materials[material_index].name,
+            slot,
             display_name
         );
 
@@ -546,34 +549,123 @@ impl ViewerApp {
         if self.tex.link_same_name {
             let siblings = loaded.same_name_siblings(material_index);
             for sib_idx in siblings {
-                Self::apply_texture_to_material(&mut loaded.ir.materials[sib_idx], tex_idx);
-                Self::update_gpu_bind(
-                    &mut loaded.gpu_model,
-                    sib_idx,
-                    &texture_view,
-                    device,
-                    texture_bgl,
-                    &loaded.ir.materials[sib_idx],
-                );
-                log::info!("  Linked assignment: mat[{}]", sib_idx);
+                Self::apply_texture_to_slot(&mut loaded.ir.materials[sib_idx], slot, tex_idx);
+                if needs_immediate_gpu_update {
+                    let texture_bgl = match self.renderer {
+                        Some(ref r) => r.texture_bgl(),
+                        None => continue,
+                    };
+                    Self::update_gpu_bind(
+                        &mut loaded.gpu_model,
+                        sib_idx,
+                        &texture_view,
+                        device,
+                        texture_bgl,
+                        &loaded.ir.materials[sib_idx],
+                    );
+                }
+                log::info!("  Linked assignment: mat[{}] slot={:?}", sib_idx, slot);
+            }
+        }
+
+        // 非 BaseColor スロットは mark_material_dirty で rebuild を予約。
+        // loaded の mut borrow を先に終わらせるため、ここで true を返してから
+        // 呼び出し元で mark_material_dirty を呼ぶ設計にするか、あるいは
+        // ここで直接呼ぶ（loaded は上の if 分岐後は使わないので NLL で許容される）。
+        if !needs_immediate_gpu_update {
+            // loaded の borrow は上のブロックで終了しているため、self を mut で借りられる
+            self.mark_material_dirty(material_index);
+            if self.tex.link_same_name {
+                if let Some(ref loaded) = self.loaded {
+                    let siblings = loaded.same_name_siblings(material_index);
+                    for sib_idx in siblings {
+                        self.mark_material_dirty(sib_idx);
+                    }
+                }
             }
         }
 
         true
     }
 
-    /// Set texture_index and base_color_tex_info on a material.
-    fn apply_texture_to_material(mat: &mut crate::intermediate::types::IrMaterial, tex_idx: usize) {
-        mat.texture_index = Some(tex_idx);
-        match mat.base_color_tex_info.as_mut() {
-            Some(info) => info.index = tex_idx,
-            None => {
-                mat.base_color_tex_info = Some(
-                    crate::intermediate::types::IrTextureInfo::from_index(tex_idx),
-                )
+    /// Step 4-16a: slot に応じて IrMaterial の対応フィールドにテクスチャインデックスを設定。
+    ///
+    /// - BaseColor: 既存の texture_index + base_color_tex_info + apply_textured_defaults
+    /// - Emissive / Normal: IrMaterial 直接フィールド
+    /// - Shade / ShadingShift / Rim / OutlineWidth / Matcap / UvAnimMask: MtoonParams フィールド
+    ///   + review_012 [P2]: `shader_family = Mtoon` に同期（描画側が MToon パスで aux bind
+    ///     group を組むための前提条件）
+    /// - Sphere / Toon: MMD 専用フィールド
+    fn apply_texture_to_slot(
+        mat: &mut crate::intermediate::types::IrMaterial,
+        slot: TextureSlot,
+        tex_idx: usize,
+    ) {
+        use crate::intermediate::types::{IrTextureInfo, ShaderFamily};
+
+        // review_012 [P2]: MToon 系スロットを割り当てた場合、shader_family を Mtoon に同期する。
+        // 描画側が shader_family 主軸判定 (review_007) で MToon パスを選択するために必要。
+        // §G の方針「ユーザーの明示的操作」にテクスチャスロット割当も含む。
+        let is_mtoon_slot = matches!(
+            slot,
+            TextureSlot::ShadeMultiply
+                | TextureSlot::ShadingShift
+                | TextureSlot::RimMultiply
+                | TextureSlot::OutlineWidth
+                | TextureSlot::Matcap
+                | TextureSlot::UvAnimMask
+        );
+        if is_mtoon_slot {
+            mat.shader_family = ShaderFamily::Mtoon;
+        }
+
+        match slot {
+            TextureSlot::BaseColor => {
+                mat.texture_index = Some(tex_idx);
+                match mat.base_color_tex_info.as_mut() {
+                    Some(info) => info.index = tex_idx,
+                    None => {
+                        mat.base_color_tex_info = Some(IrTextureInfo::from_index(tex_idx));
+                    }
+                }
+                mat.apply_textured_defaults();
+            }
+            TextureSlot::Emissive => {
+                mat.emissive_texture = Some(IrTextureInfo::from_index(tex_idx));
+            }
+            TextureSlot::Normal => {
+                mat.normal_texture = Some(IrTextureInfo::from_index(tex_idx));
+            }
+            TextureSlot::ShadeMultiply => {
+                mat.mtoon_mut().shade_texture = Some(IrTextureInfo::from_index(tex_idx));
+            }
+            TextureSlot::ShadingShift => {
+                mat.mtoon_mut().shading_shift_texture = Some(IrTextureInfo::from_index(tex_idx));
+            }
+            TextureSlot::RimMultiply => {
+                mat.mtoon_mut().rim_multiply_texture = Some(IrTextureInfo::from_index(tex_idx));
+            }
+            TextureSlot::OutlineWidth => {
+                mat.mtoon_mut().outline_width_texture = Some(IrTextureInfo::from_index(tex_idx));
+            }
+            TextureSlot::Matcap => {
+                mat.mtoon_mut().matcap_texture = Some(IrTextureInfo::from_index(tex_idx));
+            }
+            TextureSlot::UvAnimMask => {
+                mat.mtoon_mut().uv_animation_mask_texture =
+                    Some(IrTextureInfo::from_index(tex_idx));
+            }
+            TextureSlot::Sphere => {
+                mat.sphere_texture_index = Some(tex_idx);
+                if mat.sphere_mode == 0 {
+                    mat.sphere_mode = 1; // 乗算がデフォルト
+                }
+            }
+            TextureSlot::Toon => {
+                mat.toon_texture_index = Some(tex_idx);
+                mat.toon_shared_index = None; // 個別トゥーンに切替
             }
         }
-        mat.apply_textured_defaults();
     }
 
     /// Update GPU bind group for a material and clear stale MMD bind group.
