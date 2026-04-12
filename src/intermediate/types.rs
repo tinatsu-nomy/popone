@@ -144,7 +144,7 @@ impl IrTextureInfo {
 }
 
 /// MToon アウトライン幅モード
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub enum OutlineWidthMode {
     #[default]
     None,
@@ -153,7 +153,7 @@ pub enum OutlineWidthMode {
 }
 
 /// glTF alphaMode + MToon transparentWithZWrite を統合したアルファモード
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum AlphaMode {
     /// 完全不透明（デプス書込あり）
     #[default]
@@ -845,7 +845,7 @@ pub struct IrMorphTarget {
 }
 
 /// カリングモード
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CullMode {
     /// 背面カリング（デフォルト、片面描画）
     Back,

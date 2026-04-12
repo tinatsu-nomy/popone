@@ -279,6 +279,24 @@ pub struct TextureHistoryFile {
     pub version: u32,
     #[serde(default)]
     pub history: HashMap<String, Vec<TextureHistoryEntry>>,
+    /// v0.5.0 追加 (§I 最小永続化): 材質パラメータ編集差分。
+    /// `#[serde(default)]` により v1 の既存ファイル（このフィールドがない）も問題なく読み込める。
+    /// key は正規化モデルパス（`history` と同じキー）。
+    #[serde(default)]
+    pub param_overrides: HashMap<String, Vec<MaterialParamOverrideEntry>>,
+}
+
+/// 材質パラメータ編集差分の永続化エントリ (v0.5.0 / §I 最小永続化)。
+///
+/// `TextureHistoryEntry` のテクスチャ保存と並行して、材質の色・スカラー値の編集差分を
+/// `MaterialParamOverride` として保存する。材質同定は `material_index + material_name` で
+/// `resolve_material()` を共用する。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaterialParamOverrideEntry {
+    pub material_index: usize,
+    pub material_name: String,
+    #[serde(flatten)]
+    pub overrides: super::material_edit::MaterialParamOverride,
 }
 
 fn default_version() -> u32 {
@@ -290,6 +308,7 @@ impl Default for TextureHistoryFile {
         Self {
             version: 1,
             history: HashMap::new(),
+            param_overrides: HashMap::new(),
         }
     }
 }
@@ -383,10 +402,11 @@ pub fn resolve_material(
 
 /// Windows パスを正規化して小文字にする（履歴キー用）
 pub fn normalize_path(path: &Path) -> String {
-    dunce::simplified(path)
-        .to_string_lossy()
-        .to_lowercase()
-        .replace('/', "\\")
+    // 相対パスと絶対パスで同じモデルが別キーになる問題の修正:
+    // `dunce::canonicalize` で絶対パスに解決してから正規化する。
+    // ファイルが存在しない場合（テスト等）は元のパスにフォールバック。
+    let abs = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    abs.to_string_lossy().to_lowercase().replace('/', "\\")
 }
 
 // ---------------------------------------------------------------------------

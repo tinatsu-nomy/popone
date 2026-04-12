@@ -2567,14 +2567,17 @@ fn show_tab_display(
     // 材質表示
     // テクスチャ履歴キーを先に計算（借用衝突回避）
     let tex_history_key = app.texture_history_key();
-    let tex_history_has_entry = tex_history_key
-        .as_ref()
-        .is_some_and(|k| app.texture_history.history.contains_key(k));
+    let tex_history_has_entry = tex_history_key.as_ref().is_some_and(|k| {
+        app.texture_history.history.contains_key(k)
+            || app.texture_history.param_overrides.contains_key(k)
+    });
     let has_file_assignments = app
         .tex
         .assignments
         .values()
         .any(|s| matches!(s, super::app::helpers::TextureSource::File(_)));
+    // v0.5.0: パラメータ編集だけでもテクスチャ割当なしで保存可能にする（§I 最小永続化）
+    let has_param_edits = !app.material_overrides.is_empty();
 
     let Some(ref loaded) = app.loaded else { return };
     if loaded.gpu_model.draws.is_empty() {
@@ -2614,9 +2617,9 @@ fn show_tab_display(
             app.pending.reload = Some(PendingOverlay::WaitingOverlay);
         }
         if tex_history_key.is_some() {
-            if has_file_assignments
+            if (has_file_assignments || has_param_edits)
                 && ui
-                    .button(egui::RichText::new("テクスチャ保存").text_style(small.clone()))
+                    .button(egui::RichText::new("履歴保存").text_style(small.clone()))
                     .clicked()
             {
                 // 既に履歴がある場合は確認フラグ、なければ即保存
@@ -2628,7 +2631,7 @@ fn show_tab_display(
             }
             if tex_history_has_entry
                 && ui
-                    .button(egui::RichText::new("テクスチャ呼出").text_style(small.clone()))
+                    .button(egui::RichText::new("履歴呼出").text_style(small.clone()))
                     .clicked()
             {
                 do_recall_history = true;

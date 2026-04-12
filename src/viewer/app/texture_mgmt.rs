@@ -1138,25 +1138,21 @@ impl ViewerApp {
     /// 現在のモデルが履歴対象かどうか判定し、キーを返す
     pub fn texture_history_key(&self) -> Option<String> {
         use super::helpers::ReloadableSource;
-        use crate::intermediate::types::SourceFormat;
         let loaded = self.loaded.as_ref()?;
         if !loaded.appended_models.is_empty() {
             return None;
         }
+        // v0.5.0: 材質パラメータ編集の永続化のため、全フォーマット（VRM / PMX / FBX /
+        // OBJ 等）で履歴キーを返すよう拡張。旧版では FBX / OBJ のみに制限していたが、
+        // テクスチャ履歴だけでなく MaterialParamOverride も同じキーで保存するため、
+        // File ソースなら全フォーマットでキーを返す。
         match &loaded.source {
-            ReloadableSource::File(path)
-                if matches!(
-                    loaded.ir.source_format,
-                    SourceFormat::Fbx | SourceFormat::Obj
-                ) =>
-            {
-                Some(super::persistence::normalize_path(path))
-            }
+            ReloadableSource::File(path) => Some(super::persistence::normalize_path(path)),
             _ => None,
         }
     }
 
-    /// 現在のテクスチャ割り当てを履歴に保存
+    /// 現在のテクスチャ割り当て + 材質パラメータ編集差分を履歴に保存
     pub fn do_save_texture_history(&mut self) {
         let Some(key) = self.texture_history_key() else {
             return;
@@ -1165,6 +1161,7 @@ impl ViewerApp {
             return;
         };
 
+        // テクスチャ割当エントリ（既存 v1 互換）
         let entries: Vec<super::persistence::TextureHistoryEntry> = self
             .tex
             .assignments
@@ -1188,18 +1185,47 @@ impl ViewerApp {
             })
             .collect();
 
-        if entries.is_empty() {
+        // v0.5.0 追加: 材質パラメータ編集差分（§I 最小永続化）
+        // pristine_materials との diff を計算して保存する。
+        let param_entries: Vec<super::persistence::MaterialParamOverrideEntry> = loaded
+            .ir
+            .materials
+            .iter()
+            .enumerate()
+            .filter_map(|(mat_idx, mat)| {
+                let pristine = self.pristine_materials.get(mat_idx)?;
+                let diff = super::material_edit::MaterialParamOverride::diff_from(pristine, mat)?;
+                Some(super::persistence::MaterialParamOverrideEntry {
+                    material_index: mat_idx,
+                    material_name: mat.name.clone(),
+                    overrides: diff,
+                })
+            })
+            .collect();
+
+        if entries.is_empty() && param_entries.is_empty() {
             self.convert_message = Some(ConvertMessage::failure(String::from(
-                "保存対象のテクスチャ割り当てがありません",
+                "保存対象のテクスチャ割り当て・編集がありません",
             )));
             return;
         }
 
-        let count = entries.len();
-        self.texture_history.history.insert(key, entries);
+        let tex_count = entries.len();
+        let param_count = param_entries.len();
+        self.texture_history.history.insert(key.clone(), entries);
+        // review_011 [P2] 対応: param_entries が空なら古い param_overrides を明示的に消す。
+        // 空のまま残すと、ユーザーが編集を「初期値に戻す」で全消しした後でも古い override が
+        // 「履歴呼出」で再適用されてしまう。
+        if !param_entries.is_empty() {
+            self.texture_history
+                .param_overrides
+                .insert(key, param_entries);
+        } else {
+            self.texture_history.param_overrides.remove(&key);
+        }
         super::persistence::save_texture_history(&self.data_dir, &self.texture_history);
         self.convert_message = Some(ConvertMessage::success(format!(
-            "テクスチャ履歴を保存しました ({count}件)"
+            "履歴を保存しました (テクスチャ{tex_count}件, パラメータ{param_count}件)"
         )));
     }
 
@@ -1208,15 +1234,22 @@ impl ViewerApp {
         let Some(key) = self.texture_history_key() else {
             return;
         };
-        let entries = match self.texture_history.history.get(&key) {
-            Some(e) => e.clone(),
-            None => {
-                self.convert_message = Some(ConvertMessage::failure(String::from(
-                    "このモデルの履歴がありません",
-                )));
-                return;
-            }
-        };
+        // review_011 [P1] 対応: テクスチャ履歴が空でも param_overrides があれば続行する。
+        // パラメータ編集だけ保存したケースで「このモデルの履歴がありません」即 return を防ぐ。
+        let has_tex_entries = self.texture_history.history.contains_key(&key);
+        let has_param_entries = self.texture_history.param_overrides.contains_key(&key);
+        if !has_tex_entries && !has_param_entries {
+            self.convert_message = Some(ConvertMessage::failure(String::from(
+                "このモデルの履歴がありません",
+            )));
+            return;
+        }
+        let entries = self
+            .texture_history
+            .history
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
 
         // 照合結果を先に収集（loaded の不変借用を閉じるため）
         let resolved: Vec<(usize, PathBuf)>;
@@ -1273,12 +1306,95 @@ impl ViewerApp {
 
         self.tex.link_same_name = saved_link;
 
-        let msg = if skipped > 0 {
-            format!("テクスチャ履歴: {applied}件適用、{skipped}件スキップ")
-        } else {
-            format!("テクスチャ履歴: {applied}件適用")
+        // v0.5.0 追加: 材質パラメータ編集差分の復元（§I 最小永続化）
+        //
+        // review_012 [P2] 対応: 保存差分を適用する前に、全材質を pristine に戻して
+        // material_overrides をクリアする。これにより「呼出前の unsaved 編集が残る」
+        // 問題を解消し、「呼出 = 保存時点の状態を完全再現」を保証する。
+        {
+            let mat_count = if let Some(loaded) = self.loaded.as_mut() {
+                for (i, mat) in loaded.ir.materials.iter_mut().enumerate() {
+                    if let Some(pristine) = self.pristine_materials.get(i) {
+                        *mat = pristine.clone();
+                    }
+                }
+                loaded.ir.materials.len()
+            } else {
+                0
+            };
+            // dirty は loaded borrow 解放後に一括で立てる
+            for i in 0..mat_count {
+                self.mark_material_dirty(i);
+            }
+        }
+        self.material_overrides.clear();
+
+        // テクスチャ復元と同じ「resolve → apply」2 フェーズ分離パターンで
+        // immutable borrow (resolve) と mutable borrow (apply) の衝突を避ける。
+        let mut param_applied = 0usize;
+        let resolved_params: Vec<(usize, super::material_edit::MaterialParamOverride)> = {
+            let param_entries = self
+                .texture_history
+                .param_overrides
+                .get(&key)
+                .cloned()
+                .unwrap_or_default();
+            let Some(loaded) = self.loaded.as_ref() else {
+                return;
+            };
+            param_entries
+                .into_iter()
+                .filter_map(|entry| {
+                    let dummy = super::persistence::TextureHistoryEntry {
+                        material_index: entry.material_index,
+                        material_name: entry.material_name,
+                        texture_path: String::new(),
+                    };
+                    let mat_idx =
+                        super::persistence::resolve_material(&loaded.ir.materials, &dummy)?;
+                    Some((mat_idx, entry.overrides))
+                })
+                .collect()
         };
-        self.convert_message = Some(if applied > 0 {
+        for (mat_idx, overrides) in resolved_params {
+            self.material_overrides.insert(mat_idx, overrides.clone());
+            if let Some(loaded) = self.loaded.as_mut() {
+                if let Some(mat) = loaded.ir.materials.get_mut(mat_idx) {
+                    overrides.apply_to(mat);
+                }
+            }
+            self.mark_material_dirty(mat_idx);
+            param_applied += 1;
+        }
+
+        let msg = if skipped > 0 || param_applied > 0 {
+            let parts: Vec<String> = [
+                if applied > 0 {
+                    Some(format!("テクスチャ{applied}件"))
+                } else {
+                    None
+                },
+                if param_applied > 0 {
+                    Some(format!("パラメータ{param_applied}件"))
+                } else {
+                    None
+                },
+                if skipped > 0 {
+                    Some(format!("スキップ{skipped}件"))
+                } else {
+                    None
+                },
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            format!("履歴呼出: {}", parts.join(", "))
+        } else if applied > 0 {
+            format!("テクスチャ履歴: {applied}件適用")
+        } else {
+            "履歴がありません".to_string()
+        };
+        self.convert_message = Some(if applied > 0 || param_applied > 0 {
             ConvertMessage::success(msg)
         } else {
             ConvertMessage::failure(msg)

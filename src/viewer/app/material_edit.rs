@@ -30,7 +30,8 @@ use crate::intermediate::types::{
 /// 値のみを保持し、テクスチャ割当（`TextureSlot`）は別経路（`tex.assignments`）で管理する。
 ///
 /// `Default::default()` は全フィールド `None` の「空の上書き」。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct MaterialParamOverride {
     // ===== MToon 有効化 (§G / Step 2-10) =====
     //
@@ -182,6 +183,114 @@ impl MaterialParamOverride {
             && self.render_queue_offset.is_none()
     }
 
+    /// `pristine`（ロード直後の IR 材質値）と `current`（ユーザー編集後の IR 材質値）を
+    /// 比較し、値が異なるフィールドだけ `Some(_)` にした `MaterialParamOverride` を返す。
+    /// 全フィールドが一致していれば `None` を返す。
+    ///
+    /// **永続化での用途**: `popone_history.json` v2 に保存する `MaterialEditRecord.param_override`
+    /// は、この diff_from で計算した差分のみを含む。ロード直後の値と同じフィールドは
+    /// `None` のまま skip_serializing されるので、ファイルサイズが必要最小限になる。
+    ///
+    /// **enable_mtoon の diff**: `shader_family` が pristine と current で異なる場合、
+    /// `enable_mtoon = Some(current == Mtoon)` を設定する。
+    pub fn diff_from(pristine: &IrMaterial, current: &IrMaterial) -> Option<Self> {
+        let mut out = Self::default();
+
+        // enable_mtoon: shader_family の差分
+        if pristine.shader_family != current.shader_family {
+            out.enable_mtoon = Some(matches!(current.shader_family, ShaderFamily::Mtoon));
+        }
+
+        // 基本
+        macro_rules! diff_field {
+            ($field:ident, $get:expr) => {
+                if $get(pristine) != $get(current) {
+                    out.$field = Some($get(current));
+                }
+            };
+        }
+
+        diff_field!(diffuse, |m: &IrMaterial| m.diffuse);
+        diff_field!(alpha_mode, |m: &IrMaterial| m.alpha_mode);
+        diff_field!(alpha_cutoff, |m: &IrMaterial| m.alpha_cutoff);
+        diff_field!(cull_mode, |m: &IrMaterial| m.cull_mode);
+        diff_field!(edge_color, |m: &IrMaterial| m.edge_color);
+        diff_field!(edge_size, |m: &IrMaterial| m.edge_size);
+        diff_field!(emissive_factor, |m: &IrMaterial| m.emissive_factor);
+        diff_field!(normal_texture_scale, |m: &IrMaterial| m
+            .normal_texture_scale);
+
+        // MToon 系（mtoon() でデフォルト値にフォールバック、副作用なし）
+        //
+        // review_009 [P2] 対応: enable_mtoon = Some(false)（MToon を OFF にした状態）のとき、
+        // MToon 系フィールドの diff を**全スキップ**する。理由:
+        // - current.mtoon() は mtoon = None でも MTOON_DEFAULT を返すため、「OFF にした」
+        //   にもかかわらず pristine との差分が MToon 系 override として保存されてしまう
+        // - apply_to 復元時に enable_mtoon = false で mtoon = None にした直後、MToon 系
+        //   override が has_mtoon_override = true を通って mtoon_mut() → Some(default) を
+        //   再挿入し、round-trip が壊れる
+        //
+        // shade_color は Option<Vec3> なので diff_field! macro を使えない
+        // （Some(Option<Vec3>) = Option<Option<Vec3>> になってしまう）。直接代入で処理する。
+        let diff_mtoon = out.enable_mtoon != Some(false);
+        if diff_mtoon {
+            let p = pristine.mtoon().shade_color;
+            let c = current.mtoon().shade_color;
+            if p != c {
+                out.shade_color = c;
+            }
+            diff_field!(shading_toony_factor, |m: &IrMaterial| m
+                .mtoon()
+                .shading_toony_factor);
+            diff_field!(shading_shift_factor, |m: &IrMaterial| m
+                .mtoon()
+                .shading_shift_factor);
+            diff_field!(gi_equalization_factor, |m: &IrMaterial| m
+                .mtoon()
+                .gi_equalization_factor);
+            diff_field!(outline_width_mode, |m: &IrMaterial| m
+                .mtoon()
+                .outline_width_mode);
+            diff_field!(outline_width_factor, |m: &IrMaterial| m
+                .mtoon()
+                .outline_width_factor);
+            diff_field!(outline_lighting_mix, |m: &IrMaterial| m
+                .mtoon()
+                .outline_lighting_mix);
+            diff_field!(parametric_rim_color, |m: &IrMaterial| m
+                .mtoon()
+                .parametric_rim_color);
+            diff_field!(parametric_rim_fresnel_power, |m: &IrMaterial| m
+                .mtoon()
+                .parametric_rim_fresnel_power);
+            diff_field!(parametric_rim_lift, |m: &IrMaterial| m
+                .mtoon()
+                .parametric_rim_lift);
+            diff_field!(rim_lighting_mix, |m: &IrMaterial| m
+                .mtoon()
+                .rim_lighting_mix);
+            diff_field!(matcap_factor, |m: &IrMaterial| m.mtoon().matcap_factor);
+            diff_field!(uv_animation_scroll_x_speed, |m: &IrMaterial| m
+                .mtoon()
+                .uv_animation_scroll_x_speed);
+            diff_field!(uv_animation_scroll_y_speed, |m: &IrMaterial| m
+                .mtoon()
+                .uv_animation_scroll_y_speed);
+            diff_field!(uv_animation_rotation_speed, |m: &IrMaterial| m
+                .mtoon()
+                .uv_animation_rotation_speed);
+            diff_field!(render_queue_offset, |m: &IrMaterial| m
+                .mtoon()
+                .render_queue_offset);
+        } // end if diff_mtoon
+
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    }
+
     /// 自身の上書きを `mat` に適用する。`Some(_)` のフィールドだけを書き込む。
     ///
     /// **適用順序**:
@@ -237,6 +346,13 @@ impl MaterialParamOverride {
         }
 
         // MToon 系フィールド: 1 つでも設定があれば mtoon を初期化してから書き込む
+        //
+        // review_009 [P2] 対応: enable_mtoon = Some(false) の場合は MToon 系 override を
+        // **全スキップ**する。先に mtoon = None にしたのに、ここで mtoon_mut() が走って
+        // Some(default) を再挿入してしまう round-trip 不整合を防ぐ。
+        if self.enable_mtoon == Some(false) {
+            return;
+        }
         let has_mtoon_override = self.shade_color.is_some()
             || self.shading_toony_factor.is_some()
             || self.shading_shift_factor.is_some()
@@ -311,5 +427,85 @@ impl MaterialParamOverride {
                 mp.render_queue_offset = v;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::intermediate::types::MtoonParams;
+
+    /// MToon 材質の diff → apply round-trip: 保存前後で材質が等価であること。
+    #[test]
+    fn test_diff_apply_roundtrip_mtoon() {
+        let pristine = IrMaterial::default();
+        let mut current = pristine.clone();
+        current.diffuse = Vec4::new(1.0, 0.0, 0.0, 1.0);
+        current.shader_family = ShaderFamily::Mtoon;
+        current.mtoon = Some(MtoonParams {
+            shade_color: Some(Vec3::new(0.5, 0.0, 0.0)),
+            shading_toony_factor: 0.7,
+            ..MtoonParams::default()
+        });
+
+        let diff = MaterialParamOverride::diff_from(&pristine, &current);
+        assert!(diff.is_some(), "変更があるので diff は Some");
+
+        // apply: pristine に diff を適用 → current と同じになるべき
+        let mut restored = pristine.clone();
+        diff.unwrap().apply_to(&mut restored);
+
+        assert_eq!(restored.diffuse, current.diffuse);
+        assert_eq!(restored.shader_family, current.shader_family);
+        assert!(restored.mtoon.is_some());
+        assert_eq!(
+            restored.mtoon.as_ref().unwrap().shade_color,
+            current.mtoon.as_ref().unwrap().shade_color,
+        );
+        assert!(
+            (restored.mtoon.as_ref().unwrap().shading_toony_factor
+                - current.mtoon.as_ref().unwrap().shading_toony_factor)
+                .abs()
+                < 1e-6,
+        );
+    }
+
+    /// MToon ON → OFF の round-trip (review_009 [P2]): OFF にした状態を diff → apply で
+    /// 復元すると、mtoon = None + shader_family = Other が保持されること。
+    #[test]
+    fn test_diff_apply_roundtrip_mtoon_off() {
+        // pristine: MToon 材質（VRM ロード直後の状態を想定）
+        let mut pristine = IrMaterial::default();
+        pristine.shader_family = ShaderFamily::Mtoon;
+        pristine.mtoon = Some(MtoonParams::default());
+
+        // ユーザーが MToon 有効化チェックを OFF にした状態
+        let mut current = pristine.clone();
+        current.shader_family = ShaderFamily::Other;
+        current.mtoon = None;
+
+        let diff = MaterialParamOverride::diff_from(&pristine, &current);
+        assert!(diff.is_some(), "shader_family の変更で diff が出るべき");
+
+        let diff = diff.unwrap();
+        assert_eq!(diff.enable_mtoon, Some(false), "MToon 無効化を記録すべき");
+
+        // apply: pristine に diff を適用 → current と同じ状態になるべき
+        let mut restored = pristine.clone();
+        diff.apply_to(&mut restored);
+
+        assert_eq!(restored.shader_family, ShaderFamily::Other);
+        assert!(
+            restored.mtoon.is_none(),
+            "mtoon = None が保持されるべき（mtoon_mut() が再挿入してはならない）"
+        );
+    }
+
+    /// 変更なしの diff → None
+    #[test]
+    fn test_diff_from_no_change() {
+        let mat = IrMaterial::default();
+        let diff = MaterialParamOverride::diff_from(&mat, &mat);
+        assert!(diff.is_none(), "変更なしなら None");
     }
 }
