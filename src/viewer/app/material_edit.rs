@@ -515,4 +515,100 @@ mod tests {
         let diff = MaterialParamOverride::diff_from(&mat, &mat);
         assert!(diff.is_none(), "変更なしなら None");
     }
+
+    // ===== Step 7-35: diff_from/apply_to テスト拡充 =====
+
+    /// 個別フィールド差分: diffuse のみ変更
+    #[test]
+    fn test_diff_from_diffuse_only() {
+        let pristine = IrMaterial::default();
+        let mut current = pristine.clone();
+        current.diffuse = Vec4::new(0.5, 0.3, 0.1, 0.9);
+
+        let diff = MaterialParamOverride::diff_from(&pristine, &current).unwrap();
+        assert_eq!(diff.diffuse, Some(Vec4::new(0.5, 0.3, 0.1, 0.9)));
+        // 他のフィールドは None
+        assert!(diff.emissive_factor.is_none());
+        assert!(diff.enable_mtoon.is_none());
+    }
+
+    /// emissive_factor のみ変更
+    #[test]
+    fn test_diff_from_emissive_only() {
+        let pristine = IrMaterial::default();
+        let mut current = pristine.clone();
+        current.emissive_factor = Vec3::new(1.0, 0.5, 0.0);
+
+        let diff = MaterialParamOverride::diff_from(&pristine, &current).unwrap();
+        assert_eq!(diff.emissive_factor, Some(Vec3::new(1.0, 0.5, 0.0)));
+        assert!(diff.diffuse.is_none());
+    }
+
+    /// mme_kind は IrMaterial に含まれないため diff_from では生成されない
+    #[test]
+    fn test_diff_from_never_sets_mme_kind() {
+        let pristine = IrMaterial::default();
+        let mut current = pristine.clone();
+        current.diffuse = Vec4::new(1.0, 0.0, 0.0, 1.0);
+
+        let diff = MaterialParamOverride::diff_from(&pristine, &current).unwrap();
+        assert!(
+            diff.mme_kind.is_none(),
+            "mme_kind は diff_from では設定されない"
+        );
+    }
+
+    /// is_empty: 全フィールド None なら true
+    #[test]
+    fn test_is_empty_default() {
+        let ov = MaterialParamOverride::default();
+        assert!(ov.is_empty());
+    }
+
+    /// is_empty: 1 フィールドでも Some なら false
+    #[test]
+    fn test_is_empty_with_mme_kind() {
+        let mut ov = MaterialParamOverride::default();
+        ov.mme_kind = Some(crate::convert::mme::ray_mmd::RayMmdMaterialKind::Skin);
+        assert!(!ov.is_empty());
+    }
+
+    /// merge_from: Some フィールドのみ上書き
+    #[test]
+    fn test_merge_from_selective() {
+        let mut base = MaterialParamOverride::default();
+        base.diffuse = Some(Vec4::new(1.0, 0.0, 0.0, 1.0));
+
+        let patch = MaterialParamOverride {
+            emissive_factor: Some(Vec3::new(0.5, 0.5, 0.5)),
+            ..Default::default()
+        };
+
+        base.merge_from(&patch);
+        // diffuse は変わらず
+        assert_eq!(base.diffuse, Some(Vec4::new(1.0, 0.0, 0.0, 1.0)));
+        // emissive_factor はマージされた
+        assert_eq!(base.emissive_factor, Some(Vec3::new(0.5, 0.5, 0.5)));
+    }
+
+    /// enable_mtoon=false 時に MToon フィールドが diff に含まれないこと
+    #[test]
+    fn test_diff_from_mtoon_off_skips_mtoon_fields() {
+        let mut pristine = IrMaterial::default();
+        pristine.shader_family = ShaderFamily::Mtoon;
+        pristine.mtoon = Some(MtoonParams {
+            shading_toony_factor: 0.9,
+            ..MtoonParams::default()
+        });
+
+        let mut current = pristine.clone();
+        current.shader_family = ShaderFamily::Other;
+        current.mtoon = None;
+
+        let diff = MaterialParamOverride::diff_from(&pristine, &current).unwrap();
+        assert_eq!(diff.enable_mtoon, Some(false));
+        // MToon フィールドはスキップされる
+        assert!(diff.shade_color.is_none());
+        assert!(diff.shading_toony_factor.is_none());
+    }
 }

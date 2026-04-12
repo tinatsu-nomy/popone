@@ -1617,4 +1617,45 @@ mod tests {
         assert!((ti.scale.y - 3.0).abs() < 1e-6);
         assert!((ti.rotation - 0.5).abs() < 1e-6);
     }
+
+    // ===== Step 7-36: TextureSlot::is_linear テスト =====
+
+    #[test]
+    fn test_texture_slot_is_linear() {
+        // Linear スロット: 法線・ShadingShift・OutlineWidth・UvAnimMask
+        assert!(TextureSlot::Normal.is_linear());
+        assert!(TextureSlot::ShadingShift.is_linear());
+        assert!(TextureSlot::OutlineWidth.is_linear());
+        assert!(TextureSlot::UvAnimMask.is_linear());
+
+        // sRGB スロット: それ以外すべて
+        assert!(!TextureSlot::BaseColor.is_linear());
+        assert!(!TextureSlot::Emissive.is_linear());
+        assert!(!TextureSlot::ShadeMultiply.is_linear());
+        assert!(!TextureSlot::RimMultiply.is_linear());
+        assert!(!TextureSlot::Matcap.is_linear());
+        assert!(!TextureSlot::Sphere.is_linear());
+        assert!(!TextureSlot::Toon.is_linear());
+    }
+
+    #[test]
+    fn test_texture_slot_all_variants_covered() {
+        // 全 11 バリアントを列挙して is_linear が panic しないこと
+        let all = [
+            TextureSlot::BaseColor,
+            TextureSlot::Emissive,
+            TextureSlot::Normal,
+            TextureSlot::ShadeMultiply,
+            TextureSlot::ShadingShift,
+            TextureSlot::RimMultiply,
+            TextureSlot::OutlineWidth,
+            TextureSlot::Matcap,
+            TextureSlot::UvAnimMask,
+            TextureSlot::Sphere,
+            TextureSlot::Toon,
+        ];
+        let linear_count = all.iter().filter(|s| s.is_linear()).count();
+        assert_eq!(linear_count, 4, "Linear スロットは 4 種");
+        assert_eq!(all.len(), 11, "全 11 バリアント");
+    }
 }

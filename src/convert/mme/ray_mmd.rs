@@ -813,4 +813,153 @@ mod tests {
             .to_string_lossy()
             .contains("material_common_2.0.fxsub"));
     }
+
+    // ===== Step 7-32: カテゴリ推定テスト拡充 =====
+
+    #[test]
+    fn test_guess_cloth() {
+        let mut mat = IrMaterial::default();
+        mat.name = "制服_shirt".to_string();
+        assert_eq!(guess_ray_mmd_kind(&mat), RayMmdMaterialKind::Cloth);
+    }
+
+    #[test]
+    fn test_guess_glass() {
+        let mut mat = IrMaterial::default();
+        mat.name = "eye_L".to_string();
+        assert_eq!(guess_ray_mmd_kind(&mat), RayMmdMaterialKind::Glass);
+    }
+
+    #[test]
+    fn test_guess_mixed_case() {
+        let mut mat = IrMaterial::default();
+        mat.name = "BODY_SKIN_01".to_string();
+        assert_eq!(guess_ray_mmd_kind(&mat), RayMmdMaterialKind::Skin);
+
+        mat.name = "HaIr_BaCk".to_string();
+        assert_eq!(guess_ray_mmd_kind(&mat), RayMmdMaterialKind::HairAniso);
+    }
+
+    #[test]
+    fn test_guess_prefixed_name() {
+        let mut mat = IrMaterial::default();
+        // プレフィックス付きでもキーワードが含まれれば検出
+        mat.name = "mat_02_face_blush".to_string();
+        assert_eq!(guess_ray_mmd_kind(&mat), RayMmdMaterialKind::Skin);
+    }
+
+    #[test]
+    fn test_guess_japanese_cloth() {
+        let mut mat = IrMaterial::default();
+        mat.name = "上着の服".to_string();
+        assert_eq!(guess_ray_mmd_kind(&mat), RayMmdMaterialKind::Cloth);
+    }
+
+    #[test]
+    fn test_guess_japanese_glass() {
+        let mut mat = IrMaterial::default();
+        mat.name = "瞳ハイライト".to_string();
+        assert_eq!(guess_ray_mmd_kind(&mat), RayMmdMaterialKind::Glass);
+    }
+
+    #[test]
+    fn test_guess_priority_skin_over_cloth() {
+        // "skin" と "dress" 両方含む場合、skin が先（優先順位順）
+        let mut mat = IrMaterial::default();
+        mat.name = "skin_dress_overlay".to_string();
+        assert_eq!(guess_ray_mmd_kind(&mat), RayMmdMaterialKind::Skin);
+    }
+
+    #[test]
+    fn test_guess_emissive_only_when_no_keyword() {
+        // キーワードが先に一致すれば emissive にはならない
+        let mut mat = IrMaterial::default();
+        mat.name = "hair_glow".to_string();
+        mat.emissive_factor = Vec3::new(1.0, 1.0, 1.0);
+        assert_eq!(guess_ray_mmd_kind(&mat), RayMmdMaterialKind::HairAniso);
+    }
+
+    // ===== Step 7-32: custom_enable 値の検証 =====
+
+    #[test]
+    fn test_custom_enable_values() {
+        assert_eq!(RayMmdMaterialKind::Standard.custom_enable(), Some(0));
+        assert_eq!(RayMmdMaterialKind::Skin.custom_enable(), Some(1));
+        assert_eq!(RayMmdMaterialKind::HairAniso.custom_enable(), Some(3));
+        assert_eq!(RayMmdMaterialKind::Glass.custom_enable(), Some(4));
+        assert_eq!(RayMmdMaterialKind::Cloth.custom_enable(), Some(5));
+        assert_eq!(RayMmdMaterialKind::ClearCoat.custom_enable(), Some(6));
+        assert_eq!(RayMmdMaterialKind::Emissive.custom_enable(), None);
+    }
+
+    // ===== Step 7-34: generate_fx 出力検証 =====
+
+    #[test]
+    fn test_generate_fx_contains_all_sections() {
+        let mat = IrMaterial::default();
+        let include = Path::new("../Materials/material_common_2.0.fxsub");
+        let support = std::collections::HashMap::new();
+        let fx = generate_fx(&mat, RayMmdMaterialKind::Standard, include, &support);
+        let content = encoding_rs::SHIFT_JIS.decode(&fx).0;
+
+        // 全セクションヘッダが含まれること
+        assert!(content.contains("// ----- Albedo -----"));
+        assert!(content.contains("// ----- SubAlbedo -----"));
+        assert!(content.contains("// ----- Alpha -----"));
+        assert!(content.contains("// ----- Normal -----"));
+        assert!(content.contains("// ----- SubNormal -----"));
+        assert!(content.contains("// ----- Smoothness -----"));
+        assert!(content.contains("// ----- Metalness -----"));
+        assert!(content.contains("// ----- Specular -----"));
+        assert!(content.contains("// ----- Occlusion -----"));
+        assert!(content.contains("// ----- Parallax -----"));
+        assert!(content.contains("// ----- Emissive -----"));
+        assert!(content.contains("// ----- Shading Model -----"));
+        assert!(content.contains("#include"));
+    }
+
+    #[test]
+    fn test_generate_fx_crlf_encoding() {
+        let mat = IrMaterial::default();
+        let include = Path::new("test.fxsub");
+        let support = std::collections::HashMap::new();
+        let fx = generate_fx(&mat, RayMmdMaterialKind::Standard, include, &support);
+
+        // CR+LF が含まれること
+        assert!(fx.windows(2).any(|w| w == b"\r\n"));
+        // 孤立 LF がないこと（全 LF は CR+LF の一部）
+        for (i, &b) in fx.iter().enumerate() {
+            if b == b'\n' {
+                assert!(i > 0 && fx[i - 1] == b'\r', "bare LF at byte {}", i);
+            }
+        }
+    }
+
+    #[test]
+    fn test_generate_fx_skin_custom_params() {
+        let mat = IrMaterial::default();
+        let include = Path::new("test.fxsub");
+        let support = std::collections::HashMap::new();
+        let fx = generate_fx(&mat, RayMmdMaterialKind::Skin, include, &support);
+        let content = encoding_rs::SHIFT_JIS.decode(&fx).0;
+
+        assert!(content.contains("#define CUSTOM_ENABLE 1"));
+        assert!(content.contains("SSS amount"));
+    }
+
+    #[test]
+    fn test_make_fx_filename_empty_name() {
+        let mut used = HashSet::new();
+        let name = make_fx_filename("", &mut used);
+        assert_eq!(name, "material_unnamed.fx");
+    }
+
+    #[test]
+    fn test_make_fx_filename_sanitize_special_chars() {
+        let mut used = HashSet::new();
+        let name = make_fx_filename("体/肌@テスト", &mut used);
+        // 非 ASCII 英数字は除去される
+        assert!(name.starts_with("material_"));
+        assert!(name.ends_with(".fx"));
+    }
 }
