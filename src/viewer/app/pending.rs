@@ -846,6 +846,9 @@ impl ViewerApp {
         self.anim.active_index = None;
         self.tex.pkg_textures = None;
         self.clear_pkg_thumb_cache();
+        // v0.5.2 [review_01 P1]: ir.textures と同数の別モデルに差し替わっても
+        // 前モデルの TextureId が再利用されないよう、ロードキャンセル時も破棄する。
+        self.clear_ir_thumb_cache();
         self.cancel_tex_match_preview();
         self.tex.pending_match = None;
         self.selected_fbx_name = None;
@@ -888,6 +891,9 @@ impl ViewerApp {
         self.anim.active_index = None;
         self.tex.pkg_textures = None;
         self.clear_pkg_thumb_cache();
+        // v0.5.2 [review_01 P1]: ir.textures と同数の別モデルに差し替わっても
+        // 前モデルの TextureId が再利用されないよう、ロードキャンセル時も破棄する。
+        self.clear_ir_thumb_cache();
         self.cancel_tex_match_preview();
         self.tex.pending_match = None;
         self.selected_fbx_name = None;

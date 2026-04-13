@@ -3,21 +3,25 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
-  - [v0.5.1（2026-04-13）](#v0512026-04-13)
+  - [v0.5.2（2026-04-13）](#v0522026-04-13)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
-    - [パフォーマンス](#%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85)
     - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C)
+  - [v0.5.1（2026-04-13）](#v0512026-04-13)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
+    - [パフォーマンス](#%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9)
+    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-1)
+    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-1)
     - [テスト](#%E3%83%86%E3%82%B9%E3%83%88)
     - [v0.6.0 に延期](#v060-%E3%81%AB%E5%BB%B6%E6%9C%9F)
   - [v0.5.0（2026-04-13）](#v0502026-04-13)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
     - [挙動の変更](#%E6%8C%99%E5%8B%95%E3%81%AE%E5%A4%89%E6%9B%B4)
     - [テスト](#%E3%83%86%E3%82%B9%E3%83%88-1)
   - [v0.4.0（2026-04-11）](#v0402026-04-11)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
     - [挙動の変更](#%E6%8C%99%E5%8B%95%E3%81%AE%E5%A4%89%E6%9B%B4-1)
-    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-1)
+    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-2)
   - [v0.3.0（2026-04-11）](#v0302026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -25,6 +29,39 @@
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.5.2（2026-04-13）
+
+材質編集ドロワーの各パラメタセクションにテクスチャサムネイルを統合。テクスチャと関連パラメタが 1 箇所で見られるようになった。
+
+### 新機能
+
+- **テクスチャサムネイルのセクション統合** — 旧「テクスチャスロット」集約セクションを解体し、各材質セクションの先頭にサムネイル + 割当UI を配置した:
+  - **基本**: BaseColor
+  - **影 (Shade)**: Shade / ShadingShift
+  - **アウトライン**: OutlineWidth
+  - **リム**: RimMultiply
+  - **MatCap**: Matcap
+  - **UV アニメ**: UvAnimMask
+  - **エミッシブ / 法線**: Emissive / Normal
+  - **MMD テクスチャ (Sphere / Toon)**: Sphere / Toon（MMD/PMX 固有のため別セクションとして残置）
+- **サムネイルがそのままボタン** — 32px のサムネイル画像自体が `ImageButton` になり、クリックでファイルダイアログが開く（従来のテキストボタンは廃止）。ホバーでファイル名をツールチップ表示。
+- **未割当スロットは X アイコン** — 割当のないスロットには `×` 印のプレースホルダボタンを描画。色はテーマの `widgets.inactive` に連動。クリックで新規割当ダイアログが開く。
+- **行末の `×` はスロットリセット** — 既存挙動を踏襲し、割当済みスロットのみに表示（小さな `×` ボタン）。
+
+### 内部実装
+
+- `TextureState` に `ir_thumb_cache: Vec<Option<egui::TextureId>>` を追加し、`loaded.ir.textures` と並列のサムネイル TextureId キャッシュを保持。既存の `pkg_thumb_cache`（UnityPackage 内テクスチャ用）と同じ 64px サムネイルパイプラインを流用。
+- `rebuild_ir_thumb_cache` / `append_ir_thumb_cache` / `clear_ir_thumb_cache` / `sync_ir_thumb_cache` の 4 メソッドを追加。`sync` は `loaded.ir.textures.len()` と cache 長を比較し、増加時のみ append、減少時は rebuild、`loaded` が無い時は clear する差分更新を行う。
+- `assign_texture_core` の新規テクスチャ push 経路で直接 `build_ir_thumb_entry` を呼び、`&mut self` 再取得による borrow 衝突を回避しつつサムネイルを同期追加。
+- `show_material_editor_window` の先頭で `sync_ir_thumb_cache` を呼び、モデル切替・BG ロード完了など外部経路で `ir.textures` 長が変化しても UI 表示が追従する設計。
+- 共通 `texture_slot_widget()` ヘルパー関数を追加。各セクションから呼び出し、`(assign_clicked, reset_clicked)` の bool ペアを返して呼び出し側で `pending_tex_request` / `pending_tex_clear` を設定する借用境界設計。
+
+### バグ修正（リリース前レビュー対応）
+
+- **[review_01 P1] モデル切替後に前モデルのサムネイルが残る問題を修正** — `finish_load_with_gpu` / `cancel_gpu_build` / `cancel_bg_index_load` で `clear_ir_thumb_cache()` を呼び出すようにした。前モデルと新モデルのテクスチャ数が一致した場合、`sync_ir_thumb_cache()` が長さ比較だけで early return するため、前モデルの `TextureId` がそのまま再利用されて別モデルのサムネイルが誤って表示される問題があった。
+- **[review_01 P2] PSD→PNG 変換後にサムネイルが更新されない問題を修正** — `poll_pending_psd_conversions()` で PNG 差し替え完了時に該当 `tex_idx` の `TextureId` を再生成するようにした。`sync_ir_thumb_cache()` は長さが変わらないため再構築されず、PSD デコード失敗で初期サムネイルが `None` だったケースでは、PNG 変換完了後も永続的に空欄のまま残る問題があった。
+- **[review_02 P1] 材質編集ウィンドウ未表示時のテクスチャ追加で index がずれる問題を修正** — `assign_texture_core()` / `apply_tex_preview()` の新規テクスチャ push 経路で、単純な `cache.push()` ではなく「不足分を末尾から一括 append」するロジックに変更。`ir_thumb_cache` は材質編集ウィンドウを一度開くまで長さ 0 のままのため、従来の push だけでは新規サムネイルが `cache[0]` に入り、既存スロットの表示と index がずれる問題があった（モデル読込直後にメイン UI から BaseColor を差し替えるだけで全スロットの表示が壊れる）。
 
 ## v0.5.1（2026-04-13）
 

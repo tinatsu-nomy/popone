@@ -9,7 +9,6 @@
     - [UV Transform Editing UI](#uv-transform-editing-ui)
     - [Drag-and-Drop Slot Selection](#drag-and-drop-slot-selection)
     - [Auto-Assign Slot Hints](#auto-assign-slot-hints)
-    - [Texture Slot Thumbnails](#texture-slot-thumbnails)
     - [Section Collapse State Persistence](#section-collapse-state-persistence)
     - [User Custom Preset Save / Load](#user-custom-preset-save--load)
     - [Multiple Material Editor Windows](#multiple-material-editor-windows)
@@ -67,10 +66,6 @@ When the material editor drawer is open, drag-and-drop of an image file should o
 ### Auto-Assign Slot Hints
 
 `auto_assign_textures()` currently matches only filename-to-material-name. Extend to recognize slot-suffix hints in filenames (`*_normal*` → Normal, `*_emissive*` → Emissive, etc.) so batch D&D of PBR texture sets assigns to the correct slots.
-
-### Texture Slot Thumbnails
-
-The material editor drawer "テクスチャスロット" section shows only filenames. Add 32×32 thumbnails backed by `egui::TextureId` registered via `eframe::egui_wgpu::Renderer::register_native_texture()` for visual slot identification.
 
 ### Section Collapse State Persistence
 

@@ -1028,12 +1028,101 @@ fn pmx_unsupported_badge(ui: &mut egui::Ui) {
     );
 }
 
+/// v0.5.2: 各材質セクションに埋め込むテクスチャスロット行ウィジェット。
+///
+/// 旧「テクスチャスロット」集約セクションを解体し、各セクション（影・アウトライン・
+/// リム・MatCap・UV アニメ・エミッシブ/法線）の先頭に配置することで、
+/// テクスチャとそれを使うパラメタ（color / scale / shift 等）を 1 箇所で見られるようにする。
+///
+/// レイアウト: `[画像ボタン] {label}: {filename or (未割当)} [×]`
+///
+/// - 割当済み: ImageButton のクリックでファイルダイアログを開く（差し替え）
+/// - 未割当: X アイコン付きプレースホルダボタン。クリックで新規割当
+/// - `×` は割当済みのときのみ表示、スロットリセット
+///
+/// 戻り値: `(assign_clicked, reset_clicked)` — 呼び出し側が `pending_tex_request` /
+/// `pending_tex_clear` に `slot` を入れる判断に使う（借用境界を跨がないようフラグだけ返す）。
+fn texture_slot_widget(
+    ui: &mut egui::Ui,
+    label: &str,
+    tex_idx_opt: Option<usize>,
+    textures: &[crate::intermediate::types::IrTexture],
+    ir_thumb_ids: &[Option<egui::TextureId>],
+) -> (bool, bool) {
+    const THUMB_DISPLAY_PX: f32 = 32.0;
+    let thumb_size = egui::vec2(THUMB_DISPLAY_PX, THUMB_DISPLAY_PX);
+    let tex_name = tex_idx_opt
+        .and_then(|idx| textures.get(idx))
+        .map(|t| t.filename.as_str());
+    let thumb_id = tex_idx_opt.and_then(|idx| ir_thumb_ids.get(idx).copied().flatten());
+
+    let mut assign_clicked = false;
+    let mut reset_clicked = false;
+
+    ui.horizontal(|ui| {
+        let clicked = match thumb_id {
+            Some(tid) => ui
+                .add(
+                    egui::ImageButton::new(
+                        egui::Image::from_texture((tid, thumb_size)).fit_to_exact_size(thumb_size),
+                    )
+                    .frame(true),
+                )
+                .on_hover_text(tex_name.unwrap_or(""))
+                .clicked(),
+            None => {
+                let resp = ui.allocate_response(thumb_size, egui::Sense::click());
+                let rect = resp.rect;
+                let visuals = ui.style().interact(&resp);
+                ui.painter().rect(
+                    rect,
+                    2.0,
+                    visuals.bg_fill,
+                    visuals.bg_stroke,
+                    egui::StrokeKind::Inside,
+                );
+                let pad = 6.0;
+                let x_stroke = egui::Stroke::new(2.0, visuals.fg_stroke.color);
+                ui.painter().line_segment(
+                    [
+                        rect.left_top() + egui::vec2(pad, pad),
+                        rect.right_bottom() - egui::vec2(pad, pad),
+                    ],
+                    x_stroke,
+                );
+                ui.painter().line_segment(
+                    [
+                        rect.right_top() + egui::vec2(-pad, pad),
+                        rect.left_bottom() + egui::vec2(pad, -pad),
+                    ],
+                    x_stroke,
+                );
+                resp.on_hover_text("テクスチャ未割当 (クリックで選択)")
+                    .clicked()
+            }
+        };
+        if clicked {
+            assign_clicked = true;
+        }
+        ui.label(format!("{}: {}", label, tex_name.unwrap_or("(未割当)")));
+        if tex_idx_opt.is_some() && ui.small_button("×").clicked() {
+            reset_clicked = true;
+        }
+    });
+    (assign_clicked, reset_clicked)
+}
+
 pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
     use crate::intermediate::types::{MtoonParams, ShaderFamily};
 
     let Some(mat_idx) = app.editing_material_index else {
         return;
     };
+
+    // v0.5.2: 材質編集ウィンドウ表示前に ir_thumb_cache をモデルと同期。
+    // モデル切替や BG ロード完了など外部経路で ir.textures 長が変わっても、
+    // ここでチェックするだけでテクスチャスロットのサムネイルが追従する。
+    app.sync_ir_thumb_cache();
 
     // 材質名と総数を immutable borrow で先に取得
     let (mat_name, mat_count) = {
@@ -1078,6 +1167,11 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
     let mut pending_tex_clear: Option<crate::intermediate::types::TextureSlot> = None;
     // review_024 [P2]: MME カテゴリ「推定に戻す」→ closure 外で mme_kind を消去
     let mut pending_mme_reset = false;
+
+    // v0.5.2: ir_thumb_cache のスナップショットをクロージャ外に取り出す。
+    // クロージャ内で `app.loaded.as_mut()` と並行参照するには disjoint borrow が必要で、
+    // TextureId は Copy のため clone コストは無視できる。
+    let ir_thumb_ids: Vec<Option<egui::TextureId>> = app.tex.ir_thumb_cache.clone();
 
     egui::Window::new(window_title)
         .id(egui::Id::new("material_editor_window"))
@@ -1251,6 +1345,22 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
             egui::CollapsingHeader::new("基本")
                 .default_open(true)
                 .show(ui, |ui| {
+                    // v0.5.2: BaseColor テクスチャのサムネイル + 割当UI
+                    let (assign, reset) = texture_slot_widget(
+                        ui,
+                        "BaseColor",
+                        mat.texture_index,
+                        &loaded.ir.textures,
+                        &ir_thumb_ids,
+                    );
+                    if assign {
+                        pending_tex_request =
+                            Some(crate::intermediate::types::TextureSlot::BaseColor);
+                    }
+                    if reset {
+                        pending_tex_clear =
+                            Some(crate::intermediate::types::TextureSlot::BaseColor);
+                    }
                     ui.horizontal(|ui| {
                         ui.label("diffuse:");
                         let mut rgb = [mat.diffuse.x, mat.diffuse.y, mat.diffuse.z];
@@ -1275,6 +1385,43 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
             egui::CollapsingHeader::new("影 (Shade)")
                 .default_open(false)
                 .show(ui, |ui| {
+                    // v0.5.2: Shade / ShadingShift テクスチャのサムネイル + 割当UI
+                    {
+                        let mp = mat.mtoon();
+                        let shade_idx = mp.shade_texture.as_ref().map(|t| t.index);
+                        let shift_idx = mp.shading_shift_texture.as_ref().map(|t| t.index);
+                        let (a1, r1) = texture_slot_widget(
+                            ui,
+                            "shade テクスチャ",
+                            shade_idx,
+                            &loaded.ir.textures,
+                            &ir_thumb_ids,
+                        );
+                        if a1 {
+                            pending_tex_request =
+                                Some(crate::intermediate::types::TextureSlot::ShadeMultiply);
+                        }
+                        if r1 {
+                            pending_tex_clear =
+                                Some(crate::intermediate::types::TextureSlot::ShadeMultiply);
+                        }
+                        let (a2, r2) = texture_slot_widget(
+                            ui,
+                            "shading_shift テクスチャ",
+                            shift_idx,
+                            &loaded.ir.textures,
+                            &ir_thumb_ids,
+                        );
+                        if a2 {
+                            pending_tex_request =
+                                Some(crate::intermediate::types::TextureSlot::ShadingShift);
+                        }
+                        if r2 {
+                            pending_tex_clear =
+                                Some(crate::intermediate::types::TextureSlot::ShadingShift);
+                        }
+                    }
+
                     // 読み取り: `mat.mtoon()` はデフォルト値参照なので副作用なし
                     let (mut shade_color_rgb, mut shading_toony, mut shading_shift, mut gi_eq) = {
                         let mp = mat.mtoon();
@@ -1373,6 +1520,27 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                 .default_open(false)
                 .show(ui, |ui| {
                     use crate::intermediate::types::OutlineWidthMode;
+
+                    // v0.5.2: OutlineWidth テクスチャのサムネイル + 割当UI
+                    {
+                        let outline_idx =
+                            mat.mtoon().outline_width_texture.as_ref().map(|t| t.index);
+                        let (a, r) = texture_slot_widget(
+                            ui,
+                            "outline_width テクスチャ",
+                            outline_idx,
+                            &loaded.ir.textures,
+                            &ir_thumb_ids,
+                        );
+                        if a {
+                            pending_tex_request =
+                                Some(crate::intermediate::types::TextureSlot::OutlineWidth);
+                        }
+                        if r {
+                            pending_tex_clear =
+                                Some(crate::intermediate::types::TextureSlot::OutlineWidth);
+                        }
+                    }
 
                     // edge_color: IrMaterial 直接 (RGBA)
                     ui.horizontal(|ui| {
@@ -1500,6 +1668,26 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                 .default_open(false)
                 .show(ui, |ui| {
                     pmx_unsupported_badge(ui);
+                    // v0.5.2: RimMultiply テクスチャのサムネイル + 割当UI
+                    {
+                        let rim_idx =
+                            mat.mtoon().rim_multiply_texture.as_ref().map(|t| t.index);
+                        let (a, r) = texture_slot_widget(
+                            ui,
+                            "rim_multiply テクスチャ",
+                            rim_idx,
+                            &loaded.ir.textures,
+                            &ir_thumb_ids,
+                        );
+                        if a {
+                            pending_tex_request =
+                                Some(crate::intermediate::types::TextureSlot::RimMultiply);
+                        }
+                        if r {
+                            pending_tex_clear =
+                                Some(crate::intermediate::types::TextureSlot::RimMultiply);
+                        }
+                    }
                     let (mut rim_rgb, mut fresnel_power, mut rim_lift, mut rim_mix) = {
                         let mp = mat.mtoon();
                         (
@@ -1586,6 +1774,25 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                 .default_open(false)
                 .show(ui, |ui| {
                     pmx_unsupported_badge(ui);
+                    // v0.5.2: Matcap テクスチャのサムネイル + 割当UI
+                    {
+                        let matcap_idx = mat.mtoon().matcap_texture.as_ref().map(|t| t.index);
+                        let (a, r) = texture_slot_widget(
+                            ui,
+                            "matcap テクスチャ",
+                            matcap_idx,
+                            &loaded.ir.textures,
+                            &ir_thumb_ids,
+                        );
+                        if a {
+                            pending_tex_request =
+                                Some(crate::intermediate::types::TextureSlot::Matcap);
+                        }
+                        if r {
+                            pending_tex_clear =
+                                Some(crate::intermediate::types::TextureSlot::Matcap);
+                        }
+                    }
                     let mut matcap_rgb = mat.mtoon().matcap_factor.to_array();
                     let mut matcap_changed = false;
 
@@ -1609,6 +1816,29 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                 .default_open(false)
                 .show(ui, |ui| {
                     pmx_unsupported_badge(ui);
+                    // v0.5.2: UvAnimMask テクスチャのサムネイル + 割当UI
+                    {
+                        let mask_idx = mat
+                            .mtoon()
+                            .uv_animation_mask_texture
+                            .as_ref()
+                            .map(|t| t.index);
+                        let (a, r) = texture_slot_widget(
+                            ui,
+                            "uv_animation_mask テクスチャ",
+                            mask_idx,
+                            &loaded.ir.textures,
+                            &ir_thumb_ids,
+                        );
+                        if a {
+                            pending_tex_request =
+                                Some(crate::intermediate::types::TextureSlot::UvAnimMask);
+                        }
+                        if r {
+                            pending_tex_clear =
+                                Some(crate::intermediate::types::TextureSlot::UvAnimMask);
+                        }
+                    }
                     let (mut scroll_x, mut scroll_y, mut rotation) = {
                         let mp = mat.mtoon();
                         (
@@ -1695,6 +1925,42 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
             egui::CollapsingHeader::new("エミッシブ / 法線")
                 .default_open(false)
                 .show(ui, |ui| {
+                    // v0.5.2: Emissive / Normal テクスチャのサムネイル + 割当UI
+                    {
+                        let emissive_idx = mat.emissive_texture.as_ref().map(|t| t.index);
+                        let normal_idx = mat.normal_texture.as_ref().map(|t| t.index);
+                        let (a1, r1) = texture_slot_widget(
+                            ui,
+                            "emissive テクスチャ",
+                            emissive_idx,
+                            &loaded.ir.textures,
+                            &ir_thumb_ids,
+                        );
+                        if a1 {
+                            pending_tex_request =
+                                Some(crate::intermediate::types::TextureSlot::Emissive);
+                        }
+                        if r1 {
+                            pending_tex_clear =
+                                Some(crate::intermediate::types::TextureSlot::Emissive);
+                        }
+                        let (a2, r2) = texture_slot_widget(
+                            ui,
+                            "normal テクスチャ",
+                            normal_idx,
+                            &loaded.ir.textures,
+                            &ir_thumb_ids,
+                        );
+                        if a2 {
+                            pending_tex_request =
+                                Some(crate::intermediate::types::TextureSlot::Normal);
+                        }
+                        if r2 {
+                            pending_tex_clear =
+                                Some(crate::intermediate::types::TextureSlot::Normal);
+                        }
+                    }
+
                     // 現在の emissive_factor を (base_color, intensity) に分解
                     let current = mat.emissive_factor;
                     let intensity = current.max_element().max(0.0);
@@ -1760,46 +2026,40 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                     });
                 });
 
-            // ==================== テクスチャスロット (Step 4-16b) ====================
+            // ==================== MMD テクスチャ (Sphere / Toon) ====================
             //
-            // 全補助テクスチャスロットの選択ボタンを 1 セクションに集約。
-            // クリック時に `pending_tex_request` に slot をセットし、closure 外で
-            // ファイルダイアログを起動する（borrow 分離）。スロットリセット `×` も同時に提供。
-            egui::CollapsingHeader::new("テクスチャスロット")
+            // v0.5.2: BaseColor/Emissive/Normal 等の汎用スロットは各パラメタセクション
+            // （基本 / 影 / アウトライン / リム / MatCap / UV アニメ / エミッシブ/法線）
+            // に直接統合したため、ここには MMD/PMX 固有の Sphere / Toon だけを残す。
+            egui::CollapsingHeader::new("MMD テクスチャ (Sphere / Toon)")
                 .default_open(false)
                 .show(ui, |ui| {
                     use crate::intermediate::types::TextureSlot;
-
-                    let textures = &loaded.ir.textures;
-                    let mp = mat.mtoon();
-                    let slots: [(TextureSlot, &str, Option<usize>); 10] = [
-                        (TextureSlot::Emissive, "エミッシブ", mat.emissive_texture.as_ref().map(|t| t.index)),
-                        (TextureSlot::Normal, "法線", mat.normal_texture.as_ref().map(|t| t.index)),
-                        (TextureSlot::ShadeMultiply, "シェード", mp.shade_texture.as_ref().map(|t| t.index)),
-                        (TextureSlot::ShadingShift, "シェーディングシフト", mp.shading_shift_texture.as_ref().map(|t| t.index)),
-                        (TextureSlot::RimMultiply, "リム", mp.rim_multiply_texture.as_ref().map(|t| t.index)),
-                        (TextureSlot::OutlineWidth, "アウトライン幅", mp.outline_width_texture.as_ref().map(|t| t.index)),
-                        (TextureSlot::Matcap, "MatCap", mp.matcap_texture.as_ref().map(|t| t.index)),
-                        (TextureSlot::UvAnimMask, "UV アニメマスク", mp.uv_animation_mask_texture.as_ref().map(|t| t.index)),
-                        // M3: Sphere/Toon テクスチャスロット編集（MMD/PMX 専用）
-                        (TextureSlot::Sphere, "スフィア (MMD)", mat.sphere_texture_index),
-                        (TextureSlot::Toon, "トゥーン (MMD)", mat.toon_texture_index),
-                    ];
-
-                    for (slot, label, tex_idx_opt) in &slots {
-                        ui.horizontal(|ui| {
-                            let tex_name = tex_idx_opt
-                                .and_then(|idx| textures.get(idx))
-                                .map(|t| t.filename.as_str());
-                            ui.label(format!("{}:", label));
-                            if ui.button(tex_name.unwrap_or("(未割当)")).clicked() {
-                                pending_tex_request = Some(*slot);
-                            }
-                            // Step 4-17: スロットリセット `×` ボタン
-                            if tex_idx_opt.is_some() && ui.small_button("×").clicked() {
-                                pending_tex_clear = Some(*slot);
-                            }
-                        });
+                    let (a1, r1) = texture_slot_widget(
+                        ui,
+                        "sphere テクスチャ",
+                        mat.sphere_texture_index,
+                        &loaded.ir.textures,
+                        &ir_thumb_ids,
+                    );
+                    if a1 {
+                        pending_tex_request = Some(TextureSlot::Sphere);
+                    }
+                    if r1 {
+                        pending_tex_clear = Some(TextureSlot::Sphere);
+                    }
+                    let (a2, r2) = texture_slot_widget(
+                        ui,
+                        "toon テクスチャ",
+                        mat.toon_texture_index,
+                        &loaded.ir.textures,
+                        &ir_thumb_ids,
+                    );
+                    if a2 {
+                        pending_tex_request = Some(TextureSlot::Toon);
+                    }
+                    if r2 {
+                        pending_tex_clear = Some(TextureSlot::Toon);
                     }
                 });
 

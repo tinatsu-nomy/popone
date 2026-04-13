@@ -96,6 +96,7 @@
     - [Pipeline Warm-up (`WarmupPhase`)](#pipeline-warm-up-warmupphase)
     - [GPU Model Build Split (`cpu_prep_model` / `gpu_finalize_model`)](#gpu-model-build-split-cpu_prep_model--gpu_finalize_model)
     - [Incremental Thumbnail Cache](#incremental-thumbnail-cache)
+    - [IR Texture Thumbnail Cache (v0.5.2)](#ir-texture-thumbnail-cache-v052)
   - [WGSL Shader Architecture](#wgsl-shader-architecture)
     - [Common Macros](#common-macros)
     - [Shader Constants](#shader-constants)
@@ -1409,6 +1410,23 @@ PendingGpuBuild state machine:
 ### Incremental Thumbnail Cache
 
 `apply_pkg_append_post` previously called `rebuild_pkg_thumb_cache()` which decoded and uploaded ALL pkg texture thumbnails from scratch on every append. With `append_pkg_thumb_cache(start_index)`, only newly added textures generate thumbnails. Eliminates cumulative O(N²) cost during batch append.
+
+### IR Texture Thumbnail Cache (v0.5.2)
+
+To display 32px thumbnails of assigned textures in each material editor section, `TextureState.ir_thumb_cache: Vec<Option<egui::TextureId>>` is maintained parallel to `loaded.ir.textures`. It reuses the same 64px thumbnail pipeline as `pkg_thumb_cache` (`create_thumbnail_rgba` + `upload_rgba_to_gpu` + `register_native_texture`).
+
+| Method | Purpose |
+|---|---|
+| `rebuild_ir_thumb_cache` | Rebuild the cache from scratch for all entries in `loaded.ir.textures` |
+| `append_ir_thumb_cache(start)` | Append only entries at and after `start` |
+| `clear_ir_thumb_cache` | Release all retained `TextureId`s via `free_texture` |
+| `sync_ir_thumb_cache` | Length comparison dispatches between append / rebuild / clear |
+
+Common inconsistency cases and mitigations:
+
+- **Stale thumbnails after model swap**: When the previous and next models have the same texture count, `sync` early-returns on length comparison and shows the previous model's `TextureId`s. Mitigation: `finish_load_with_gpu` and load-cancel paths call `clear_ir_thumb_cache()`.
+- **Missed update after async PSD→PNG**: In-place texture updates preserve length, so `sync` does not rebuild. Mitigation: `poll_pending_psd_conversions()` releases and regenerates the `TextureId` at the converted index on completion.
+- **Index misalignment before material editor opens**: A blind `push` on an empty cache places the new thumbnail at index 0 instead of at `ir.textures.len() - 1`. Mitigation: `assign_texture_core` and `apply_tex_preview` perform a self-healing "append the missing prefix from cache_len up to ir.textures.len()" sync instead of a plain push.
 
 ## WGSL Shader Architecture
 

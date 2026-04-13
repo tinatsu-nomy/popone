@@ -12,7 +12,7 @@
   - [Extras](#extras)
     - [Animation Playback](#animation-playback)
     - [PMX (MikuMikuDance) Conversion](#pmx-mikumikudance-conversion)
-    - [Material Editor (v0.5.0 / extended in v0.5.1)](#material-editor-v050--extended-in-v051)
+    - [Material Editor (v0.5.0 / extended in v0.5.1 / v0.5.2)](#material-editor-v050--extended-in-v051--v052)
     - [MME (ray-mmd) Output (v0.5.0)](#mme-ray-mmd-output-v050)
   - [Shader Support](#shader-support)
     - [Shader Detection](#shader-detection)
@@ -168,12 +168,22 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - Auto-classified display frames (Root / Expression / Upper Body / Arms / Fingers / Legs / Other)
 - UV normalization (clamped to 0..1)
 
-### Material Editor (v0.5.0 / extended in v0.5.1)
+### Material Editor (v0.5.0 / extended in v0.5.1 / v0.5.2)
 
 Click the "編" button on any material row in the Display tab to open the Material Editor drawer.
 
 - **Editable parameters** — diffuse color, alpha mode/cutoff, shade color, shading toony/shift, outline color/width/mode, parametric rim, matcap factor, emissive factor, normal scale, UV animation speeds, render queue offset
-- **Texture slot assignment** — BaseColor, Emissive, Normal, Shade, ShadingShift, Rim, OutlineWidth, Matcap, UvAnimMask, Sphere, Toon (11 slots — Sphere/Toon added in v0.5.1). Click the slot button to open a file dialog
+- **Texture slot assignment (refactored in v0.5.2)** — Each parameter section now shows the related texture thumbnail (32px square) as a button at its top:
+  - **Basic**: BaseColor
+  - **Shade (影)**: Shade / ShadingShift
+  - **Outline (アウトライン)**: OutlineWidth
+  - **Rim (リム)**: RimMultiply
+  - **MatCap**: Matcap
+  - **UV Animation (UV アニメ)**: UvAnimMask
+  - **Emissive / Normal (エミッシブ / 法線)**: Emissive / Normal
+  - **MMD Textures (Sphere / Toon)**: Sphere / Toon (MMD/PMX-specific, kept in a dedicated section)
+
+  Clicking a thumbnail opens a file dialog to replace or assign a texture. When a texture is assigned, hovering the thumbnail shows the filename as a tooltip. Unassigned slots render a placeholder button with an `×` symbol. A small `×` reset button at the row end clears individual slots when they are assigned.
 - **MToon enable/disable** — "MToon 有効化" checkbox to promote a non-MToon material
 - **Presets** — MToon 1.0 Default, lilToon Standard, PMX Compatible (3 built-in presets)
 - **Copy / Paste (v0.5.1)** — Copy a material's color/scalar values to the session clipboard and paste them onto another material. Texture assignments are intentionally excluded (path-dependent)

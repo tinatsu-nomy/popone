@@ -96,6 +96,7 @@
     - [パイプラインウォームアップ (`WarmupPhase`)](#%E3%83%91%E3%82%A4%E3%83%97%E3%83%A9%E3%82%A4%E3%83%B3%E3%82%A6%E3%82%A9%E3%83%BC%E3%83%A0%E3%82%A2%E3%83%83%E3%83%97-warmupphase)
     - [GPU モデルビルド分離 (`cpu_prep_model` / `gpu_finalize_model`)](#gpu-%E3%83%A2%E3%83%87%E3%83%AB%E3%83%93%E3%83%AB%E3%83%89%E5%88%86%E9%9B%A2-cpu_prep_model--gpu_finalize_model)
     - [サムネイルキャッシュ差分更新](#%E3%82%B5%E3%83%A0%E3%83%8D%E3%82%A4%E3%83%AB%E3%82%AD%E3%83%A3%E3%83%83%E3%82%B7%E3%83%A5%E5%B7%AE%E5%88%86%E6%9B%B4%E6%96%B0)
+    - [ir テクスチャサムネイルキャッシュ（v0.5.2）](#ir-%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E3%82%B5%E3%83%A0%E3%83%8D%E3%82%A4%E3%83%AB%E3%82%AD%E3%83%A3%E3%83%83%E3%82%B7%E3%83%A5v052)
   - [WGSL シェーダー構成](#wgsl-%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%80%E3%83%BC%E6%A7%8B%E6%88%90)
     - [共通マクロ](#%E5%85%B1%E9%80%9A%E3%83%9E%E3%82%AF%E3%83%AD)
     - [シェーダー定数](#%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%80%E3%83%BC%E5%AE%9A%E6%95%B0)
@@ -1386,6 +1387,23 @@ PendingGpuBuild ステートマシン:
 ### サムネイルキャッシュ差分更新
 
 `apply_pkg_append_post` で従来 `rebuild_pkg_thumb_cache()` が全 pkg テクスチャのサムネイルを毎回ゼロから再生成していた。`append_pkg_thumb_cache(start_index)` で新規追加分のみ生成し、バッチ append 時の累積 O(N²) コストを解消。
+
+### ir テクスチャサムネイルキャッシュ（v0.5.2）
+
+材質編集ドロワーの各セクションで割当済みテクスチャを 32px サムネイルとして表示するため、`loaded.ir.textures` と並列の `TextureState.ir_thumb_cache: Vec<Option<egui::TextureId>>` を導入した。`pkg_thumb_cache` と同じ 64px サムネイルパイプライン（`create_thumbnail_rgba` + `upload_rgba_to_gpu` + `register_native_texture`）を流用する。
+
+| メソッド | 目的 |
+|---|---|
+| `rebuild_ir_thumb_cache` | `loaded.ir.textures` 全枚数からキャッシュを作り直す |
+| `append_ir_thumb_cache(start)` | `start` 以降の新規テクスチャ分だけ追記 |
+| `clear_ir_thumb_cache` | 保持している `TextureId` を `free_texture` で解放 |
+| `sync_ir_thumb_cache` | 長さ比較で「append / rebuild / clear」を差分選択 |
+
+不整合の典型例と対策:
+
+- **モデル切替残留**: 旧モデルと新モデルのテクスチャ数が一致すると `sync` が早期 return し、前モデルの `TextureId` が表示されてしまう → `finish_load_with_gpu` と load キャンセル経路で `clear_ir_thumb_cache()` を呼ぶ。
+- **PSD→PNG 非同期変換後の更新抜け**: インプレース更新では長さが変わらず `sync` が再構築しない → `poll_pending_psd_conversions()` が変換完了時に該当 index の `TextureId` を解放・再生成する。
+- **材質編集未開封時の index ずれ**: キャッシュ未構築（長さ 0）のまま `push` すると index 0 に入ってしまう → `assign_texture_core` / `apply_tex_preview` で「cache_len 〜 ir.textures.len() までの不足分を一括 append」する自己修復型同期に変更。
 
 ## WGSL シェーダー構成
 

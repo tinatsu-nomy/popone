@@ -12,7 +12,7 @@
   - [おまけ](#%E3%81%8A%E3%81%BE%E3%81%91)
     - [アニメーション再生](#%E3%82%A2%E3%83%8B%E3%83%A1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E5%86%8D%E7%94%9F)
     - [PMX（MikuMikuDance）形式に変換](#pmxmikumikudance%E5%BD%A2%E5%BC%8F%E3%81%AB%E5%A4%89%E6%8F%9B)
-    - [材質編集ドロワー（v0.5.0 / v0.5.1 拡張）](#%E6%9D%90%E8%B3%AA%E7%B7%A8%E9%9B%86%E3%83%89%E3%83%AD%E3%83%AF%E3%83%BCv050--v051-%E6%8B%A1%E5%BC%B5)
+    - [材質編集ドロワー（v0.5.0 / v0.5.1 / v0.5.2 拡張）](#%E6%9D%90%E8%B3%AA%E7%B7%A8%E9%9B%86%E3%83%89%E3%83%AD%E3%83%AF%E3%83%BCv050--v051--v052-%E6%8B%A1%E5%BC%B5)
     - [MME（ray-mmd）出力（v0.5.0）](#mmeray-mmd%E5%87%BA%E5%8A%9Bv050)
   - [シェーダー対応状況](#%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%80%E3%83%BC%E5%AF%BE%E5%BF%9C%E7%8A%B6%E6%B3%81)
     - [シェーダー検出](#%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%80%E3%83%BC%E6%A4%9C%E5%87%BA)
@@ -168,12 +168,22 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - 表示枠の自動分類（Root / 表情 / 体(上) / 腕 / 指 / 足 / その他）
 - UV 正規化（0..1 範囲に補正）
 
-### 材質編集ドロワー（v0.5.0 / v0.5.1 拡張）
+### 材質編集ドロワー（v0.5.0 / v0.5.1 / v0.5.2 拡張）
 
 表示タブの材質行にある「編」ボタンをクリックすると、材質編集ドロワーが開きます。
 
 - **編集可能パラメータ** — diffuse カラー、alpha モード / cutoff、shade color、shading toony / shift、outline カラー / 幅 / モード、パラメトリックリム、matcap factor、emissive factor、法線スケール、UV アニメ速度、render queue offset
-- **テクスチャスロット割当** — BaseColor / Emissive / Normal / Shade / ShadingShift / Rim / OutlineWidth / Matcap / UvAnimMask / Sphere / Toon（11 スロット、v0.5.1 で Sphere / Toon を追加）。スロットボタンをクリックしてファイルダイアログで選択
+- **テクスチャスロット割当（v0.5.2 リファクタ）** — 各パラメタセクションの先頭に対応するテクスチャのサムネイル（32px 正方形）がボタンとして表示される:
+  - **基本**: BaseColor
+  - **影 (Shade)**: Shade / ShadingShift
+  - **アウトライン**: OutlineWidth
+  - **リム**: RimMultiply
+  - **MatCap**: Matcap
+  - **UV アニメ**: UvAnimMask
+  - **エミッシブ / 法線**: Emissive / Normal
+  - **MMD テクスチャ (Sphere / Toon)**: Sphere / Toon（MMD/PMX 固有）
+
+  サムネイルをクリックするとファイルダイアログが開き、差し替え/新規割当が行える。割当済みの場合はホバーでファイル名をツールチップ表示。未割当スロットは `×` 印のプレースホルダボタンで表示。割当済みの各行末には小さな `×` ボタンがあり、スロット単位のリセットに使う。
 - **MToon 有効化 / 無効化** — 「MToon 有効化」チェックボックスで非 MToon 材質を MToon に昇格可能
 - **プリセット** — MToon 1.0 デフォルト / lilToon 標準 / PMX 互換（組込 3 種）
 - **コピー / ペースト（v0.5.1）** — 材質のカラー / スカラー値をクリップボードにコピーし、別材質にペースト可能。テクスチャ割当はパス依存を避けるため除外

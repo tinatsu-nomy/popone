@@ -3,21 +3,25 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
+  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
     - [New Features](#new-features)
-    - [Performance](#performance)
     - [Internals](#internals)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
+  - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
+    - [New Features](#new-features-1)
+    - [Performance](#performance)
+    - [Internals](#internals-1)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
     - [Tests](#tests)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
-    - [New Features](#new-features-1)
+    - [New Features](#new-features-2)
     - [Behavior Changes](#behavior-changes)
     - [Tests](#tests-1)
   - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
-    - [New Features](#new-features-2)
+    - [New Features](#new-features-3)
     - [Behavior Changes](#behavior-changes-1)
-    - [Internals](#internals-1)
+    - [Internals](#internals-2)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -25,6 +29,39 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.2 (2026-04-13)
+
+Texture thumbnails are now integrated into each material editor parameter section. Texture assignments and their related parameters can be seen in one place.
+
+### New Features
+
+- **Texture Thumbnails Integrated into Sections** — The old consolidated "テクスチャスロット" section has been dissolved, and thumbnail + assignment UI is now placed at the top of each material parameter section:
+  - **Basic**: BaseColor
+  - **Shade (影)**: Shade / ShadingShift
+  - **Outline (アウトライン)**: OutlineWidth
+  - **Rim (リム)**: RimMultiply
+  - **MatCap**: Matcap
+  - **UV Animation (UV アニメ)**: UvAnimMask
+  - **Emissive / Normal (エミッシブ / 法線)**: Emissive / Normal
+  - **MMD Textures (Sphere / Toon)**: Sphere / Toon — kept as a separate section since they are MMD/PMX-specific.
+- **Thumbnail as Button** — The 32px thumbnail image itself is now an `ImageButton`; clicking it opens the file dialog (the previous separate text button has been removed). Hovering shows the filename as a tooltip.
+- **X Icon for Unassigned Slots** — Unassigned slots render a placeholder button with an `×` symbol, using theme-consistent colors from `widgets.inactive`. Clicking opens the file dialog for new assignment.
+- **Per-Slot Reset** — The existing small `×` reset button at the end of each row is preserved, visible only when a texture is assigned.
+
+### Internals
+
+- Added `TextureState::ir_thumb_cache: Vec<Option<egui::TextureId>>`, a cache of 64px thumbnail TextureIds parallel to `loaded.ir.textures`. Reuses the same thumbnail pipeline as the existing `pkg_thumb_cache` (UnityPackage textures).
+- Added four methods: `rebuild_ir_thumb_cache` / `append_ir_thumb_cache` / `clear_ir_thumb_cache` / `sync_ir_thumb_cache`. `sync` compares `loaded.ir.textures.len()` with cache length and performs differential updates: append for growth, rebuild for shrinkage, clear when no model is loaded.
+- In `assign_texture_core`, `build_ir_thumb_entry` is called inline on the new-texture push path to avoid `&mut self` re-borrow conflicts with existing `device`/`queue` borrows.
+- `show_material_editor_window` calls `sync_ir_thumb_cache` at entry so UI thumbnails track external changes (model swap, BG load completion) to `ir.textures` length.
+- Added shared `texture_slot_widget()` helper function. Each section calls it and it returns `(assign_clicked, reset_clicked)` bool pair — the caller then sets `pending_tex_request` / `pending_tex_clear`, keeping borrow boundaries clean.
+
+### Bug Fixes (Pre-Release Review)
+
+- **[review_01 P1] Stale thumbnails after model swap** — `finish_load_with_gpu` / `cancel_gpu_build` / `cancel_bg_index_load` now call `clear_ir_thumb_cache()`. Without this, when the previous and next models happened to have the same texture count, `sync_ir_thumb_cache()` would early-return on length comparison and reuse the previous model's `TextureId`s, showing incorrect thumbnails.
+- **[review_01 P2] Thumbnail not updated after PSD→PNG conversion** — `poll_pending_psd_conversions()` now regenerates the `TextureId` for the converted index on completion. Since length is unchanged, `sync_ir_thumb_cache()` would not rebuild, and in cases where the initial PSD decode failed (`None` thumbnail), the slot would remain permanently blank even after successful PNG conversion.
+- **[review_02 P1] Index misalignment when adding texture before material editor opens** — `assign_texture_core()` and `apply_tex_preview()` new-texture push paths were changed from a simple `cache.push()` to a "append missing prefix" logic. `ir_thumb_cache` stays at length 0 until the material editor is opened, so the previous push would place the new thumbnail at `cache[0]`, misaligning all subsequent slot displays. A single BaseColor reassignment right after model load was enough to corrupt every slot thumbnail.
 
 ## v0.5.1 (2026-04-13)
 

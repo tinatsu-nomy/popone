@@ -1532,6 +1532,11 @@ impl ViewerApp {
         }
         // PSD→PNG バックグラウンド変換を破棄（前モデルの tex_idx が stale になるのを防ぐ）
         self.tex.pending_psd_conversions.clear();
+        // v0.5.2 [review_01 P1] 対応: 前モデルのサムネイル TextureId を解放する。
+        // これを呼ばないと、新旧モデルのテクスチャ数が一致した場合に
+        // `sync_ir_thumb_cache()` が長さ比較で early return し、
+        // 材質編集ウィンドウで前モデルのサムネイルが別モデルの画像として表示される。
+        self.clear_ir_thumb_cache();
         // L3: pending_tex_preview の egui TextureId を正しく解放してから破棄
         if let Some(preview) = self.tex.pending_preview.take() {
             self.cancel_tex_preview_inner(preview);

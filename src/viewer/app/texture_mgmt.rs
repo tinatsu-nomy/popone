@@ -40,6 +40,12 @@ pub struct TextureState {
     pub pkg_textures: Option<Vec<(String, Arc<[u8]>)>>,
     /// pkg_textures のサムネイル TextureId キャッシュ
     pub pkg_thumb_cache: Vec<Option<egui::TextureId>>,
+    /// loaded.ir.textures のサムネイル TextureId キャッシュ（割当済みテクスチャ表示用）
+    ///
+    /// v0.5.2 で追加。マテリアルに割り当てたテクスチャをUI上でサムネイル表示するため、
+    /// `ir.textures[i]` に対応する 64px 縮小版を egui の `TextureId` として登録して保持する。
+    /// サイズは `ir.textures.len()` と一致するよう `sync_ir_thumb_cache()` で同期。
+    pub ir_thumb_cache: Vec<Option<egui::TextureId>>,
     /// 同一材質名への同時テクスチャ割り当て
     pub link_same_name: bool,
     /// pkgテクスチャポップアップ用フィルタ
@@ -66,6 +72,7 @@ impl Default for TextureState {
             pending_match: None,
             pkg_textures: None,
             pkg_thumb_cache: Vec::new(),
+            ir_thumb_cache: Vec::new(),
             link_same_name: true,
             pkg_popup_filter: String::new(),
             last_dir: None,
@@ -259,6 +266,131 @@ impl ViewerApp {
         for tex_id in self.tex.pkg_thumb_cache.drain(..).flatten() {
             renderer.free_texture(&tex_id);
         }
+    }
+
+    /// `loaded.ir.textures` のサムネイルを GPU にアップロードして `ir_thumb_cache` に登録する。
+    ///
+    /// v0.5.2 で追加。マテリアル編集ウィンドウでテクスチャスロットに割り当て済みの
+    /// テクスチャをサムネイル表示するために利用する。`pkg_thumb_cache` と同様に
+    /// 64px 縮小版を `register_native_texture` で登録し、`egui::TextureId` を保持。
+    pub fn rebuild_ir_thumb_cache(&mut self) {
+        self.clear_ir_thumb_cache();
+        let Some(ref loaded) = self.loaded else {
+            return;
+        };
+        let device = &self.render_state.device;
+        let queue = &self.render_state.queue;
+        let mut renderer = self.render_state.renderer.write();
+        const THUMB_SIZE: u32 = 64;
+
+        for tex in loaded.ir.textures.iter() {
+            let thumb_id =
+                Self::build_ir_thumb_entry(tex, THUMB_SIZE, device, queue, &mut renderer);
+            self.tex.ir_thumb_cache.push(thumb_id);
+        }
+    }
+
+    /// `loaded.ir.textures` の長さに合わせて `ir_thumb_cache` を同期する（差分更新）。
+    ///
+    /// モデル切替・テクスチャ追加など `ir.textures` 長が変化した際に呼び出す。
+    /// - `loaded` が無い場合: 全クリア
+    /// - 長さが短縮されている場合: 既存を破棄して再構築
+    /// - 長さが増加している場合: 追加分のみアップロード
+    pub fn sync_ir_thumb_cache(&mut self) {
+        let Some(ref loaded) = self.loaded else {
+            if !self.tex.ir_thumb_cache.is_empty() {
+                self.clear_ir_thumb_cache();
+            }
+            return;
+        };
+        let target_len = loaded.ir.textures.len();
+        let cache_len = self.tex.ir_thumb_cache.len();
+        if cache_len == target_len {
+            return;
+        }
+        if cache_len > target_len {
+            self.rebuild_ir_thumb_cache();
+            return;
+        }
+        // append のみで済むケース
+        self.append_ir_thumb_cache(cache_len);
+    }
+
+    /// `ir_thumb_cache` に `start_index` 以降の新規テクスチャ分を追記する（差分更新）。
+    pub fn append_ir_thumb_cache(&mut self, start_index: usize) {
+        let Some(ref loaded) = self.loaded else {
+            return;
+        };
+        if start_index >= loaded.ir.textures.len() {
+            return;
+        }
+        let device = &self.render_state.device;
+        let queue = &self.render_state.queue;
+        let mut renderer = self.render_state.renderer.write();
+        const THUMB_SIZE: u32 = 64;
+
+        for tex in loaded.ir.textures[start_index..].iter() {
+            let thumb_id =
+                Self::build_ir_thumb_entry(tex, THUMB_SIZE, device, queue, &mut renderer);
+            self.tex.ir_thumb_cache.push(thumb_id);
+        }
+    }
+
+    /// `ir_thumb_cache` を破棄して GPU リソースを解放する。
+    pub(super) fn clear_ir_thumb_cache(&mut self) {
+        let mut renderer = self.render_state.renderer.write();
+        for tex_id in self.tex.ir_thumb_cache.drain(..).flatten() {
+            renderer.free_texture(&tex_id);
+        }
+    }
+
+    /// 単一 `IrTexture` からサムネイル TextureId を生成する。
+    ///
+    /// `TextureData::RawRgba` は直接リサイズし、`Encoded` はデコード→リサイズする。
+    /// 失敗時は `None` を返し、UI 側で「サムネ無し」としてフォールバックする。
+    fn build_ir_thumb_entry(
+        tex: &crate::intermediate::types::IrTexture,
+        thumb_size: u32,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        renderer: &mut eframe::egui_wgpu::Renderer,
+    ) -> Option<egui::TextureId> {
+        use crate::intermediate::types::TextureData;
+        let rgba = match &tex.data {
+            TextureData::RawRgba {
+                pixels,
+                width,
+                height,
+            } => {
+                let img = image::RgbaImage::from_raw(*width, *height, pixels.to_vec())?;
+                let resized = image::imageops::resize(
+                    &img,
+                    thumb_size,
+                    thumb_size,
+                    image::imageops::FilterType::Triangle,
+                );
+                resized.into_raw()
+            }
+            TextureData::Encoded(data) => {
+                let is_psd = super::super::texture::is_psd_filename(&tex.filename);
+                match super::super::texture::create_thumbnail_rgba(data, is_psd, thumb_size) {
+                    Ok(rgba) => rgba,
+                    Err(e) => {
+                        log::warn!("ir thumb decode failed: {} - {}", tex.filename, e);
+                        return None;
+                    }
+                }
+            }
+        };
+        let (view, _) = super::super::texture::upload_rgba_to_gpu(
+            device,
+            queue,
+            &rgba,
+            thumb_size,
+            thumb_size,
+            Some("ir_thumb"),
+        );
+        Some(renderer.register_native_texture(device, &view, eframe::wgpu::FilterMode::Linear))
     }
 
     /// 指定材質に外部テクスチャを割り当て（ファイルパスから）
@@ -493,6 +625,34 @@ impl ViewerApp {
             loaded
                 .gpu_model
                 .push_gpu_texture_view(texture_view.clone(), texture_view_unorm.clone());
+            // v0.5.2 [review_02 P1] 対応: 単純な push ではなく不足分を末尾 append する。
+            // `ir_thumb_cache` は材質編集ウィンドウを開くまで未構築（長さ 0）のままなので、
+            // `sync_ir_thumb_cache()` を経ずに push すると新規サムネイルが index 0 に入り、
+            // 既存スロットのサムネイルと index がずれる（全スロット誤表示）。
+            //
+            // 正しくは「現在の cache 長から ir.textures 長まで足りない分を全て append」する。
+            // 通常は cache_len == textures.len() - 1 で 1 枚だけ append、キャッシュ未構築時は
+            // 新規テクスチャを含めて全枚数を一括生成する。
+            //
+            // `device`/`queue` は `&self.render_state.device`/queue として既に借用中で、
+            // `self.render_state.renderer` と `self.tex.ir_thumb_cache` は disjoint fields の
+            // ため、この場で write ロックと cache への push が両立する。
+            {
+                let mut renderer = self.render_state.renderer.write();
+                let cache_len = self.tex.ir_thumb_cache.len();
+                let target_len = loaded.ir.textures.len();
+                if cache_len > target_len {
+                    // キャッシュが長すぎる異常系: 全破棄してから再構築（ここに来るのは想定外）
+                    for old in self.tex.ir_thumb_cache.drain(..).flatten() {
+                        renderer.free_texture(&old);
+                    }
+                }
+                let start = self.tex.ir_thumb_cache.len();
+                for t in &loaded.ir.textures[start..] {
+                    let thumb_id = Self::build_ir_thumb_entry(t, 64, device, queue, &mut renderer);
+                    self.tex.ir_thumb_cache.push(thumb_id);
+                }
+            }
             idx
         };
 
@@ -953,6 +1113,29 @@ impl ViewerApp {
                 source_path: path.display().to_string(),
                 mip_chain: None,
             });
+
+        // v0.5.2 [review_02 P1] 対応: ir_thumb_cache を現行長まで追いつかせる。
+        // 材質編集ウィンドウ未表示の状態で preview → apply 確定すると、`sync_ir_thumb_cache()`
+        // を経ないまま `push` したサムネイルが index 0 に入り、既存スロット表示がずれる。
+        // 不足分（cache_len 〜 ir.textures.len() までの全テクスチャ）を一括 append することで、
+        // 新規テクスチャは必ず正しい `tex_idx` 位置に入る。
+        {
+            let device = &self.render_state.device;
+            let queue = &self.render_state.queue;
+            let mut renderer = self.render_state.renderer.write();
+            let cache_len = self.tex.ir_thumb_cache.len();
+            let target_len = loaded.ir.textures.len();
+            if cache_len > target_len {
+                for old in self.tex.ir_thumb_cache.drain(..).flatten() {
+                    renderer.free_texture(&old);
+                }
+            }
+            let start = self.tex.ir_thumb_cache.len();
+            for t in &loaded.ir.textures[start..] {
+                let thumb_id = Self::build_ir_thumb_entry(t, 64, device, queue, &mut renderer);
+                self.tex.ir_thumb_cache.push(thumb_id);
+            }
+        }
 
         // PSD の場合は BG スレッドで PNG 変換を開始
         if spawn_psd_bg {
@@ -1602,6 +1785,26 @@ impl ViewerApp {
                             conv.display_name,
                             conv.tex_idx,
                         );
+
+                        // v0.5.2 [review_01 P2]: PSD→PNG 差し替え後はサムネイルも再生成。
+                        // `sync_ir_thumb_cache()` は長さ比較で判定するため、インプレース
+                        // 更新では再構築されず、PSD デコード失敗時に `None` だった
+                        // エントリが永続的に空欄のままになる問題を修正。
+                        let tex_ref: &crate::intermediate::types::IrTexture =
+                            &loaded.ir.textures[conv.tex_idx];
+                        let device = &self.render_state.device;
+                        let queue = &self.render_state.queue;
+                        let mut renderer = self.render_state.renderer.write();
+                        if let Some(Some(old_id)) =
+                            self.tex.ir_thumb_cache.get(conv.tex_idx).copied()
+                        {
+                            renderer.free_texture(&old_id);
+                        }
+                        let new_id =
+                            Self::build_ir_thumb_entry(tex_ref, 64, device, queue, &mut renderer);
+                        if conv.tex_idx < self.tex.ir_thumb_cache.len() {
+                            self.tex.ir_thumb_cache[conv.tex_idx] = new_id;
+                        }
                     } else {
                         log::warn!(
                             "PSD->PNG conversion result discarded (tex_idx {} out of range): {}",
