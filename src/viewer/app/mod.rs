@@ -529,6 +529,11 @@ pub struct ViewerApp {
     pub uv_edit: uv_edit::UvEditState,
     /// UV 編集ウィンドウの開閉状態 (v0.5.5)。材質編集パネルから開く。
     pub uv_edit_window_open: bool,
+    /// UV 編集キャンバスの背景用テクスチャキャッシュ (v0.5.5 Phase 2-1)。
+    /// `(ir_texture_index, egui::TextureId)` を 1 つだけ保持する簡易キャッシュ。
+    /// アクティブ材質の BaseColor 解決結果が変わったら古い `TextureId` を
+    /// `renderer.free_texture` で解放し、`register_native_texture` で張り直す。
+    pub uv_edit_bg_tex: Option<(usize, egui::TextureId)>,
     /// ダークテーマ適用済みフラグ（update初回で再適用、eframeのスタイルリセット対策）
     dark_theme_applied: bool,
     /// テーマから解決済みのパネル背景色
@@ -835,6 +840,7 @@ impl ViewerApp {
             texture_history,
             uv_edit: uv_edit::UvEditState::default(),
             uv_edit_window_open: false,
+            uv_edit_bg_tex: None,
             dark_theme_applied: false,
             theme_panel_bg: Self::theme_color(&theme.panel_bg, DARK_PANEL_BG),
             theme_border: Self::theme_color(&theme.border, DARK_BORDER_COLOR),
@@ -1636,6 +1642,11 @@ impl ViewerApp {
         // 新規ロード時: UV 編集状態もリセット（メッシュ/頂点Index が変わるため再利用不可）
         self.uv_edit.reset();
         self.uv_edit_window_open = false;
+        // 旧モデルの TextureView に紐付いていた egui TextureId を free（GPU リークを防ぐ）
+        if let Some((_, tex_id)) = self.uv_edit_bg_tex.take() {
+            let mut renderer = self.render_state.renderer.write();
+            renderer.free_texture(&tex_id);
+        }
         // 新規ロード時: シェーダーを初期値にリセットしてからモデル形式に応じて正規化
         self.display.shader_override = ShaderOverride::Default;
         self.display.use_mmd_path = false;

@@ -4,7 +4,6 @@
 
 - [Roadmap](#roadmap)
   - [Targeted for v0.6.0](#targeted-for-v060)
-    - [UV Editor Phase 2 (Interaction Enrichment)](#uv-editor-phase-2-interaction-enrichment)
     - [UV Editor Phase 3 (Data Coverage)](#uv-editor-phase-3-data-coverage)
     - [OBJ / STL Import Options UI Polish](#obj--stl-import-options-ui-polish)
     - [Background Load Internals Cleanup](#background-load-internals-cleanup)
@@ -37,25 +36,17 @@ This document tracks planned work, future improvements, and external feature req
 
 Current target: **v0.6.0**
 
-> **Note:** v0.5.4 shipped per-slot UV transform (offset / scale / rotation) editing in the material editor panel. v0.5.5 shipped **Phase 1** of the per-vertex UV editor (single-vertex select/drag, `IrMesh.vertices_mut()` write-through, persistence via `popone_history.json` v3). See [CHANGELOG.md](CHANGELOG.md#v055-2026-04-13). Phase 2 / Phase 3 are listed below.
+> **Note:** v0.5.4 shipped per-slot UV transform. v0.5.5 shipped **Phase 1 + Phase 2** of the per-vertex UV editor (single/multi-vertex select/drag, rectangle selection, zoom/pan, rotate/scale, undo/redo, texture background). See [CHANGELOG.md](CHANGELOG.md#v055-2026-04-13). Only Phase 3 remains below.
 
 ## Targeted for v0.6.0
-
-### UV Editor Phase 2 (Interaction Enrichment)
-
-Extend the single-vertex editor delivered in v0.5.5 Phase 1:
-
-- **Rectangle selection** — Drag a selection rectangle on the canvas to select multiple vertices at once (modifier keys to add / remove from the current selection)
-- **Bulk translate / scale / rotate** — Pivot at the selection bounding-box center (or a 2D cursor) with on-canvas gizmos
-- **Texture background** — Render the active material's BaseColor texture behind the wireframe (fit to UV [0,1] square, optional tile view outside `0..1`)
-- **Zoom / pan** — Mouse-wheel zoom, middle-drag pan; grid snap on shift
-- **Undo history** — One drag operation = one undo command (drag-through edits coalesce automatically)
 
 ### UV Editor Phase 3 (Data Coverage)
 
 - **UV1 editing** — Switch the canvas to edit `IrMesh.uvs1` via a UV-set dropdown
 - **Morph UV** — For PMX UV morphs, present a "base UV edit vs. morph edit" mode switch
 - **Detached window** — Allow the UV editor to pop out as an `egui::Window`, enabling side-by-side display of multiple materials
+- **Additive / subtractive rectangle selection** — Shift+drag to add, Alt+drag to remove from the current selection (current behavior replaces the selection)
+- **Visual 2D gizmo handles** — Bbox-corner scale handles + rotation anchor as an alternative to the modifier-key mode (Phase 2-4 shipped the key-modifier version only)
 
 
 

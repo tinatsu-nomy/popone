@@ -23,8 +23,36 @@ use super::persistence::VertexUvOverrideEntry;
 /// 頂点編集のキー: `(mesh_index, vertex_index_in_mesh)`。
 pub type VertexKey = (u32, u32);
 
+/// undo/redo の 1 コマンド (v0.5.5 Phase 2-5)。
+///
+/// ドラッグ 1 回単位で記録し、`before` (変更前) / `after` (変更後) の 2 つの
+/// UV マップを持つ。`before` のキーは 必ず `after` のキーと一致する（同じ頂点集合）。
+#[derive(Debug, Clone)]
+pub struct UvUndoEntry {
+    pub before: HashMap<VertexKey, [f32; 2]>,
+    pub after: HashMap<VertexKey, [f32; 2]>,
+}
+
+/// undo スタックの最大エントリ数（古いものから破棄）。
+pub const UV_UNDO_MAX: usize = 50;
+
+/// ドラッグモード (v0.5.5 Phase 2-2)。
+/// `drag_started()` 時に決定し、`dragged()` の分岐で使う。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum UvDragMode {
+    /// ドラッグ外
+    #[default]
+    None,
+    /// 選択頂点を平行移動（プレス位置が頂点近傍 12 px 以内）
+    Move,
+    /// 矩形選択（プレス位置が頂点から遠い場合）
+    Rect,
+}
+
 /// 頂点単位 UV 編集の状態（ViewerApp に 1 つだけ保持）。
-#[derive(Debug, Default)]
+///
+/// `Default` は手書き（`view_zoom` の初期値を 1.0 にするため）。
+#[derive(Debug)]
 pub struct UvEditState {
     /// 編集された頂点の現在 UV。IR へ反映する前の保留中の差分と、既に反映済みの差分の
     /// どちらも同じ経路で記録する（保存時に IR から読み直すのではなく、ここを信頼する）。
@@ -35,15 +63,56 @@ pub struct UvEditState {
     pub active_material: usize,
     /// ドラッグ中フラグ（`true` の間は GPU 書き換えを遅延する）。
     pub dragging: bool,
+    /// 現在のドラッグモード (Phase 2-2 で追加)。
+    pub drag_mode: UvDragMode,
     /// ドラッグ開始時点での選択頂点の UV（`start_uv + cumulative_cursor_delta` 方式で
     /// 過加算を防ぐため、review_result_02 [P1] 対応）。ドラッグ終了でクリア。
     pub drag_start_uvs: HashMap<VertexKey, [f32; 2]>,
     /// ドラッグ開始時のカーソル UV 位置（キャンバス座標から変換済み）。
     /// `None` = ドラッグ外。
     pub drag_press_uv: Option<[f32; 2]>,
+    /// ドラッグ開始時に算出した選択頂点群の bbox 中心（Phase 2-4 の回転/スケールピボット）。
+    /// `None` = ピボット未設定（選択 0 件 or Rect モード等）。
+    pub drag_pivot: Option<[f32; 2]>,
     /// ロード後に persistence 側から受け取った復元予定エントリ。
     /// `apply_pending_restore` 呼び出し後は `None` に戻る。
     pub pending_restore: Option<Vec<VertexUvOverrideEntry>>,
+    /// キャンバスの表示オフセット (UV 空間) — キャンバス左上端に置く UV 座標。
+    /// デフォルト `[0.0, 0.0]` で UV 原点がキャンバス左上に一致する (Phase 2-3)。
+    pub view_offset: [f32; 2],
+    /// キャンバスのズーム倍率。`1.0` で UV [0,1] がちょうどキャンバスにフィットする。
+    /// ホイールでカーソル位置中心にスケーリング、0.1〜32.0 の範囲にクランプ (Phase 2-3)。
+    pub view_zoom: f32,
+    /// undo スタック（新しいほど末尾、Phase 2-5）。
+    pub undo_stack: Vec<UvUndoEntry>,
+    /// redo スタック（undo で捨てたエントリを保持、新しいほど末尾）。
+    /// 新しい編集が push_undo されると自動でクリアされる。
+    pub redo_stack: Vec<UvUndoEntry>,
+    /// 編集前（初回ドラッグ時点）の UV を頂点単位で記録する (review_result_05 [P2])。
+    /// `apply_undo` / `apply_redo` で「pristine に戻った頂点」を `overrides` から削除する
+    /// 判定に使う。メモリは「一度でも編集された頂点」分のみで済むため常に軽量。
+    pub pristine_uvs: HashMap<VertexKey, [f32; 2]>,
+}
+
+impl Default for UvEditState {
+    fn default() -> Self {
+        Self {
+            overrides: HashMap::new(),
+            selected: HashSet::new(),
+            active_material: 0,
+            dragging: false,
+            drag_mode: UvDragMode::None,
+            drag_start_uvs: HashMap::new(),
+            drag_press_uv: None,
+            drag_pivot: None,
+            pending_restore: None,
+            view_offset: [0.0, 0.0],
+            view_zoom: 1.0,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            pristine_uvs: HashMap::new(),
+        }
+    }
 }
 
 impl UvEditState {
@@ -53,9 +122,89 @@ impl UvEditState {
         self.selected.clear();
         self.active_material = 0;
         self.dragging = false;
+        self.drag_mode = UvDragMode::None;
         self.drag_start_uvs.clear();
         self.drag_press_uv = None;
+        self.drag_pivot = None;
         self.pending_restore = None;
+        self.view_offset = [0.0, 0.0];
+        self.view_zoom = 1.0;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.pristine_uvs.clear();
+    }
+
+    /// 頂点 UV の pristine を記録する（初回ドラッグ開始時に呼ぶ）。
+    /// 既に記録済みなら何もしない（`or_insert` セマンティクス）。
+    pub fn record_pristine(&mut self, key: VertexKey, uv: [f32; 2]) {
+        self.pristine_uvs.entry(key).or_insert(uv);
+    }
+
+    /// `uv` が pristine と一致するかを判定する（review_result_05 [P2]）。
+    /// pristine 未記録なら `false`（= 一度も編集していない扱いにはしないで安全側に倒す）。
+    fn matches_pristine(&self, key: VertexKey, uv: [f32; 2]) -> bool {
+        self.pristine_uvs.get(&key).is_some_and(|p| *p == uv)
+    }
+
+    /// undo エントリを記録する。`before == after` の空操作なら何もしない。
+    /// 新規 push で redo スタックは破棄される (標準の undo/redo セマンティクス)。
+    pub fn push_undo(
+        &mut self,
+        before: HashMap<VertexKey, [f32; 2]>,
+        after: HashMap<VertexKey, [f32; 2]>,
+    ) {
+        if before == after {
+            return;
+        }
+        self.undo_stack.push(UvUndoEntry { before, after });
+        if self.undo_stack.len() > UV_UNDO_MAX {
+            let drop_n = self.undo_stack.len() - UV_UNDO_MAX;
+            self.undo_stack.drain(..drop_n);
+        }
+        self.redo_stack.clear();
+    }
+
+    /// undo を適用する。IR の UV を `before` に書き戻し、`overrides` にも反映する。
+    /// pristine と一致した頂点は「未編集状態に戻った」として `overrides` から削除する
+    /// (review_result_05 [P2])。戻り値: 適用されたら `true`、スタックが空なら `false`。
+    pub fn apply_undo(&mut self, ir: &mut IrModel) -> bool {
+        let Some(entry) = self.undo_stack.pop() else {
+            return false;
+        };
+        for (&(mi, vi), &uv) in &entry.before {
+            write_uv_to_ir(ir, mi, vi, uv);
+            if self.matches_pristine((mi, vi), uv) {
+                self.overrides.remove(&(mi, vi));
+            } else {
+                self.overrides.insert((mi, vi), uv);
+            }
+        }
+        self.redo_stack.push(entry);
+        true
+    }
+
+    /// redo を適用する。IR の UV を `after` に書き戻し、`overrides` にも反映する。
+    /// pristine と一致するケース（= 初期値への redo）は overrides から削除する。
+    pub fn apply_redo(&mut self, ir: &mut IrModel) -> bool {
+        let Some(entry) = self.redo_stack.pop() else {
+            return false;
+        };
+        for (&(mi, vi), &uv) in &entry.after {
+            write_uv_to_ir(ir, mi, vi, uv);
+            if self.matches_pristine((mi, vi), uv) {
+                self.overrides.remove(&(mi, vi));
+            } else {
+                self.overrides.insert((mi, vi), uv);
+            }
+        }
+        self.undo_stack.push(entry);
+        true
+    }
+
+    /// ビュー状態のみをリセットする（表示リセットボタン用）。編集差分は保持。
+    pub fn reset_view(&mut self) {
+        self.view_offset = [0.0, 0.0];
+        self.view_zoom = 1.0;
     }
 
     /// 1 頂点の UV を記録する（IR の書き込みは別経路で `apply_to_ir` 経由）。

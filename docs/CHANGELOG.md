@@ -4,36 +4,37 @@
 
 - [Changelog](#changelog)
   - [v0.5.5 (2026-04-13)](#v055-2026-04-13)
-    - [New Features](#new-features)
+    - [New Features (Phase 1)](#new-features-phase-1)
+    - [New Features (Phase 2)](#new-features-phase-2)
     - [Internals](#internals)
     - [Scope Notes](#scope-notes)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
     - [Tests](#tests)
   - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
-    - [New Features](#new-features-1)
+    - [New Features](#new-features)
     - [Internals](#internals-1)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
     - [Tests](#tests-1)
   - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
-    - [New Features](#new-features-2)
+    - [New Features](#new-features-1)
     - [Internals](#internals-2)
   - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
-    - [New Features](#new-features-3)
+    - [New Features](#new-features-2)
     - [Internals](#internals-3)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
   - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
-    - [New Features](#new-features-4)
+    - [New Features](#new-features-3)
     - [Performance](#performance)
     - [Internals](#internals-4)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-3)
     - [Tests](#tests-2)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
-    - [New Features](#new-features-5)
+    - [New Features](#new-features-4)
     - [Behavior Changes](#behavior-changes)
     - [Tests](#tests-3)
   - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
-    - [New Features](#new-features-6)
+    - [New Features](#new-features-5)
     - [Behavior Changes](#behavior-changes-1)
     - [Internals](#internals-5)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
@@ -46,9 +47,9 @@
 
 ## v0.5.5 (2026-04-13)
 
-Introduces a **per-vertex UV editing window** invoked from the material editor panel. v0.5.4 delivered material-level UV transform (offset / scale / rotation). v0.5.5 goes one layer deeper: individual UV vertices can now be selected and dragged directly inside the viewer. This is **Phase 1** — single-vertex selection and drag-move only; rectangle selection, rotation/scale, and texture-background preview are scheduled for v0.5.6+.
+Introduces a **per-vertex UV editing window** invoked from the material editor panel. v0.5.4 delivered material-level UV transform (offset / scale / rotation). v0.5.5 goes one layer deeper with both **Phase 1** (single-vertex editor + persistence + reload-safe state) and **Phase 2** (texture-background preview, rectangle selection, zoom/pan, rotate/scale, undo/redo, Ctrl+A). Phase 3 (UV1, morph UV, multi-window) is deferred to v0.5.7+.
 
-### New Features
+### New Features (Phase 1)
 
 - **UV Edit Window** — A new "UV 編集" button appears in the material editor panel header. Clicking it opens a dedicated floating `egui::Window` (`Id::new("uv_edit_window")`, 1-instance) whose title reflects the active material name. The window renders a square UV canvas (up to 260×260 px) of the active material's triangle wireframe in UV space with **v=0 at the top** / **v=1 at the bottom**, matching the `convert/uvmap.rs` PSD export so both views are directly comparable.
 - **Vertex Pick & Drag** — Clicking within 12 px of a UV vertex selects it (yellow). Dragging translates the selected vertex in UV space. Edits are written directly to `IrMesh.vertices_mut()[*].uv`, so re-exports (PMX writer) immediately reflect the change.
@@ -56,29 +57,48 @@ Introduces a **per-vertex UV editing window** invoked from the material editor p
 - **Vertex UV Persistence** — `TextureHistoryFile` gains `vertex_uv_overrides: HashMap<path, Vec<VertexUvOverrideEntry>>` (JSON version bumped to v3). "履歴を保存" now writes per-vertex UV deltas alongside texture and parameter deltas; "履歴呼出" restores them and syncs the GPU vertex buffer.
 - **GPU Sync on Mouse-Up** — `GpuModel::sync_uvs_from_ir` re-uploads the full vertex buffer only on drag-stop. Per-frame edits during the drag touch only CPU-side `IrVertex.uv` to keep the frame rate unaffected.
 
+### New Features (Phase 2)
+
+- **Texture Background (2-1)** — The active material's BaseColor texture is rendered as a canvas background via `register_native_texture` + `painter.image`, scoped to the UV [0,1] region. A 1-entry cache (`ViewerApp.uv_edit_bg_tex`) re-registers only when the active material changes, and `finish_load_with_gpu` frees the `egui::TextureId` on model switch to avoid GPU leaks. PMX/PMD materials that lack `base_color_tex_info` fall back to `mat.texture_index`.
+- **Rectangle Selection + Bulk Translate (2-2)** — Left-drag starting far from any vertex begins rectangle selection (clears existing selection, re-fills on every frame from vertices inside the rect). Left-drag starting near a vertex enters Move mode (auto-selects the vertex under cursor if none was selected) and translates the whole selection. `UvDragMode { None, Move, Rect }` drives the branch, and `drag_start_uvs` is a `HashMap` so 1-vertex and N-vertex drags share the same code path.
+- **Zoom / Pan / Snap (2-3)** — Wheel zooms around cursor (0.1×〜32×, log-scale factor `* 0.002.exp()`). Middle-drag pans in UV space (scaled by zoom). Shift + drag snaps translation to 1/16 (= 0.0625) grid. `uv_to_canvas` / `canvas_to_uv` were extended with `view_offset` / `view_zoom`, so pick/draw/drag/rect all follow the view transform. "表示リセット" button returns to zoom=1.0 / offset=[0,0].
+- **Rotate / Scale (2-4)** — Alt + drag rotates around the selection-bbox center (angle diff via `atan2` → `sin_cos`). Ctrl + drag scales around the same pivot (distance ratio). A cross-hair marker is drawn at the pivot during Move drag for visual feedback. Ctrl takes precedence over Alt if both are held.
+- **Undo / Redo (2-5)** — `UvUndoEntry { before, after }` records one entry per drag (on `drag_stopped` Move). `Ctrl+Z` undoes, `Ctrl+Y` / `Ctrl+Shift+Z` redoes. GUI buttons "⟲ 元に戻す" / "⟳ やり直す" mirror the shortcuts. Undo stack is capped at 50 entries (FIFO). New edits clear the redo stack (standard semantics). `wants_keyboard_input()` guard prevents collision with TextEdit widgets elsewhere in the app.
+- **Select All (Ctrl+A)** — Adds all vertices of the active material to `selected` (existing selection is preserved, not replaced). A "全選択" button provides the same action from the GUI.
+
 ### Internals
 
-- New `src/viewer/app/uv_edit.rs` introduces `UvEditState { overrides, selected, active_material, dragging, pending_restore }`. `apply_to_ir` writes overrides to IR; `apply_pending_restore` is called after `history recall`.
-- `ViewerApp` gains `uv_edit_window_open: bool` wired to `show_uv_edit_window`, which is invoked from `update()` right after `show_material_editor_window`.
-- New `VertexUvOverrideEntry { mesh_index, vertex_index, uv: [f32; 2] }` in `persistence.rs` — flat-array JSON layout (~30 byte per vertex).
-- `TextureHistoryFile` preserves backward compatibility: v0.5.4 and earlier `popone_history.json` files load unchanged via `#[serde(default)]`.
+- New `src/viewer/app/uv_edit.rs` introduces `UvEditState` and grows across phases:
+  - Phase 1: `overrides`, `selected`, `active_material`, `dragging`, `pending_restore`
+  - Phase 2-2: `UvDragMode` enum, `drag_mode`, `drag_start_uvs`, `drag_press_uv`
+  - Phase 2-3: `view_offset`, `view_zoom` (manual `Default` impl for `view_zoom = 1.0`), `reset_view()`
+  - Phase 2-4: `drag_pivot`
+  - Phase 2-5: `UvUndoEntry`, `undo_stack`, `redo_stack`, `push_undo`, `apply_undo`, `apply_redo`, const `UV_UNDO_MAX = 50`
+  - Review 05 fix: `pristine_uvs`, `record_pristine`, `matches_pristine` (lazy per-vertex pristine; keeps overrides clean after undo restores to initial value)
+- `ViewerApp` gains `uv_edit_window_open: bool` and `uv_edit_bg_tex: Option<(usize, egui::TextureId)>`. `show_uv_edit_window` is invoked from `update()` right after `show_material_editor_window`. Both are cleared / freed on `finish_load_with_gpu`.
+- New `VertexUvOverrideEntry { mesh_index, vertex_index, uv: [f32; 2] }` in `persistence.rs` — flat-array JSON layout (~30 byte per vertex). `TextureHistoryFile` preserves backward compatibility: v0.5.4 and earlier `popone_history.json` files load unchanged via `#[serde(default)]`.
 - `GpuModel::sync_uvs_from_ir` walks IR meshes, uses the existing `global_to_gpu` map to find each GPU vertex index, updates `base_vertices[*].uv`, re-uploads via `queue.write_buffer`, and invalidates the morph cache so the next animation frame re-composites from fresh base data.
+- `uv_to_canvas` / `canvas_to_uv` now take `view_offset: [f32; 2]` and `view_zoom: f32` parameters. Since all rendering/picking/drag/rect math flows through these two functions, Phase 2-3's pan/zoom automatically applies to every interaction with a single centralized change.
+- Drag handling uses a `start_uv + (cursor_uv - press_uv)` formulation (and rotation/scale analogues) to stay robust regardless of the `drag_delta()` frame/cumulative semantics across egui versions.
 
 ### Scope Notes
 
 - **UV0 only.** UV1 (`IrMesh.uvs1`), morph UV, and multi UV-set switching are planned for Phase 3 (v0.5.7+).
-- **Single-vertex selection only.** Rectangle selection, bulk translate/scale/rotate with pivot, snap-to-grid, and zoom/pan are Phase 2 (v0.5.6).
-- **No undo.** "編集をすべてクリア" button discards overrides but does not restore the pre-edit UV (reload is required for a true revert). Undo history is Phase 2 work.
+- **Single window instance.** Multi-material side-by-side editing is Phase 3.
+- **Clear-all is destructive.** "編集をすべてクリア" drops overrides / selected / undo stack / redo stack / pristine_uvs. Reload is required to restore the original (pre-edit) UVs since no global pristine snapshot is kept.
 
 ### Bug Fixes (Pre-Release Review)
 
 - **review_result_01 [P1] Reload dropped per-vertex UV edits** — `finish_load_with_gpu` unconditionally called `self.uv_edit.reset()`, so any A-stance / T-stance conversion or `reload_current()` discarded unsaved UV edits. `ReloadSnapshot` now carries `uv_edit_overrides` / `uv_edit_active_material` / `uv_edit_window_open`; `restore_snapshot_on_success` reapplies overrides via `apply_to_ir` and re-uploads the GPU vertex buffer via `sync_uvs_from_ir`. `restore_snapshot_on_failure` also restores the override map so the in-memory state stays consistent after a failed reload.
-- **review_result_02 [P1] Drag-move over-accumulated per frame** — The original implementation added `response.drag_delta()` to the current UV every `dragged()` frame. Because the delta behavior depends on the egui version and can be cumulative from drag-press, long drags caused the vertex UV to fly far beyond the cursor. The implementation now captures each selected vertex's UV *and* the cursor UV position on `drag_started()`, then on every `dragged()` frame recomputes `new_uv = start_uv + (cursor_uv - press_uv)`. This makes the edit robust regardless of the `drag_delta()` frame/cumulative semantics. Added `canvas_to_uv` helper and `UvEditState::{drag_start_uvs, drag_press_uv}` fields (cleared on drag-stop and `reset()`).
-- **Hand-test feedback [P1] Canvas Y-axis disagreed with PSD export** — The initial Phase 1 canvas used the Blender/Maya convention (v=0 at the bottom), but `convert/uvmap.rs` rasterizes UV v directly to image Y (v=0 at the top). Comparing the editor against the exported PSD UV map showed a vertical flip. `uv_to_canvas` / `canvas_to_uv` are now both non-flipping on Y, so the editor visually matches the PSD output and side-by-side workflows work as expected.
+- **review_result_02 [P1] Drag-move over-accumulated per frame** — The original implementation added `response.drag_delta()` to the current UV every `dragged()` frame. Because the delta behavior depends on the egui version and can be cumulative from drag-press, long drags caused the vertex UV to fly far beyond the cursor. The implementation now captures each selected vertex's UV *and* the cursor UV position on `drag_started()`, then on every `dragged()` frame recomputes `new_uv = start_uv + (cursor_uv - press_uv)`. Added `canvas_to_uv` helper and `UvEditState::{drag_start_uvs, drag_press_uv}` fields (cleared on drag-stop and `reset()`).
+- **Hand-test feedback [P1] Canvas Y-axis disagreed with PSD export** — The initial Phase 1 canvas used the Blender/Maya convention (v=0 at the bottom), but `convert/uvmap.rs` rasterizes UV v directly to image Y (v=0 at the top). `uv_to_canvas` / `canvas_to_uv` are now both non-flipping on Y, so the editor visually matches the PSD output and side-by-side workflows work as expected.
+- **review_result_03 [P2] Clear-all left undo/redo stacks intact** — "編集をすべてクリア" only cleared `overrides` / `selected`, so pressing `Ctrl+Z` right after resurrected the discarded edits, violating the button's tooltip contract. The button now also clears `undo_stack` / `redo_stack`, and the tooltip explicitly mentions "undo/redo 履歴を破棄".
+- **review_result_05 [P2] Undo left stale entries in overrides** — `apply_undo` / `apply_redo` unconditionally did `overrides.insert(k, v)`, so a vertex returned to its initial UV by undo still appeared as "edited" in the UI count and in `to_entries()`-based history save. A lazy-recorded `pristine_uvs` (populated by `record_pristine` on the first drag of each vertex, `or_insert` semantics) now lets undo/redo call `overrides.remove` whenever the resulting UV equals the pristine value. Memory cost scales with the number of *ever-edited* vertices only, avoiding the all-vertex snapshot that was explicitly rejected in Phase 1.
+- **review_result_06 [P2] Clear-all ignored pristine_uvs** — Following review 05, the clear-all button also needs to drop `pristine_uvs`, otherwise a later edit session reuses a stale pristine baseline and undo cannot return to an "unedited" state.
 
 ### Tests
 
-- Full test suite (179 tests) continues to pass. No new tests were added for Phase 1 — the UV edit surface is UI-driven and its data flow (IR → GpuModel → PMX writer) is already covered by existing round-trip tests.
+- Full test suite (179 tests) continues to pass. UV-edit logic is UI-driven; downstream data flow (IR → GpuModel → PMX writer) is covered by existing round-trip tests.
 
 ## v0.5.4 (2026-04-13)
 

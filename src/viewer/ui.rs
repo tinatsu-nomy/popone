@@ -5,6 +5,7 @@ use std::sync::Arc;
 use eframe::egui;
 use egui::epaint::{Color32, Mesh, Vertex};
 
+use super::app::uv_edit::UvDragMode;
 use super::app::{ConvertMessage, DisplaySettings, PendingOverlay, SidePanelTab, ViewerApp};
 use super::export_filter::build_filtered_ir;
 use super::gpu::{DrawMode, LightMode, ShaderSelection};
@@ -5941,19 +5942,37 @@ fn hsv_to_color32(h: f32, s: f32, v: f32) -> Color32 {
 /// UV Y=0 を**上端**、UV Y=1 を**下端**にマッピングする（PSD 出力 `convert/uvmap.rs` が
 /// `y = v * dim` で画像 Y に直書きしているのと合わせるため）。これにより UV エディタの
 /// 見え方と `.psd` UV マップの見え方が完全一致し、ユーザーが両者を同時参照できる。
-fn uv_to_canvas(uv: [f32; 2], rect: egui::Rect) -> egui::Pos2 {
+///
+/// Phase 2-3 でビュー変換 (`view_offset`, `view_zoom`) を追加: キャンバス左上端に
+/// 置かれる UV 座標が `view_offset`、ズーム倍率が `view_zoom`。
+fn uv_to_canvas(
+    uv: [f32; 2],
+    rect: egui::Rect,
+    view_offset: [f32; 2],
+    view_zoom: f32,
+) -> egui::Pos2 {
     egui::pos2(
-        rect.min.x + uv[0] * rect.width(),
-        rect.min.y + uv[1] * rect.height(),
+        rect.min.x + (uv[0] - view_offset[0]) * view_zoom * rect.width(),
+        rect.min.y + (uv[1] - view_offset[1]) * view_zoom * rect.height(),
     )
 }
 
 /// キャンバス内の画面座標 (px) を UV 座標 (0..1) に変換する。`uv_to_canvas` の逆変換。
-fn canvas_to_uv(p: egui::Pos2, rect: egui::Rect) -> [f32; 2] {
+fn canvas_to_uv(
+    p: egui::Pos2,
+    rect: egui::Rect,
+    view_offset: [f32; 2],
+    view_zoom: f32,
+) -> [f32; 2] {
     [
-        (p.x - rect.min.x) / rect.width(),
-        (p.y - rect.min.y) / rect.height(),
+        (p.x - rect.min.x) / (view_zoom * rect.width()) + view_offset[0],
+        (p.y - rect.min.y) / (view_zoom * rect.height()) + view_offset[1],
     ]
+}
+
+/// Shift スナップ用: `val` を `step` の倍数に丸める。
+fn snap_to(val: f32, step: f32) -> f32 {
+    (val / step).round() * step
 }
 
 /// UV 編集ウィンドウ（v0.5.5 Phase 1）。材質編集パネルのヘッダボタンから開く。
@@ -6051,21 +6070,162 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         override_count, selected_count
     ));
 
+    let mut select_all_trigger = false;
     ui.horizontal(|ui| {
+        if ui
+            .small_button("全選択")
+            .on_hover_text("アクティブ材質の全頂点を選択に追加 (Ctrl+A)")
+            .clicked()
+        {
+            select_all_trigger = true;
+        }
         if ui.small_button("選択解除").clicked() {
             app.uv_edit.selected.clear();
         }
         if ui
             .small_button("編集をすべてクリア")
-            .on_hover_text("このモデルの全頂点 UV 編集を破棄（元の UV には戻らないため、編集前の状態に戻すにはリロードが必要）")
+            .on_hover_text("全頂点 UV 編集差分と undo/redo 履歴を破棄（元の UV には戻らないため、編集前の状態に戻すにはリロードが必要）")
             .clicked()
         {
+            // review_result_03 [P2]: クリア直後の Ctrl+Z/Ctrl+Y で編集が復活しないよう
+            // undo/redo スタックも同時に破棄する。UI ラベル「すべてクリア」と整合。
+            // review_result_06 [P2]: pristine_uvs も破棄する。残したままだと次のドラッグで
+            // `record_pristine` が古い pristine を `or_insert` で再利用し、クリア後の新編集が
+            // 「古い A に戻る」基準で undo 判定されて overrides から外れなくなる。
             app.uv_edit.overrides.clear();
             app.uv_edit.selected.clear();
+            app.uv_edit.undo_stack.clear();
+            app.uv_edit.redo_stack.clear();
+            app.uv_edit.pristine_uvs.clear();
+        }
+        if ui
+            .small_button("表示リセット")
+            .on_hover_text("キャンバスのズーム/パンをリセット (Phase 2-3)")
+            .clicked()
+        {
+            app.uv_edit.reset_view();
         }
     });
+    ui.small(format!(
+        "ズーム: {:.2}x  /  ホイール=ズーム, 中ドラッグ=パン",
+        app.uv_edit.view_zoom
+    ));
+    ui.small(
+        "Shift+ドラッグ=1/16 スナップ, Alt+ドラッグ=回転, Ctrl+ドラッグ=スケール (ピボット=選択中心)",
+    );
+
+    // Phase 2-5: Undo / Redo ボタン行とキーショートカット（Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z）
+    let can_undo = !app.uv_edit.undo_stack.is_empty();
+    let can_redo = !app.uv_edit.redo_stack.is_empty();
+    let mut undo_trigger = false;
+    let mut redo_trigger = false;
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(can_undo, egui::Button::new("⟲ 元に戻す").small())
+            .on_hover_text("Ctrl+Z")
+            .clicked()
+        {
+            undo_trigger = true;
+        }
+        if ui
+            .add_enabled(can_redo, egui::Button::new("⟳ やり直す").small())
+            .on_hover_text("Ctrl+Y / Ctrl+Shift+Z")
+            .clicked()
+        {
+            redo_trigger = true;
+        }
+        ui.small(format!(
+            "undo: {} / redo: {}",
+            app.uv_edit.undo_stack.len(),
+            app.uv_edit.redo_stack.len()
+        ));
+    });
+    // キーボードショートカット: TextEdit 等がキー入力を欲していないときだけ受ける
+    if !ui.ctx().wants_keyboard_input() {
+        let (key_undo, key_redo, key_select_all) = ui.input(|i| {
+            let z = i.key_pressed(egui::Key::Z) && i.modifiers.command;
+            let y = i.key_pressed(egui::Key::Y) && i.modifiers.command;
+            let a = i.key_pressed(egui::Key::A) && i.modifiers.command;
+            let shift = i.modifiers.shift;
+            (z && !shift, (z && shift) || y, a)
+        });
+        if key_undo {
+            undo_trigger = true;
+        }
+        if key_redo {
+            redo_trigger = true;
+        }
+        if key_select_all {
+            select_all_trigger = true;
+        }
+    }
+    if select_all_trigger {
+        // アクティブ材質に属する全メッシュの全頂点を selected に追加（既存選択は保持）
+        if let Some(loaded) = app.loaded.as_ref() {
+            for (mi, mesh) in loaded.ir.meshes.iter().enumerate() {
+                if mesh.material_index != active_mat {
+                    continue;
+                }
+                for vi in 0..mesh.vertices.len() {
+                    app.uv_edit.selected.insert((mi as u32, vi as u32));
+                }
+            }
+        }
+    }
+    if undo_trigger && can_undo {
+        let queue = app.render_state.queue.clone();
+        if let Some(loaded) = app.loaded.as_mut() {
+            if app.uv_edit.apply_undo(&mut loaded.ir) {
+                loaded.gpu_model.sync_uvs_from_ir(&loaded.ir, &queue);
+            }
+        }
+    }
+    if redo_trigger && can_redo {
+        let queue = app.render_state.queue.clone();
+        if let Some(loaded) = app.loaded.as_mut() {
+            if app.uv_edit.apply_redo(&mut loaded.ir) {
+                loaded.gpu_model.sync_uvs_from_ir(&loaded.ir, &queue);
+            }
+        }
+    }
 
     ui.separator();
+
+    // アクティブ材質の BaseColor テクスチャ解決（PMX/PMD は texture_index フォールバック）
+    let bg_tex_idx: Option<usize> = app
+        .loaded
+        .as_ref()
+        .and_then(|l| l.ir.materials.get(active_mat))
+        .and_then(|mat| {
+            mat.base_color_tex_info
+                .as_ref()
+                .map(|t| t.index)
+                .or(mat.texture_index)
+        });
+
+    // キャッシュ差分検出: 一致しなければ古い egui TextureId を free し、新しい TextureView を登録
+    let cached_idx = app.uv_edit_bg_tex.as_ref().map(|(i, _)| *i);
+    if cached_idx != bg_tex_idx {
+        if let Some((_, old_id)) = app.uv_edit_bg_tex.take() {
+            let mut renderer = app.render_state.renderer.write();
+            renderer.free_texture(&old_id);
+        }
+        if let Some(idx) = bg_tex_idx {
+            let new_id: Option<egui::TextureId> = app.loaded.as_ref().and_then(|loaded| {
+                loaded.gpu_model.gpu_texture_views.get(idx).map(|view| {
+                    let mut renderer = app.render_state.renderer.write();
+                    renderer.register_native_texture(
+                        &app.render_state.device,
+                        view,
+                        eframe::wgpu::FilterMode::Linear,
+                    )
+                })
+            });
+            if let Some(id) = new_id {
+                app.uv_edit_bg_tex = Some((idx, id));
+            }
+        }
+    }
 
     // キャンバス描画（正方形）
     let canvas_size = ui.available_width().clamp(160.0, 260.0);
@@ -6074,11 +6234,64 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         egui::Sense::click_and_drag(),
     );
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, Color32::from_rgb(0x10, 0x10, 0x10));
+
+    // ホイール: カーソル位置を中心にズーム (Phase 2-3)
+    let scroll_y = ui.input(|i| i.raw_scroll_delta.y);
+    if response.hovered() && scroll_y != 0.0 {
+        if let Some(cursor) = ui.input(|i| i.pointer.hover_pos()) {
+            let voff_cur = app.uv_edit.view_offset;
+            let vzoom_cur = app.uv_edit.view_zoom;
+            let pre_uv = canvas_to_uv(cursor, rect, voff_cur, vzoom_cur);
+            let factor = (scroll_y * 0.002).exp();
+            let new_zoom = (vzoom_cur * factor).clamp(0.1, 32.0);
+            app.uv_edit.view_zoom = new_zoom;
+            let post_uv = canvas_to_uv(cursor, rect, voff_cur, new_zoom);
+            app.uv_edit.view_offset[0] += pre_uv[0] - post_uv[0];
+            app.uv_edit.view_offset[1] += pre_uv[1] - post_uv[1];
+        }
+    }
+
+    // 中ボタンドラッグ: パン (Phase 2-3)
+    let (mid_down, ptr_delta) = ui.input(|i| (i.pointer.middle_down(), i.pointer.delta()));
+    if response.hovered() && mid_down && (ptr_delta.x.abs() + ptr_delta.y.abs()) > 0.0 {
+        let vzoom_cur = app.uv_edit.view_zoom;
+        app.uv_edit.view_offset[0] -= ptr_delta.x / (rect.width() * vzoom_cur);
+        app.uv_edit.view_offset[1] -= ptr_delta.y / (rect.height() * vzoom_cur);
+    }
+
+    // 以降の描画・ピック・ドラッグで参照するビュー状態（本フレーム確定値）
+    let voff = app.uv_edit.view_offset;
+    let vzoom = app.uv_edit.view_zoom;
+
+    // UV [0,1] 領域がキャンバス上でどこに来るかを計算
+    let uv01_tl = uv_to_canvas([0.0, 0.0], rect, voff, vzoom);
+    let uv01_br = uv_to_canvas([1.0, 1.0], rect, voff, vzoom);
+    let uv01_rect = egui::Rect::from_two_pos(uv01_tl, uv01_br);
+
+    // 背景: キャンバス全体を暗色で塗る（UV [0,1] の外側も視覚的に示すため）
+    painter.rect_filled(rect, 0.0, Color32::from_rgb(0x0A, 0x0A, 0x0A));
+    // BaseColor テクスチャがあれば UV [0,1] 矩形に等倍描画
+    if let Some((_, tex_id)) = app.uv_edit_bg_tex {
+        painter.image(
+            tex_id,
+            uv01_rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    } else {
+        painter.rect_filled(uv01_rect, 0.0, Color32::from_rgb(0x10, 0x10, 0x10));
+    }
+    painter.rect_stroke(
+        uv01_rect,
+        0.0,
+        egui::Stroke::new(1.0, Color32::from_gray(0x60)),
+        egui::StrokeKind::Inside,
+    );
+    // キャンバス外周の枠
     painter.rect_stroke(
         rect,
         0.0,
-        egui::Stroke::new(1.0, Color32::from_gray(0x50)),
+        egui::Stroke::new(1.0, Color32::from_gray(0x40)),
         egui::StrokeKind::Inside,
     );
 
@@ -6104,9 +6317,9 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 let Some(c) = verts.get(tri[2] as usize) else {
                     continue;
                 };
-                let pa = uv_to_canvas(a.uv.to_array(), rect);
-                let pb = uv_to_canvas(b.uv.to_array(), rect);
-                let pc = uv_to_canvas(c.uv.to_array(), rect);
+                let pa = uv_to_canvas(a.uv.to_array(), rect, voff, vzoom);
+                let pb = uv_to_canvas(b.uv.to_array(), rect, voff, vzoom);
+                let pc = uv_to_canvas(c.uv.to_array(), rect, voff, vzoom);
                 painter.line_segment([pa, pb], wire_stroke);
                 painter.line_segment([pb, pc], wire_stroke);
                 painter.line_segment([pc, pa], wire_stroke);
@@ -6120,7 +6333,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 } else {
                     vert_default
                 };
-                let p = uv_to_canvas(v.uv.to_array(), rect);
+                let p = uv_to_canvas(v.uv.to_array(), rect, voff, vzoom);
                 painter.circle_filled(p, 2.5, color);
             }
         }
@@ -6136,7 +6349,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         continue;
                     }
                     for (vi, v) in mesh.vertices.iter().enumerate() {
-                        let p = uv_to_canvas(v.uv.to_array(), rect);
+                        let p = uv_to_canvas(v.uv.to_array(), rect, voff, vzoom);
                         let d = (p - click_pos).length_sq();
                         if best.is_none_or(|(_, bd)| d < bd) {
                             best = Some(((mi as u32, vi as u32), d));
@@ -6153,73 +6366,301 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     }
 
-    // ドラッグ開始: 選択頂点の UV とカーソル位置を記録（累積方式の基点, review_result_02 [P1]）
+    // ドラッグ開始: モード判定 (Move or Rect, Phase 2-2)
+    //
+    // 判定ルール:
+    //   - プレス位置が選択済み頂点の 12 px 以内 → Move (既存選択で平行移動)
+    //   - プレス位置が任意の頂点の 12 px 以内 → Move (その頂点を単独選択して平行移動)
+    //   - それ以外 → Rect (矩形選択、既存選択はクリア)
     if response.drag_started() {
         app.uv_edit.drag_start_uvs.clear();
         app.uv_edit.drag_press_uv = None;
-        let selected: Vec<(u32, u32)> = app.uv_edit.selected.iter().copied().collect();
-        if let Some(loaded) = app.loaded.as_ref() {
-            for (mi, vi) in &selected {
-                if let Some(mesh) = loaded.ir.meshes.get(*mi as usize) {
-                    if let Some(v) = mesh.vertices.get(*vi as usize) {
-                        app.uv_edit
-                            .drag_start_uvs
-                            .insert((*mi, *vi), v.uv.to_array());
-                    }
-                }
-            }
-        }
-        if let Some(press_pos) = response.interact_pointer_pos() {
-            app.uv_edit.drag_press_uv = Some(canvas_to_uv(press_pos, rect));
-        }
-    }
+        app.uv_edit.drag_mode = UvDragMode::None;
 
-    // ドラッグ中: start_uv + (cursor_uv - press_uv) で再計算する。
-    // `drag_delta()` の累積/差分仕様に依存しないため、フレーム数に比例して過加算されない。
-    if response.dragged() && !app.uv_edit.drag_start_uvs.is_empty() {
-        if let (Some(press_uv), Some(cursor_pos)) =
-            (app.uv_edit.drag_press_uv, response.interact_pointer_pos())
-        {
-            let cursor_uv = canvas_to_uv(cursor_pos, rect);
-            let dx = cursor_uv[0] - press_uv[0];
-            let dy = cursor_uv[1] - press_uv[1];
-            let starts: Vec<((u32, u32), [f32; 2])> = app
-                .uv_edit
-                .drag_start_uvs
-                .iter()
-                .map(|(&k, &v)| (k, v))
-                .collect();
-            let mut new_entries: Vec<((u32, u32), [f32; 2])> = Vec::with_capacity(starts.len());
-            if let Some(loaded) = app.loaded.as_mut() {
-                for ((mi, vi), start_uv) in starts {
-                    if let Some(mesh) = loaded.ir.meshes.get_mut(mi as usize) {
-                        let verts = mesh.vertices_mut();
-                        if let Some(v) = verts.get_mut(vi as usize) {
-                            let nu = start_uv[0] + dx;
-                            let nv = start_uv[1] + dy;
-                            v.uv.x = nu;
-                            v.uv.y = nv;
-                            new_entries.push(((mi, vi), [nu, nv]));
+        if let Some(press_pos) = response.interact_pointer_pos() {
+            app.uv_edit.drag_press_uv = Some(canvas_to_uv(press_pos, rect, voff, vzoom));
+
+            let mut nearest_sel_sq = f32::INFINITY;
+            let mut nearest_any_sq = f32::INFINITY;
+            let mut best_any: Option<(u32, u32)> = None;
+            if let Some(loaded) = app.loaded.as_ref() {
+                for (mi, mesh) in loaded.ir.meshes.iter().enumerate() {
+                    if mesh.material_index != active_mat {
+                        continue;
+                    }
+                    for (vi, v) in mesh.vertices.iter().enumerate() {
+                        let p = uv_to_canvas(v.uv.to_array(), rect, voff, vzoom);
+                        let d2 = (p - press_pos).length_sq();
+                        let key = (mi as u32, vi as u32);
+                        if app.uv_edit.selected.contains(&key) && d2 < nearest_sel_sq {
+                            nearest_sel_sq = d2;
+                        }
+                        if d2 < nearest_any_sq {
+                            nearest_any_sq = d2;
+                            best_any = Some(key);
                         }
                     }
                 }
             }
-            for (k, uv) in new_entries {
-                app.uv_edit.overrides.insert(k, uv);
+
+            let mode = if nearest_sel_sq < 144.0 {
+                UvDragMode::Move
+            } else if nearest_any_sq < 144.0 {
+                // 新規頂点を単独選択して Move
+                app.uv_edit.selected.clear();
+                if let Some(k) = best_any {
+                    app.uv_edit.selected.insert(k);
+                }
+                UvDragMode::Move
+            } else {
+                // 頂点から遠い → 矩形選択（既存選択をクリアして開始）
+                app.uv_edit.selected.clear();
+                UvDragMode::Rect
+            };
+            app.uv_edit.drag_mode = mode;
+
+            // Move モードなら開始時点の UV を記録（累積方式の基点）
+            // Phase 2-4: あわせて選択 bbox 中心を pivot として保存（回転/スケールの基準点）
+            if matches!(mode, UvDragMode::Move) {
+                let selected: Vec<(u32, u32)> = app.uv_edit.selected.iter().copied().collect();
+                let mut u_min = f32::INFINITY;
+                let mut u_max = f32::NEG_INFINITY;
+                let mut v_min = f32::INFINITY;
+                let mut v_max = f32::NEG_INFINITY;
+                let mut any = false;
+                if let Some(loaded) = app.loaded.as_ref() {
+                    for (mi, vi) in &selected {
+                        if let Some(mesh) = loaded.ir.meshes.get(*mi as usize) {
+                            if let Some(v) = mesh.vertices.get(*vi as usize) {
+                                let arr = v.uv.to_array();
+                                app.uv_edit.drag_start_uvs.insert((*mi, *vi), arr);
+                                // review_result_05 [P2]: 初回ドラッグ時点の UV を pristine として記録
+                                // （or_insert セマンティクスなので 2 回目以降は上書きされない）
+                                app.uv_edit.record_pristine((*mi, *vi), arr);
+                                u_min = u_min.min(arr[0]);
+                                u_max = u_max.max(arr[0]);
+                                v_min = v_min.min(arr[1]);
+                                v_max = v_max.max(arr[1]);
+                                any = true;
+                            }
+                        }
+                    }
+                }
+                app.uv_edit.drag_pivot = if any {
+                    Some([(u_min + u_max) * 0.5, (v_min + v_max) * 0.5])
+                } else {
+                    None
+                };
             }
-            app.uv_edit.dragging = true;
         }
     }
 
-    // ドラッグ終了: GPU 同期（vertex_buf 再アップロード）と開始基点のクリア
-    if response.drag_stopped() && app.uv_edit.dragging {
-        let queue = app.render_state.queue.clone();
-        if let Some(loaded) = app.loaded.as_mut() {
-            loaded.gpu_model.sync_uvs_from_ir(&loaded.ir, &queue);
+    // ドラッグ中: モードに応じて処理
+    if response.dragged() {
+        match app.uv_edit.drag_mode {
+            UvDragMode::Move => {
+                // Phase 2-4: 修飾キーで変換モード切替
+                //   - 無修飾: 平行移動 (既存)
+                //   - Alt  : pivot 中心の回転（角度差 = cursor と press の pivot からの角度差）
+                //   - Ctrl : pivot 中心のスケール（倍率 = cursor と press の pivot からの距離比）
+                // いずれも `start_uv + 変換` 方式で、フレーム数に比例した過加算は起こさない。
+                if !app.uv_edit.drag_start_uvs.is_empty() {
+                    if let (Some(press_uv), Some(cursor_pos)) =
+                        (app.uv_edit.drag_press_uv, response.interact_pointer_pos())
+                    {
+                        let cursor_uv = canvas_to_uv(cursor_pos, rect, voff, vzoom);
+                        let (shift_down, alt_down, ctrl_down) =
+                            ui.input(|i| (i.modifiers.shift, i.modifiers.alt, i.modifiers.command));
+                        let pivot = app.uv_edit.drag_pivot;
+                        let snap_step = 1.0 / 16.0;
+
+                        #[derive(Clone, Copy, PartialEq, Eq)]
+                        enum XformMode {
+                            Translate,
+                            Rotate,
+                            Scale,
+                        }
+                        let xform = if ctrl_down && pivot.is_some() {
+                            XformMode::Scale
+                        } else if alt_down && pivot.is_some() {
+                            XformMode::Rotate
+                        } else {
+                            XformMode::Translate
+                        };
+
+                        // モード別に変換パラメータを事前計算
+                        let scale_factor: f32 = if let (XformMode::Scale, Some(pv)) = (xform, pivot)
+                        {
+                            let pd = ((press_uv[0] - pv[0]).powi(2)
+                                + (press_uv[1] - pv[1]).powi(2))
+                            .sqrt();
+                            let cd = ((cursor_uv[0] - pv[0]).powi(2)
+                                + (cursor_uv[1] - pv[1]).powi(2))
+                            .sqrt();
+                            if pd > 1e-6 {
+                                cd / pd
+                            } else {
+                                1.0
+                            }
+                        } else {
+                            1.0
+                        };
+                        let (sin_a, cos_a): (f32, f32) =
+                            if let (XformMode::Rotate, Some(pv)) = (xform, pivot) {
+                                let pa = (press_uv[1] - pv[1]).atan2(press_uv[0] - pv[0]);
+                                let ca = (cursor_uv[1] - pv[1]).atan2(cursor_uv[0] - pv[0]);
+                                (ca - pa).sin_cos()
+                            } else {
+                                (0.0, 1.0)
+                            };
+
+                        let starts: Vec<((u32, u32), [f32; 2])> = app
+                            .uv_edit
+                            .drag_start_uvs
+                            .iter()
+                            .map(|(&k, &v)| (k, v))
+                            .collect();
+                        let mut new_entries: Vec<((u32, u32), [f32; 2])> =
+                            Vec::with_capacity(starts.len());
+                        if let Some(loaded) = app.loaded.as_mut() {
+                            for ((mi, vi), start_uv) in starts {
+                                if let Some(mesh) = loaded.ir.meshes.get_mut(mi as usize) {
+                                    let verts = mesh.vertices_mut();
+                                    if let Some(v) = verts.get_mut(vi as usize) {
+                                        let (raw_u, raw_v) = match (xform, pivot) {
+                                            (XformMode::Scale, Some(pv)) => (
+                                                pv[0] + (start_uv[0] - pv[0]) * scale_factor,
+                                                pv[1] + (start_uv[1] - pv[1]) * scale_factor,
+                                            ),
+                                            (XformMode::Rotate, Some(pv)) => {
+                                                let du = start_uv[0] - pv[0];
+                                                let dv = start_uv[1] - pv[1];
+                                                (
+                                                    pv[0] + du * cos_a - dv * sin_a,
+                                                    pv[1] + du * sin_a + dv * cos_a,
+                                                )
+                                            }
+                                            _ => {
+                                                // 平行移動 (fallback)
+                                                let dx = cursor_uv[0] - press_uv[0];
+                                                let dy = cursor_uv[1] - press_uv[1];
+                                                (start_uv[0] + dx, start_uv[1] + dy)
+                                            }
+                                        };
+                                        // Shift スナップは平行移動モードのみ適用
+                                        let (nu, nv) = if shift_down
+                                            && matches!(xform, XformMode::Translate)
+                                        {
+                                            (snap_to(raw_u, snap_step), snap_to(raw_v, snap_step))
+                                        } else {
+                                            (raw_u, raw_v)
+                                        };
+                                        v.uv.x = nu;
+                                        v.uv.y = nv;
+                                        new_entries.push(((mi, vi), [nu, nv]));
+                                    }
+                                }
+                            }
+                        }
+                        for (k, uv) in new_entries {
+                            app.uv_edit.overrides.insert(k, uv);
+                        }
+                        app.uv_edit.dragging = true;
+                    }
+                }
+            }
+            UvDragMode::Rect => {
+                // 矩形範囲内の頂点を `selected` に毎フレーム再設定（shift 加算選択は Phase 2 後続）
+                if let (Some(press_uv), Some(cursor_pos)) =
+                    (app.uv_edit.drag_press_uv, response.interact_pointer_pos())
+                {
+                    let cursor_uv = canvas_to_uv(cursor_pos, rect, voff, vzoom);
+                    let u_lo = press_uv[0].min(cursor_uv[0]);
+                    let u_hi = press_uv[0].max(cursor_uv[0]);
+                    let v_lo = press_uv[1].min(cursor_uv[1]);
+                    let v_hi = press_uv[1].max(cursor_uv[1]);
+                    app.uv_edit.selected.clear();
+                    if let Some(loaded) = app.loaded.as_ref() {
+                        for (mi, mesh) in loaded.ir.meshes.iter().enumerate() {
+                            if mesh.material_index != active_mat {
+                                continue;
+                            }
+                            for (vi, v) in mesh.vertices.iter().enumerate() {
+                                let u = v.uv.x;
+                                let vy = v.uv.y;
+                                if u >= u_lo && u <= u_hi && vy >= v_lo && vy <= v_hi {
+                                    app.uv_edit.selected.insert((mi as u32, vi as u32));
+                                }
+                            }
+                        }
+                    }
+                    // 選択矩形の視覚フィードバック（半透明塗り + 枠線、頂点描画の後に追加）
+                    let p0 = uv_to_canvas(press_uv, rect, voff, vzoom);
+                    let p1 = uv_to_canvas(cursor_uv, rect, voff, vzoom);
+                    let sel_rect = egui::Rect::from_two_pos(p0, p1);
+                    painter.rect_filled(
+                        sel_rect,
+                        0.0,
+                        Color32::from_rgba_premultiplied(0x40, 0x70, 0xA0, 0x40),
+                    );
+                    painter.rect_stroke(
+                        sel_rect,
+                        0.0,
+                        egui::Stroke::new(1.0, Color32::from_rgb(0x66, 0xBB, 0xFF)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            }
+            UvDragMode::None => {}
+        }
+    }
+
+    // ドラッグ終了: モード別の後処理 + 共通のクリーンアップ
+    if response.drag_stopped() {
+        if matches!(app.uv_edit.drag_mode, UvDragMode::Move) && app.uv_edit.dragging {
+            // Phase 2-5: undo エントリを記録（drag_start_uvs を clear する前）
+            let before = app.uv_edit.drag_start_uvs.clone();
+            let mut after: std::collections::HashMap<(u32, u32), [f32; 2]> =
+                std::collections::HashMap::with_capacity(before.len());
+            if let Some(loaded) = app.loaded.as_ref() {
+                for &(mi, vi) in before.keys() {
+                    if let Some(mesh) = loaded.ir.meshes.get(mi as usize) {
+                        if let Some(v) = mesh.vertices.get(vi as usize) {
+                            after.insert((mi, vi), v.uv.to_array());
+                        }
+                    }
+                }
+            }
+            app.uv_edit.push_undo(before, after);
+
+            let queue = app.render_state.queue.clone();
+            if let Some(loaded) = app.loaded.as_mut() {
+                loaded.gpu_model.sync_uvs_from_ir(&loaded.ir, &queue);
+            }
         }
         app.uv_edit.dragging = false;
+        app.uv_edit.drag_mode = UvDragMode::None;
         app.uv_edit.drag_start_uvs.clear();
         app.uv_edit.drag_press_uv = None;
+        app.uv_edit.drag_pivot = None;
+    }
+
+    // Phase 2-4: ドラッグ中の Move モードでピボットを十字マーカーで表示（視覚フィードバック）
+    if app.uv_edit.dragging && matches!(app.uv_edit.drag_mode, UvDragMode::Move) {
+        if let Some(pivot) = app.uv_edit.drag_pivot {
+            let p = uv_to_canvas(pivot, rect, voff, vzoom);
+            let size = 8.0;
+            let stroke = egui::Stroke::new(1.5, Color32::from_rgb(0xFF, 0x80, 0x40));
+            painter.line_segment(
+                [egui::pos2(p.x - size, p.y), egui::pos2(p.x + size, p.y)],
+                stroke,
+            );
+            painter.line_segment(
+                [egui::pos2(p.x, p.y - size), egui::pos2(p.x, p.y + size)],
+                stroke,
+            );
+            painter.circle_stroke(p, 3.5, stroke);
+        }
     }
 
     ui.add_space(4.0);
