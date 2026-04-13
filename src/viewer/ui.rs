@@ -5,7 +5,7 @@ use std::sync::Arc;
 use eframe::egui;
 use egui::epaint::{Color32, Mesh, Vertex};
 
-use super::app::uv_edit::UvDragMode;
+use super::app::uv_edit::{UvDragMode, UvRectBehavior};
 use super::app::{ConvertMessage, DisplaySettings, PendingOverlay, SidePanelTab, ViewerApp};
 use super::export_filter::build_filtered_ir;
 use super::gpu::{DrawMode, LightMode, ShaderSelection};
@@ -6110,9 +6110,8 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         "ズーム: {:.2}x  /  ホイール=ズーム, 中ドラッグ=パン",
         app.uv_edit.view_zoom
     ));
-    ui.small(
-        "Shift+ドラッグ=1/16 スナップ, Alt+ドラッグ=回転, Ctrl+ドラッグ=スケール (ピボット=選択中心)",
-    );
+    ui.small("頂点近くから: Shift=スナップ / Alt=回転 / Ctrl=スケール (ピボット=選択中心)");
+    ui.small("頂点から遠くから: 矩形選択 / Shift=加算選択 / Ctrl=除外選択");
 
     // Phase 2-5: Undo / Redo ボタン行とキーショートカット（Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z）
     let can_undo = !app.uv_edit.undo_stack.is_empty();
@@ -6413,8 +6412,24 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 }
                 UvDragMode::Move
             } else {
-                // 頂点から遠い → 矩形選択（既存選択をクリアして開始）
-                app.uv_edit.selected.clear();
+                // 頂点から遠い → 矩形選択。Phase 3 A-4: Shift=加算 / Ctrl=除外 / 無修飾=置換
+                let (shift_down, ctrl_down) =
+                    ui.input(|i| (i.modifiers.shift, i.modifiers.command));
+                let behavior = if shift_down {
+                    UvRectBehavior::Add
+                } else if ctrl_down {
+                    UvRectBehavior::Subtract
+                } else {
+                    UvRectBehavior::Replace
+                };
+                app.uv_edit.rect_behavior = behavior;
+                if matches!(behavior, UvRectBehavior::Replace) {
+                    app.uv_edit.selected.clear();
+                    app.uv_edit.rect_initial_selected.clear();
+                } else {
+                    // Add/Subtract: 開始時点の selected を initial として保存
+                    app.uv_edit.rect_initial_selected = app.uv_edit.selected.clone();
+                }
                 UvDragMode::Rect
             };
             app.uv_edit.drag_mode = mode;
@@ -6570,7 +6585,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 }
             }
             UvDragMode::Rect => {
-                // 矩形範囲内の頂点を `selected` に毎フレーム再設定（shift 加算選択は Phase 2 後続）
+                // 矩形範囲内の頂点を計算し、behavior (Replace/Add/Subtract) に応じて selected を再計算
                 if let (Some(press_uv), Some(cursor_pos)) =
                     (app.uv_edit.drag_press_uv, response.interact_pointer_pos())
                 {
@@ -6579,7 +6594,9 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     let u_hi = press_uv[0].max(cursor_uv[0]);
                     let v_lo = press_uv[1].min(cursor_uv[1]);
                     let v_hi = press_uv[1].max(cursor_uv[1]);
-                    app.uv_edit.selected.clear();
+                    // rect 内頂点を集める
+                    let mut inside: std::collections::HashSet<(u32, u32)> =
+                        std::collections::HashSet::new();
                     if let Some(loaded) = app.loaded.as_ref() {
                         for (mi, mesh) in loaded.ir.meshes.iter().enumerate() {
                             if mesh.material_index != active_mat {
@@ -6589,11 +6606,27 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                                 let u = v.uv.x;
                                 let vy = v.uv.y;
                                 if u >= u_lo && u <= u_hi && vy >= v_lo && vy <= v_hi {
-                                    app.uv_edit.selected.insert((mi as u32, vi as u32));
+                                    inside.insert((mi as u32, vi as u32));
                                 }
                             }
                         }
                     }
+                    // behavior に応じた selected 再構築 (Phase 3 A-4)
+                    app.uv_edit.selected = match app.uv_edit.rect_behavior {
+                        UvRectBehavior::Replace => inside,
+                        UvRectBehavior::Add => {
+                            let mut s = app.uv_edit.rect_initial_selected.clone();
+                            s.extend(inside);
+                            s
+                        }
+                        UvRectBehavior::Subtract => {
+                            let mut s = app.uv_edit.rect_initial_selected.clone();
+                            for k in &inside {
+                                s.remove(k);
+                            }
+                            s
+                        }
+                    };
                     // 選択矩形の視覚フィードバック（半透明塗り + 枠線、頂点描画の後に追加）
                     let p0 = uv_to_canvas(press_uv, rect, voff, vzoom);
                     let p1 = uv_to_canvas(cursor_uv, rect, voff, vzoom);
@@ -6643,6 +6676,8 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         app.uv_edit.drag_start_uvs.clear();
         app.uv_edit.drag_press_uv = None;
         app.uv_edit.drag_pivot = None;
+        app.uv_edit.rect_behavior = UvRectBehavior::Replace;
+        app.uv_edit.rect_initial_selected.clear();
     }
 
     // Phase 2-4: ドラッグ中の Move モードでピボットを十字マーカーで表示（視覚フィードバック）

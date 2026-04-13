@@ -45,7 +45,6 @@ Current target: **v0.6.0**
 - **UV1 editing** — Switch the canvas to edit `IrMesh.uvs1` via a UV-set dropdown
 - **Morph UV** — For PMX UV morphs, present a "base UV edit vs. morph edit" mode switch
 - **Detached window** — Allow the UV editor to pop out as an `egui::Window`, enabling side-by-side display of multiple materials
-- **Additive / subtractive rectangle selection** — Shift+drag to add, Alt+drag to remove from the current selection (current behavior replaces the selection)
 - **Visual 2D gizmo handles** — Bbox-corner scale handles + rotation anchor as an alternative to the modifier-key mode (Phase 2-4 shipped the key-modifier version only)
 
 

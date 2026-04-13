@@ -65,6 +65,7 @@
 - **回転 / スケール (2-4)** — Alt+ドラッグで選択 bbox 中心ピボットの回転（`atan2` で角度差 → `sin_cos` で回転行列）。Ctrl+ドラッグで同ピボットのスケール（距離比）。Move ドラッグ中はピボットに十字マーカーを描画して視覚フィードバック。Ctrl と Alt が同時押下の場合は Ctrl 優先
 - **undo / redo (2-5)** — `UvUndoEntry { before, after }` を drag_stopped Move ごとに 1 コマンド記録。`Ctrl+Z` で undo、`Ctrl+Y` / `Ctrl+Shift+Z` で redo。「⟲ 元に戻す」「⟳ やり直す」ボタンが GUI から同等操作を提供。undo スタックは 50 エントリ上限（FIFO）。新編集で redo スタックは自動クリア（標準セマンティクス）。`wants_keyboard_input()` ガードで TextEdit とキー衝突しない
 - **全選択 (Ctrl+A)** — アクティブ材質の全頂点を `selected` に追加（既存選択は保持）。「全選択」ボタンが GUI から同等操作を提供
+- **矩形選択の加算/除外モード (Phase 3 A-4 を前倒し)** — 従来の矩形選択は常に既存選択を置換していたが、Shift+ドラッグで矩形内頂点を既存選択に追加、Ctrl+ドラッグで除外する動作を追加。`UvRectBehavior { Replace, Add, Subtract }` を drag_started 時の修飾キーで確定し、`rect_initial_selected` に開始時点の selected をスナップショット保存。矩形拡大/縮小時の整合は毎フレーム `initial ± inside` で再計算する方式で保つ。Alt は Move モードの「回転」と競合するため、Rect モードの除外は Ctrl を使う（mode は drag 開始位置で確定しているので Ctrl の意味は mode ごとに一意）
 
 ### 内部実装
 

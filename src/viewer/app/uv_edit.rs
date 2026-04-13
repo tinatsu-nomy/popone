@@ -49,6 +49,19 @@ pub enum UvDragMode {
     Rect,
 }
 
+/// 矩形選択の動作モード (v0.5.5 Phase 3 / A-4)。`drag_started()` 時の修飾キーで決定する。
+/// Alt は Move モードの「回転」と競合するため Rect モードでは使わず、除外は Ctrl を使う。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum UvRectBehavior {
+    /// 既存選択をクリアして矩形内頂点で置換（無修飾、Phase 2-2 の挙動）
+    #[default]
+    Replace,
+    /// 既存選択に矩形内頂点を追加（Shift+ドラッグ）
+    Add,
+    /// 既存選択から矩形内頂点を除外（Ctrl+ドラッグ）
+    Subtract,
+}
+
 /// 頂点単位 UV 編集の状態（ViewerApp に 1 つだけ保持）。
 ///
 /// `Default` は手書き（`view_zoom` の初期値を 1.0 にするため）。
@@ -92,6 +105,11 @@ pub struct UvEditState {
     /// `apply_undo` / `apply_redo` で「pristine に戻った頂点」を `overrides` から削除する
     /// 判定に使う。メモリは「一度でも編集された頂点」分のみで済むため常に軽量。
     pub pristine_uvs: HashMap<VertexKey, [f32; 2]>,
+    /// 矩形選択の現在の動作モード (Phase 3 / A-4)。drag_started で決定、drag_stopped でリセット。
+    pub rect_behavior: UvRectBehavior,
+    /// 矩形選択開始時点の `selected` スナップショット (Phase 3 / A-4)。
+    /// Add/Subtract モードで「initial ± rect_inside」の再計算基点に使う。
+    pub rect_initial_selected: HashSet<VertexKey>,
 }
 
 impl Default for UvEditState {
@@ -111,6 +129,8 @@ impl Default for UvEditState {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             pristine_uvs: HashMap::new(),
+            rect_behavior: UvRectBehavior::Replace,
+            rect_initial_selected: HashSet::new(),
         }
     }
 }
@@ -132,6 +152,8 @@ impl UvEditState {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.pristine_uvs.clear();
+        self.rect_behavior = UvRectBehavior::Replace;
+        self.rect_initial_selected.clear();
     }
 
     /// 頂点 UV の pristine を記録する（初回ドラッグ開始時に呼ぶ）。
