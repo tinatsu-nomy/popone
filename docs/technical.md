@@ -118,6 +118,14 @@
     - [VRM Parameter Mapping](#vrm-parameter-mapping)
     - [UV Animation](#uv-animation)
     - [Transparent Draw Order Control (alphaMode / transparentWithZWrite / renderQueueOffsetNumber)](#transparent-draw-order-control-alphamode--transparentwithzwrite--renderqueueoffsetnumber)
+  - [Material Editing and Expression Material Binds (v0.5.0 / v0.5.1)](#material-editing-and-expression-material-binds-v050--v051)
+    - [Material Editor Drawer — Update Path](#material-editor-drawer--update-path)
+    - [DrawCall.material_buf — Persistent Uniform Buffer Handle (v0.5.1)](#drawcallmaterial_buf--persistent-uniform-buffer-handle-v051)
+    - [Full Rebuild Information-Source Integrity (VRM / PMX / PMD)](#full-rebuild-information-source-integrity-vrm--pmx--pmd)
+    - [Texture History Recall Ordering](#texture-history-recall-ordering)
+    - [Expression Re-application Timing](#expression-re-application-timing)
+    - [Expression Material Binds — Playback Pipeline](#expression-material-binds--playback-pipeline)
+    - [Texture History Auxiliary Slot Persistence (v0.5.1)](#texture-history-auxiliary-slot-persistence-v051)
   - [Bloom Post-Effect](#bloom-post-effect)
     - [Dual Kawase Algorithm](#dual-kawase-algorithm)
     - [MRT (Multiple Render Target) Emissive Separation](#mrt-multiple-render-target-emissive-separation)
@@ -332,7 +340,7 @@ VRM extension JSON is deserialized once into strongly-typed `VrmV0` / `VrmV1` st
 
 - **VRM 1.0** (`extract_morphs_v1`): iterates every preset expression (`aa`, `ih`, `ou`, `ee`, `oh`, `blink`, `blinkLeft`, `blinkRight`, `happy`, `angry`, `sad`, `relaxed`, `surprised`, `neutral`, `lookUp`, `lookDown`, `lookLeft`, `lookRight`) plus all entries in `expressions.custom`. For each, `morphTargetBinds` are resolved via a node-index → `IrMesh` index map (one node may expand to multiple IR meshes), and positions / normals / tangents from the corresponding `morph_targets` are collected per global vertex index
 - **VRM 0.0** (`extract_morphs_v0`): iterates `blendShapeMaster.blendShapeGroups`. Each bind references a mesh by `mesh` index; `bind.weight` is divided by 100 because VRM 0.0 uses a 0..100 scale. The preset name is converted to a Japanese morph name via `convert::morph::preset_to_jp_v0`
-- `materialColorBinds` / `textureTransformBinds` (VRM 1.0) are currently parsed into `Expression` structs but not applied at playback — tracked in the roadmap
+- **`materialColorBinds` / `textureTransformBinds` (VRM 1.0, playback added in v0.5.1)** — `extract_morphs_v1` emits these as `IrMorphKind::Material { color_binds, uv_binds }`. An Expression with both vertex morphs and material binds is registered as **two IrMorphs with the same name** (`Vertex` + `Material`), and the name-based `morph_weights` mapping applies the same weight to both. `MaterialColorBindType` has 6 variants (`color` / `emissionColor` / `shadeColor` / `matcapColor` / `rimColor` / `outlineColor`), parsed from the VRM 1.0 `type` string via `from_vrm_str` (unknown strings log a warning and are skipped)
 
 ### Meta Info Extraction
 
@@ -1930,6 +1938,177 @@ if material.alpha_cutoff < -0.75 {
 | outline | Front | on | MToon outline (OPAQUE / BlendZWrite). With depth bias (UniVRM `Offset 1, 1` equivalent) |
 | outline_mask | Front | on | MToon outline (MASK). With depth bias + AlphaToCoverage |
 | outline_blend | Front | off | MToon outline (Blend). With depth bias |
+
+## Material Editing and Expression Material Binds (v0.5.0 / v0.5.1)
+
+### Material Editor Drawer — Update Path
+
+The material editor UI (`show_material_editor_window`, ui.rs:1020) opens a floating `egui::Window`, and the closure holds `&mut app` to update both the IR material and `MaterialParamOverride` simultaneously. At closure exit, `pending_override` is merged into `app.material_overrides[mat_idx]` and `material_dirty[mat_idx]` is set.
+
+At the end of `update()`, `apply_pending_material_rebuilds()` (app/mod.rs:1859) scans the dirty flags and calls `GpuRenderer::rebuild_material_bind_groups()`. In v0.5.1, this signature adds `queue: &wgpu::Queue` and `uniform_only: bool` — edits without texture changes take the `queue.write_buffer` fast path.
+
+### DrawCall.material_buf — Persistent Uniform Buffer Handle (v0.5.1)
+
+Prior to v0.5.1, `DrawCall` held only `material_bind_group: wgpu::BindGroup` without the corresponding `wgpu::Buffer` handle. `create_material_bind_group` created the buffer with `BufferUsages::UNIFORM` only and trapped it inside the bind group, making `queue.write_buffer` partial updates structurally impossible — every edit required full bind group recreation.
+
+v0.5.1 introduces the following structural changes:
+
+1. Added `material_buf: wgpu::Buffer` field to `DrawCall` (mesh.rs:85)
+2. Split `create_material_bind_group` into 3 functions (gpu.rs:4739-4855):
+   - `serialize_material_uniform(params) -> Vec<u8>` — encase serialization only
+   - `create_material_buffer_and_bind_group(device, layout, params) -> (wgpu::Buffer, wgpu::BindGroup)` — creates buffer with `UNIFORM | COPY_DST` and returns both (used at load time)
+   - `write_material_buffer(queue, buf, params)` — partial update via `queue.write_buffer` (used for Expression material binds and material editor color/scalar edits)
+3. Added `uniform_only: bool` parameter to `rebuild_material_bind_groups`; when `true`, skips bind group recreation and only writes the buffer
+
+This optimization allows Expression material binds to update up to ~11 material uniforms per frame (typical VRM model) without GPU resource churn. Each buffer write is approximately 720 bytes.
+
+### Full Rebuild Information-Source Integrity (VRM / PMX / PMD)
+
+`rebuild_material_bind_groups(uniform_only=false)` regenerates four groups:
+
+1. `material_buf` — updated in place via `write_material_buffer`
+2. `texture_bind_group` (standard-path BaseColor) — uses the same information source as the initial DrawCall construction
+3. `mtoon_aux_bind_group` — `build_aux_refs_for` + `rebuild_mtoon_aux_bind_group`
+4. `mmd_material_buf` / `mmd_texture_bind_group` / `mmd_aux_bind_group` — only when `RenderStyle::Mmd`
+
+**Keeping BaseColor information sources aligned** — VRM treats `mat.base_color_tex_info` (which carries `KHR_texture_transform`, `texCoord`, and sampler info) as the primary source, while PMX/PMD only has `mat.texture_index` (a plain index reference). To stay consistent with the initial DrawCall construction (mesh.rs:1256), which uses `mat.texture_index` as the primary index source, `rebuild_material_bind_groups` also **prefers `texture_index`** and resolves the sampler via `base_color_tex_info.sampler` → `IrSamplerInfo::default()` in that fallback order.
+
+Skipping this alignment produces silent inconsistencies for one material class: e.g., looking at `base_color_tex_info` alone makes PMX/PMD materials regress to `texture_bind_group = None` after any full rebuild, showing a blank white texture.
+
+### Texture History Recall Ordering
+
+`do_recall_texture_history` must execute in this order:
+
+1. **Pristine restore + full state clear** — Restore `loaded.ir.materials[*]` from `pristine_materials`, clear `material_overrides` / `slot_texture_paths` / `tex.assignments` / `tex.pkg_assignments`, and mark every material dirty
+2. **Texture restoration** — Apply entries from `resolved`: BaseColor through `assign_texture_to_material`, auxiliary slots through `assign_texture_core` (both produce immediate GPU reflection)
+3. **Param override restoration** — Load `material_overrides` from JSON and `apply_to(mat)` each record
+
+Pre-v0.5.1 implementations restored textures first and then restored pristine, which destroyed the texture references (`IrMaterial.emissive_texture`, `normal_texture`, `mtoon.*_texture`) that the restored textures had just written. The current order treats pristine as a baseline over which subsequent steps can overwrite cleanly; every intermediate state is consistent.
+
+### Expression Re-application Timing
+
+After processing dirty materials, `apply_pending_material_rebuilds` runs two final passes:
+
+1. For each dirty material, re-capture `material_base_values[mat_idx]` via `MaterialBaseValues::from_ir(mat)` so editor-modified values become the new Expression base
+2. If `morph_weights.iter().any(|w| w.abs() > 1e-6)`, run `accumulate_expression_materials` and `write_material_buffer` over affected materials
+
+This trailing re-application is necessary when a manual morph slider holds non-zero weight and the user edits a material: animation playback would overwrite it on the next `update_animation` frame, but when playback is stopped and only manual morph sliders are driving, nothing else re-applies the Expression material reflection.
+
+### Expression Material Binds — Playback Pipeline
+
+VRM 1.0 spec update algorithm:
+
+```
+finalValue = baseValue + Σ((targetValue - baseValue) × weight)
+```
+
+- **Additive blending**: When multiple Expressions have binds for the same property on the same material, each `(target - base) × weight` is summed (not linear blend)
+- **Base value**: Load-time `IrMaterial` value. If the material editor modifies it, the edited value becomes the new base
+
+#### IR Types (intermediate/types.rs)
+
+```rust
+pub enum IrMorphKind {
+    Vertex { positions, normals, tangents },
+    Group(Vec<(usize, f32)>),
+    Material {                                  // added in v0.5.1
+        color_binds: Vec<IrMaterialColorBind>,
+        uv_binds: Vec<IrTextureTransformBind>,
+    },
+}
+
+pub enum MaterialColorBindType {
+    Color,          // baseColorFactor → IrMaterial.diffuse
+    EmissionColor,  // emissiveFactor → IrMaterial.emissive_factor
+    ShadeColor,     // shadeColorFactor → MtoonParams.shade_color
+    MatcapColor,    // matcapFactor → MtoonParams.matcap_factor
+    RimColor,       // parametricRimColorFactor → MtoonParams.parametric_rim_color
+    OutlineColor,   // outlineColorFactor → IrMaterial.edge_color
+}
+```
+
+A VRM Expression with both Vertex and Material binds is emitted as **two IrMorphs with the same name** (`Vertex` and `Material`). Since `morph_weights` uses name-based mapping, both receive identical weights. This minimizes impact on existing `Vertex` / `Group` handling (no Compound variant needed).
+
+#### Base Value Snapshot (`MaterialBaseValues`)
+
+`GpuModel` gains `material_base_values: Vec<MaterialBaseValues>`, captured at the end of `cpu_prep_model` via `MaterialBaseValues::from_ir()` (diffuse / emissive_factor / shade_color / matcap_factor / rim_color / edge_color / base_uv_offset / base_uv_scale).
+
+When the material editor triggers `material_dirty`, `material_base_values[mat_idx]` is re-captured so that **the editor-modified value becomes the new base**. This ensures expressions always blend against the latest edited value.
+
+#### Accumulation Function (`accumulate_expression_materials`)
+
+A pure function in mesh.rs. Iterates `GpuMorphEntry::Material` entries, accumulates color/UV deltas per material, and returns `MaterialParams` only for dirty materials.
+
+```rust
+pub(crate) fn accumulate_expression_materials(
+    gpu_morphs: &[GpuMorphEntry],
+    morph_weights: &[f32],
+    base_values: &[MaterialBaseValues],
+    ir_materials: &[IrMaterial],
+    mat_count: usize,
+    flags: &MaterialBuildFlags,
+) -> Vec<Option<MaterialParams>>
+```
+
+1. Initialize `accum: Vec<ColorAccum>` to zero (sized to material count)
+2. Iterate `morph_weights`; for each `GpuMorphEntry::Material` with `weight != 0`:
+   - For each `color_bind`: `accum[mat].<color_field> += (target - base) × weight`
+   - For each `uv_bind`: similarly accumulate `uv_offset` / `uv_scale`
+3. For each `dirty` material, clone the `IrMaterial`, apply the final values, and generate `MaterialParams` via `build_material_params_for()`
+
+#### Wiring into the Animation Loop
+
+`update_animation` (app/mod.rs:2005) runs the `accumulate_expression_materials` → `write_material_buffer` loop immediately after `apply_bone_animation`:
+
+```rust
+let dirty_params = accumulate_expression_materials(
+    &loaded.gpu_model.gpu_morphs,
+    &self.morph_weights,
+    &loaded.gpu_model.material_base_values,
+    &loaded.ir.materials,
+    mat_count,
+    &flags,
+);
+for (mat_idx, params) in dirty_params.iter().enumerate() {
+    if let Some(p) = params {
+        for draw in &loaded.gpu_model.draws {
+            if draw.material_index == mat_idx {
+                crate::viewer::gpu::write_material_buffer(queue, &draw.material_buf, p);
+            }
+        }
+    }
+}
+```
+
+The same accumulation + write flow is also wired into the morph slider path (app/mod.rs:2360), so manual slider manipulation produces immediate material color feedback even when animation is not playing.
+
+#### material_index Offset in IrModel::merge()
+
+When appending a model, guest-side `material_index` values inside `IrMorphKind::Material` variants must be offset by the host's material count. Ordering caveat: use `mat_offset = self.materials.len()` computed at the **top** of `merge()` (before `self.materials.append(&mut other.materials)`). Computing it after the append yields the post-merge total (host + guest) and produces wrong offsets.
+
+### Texture History Auxiliary Slot Persistence (v0.5.1)
+
+Prior to v0.5.1, `popone_history.json` only stored `tex.assignments` (BaseColor), while auxiliary slot assignments (Emissive / Normal / Shade, etc.) lived in `slot_texture_paths: HashMap<(usize, TextureSlot), PathBuf>` — a session-local state that was discarded on restart.
+
+v0.5.1 adds a `slot: TextureSlot` field to `TextureHistoryEntry` (persistence.rs:321):
+
+```rust
+pub struct TextureHistoryEntry {
+    pub material_index: usize,
+    pub material_name: String,
+    pub texture_path: String,
+    #[serde(default = "default_base_color_slot")]
+    pub slot: TextureSlot,
+}
+```
+
+**Backward/forward compatibility design**:
+- `#[serde(default = "default_base_color_slot")]`: pre-v0.5.1 JSON without the slot field loads as `BaseColor`
+- v0.5.1-saved JSON loaded by v0.5.0 has its `slot` field silently ignored (serde unknown-field setting) and treats it as BaseColor (forward compatible)
+
+**Save path**: `save_texture_history()` scans both `tex.assignments` (BaseColor) and `slot_texture_paths` (all auxiliary slots) and merges them into a single `Vec<TextureHistoryEntry>`.
+
+**Restore path**: `reload_texture_history()` walks entries; `entry.slot == BaseColor` takes the existing `assign_texture_to_material` path, while others call `assign_texture_core(mat_idx, slot, data, is_psd, display_name)` directly for GPU reflection. The dedup key is also widened from `HashSet<usize>` to `HashSet<(usize, TextureSlot)>` so multiple simultaneous auxiliary slot assignments on the same material (e.g. Emissive + Normal + Shade) are preserved correctly.
 
 ## Bloom Post-Effect
 

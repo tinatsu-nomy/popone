@@ -12,6 +12,8 @@
   - [Extras](#extras)
     - [Animation Playback](#animation-playback)
     - [PMX (MikuMikuDance) Conversion](#pmx-mikumikudance-conversion)
+    - [Material Editor (v0.5.0 / extended in v0.5.1)](#material-editor-v050--extended-in-v051)
+    - [MME (ray-mmd) Output (v0.5.0)](#mme-ray-mmd-output-v050)
   - [Shader Support](#shader-support)
     - [Shader Detection](#shader-detection)
     - [Reproduction Fidelity (Viewer / PMX Conversion)](#reproduction-fidelity-viewer--pmx-conversion)
@@ -63,7 +65,7 @@ If the viewer is already running, subsequent launches pass the file path to the 
 - **Dark Theme** — Blender / Substance Painter style dark theme. Unified color scheme for panels, buttons, and tooltips. Side panel fixed at 280px with flat tab bar. Displays a rounded-corner splash image centered in the viewport when no model is loaded
 - **3D Rendering** — Real-time rendering with egui + wgpu. Textured Lambert shading, double-sided, alpha blending. VRM MToon materials are displayed with 2-color toon shading (lit/shade smoothstep interpolation) + outline rendering (inverted hull method) + rim lighting (parametric rim + MatCap texture) + auxiliary textures (shadeMultiply / shadingShift / rimMultiply, with texCoord / KHR_texture_transform support) + UV animation (scroll/rotation) + emissive (emission) + normal mapping (MikkTSpace tangent generation for TBN construction, doubleSided back-face normal flipping) + MToon spec-compliant 4-phase draw order control (OPAQUE → MASK → BlendZWrite → Blend, with `transparentWithZWrite` / `renderQueueOffsetNumber` + dynamic camera distance sorting within BLEND). VRM 0.x MToon properties are fully normalized to VRM 1.0 (UniVRM migration compliant). All textures including base color support `texCoord` / `KHR_texture_transform`. Per-texture glTF sampler address modes (Repeat / ClampToEdge / MirroredRepeat) and filter modes (including all 6 minFilter mipmap selection values) are honored with individual samplers per texture. UTS2 (Unity-Chan Toon Shader) / lilToon / Poiyomi materials are auto-detected and displayed via MToon approximation (see "Shader Support" section for details). PMX/PMD displayed in MMD rendering mode (NdotL-dependent toon shading, edges, sphere maps). Lighting uses light color + hemisphere ambient (Sky/Ground 2-color interpolation) for VRoidHub-like ambient lighting
 - **Camera** — Left drag: rotate, Right drag: pan, Scroll: zoom. F: fit, R: reset, Double-click: fit, Shift: precision mode (1/3 speed). FOV 30° (MMD-compliant)
-- **Expression Morphs** — Adjust with sliders (0/1 buttons, direct input). Text filter for narrowing by name (partial match on Japanese/English names, case-insensitive)
+- **Expression Morphs** — Adjust with sliders (0/1 buttons, direct input). Text filter for narrowing by name (partial match on Japanese/English names, case-insensitive). v0.5.1 adds playback of VRM 1.0 Expression **`materialColorBinds` (6 color targets: color / emissionColor / shadeColor / matcapColor / rimColor / outlineColor)** and **`textureTransformBinds` (UV scale / offset)**. Multiple simultaneously-active expressions blend additively per the VRM 1.0 spec: `finalValue = baseValue + Σ((targetValue - baseValue) × weight)`
 - **Material Visibility** — Per-material ON/OFF toggle with search filter. Hovering over a material name shows a tooltip listing referenced texture filenames (base, sphere, toon, normal, emissive). Hovering over a material row highlights the corresponding mesh in the 3D view with semi-transparent orange overlay. Materials are always grouped by model name with collapsible headers (multiple FBX from Prefab shown as separate groups). Group headers include `[S]` (normal smoothing), `[C]` (custom normal clear), `[N]` (normal map ON/OFF), `[B]` (emissive ON/OFF), and `[☑]` (visibility) batch buttons. Hovering over the header highlights all meshes in the group
 - **Meta Info Panel** — Displays VRM model info, author, permissions, and license with Japanese labels. Permission/license values shown as color badges (allow = green / conditional = yellow / deny = red / neutral = gray). Hover tooltips on both labels and values. Supports VRM 0.0/1.0. CJK font fallback (JP → SC) renders Chinese model names and author names correctly
 - **File Hierarchy Tree** — Displays the load chain from opened file to final model in a tree view. Textures, animations, and package textures are also listed
@@ -166,18 +168,20 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - Auto-classified display frames (Root / Expression / Upper Body / Arms / Fingers / Legs / Other)
 - UV normalization (clamped to 0..1)
 
-### Material Editor (v0.5.0)
+### Material Editor (v0.5.0 / extended in v0.5.1)
 
 Click the "編" button on any material row in the Display tab to open the Material Editor drawer.
 
 - **Editable parameters** — diffuse color, alpha mode/cutoff, shade color, shading toony/shift, outline color/width/mode, parametric rim, matcap factor, emissive factor, normal scale, UV animation speeds, render queue offset
-- **Texture slot assignment** — BaseColor, Emissive, Normal, Shade, ShadingShift, Rim, OutlineWidth, Matcap, UvAnimMask (11 slots). Click the slot button to open a file dialog
+- **Texture slot assignment** — BaseColor, Emissive, Normal, Shade, ShadingShift, Rim, OutlineWidth, Matcap, UvAnimMask, Sphere, Toon (11 slots — Sphere/Toon added in v0.5.1). Click the slot button to open a file dialog
 - **MToon enable/disable** — "MToon 有効化" checkbox to promote a non-MToon material
 - **Presets** — MToon 1.0 Default, lilToon Standard, PMX Compatible (3 built-in presets)
+- **Copy / Paste (v0.5.1)** — Copy a material's color/scalar values to the session clipboard and paste them onto another material. Texture assignments are intentionally excluded (path-dependent)
+- **Dirty indicator (v0.5.1)** — A trailing `*` in the window title indicates the current material has unsaved edits (parameter overrides, BaseColor texture, or auxiliary slot texture)
 - **Reset** — Per-slot `×` button to clear individual textures, "初期値に戻す" to restore the material to its load-time state
 - **Live preview** — Changes are reflected immediately in both standard and MMD render paths
-- **Persistence** — Color/scalar edits are saved in `popone_history.json` and restored on reload
-- **PMX non-support badges** — Parameters not representable in PMX format are marked with "(PMX非対応)" with a tooltip indicating they are included in MME output
+- **Persistence** — Color/scalar edits **and all texture slot assignments** (v0.5.1 extended auxiliary slots) are saved in `popone_history.json` and restored on reload
+- **PMX non-support badges (visually strengthened in v0.5.1)** — Parameters not representable in PMX format show a color-coded `⚠ PMX 非対応` badge at the top of the relevant section with a hover tooltip explaining that MME (.fx) output and viewer preview do honor them
 
 ### MME (ray-mmd) Output (v0.5.0)
 
@@ -212,8 +216,8 @@ Shader information recorded in VRM 0.0 `materialProperties` is auto-detected and
 
 | Shader | Viewer | PMX | Supported Parameters | Not Supported |
 |--------|:------:|:---:|---------------------|---------------|
-| MToon (VRM 1.0) | 95% | 90% | shade/toony/shift/outline/rim/matcap/UV anim/emissive/normal/GI/draw order | Expression materialColorBinds/textureTransformBinds |
-| MToon (VRM 0.0) | 90% | 85% | Above + full UniVRM Migration-compliant property normalization | Same as above |
+| MToon (VRM 1.0) | 98% | 90% | shade/toony/shift/outline/rim/matcap/UV anim/emissive/normal/GI/draw order/Expression materialColorBinds/textureTransformBinds (v0.5.1 added) | — |
+| MToon (VRM 0.0) | 92% | 85% | Above + full UniVRM Migration-compliant property normalization | — |
 | UTS2 | 75% | 70% | 1st shade/2nd shade/outline/rim/matcap/emissive/normal/HighColor(PMX only) | StencilMask, AngelRing, UTS2-specific lighting |
 | lilToon | 60% | 55% | shade/2nd shadow/outline/rim/matcap/emissive/normal/alpha mode | Fur, Refraction, Gem, FakeShadow, AudioLink, Dissolve, distance fade |
 | Poiyomi | 45% | 40% | 1st shadow/2nd shadow/outline/emissive/normal/alpha mode | Rim, MatCap, AudioLink, Dissolve, Glitter, Parallax, Decal |

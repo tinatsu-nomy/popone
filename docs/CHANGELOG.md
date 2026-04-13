@@ -3,6 +3,21 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
+    - [New Features](#new-features)
+    - [Performance](#performance)
+    - [Internals](#internals)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
+    - [Tests](#tests)
+    - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
+  - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
+    - [New Features](#new-features-1)
+    - [Behavior Changes](#behavior-changes)
+    - [Tests](#tests-1)
+  - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
+    - [New Features](#new-features-2)
+    - [Behavior Changes](#behavior-changes-1)
+    - [Internals](#internals-1)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -10,6 +25,58 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.1 (2026-04-13)
+
+VRM 1.0 Expression material binds playback, auxiliary texture slot persistence, and material editor drawer UX improvements.
+
+### New Features
+
+- **Expression Material Binds (VRM 1.0)** — The viewer now plays back `materialColorBinds` and `textureTransformBinds` in VRM 1.0 Expressions. Six color targets (`color` / `emissionColor` / `shadeColor` / `matcapColor` / `rimColor` / `outlineColor`) and UV scale/offset blend additively across multiple simultaneously-active expressions following the VRM 1.0 spec algorithm: `finalValue = baseValue + Σ((targetValue − baseValue) × weight)`. Base values are captured at load time and refreshed when the material editor modifies a material, so editor-adjusted values become the new base that expressions blend against.
+- **Sphere / Toon Texture Slot Editing** — The material editor drawer "テクスチャスロット" section now exposes the MMD-specific `Sphere` and `Toon` slots. Each slot has a file dialog button and `×` reset button matching the existing 8 auxiliary slots.
+- **Auxiliary Texture Slot Persistence** — All 10 non-BaseColor texture slot assignments (Emissive / Normal / Shade / ShadingShift / RimMultiply / OutlineWidth / Matcap / UvAnimMask / Sphere / Toon) are now saved to `popone_history.json` with a `slot` field on each `TextureHistoryEntry`. Previously only BaseColor assignments were persisted and auxiliary slots were lost on restart. The new `slot` field uses `#[serde(default)]` so v0.5.0 history files load as `BaseColor` (backward compatible) and v0.5.1 files are silently accepted by v0.5.0 (forward compatible via unknown-field ignoring).
+- **Dirty Indicator in Material Editor Title** — The window title now shows a trailing `*` when the currently-edited material has any edit difference: parameter overrides, BaseColor texture assignment, or auxiliary slot texture assignment. This lets users identify "touched" materials at a glance.
+- **Material Parameter Copy / Paste** — The material editor drawer toolbar row gains "コピー" and "ペースト" buttons. Copy captures the `diff_from(pristine, current)` result into a session-local clipboard; paste applies it to the currently-edited material with the standard dirty-tracking flow. Texture assignments are intentionally excluded (path-dependent) so only color/scalar values transfer between materials.
+- **PMX-Unsupported Badge Visual Enhancement** — The Rim / MatCap / UV Animation collapsing sections previously embedded `(PMX非対応)` as plain text in the section title. The title is now clean and each section body opens with a color-coded `⚠ PMX 非対応` badge with a hover tooltip: "この項目は PMX 出力では反映されません。MME (.fx) 出力やビューアプレビューでは反映されます。"
+
+### Performance
+
+- **DrawCall Uniform Buffer Optimization** — `DrawCall` now holds a persistent `wgpu::Buffer` (`material_buf`) with `UNIFORM | COPY_DST` usage. `create_material_bind_group` was split into `serialize_material_uniform` / `create_material_buffer_and_bind_group` / `write_material_buffer`. The existing bind group rebuild path now uses `queue.write_buffer` for uniform-only updates, avoiding full bind group recreation on every material edit or expression frame. This is the enabler for per-frame Expression material bind updates without GPU resource churn.
+
+### Internals
+
+- New enum variant `IrMorphKind::Material { color_binds, uv_binds }` alongside existing `Vertex` and `Group`. VRM Expressions with both vertex morphs and material binds are emitted as two separate IrMorphs with the same name, so the existing name-based `morph_weights` mapping drives both simultaneously without requiring a compound variant.
+- New types `MaterialColorBindType`, `IrMaterialColorBind`, `IrTextureTransformBind` in `intermediate::types`. `MaterialColorBindType::from_vrm_str` parses the VRM 1.0 `type` string to the enum.
+- New `GpuMorphEntry::Material` variant and `MaterialBaseValues` struct on `GpuModel`, plus a pure function `accumulate_expression_materials()` that iterates active material morphs, accumulates color and UV deltas per material, and returns `Vec<Option<MaterialParams>>` for dirty materials.
+- `IrModel::merge()` now offsets `material_index` in `IrMorphKind::Material` variants (color_binds and uv_binds) when merging models.
+
+### Bug Fixes (Pre-Release Review)
+
+A series of five Codex review rounds surfaced integration issues between the new Expression material-bind path, the history-recall flow, and the existing material editor. All were resolved before shipping:
+
+- **Texture history recall order** — Previously the recall flow restored textures first and then reset all materials to `pristine`, which destroyed auxiliary-slot texture references (`emissive_texture`, `normal_texture`, etc.). Fixed by restoring pristine first, then applying textures and parameter overrides. Also clear `tex.assignments`, `tex.pkg_assignments`, and `slot_texture_paths` as part of the pristine reset so the recalled state is a complete reproduction of the saved point.
+- **Expression weight-zero revert** — `accumulate_expression_materials` previously skipped morphs with `weight.abs() < 1e-6`, which meant a `1.0 → 0.0` weight transition never wrote the base value back and the last-applied color / UV remained stuck on the GPU. Fixed by pre-marking every material referenced by any `GpuMorphEntry::Material` as dirty so the base value is written back when deltas collapse to zero.
+- **Material-editor edits not seen as new base** — `material_base_values` was captured once at load time, so editor-adjusted values were ignored by the Expression blend basis. Fixed by re-capturing `MaterialBaseValues::from_ir(mat)` inside `apply_pending_material_rebuilds` whenever a material is marked dirty.
+- **Expression reflection lost when editing during manual morph** — Editing a material while a manual morph slider holds a non-zero weight previously dropped the Expression material reflection until the user moved the slider again. Fixed by running the Expression material accumulation pass at the end of `apply_pending_material_rebuilds` whenever any morph weight is non-zero.
+- **BaseColor texture-bind not regenerated on full rebuild** — `rebuild_material_bind_groups` only updated `material_buf` / aux / MMD bind groups but not the standard-path `texture_bind_group`. This left stale BaseColor textures on screen after pristine restoration. Fixed by regenerating the standard-path texture bind group in the full-rebuild path as well.
+- **BaseColor bind regression for PMX / PMD materials** — The initial fix above only looked at `mat.base_color_tex_info`, which is `None` for PMX / PMD materials, so their BaseColor disappeared after any full rebuild. Fixed by matching the initial DrawCall construction's information source: `mat.texture_index` as the primary index, with `base_color_tex_info.sampler` as a sampler source and a default `IrSamplerInfo` fallback.
+- **`material_index` not remapped in visible-only export** — `build_filtered_ir()` cloned `IrMorphKind::Material` binds verbatim, leaving stale indices into the pre-filter material array. Fixed by running `color_binds` / `uv_binds` through `mat_remap` with `filter_map`, dropping binds whose target material was excluded.
+- **Empty Material morphs leaking into filtered IR** — Material morphs whose binds all pointed at excluded materials still survived as empty morphs, producing "dead expressions" in PMX output. Fixed by deriving `morph_alive[i]` for `IrMorphKind::Material` from whether any bind targets a surviving material after remap, cascading through the existing Group convergence pass.
+
+### Tests
+
+- 235 unit tests (up from 230 in v0.5.0). New coverage: `MaterialColorBindType::from_vrm_str` for all 6 valid strings plus unknown/empty fallback, `IrModel::merge()` material index offset for Material morphs, and `TextureHistoryEntry` slot field serde (backward-compat default, explicit slot parse, roundtrip).
+
+### Deferred → v0.6.0
+
+- UV transform editing UI for the remaining texture slots (RimMultiply / OutlineWidth / Matcap / UvAnimMask) — existing code has no UV transform editing UI for any slot yet, so this becomes a larger scope than originally anticipated.
+- Drag-and-drop slot selection dialog when material editor is open.
+- Auto-assign slot hint matching (`*_normal*` → Normal, etc.).
+- Texture slot thumbnail preview in editor drawer.
+- Section collapse state persistence across sessions.
+- User-defined custom preset save/load.
+- sdPBR `.fx` generation, MaskedMaterial support, MME `.fx` import.
+
 
 ## v0.5.0 (2026-04-13)
 

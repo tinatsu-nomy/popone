@@ -118,6 +118,14 @@
     - [VRM パラメータ対応](#vrm-%E3%83%91%E3%83%A9%E3%83%A1%E3%83%BC%E3%82%BF%E5%AF%BE%E5%BF%9C)
     - [UV アニメーション](#uv-%E3%82%A2%E3%83%8B%E3%83%A1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3)
     - [透明描画順制御（alphaMode / transparentWithZWrite / renderQueueOffsetNumber）](#%E9%80%8F%E6%98%8E%E6%8F%8F%E7%94%BB%E9%A0%86%E5%88%B6%E5%BE%A1alphamode--transparentwithzwrite--renderqueueoffsetnumber)
+  - [材質編集と Expression 材質バインド（v0.5.0 / v0.5.1）](#%E6%9D%90%E8%B3%AA%E7%B7%A8%E9%9B%86%E3%81%A8-expression-%E6%9D%90%E8%B3%AA%E3%83%90%E3%82%A4%E3%83%B3%E3%83%89v050--v051)
+    - [材質編集ドロワー — 更新経路](#%E6%9D%90%E8%B3%AA%E7%B7%A8%E9%9B%86%E3%83%89%E3%83%AD%E3%83%AF%E3%83%BC--%E6%9B%B4%E6%96%B0%E7%B5%8C%E8%B7%AF)
+    - [DrawCall.material_buf — uniform バッファの永続ハンドル（v0.5.1）](#drawcallmaterial_buf--uniform-%E3%83%90%E3%83%83%E3%83%95%E3%82%A1%E3%81%AE%E6%B0%B8%E7%B6%9A%E3%83%8F%E3%83%B3%E3%83%89%E3%83%ABv051)
+    - [full rebuild の情報源整合性（VRM / PMX / PMD 対応）](#full-rebuild-%E3%81%AE%E6%83%85%E5%A0%B1%E6%BA%90%E6%95%B4%E5%90%88%E6%80%A7vrm--pmx--pmd-%E5%AF%BE%E5%BF%9C)
+    - [履歴呼出の順序原則](#%E5%B1%A5%E6%AD%B4%E5%91%BC%E5%87%BA%E3%81%AE%E9%A0%86%E5%BA%8F%E5%8E%9F%E5%89%87)
+    - [Expression 再適用のタイミング](#expression-%E5%86%8D%E9%81%A9%E7%94%A8%E3%81%AE%E3%82%BF%E3%82%A4%E3%83%9F%E3%83%B3%E3%82%B0)
+    - [Expression 材質バインド — 再生パイプライン](#expression-%E6%9D%90%E8%B3%AA%E3%83%90%E3%82%A4%E3%83%B3%E3%83%89--%E5%86%8D%E7%94%9F%E3%83%91%E3%82%A4%E3%83%97%E3%83%A9%E3%82%A4%E3%83%B3)
+    - [テクスチャ履歴の補助スロット永続化（v0.5.1）](#%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E5%B1%A5%E6%AD%B4%E3%81%AE%E8%A3%9C%E5%8A%A9%E3%82%B9%E3%83%AD%E3%83%83%E3%83%88%E6%B0%B8%E7%B6%9A%E5%8C%96v051)
   - [Bloom ポストエフェクト](#bloom-%E3%83%9D%E3%82%B9%E3%83%88%E3%82%A8%E3%83%95%E3%82%A7%E3%82%AF%E3%83%88)
     - [Dual Kawase アルゴリズム](#dual-kawase-%E3%82%A2%E3%83%AB%E3%82%B4%E3%83%AA%E3%82%BA%E3%83%A0)
     - [MRT (Multiple Render Target) による emissive 分離](#mrt-multiple-render-target-%E3%81%AB%E3%82%88%E3%82%8B-emissive-%E5%88%86%E9%9B%A2)
@@ -332,7 +340,7 @@ VRM 拡張 JSON は強く型付けされた `VrmV0` / `VrmV1` 構造体（`vrm::
 
 - **VRM 1.0**（`extract_morphs_v1`）: preset 表情（`aa`, `ih`, `ou`, `ee`, `oh`, `blink`, `blinkLeft`, `blinkRight`, `happy`, `angry`, `sad`, `relaxed`, `surprised`, `neutral`, `lookUp`, `lookDown`, `lookLeft`, `lookRight`）と `expressions.custom` を全走査する。各 `morphTargetBinds` はノード index → `IrMesh` index マップ（1 ノードが複数 IR メッシュに展開される場合を考慮）で解決し、対応する `morph_targets` の位置・法線・接線オフセットをグローバル頂点 index でまとめる
 - **VRM 0.0**（`extract_morphs_v0`）: `blendShapeMaster.blendShapeGroups` を走査。各 bind は `mesh` index でメッシュを参照し、`bind.weight` は 0..100 スケールなので 100 で割る。preset 名は `convert::morph::preset_to_jp_v0` で日本語モーフ名に変換する
-- `materialColorBinds` / `textureTransformBinds`（VRM 1.0）は `Expression` 構造体にパースされるが再生時には未適用。ロードマップで追跡中
+- **`materialColorBinds` / `textureTransformBinds`（VRM 1.0、v0.5.1 で再生対応）** — `extract_morphs_v1` が `IrMorphKind::Material { color_binds, uv_binds }` として発行する。頂点モーフと同居する Expression は**同名の 2 つの IrMorph**（`Vertex` + `Material`）として登録され、名前ベースの `morph_weights` マッピングで両方に同一ウェイトが適用される。`MaterialColorBindType` は `color` / `emissionColor` / `shadeColor` / `matcapColor` / `rimColor` / `outlineColor` の 6 バリアントで、`from_vrm_str` が文字列から enum にパースする（未知の文字列は警告ログ + スキップ）
 
 ### メタ情報抽出
 
@@ -1907,6 +1915,177 @@ if material.alpha_cutoff < -0.75 {
 | outline | Front | あり | MToon アウトライン（OPAQUE / BlendZWrite）。depth bias 付き（UniVRM `Offset 1, 1` 相当） |
 | outline_mask | Front | あり | MToon アウトライン（MASK）。depth bias + AlphaToCoverage 付き |
 | outline_blend | Front | なし | MToon アウトライン（Blend）。depth bias 付き |
+
+## 材質編集と Expression 材質バインド（v0.5.0 / v0.5.1）
+
+### 材質編集ドロワー — 更新経路
+
+材質編集 UI（`show_material_editor_window`, ui.rs:1020）は `egui::Window` をフローティング表示し、closure 内で `&mut app` を保持して IR 材質と `MaterialParamOverride` を同時に更新する。closure 終端で `pending_override` を `app.material_overrides[mat_idx]` にマージし、`material_dirty[mat_idx]` を立てる。
+
+`update()` 終端で `apply_pending_material_rebuilds()`（app/mod.rs:1859）が dirty フラグを走査し、`GpuRenderer::rebuild_material_bind_groups()` を呼ぶ。v0.5.1 以降はこのシグネチャに `queue: &wgpu::Queue` と `uniform_only: bool` が追加されており、テクスチャ変更を伴わない編集は `queue.write_buffer` で部分更新される。
+
+### DrawCall.material_buf — uniform バッファの永続ハンドル（v0.5.1）
+
+v0.5.0 までの `DrawCall` は `material_bind_group: wgpu::BindGroup` のみを保持しており、対応する `wgpu::Buffer` ハンドルを持っていなかった。`create_material_bind_group` は `BufferUsages::UNIFORM` のみでバッファを作成し bind group に閉じ込めていたため、`queue.write_buffer` による部分更新が構造上不可能で、編集のたびに bind group を再生成するしかなかった。
+
+v0.5.1 では以下の構造変更を行った:
+
+1. `DrawCall` に `material_buf: wgpu::Buffer` フィールドを追加（mesh.rs:85）
+2. `create_material_bind_group` を 3 つの関数に分割（gpu.rs:4739-4855）:
+   - `serialize_material_uniform(params) -> Vec<u8>` — encase シリアライズのみ
+   - `create_material_buffer_and_bind_group(device, layout, params) -> (wgpu::Buffer, wgpu::BindGroup)` — `UNIFORM | COPY_DST` でバッファ作成し両方返す（ロード時に使用）
+   - `write_material_buffer(queue, buf, params)` — `queue.write_buffer` で部分更新（Expression 材質バインドや材質エディタのカラー/スカラー変更時に使用）
+3. `rebuild_material_bind_groups` に `uniform_only: bool` を追加し、`true` のときは bind group 再生成をスキップして buffer 書き込みのみ行う
+
+この最適化により、Expression 材質バインドで毎フレーム最大 11 材質（典型的な VRM モデル）の uniform を更新しても GPU リソースチャーンが発生しない。1 材質あたりの書き込みは約 720 bytes。
+
+### full rebuild の情報源整合性（VRM / PMX / PMD 対応）
+
+`rebuild_material_bind_groups(uniform_only=false)` は次の 4 系統を再生成する:
+
+1. `material_buf` — `write_material_buffer` で部分更新
+2. `texture_bind_group`（標準パス BaseColor） — 初回 DrawCall 構築と同じ情報源を使う
+3. `mtoon_aux_bind_group` — `build_aux_refs_for` + `rebuild_mtoon_aux_bind_group`
+4. `mmd_material_buf` / `mmd_texture_bind_group` / `mmd_aux_bind_group` — `RenderStyle::Mmd` のときのみ
+
+**BaseColor 情報源の揃え方** — VRM は `mat.base_color_tex_info`（`KHR_texture_transform` / `texCoord` / sampler 情報を保持）を主体とし、PMX/PMD は `mat.texture_index`（単純なインデックス参照）のみを持つ。初回 DrawCall 構築（mesh.rs:1256）が `mat.texture_index` を主インデックス源として使うのに合わせ、`rebuild_material_bind_groups` も**`texture_index` を優先**し、sampler だけ `base_color_tex_info.sampler` → `IrSamplerInfo::default()` のフォールバック順で解決する。
+
+この揃え方をしないと、VRM と PMX/PMD のどちらかで暗黙の不整合が生まれる（例: `base_color_tex_info` だけを参照すると PMX/PMD 材質が full rebuild 時に `texture_bind_group = None` になり白テクスチャに後退）。
+
+### 履歴呼出の順序原則
+
+`do_recall_texture_history` は以下の順で実行する必要がある:
+
+1. **pristine 復元 + 全状態クリア** — `loaded.ir.materials[*]` を `pristine_materials` に戻し、`material_overrides` / `slot_texture_paths` / `tex.assignments` / `tex.pkg_assignments` を全てクリア。全材質に `mark_material_dirty()`
+2. **テクスチャ復元** — `resolved` から BaseColor は `assign_texture_to_material`、補助スロットは `assign_texture_core` で GPU に即時反映
+3. **param override 復元** — `material_overrides` を JSON から読み、`apply_to` で IrMaterial に書き戻し
+
+旧実装（v0.5.1 リリース前）は「テクスチャ復元 → pristine 復元」の順で、2 ステップ目が 1 ステップ目の結果を破壊していた。pristine 復元は `IrMaterial.emissive_texture` / `normal_texture` / `mtoon.*_texture` などの参照を全て元に戻すため、補助スロットのテクスチャ参照がゼロクリアされていた。現在の順序は「pristine をベースラインとして後続ステップが上書きしていく」形で、どの中間状態でも整合性が取れる。
+
+### Expression 再適用のタイミング
+
+`apply_pending_material_rebuilds` は材質 dirty 処理後、末尾で以下を実行:
+
+1. dirty な材質について `material_base_values[mat_idx]` を `MaterialBaseValues::from_ir(mat)` で再キャプチャ（エディタ編集値を Expression の新しいベースに反映）
+2. `morph_weights.iter().any(|w| w.abs() > 1e-6)` のときは `accumulate_expression_materials` を走らせ、影響材質に `write_material_buffer` で再適用
+
+この末尾実行は「手動モーフが非ゼロ weight で保持されている状態で材質を編集した瞬間」に必要となる。アニメーション再生中は次フレームの `update_animation` で上書きされるが、停止中 + 手動モーフ単独時には他に再適用の経路がない。
+
+### Expression 材質バインド — 再生パイプライン
+
+VRM 1.0 仕様の更新アルゴリズム:
+
+```
+finalValue = baseValue + Σ((targetValue - baseValue) × weight)
+```
+
+- **加算合成**: 複数 Expression が同一材質の同一プロパティに対する bind を持つ場合、それぞれの `(target - base) × weight` が合算される（線形ブレンドではない）
+- **ベース値**: ロード時の `IrMaterial` 値。材質エディタで編集された場合はエディタ値が新しいベース
+
+#### IR 型（intermediate/types.rs）
+
+```rust
+pub enum IrMorphKind {
+    Vertex { positions, normals, tangents },
+    Group(Vec<(usize, f32)>),
+    Material {                                  // v0.5.1 追加
+        color_binds: Vec<IrMaterialColorBind>,
+        uv_binds: Vec<IrTextureTransformBind>,
+    },
+}
+
+pub enum MaterialColorBindType {
+    Color,          // baseColorFactor → IrMaterial.diffuse
+    EmissionColor,  // emissiveFactor → IrMaterial.emissive_factor
+    ShadeColor,     // shadeColorFactor → MtoonParams.shade_color
+    MatcapColor,    // matcapFactor → MtoonParams.matcap_factor
+    RimColor,       // parametricRimColorFactor → MtoonParams.parametric_rim_color
+    OutlineColor,   // outlineColorFactor → IrMaterial.edge_color
+}
+```
+
+Vertex + Material を両方持つ VRM Expression は**同名の 2 つの IrMorph**（`Vertex` と `Material`）として発行される。`morph_weights` は名前ベースマッピングのため、どちらにも同一ウェイトが適用される。これにより既存の `Vertex` / `Group` バリアント処理への影響が最小化される（Compound バリアントは不要）。
+
+#### ベース値スナップショット（`MaterialBaseValues`）
+
+`GpuModel` に `material_base_values: Vec<MaterialBaseValues>` を追加し、`cpu_prep_model` の末尾で `IrMaterial::from_ir()` を呼んでロード時の値（diffuse / emissive_factor / shade_color / matcap_factor / rim_color / edge_color / base_uv_offset / base_uv_scale）をキャプチャする。
+
+材質エディタで material_dirty が立った際に `material_base_values[mat_idx]` を再キャプチャすることで、**エディタ編集値が新しいベースになる**。これにより Expression は常に最新の編集値を基準にブレンドする。
+
+#### アキュムレーション関数（`accumulate_expression_materials`）
+
+mesh.rs の純関数。`GpuMorphEntry::Material` を走査して各材質のカラー/UV 変化量を蓄積し、dirty な材質のみ `MaterialParams` を返す。
+
+```rust
+pub(crate) fn accumulate_expression_materials(
+    gpu_morphs: &[GpuMorphEntry],
+    morph_weights: &[f32],
+    base_values: &[MaterialBaseValues],
+    ir_materials: &[IrMaterial],
+    mat_count: usize,
+    flags: &MaterialBuildFlags,
+) -> Vec<Option<MaterialParams>>
+```
+
+1. `accum: Vec<ColorAccum>` をゼロ初期化（材質数分）
+2. `morph_weights` を走査、`weight != 0` の `GpuMorphEntry::Material` について:
+   - 各 `color_bind`: `accum[mat].<color_field> += (target - base) × weight`
+   - 各 `uv_bind`: `accum[mat].uv_offset / uv_scale` を同様に加算
+3. `dirty` な材質について `IrMaterial` をクローンし、最終値を適用 → `build_material_params_for()` で `MaterialParams` を生成
+
+#### アニメーションループでの呼び出し
+
+`update_animation`（app/mod.rs:2005）で `apply_bone_animation` 直後に `accumulate_expression_materials` → `write_material_buffer` ループを実行する:
+
+```rust
+let dirty_params = accumulate_expression_materials(
+    &loaded.gpu_model.gpu_morphs,
+    &self.morph_weights,
+    &loaded.gpu_model.material_base_values,
+    &loaded.ir.materials,
+    mat_count,
+    &flags,
+);
+for (mat_idx, params) in dirty_params.iter().enumerate() {
+    if let Some(p) = params {
+        for draw in &loaded.gpu_model.draws {
+            if draw.material_index == mat_idx {
+                crate::viewer::gpu::write_material_buffer(queue, &draw.material_buf, p);
+            }
+        }
+    }
+}
+```
+
+モーフスライダー経路（app/mod.rs:2360）にも同じアキュムレーション + 書き込みを実装しており、アニメーション再生中でなくても手動スライダー操作で材質カラーが即時反映される。
+
+#### IrModel::merge() での material_index オフセット
+
+model append 時、Guest 側の `IrMorphKind::Material` 内の `material_index` を host の材質数だけオフセット調整する。merge の順序注意: `self.materials.append(&mut other.materials)` より**前**に保持した `mat_offset = self.materials.len()`（関数先頭で計算）を使う必要がある（after では host+guest 合計となり誤った値になる）。
+
+### テクスチャ履歴の補助スロット永続化（v0.5.1）
+
+v0.5.0 までの `popone_history.json` は `tex.assignments`（BaseColor のみ）を保存しており、補助スロット（Emissive / Normal / Shade など）の割当は `slot_texture_paths: HashMap<(usize, TextureSlot), PathBuf>` としてセッション内のみ保持され、再起動で消失していた。
+
+v0.5.1 では `TextureHistoryEntry` に `slot: TextureSlot` フィールドを追加（persistence.rs:321）:
+
+```rust
+pub struct TextureHistoryEntry {
+    pub material_index: usize,
+    pub material_name: String,
+    pub texture_path: String,
+    #[serde(default = "default_base_color_slot")]
+    pub slot: TextureSlot,
+}
+```
+
+**後方互換性の設計**:
+- `#[serde(default = "default_base_color_slot")]`: v0.5.0 以前の slot フィールドなし JSON は `BaseColor` として解釈される
+- v0.5.1 で保存した JSON を v0.5.0 で読み込む場合は serde の unknown field 無視設定により slot フィールドが黙殺され、BaseColor として扱われる（前方互換）
+
+**保存時**: `save_texture_history()` で `tex.assignments`（BaseColor）と `slot_texture_paths`（補助スロット全種）の両方を走査し、単一の `Vec<TextureHistoryEntry>` にマージ保存する。
+
+**復元時**: `reload_texture_history()` でエントリを走査し、`entry.slot == BaseColor` は従来の `assign_texture_to_material` 経路、それ以外は `assign_texture_core(mat_idx, slot, data, is_psd, display_name)` を直接呼んで GPU 反映する。重複検出キーも `HashSet<usize>` から `HashSet<(usize, TextureSlot)>` に拡張され、同一材質の複数スロット同時割当（Emissive + Normal + Shade など）が正しく動作する。
 
 ## Bloom ポストエフェクト
 

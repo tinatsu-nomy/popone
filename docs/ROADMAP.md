@@ -3,10 +3,17 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Roadmap](#roadmap)
-  - [Targeted for v0.5.0](#targeted-for-v050)
-    - [Expression Material Binds (VRM 1.0)](#expression-material-binds-vrm-10)
+  - [Targeted for v0.6.0](#targeted-for-v060)
     - [OBJ / STL Import Options UI Polish](#obj--stl-import-options-ui-polish)
     - [Background Load Internals Cleanup](#background-load-internals-cleanup)
+    - [UV Transform Editing UI](#uv-transform-editing-ui)
+    - [Drag-and-Drop Slot Selection](#drag-and-drop-slot-selection)
+    - [Auto-Assign Slot Hints](#auto-assign-slot-hints)
+    - [Texture Slot Thumbnails](#texture-slot-thumbnails)
+    - [Section Collapse State Persistence](#section-collapse-state-persistence)
+    - [User Custom Preset Save / Load](#user-custom-preset-save--load)
+    - [Multiple Material Editor Windows](#multiple-material-editor-windows)
+    - [Material Editor Advanced MME Features](#material-editor-advanced-mme-features)
   - [Future Work (No Target Version)](#future-work-no-target-version)
     - [Unity `.anim` Residuals](#unity-anim-residuals)
     - [Archive Parent-Directory References](#archive-parent-directory-references)
@@ -28,20 +35,11 @@
 
 This document tracks planned work, future improvements, and external feature requests for `popone`. Items in this list are **not** yet implemented. Completed work is recorded in [CHANGELOG.md](CHANGELOG.md).
 
-Current target: **v0.5.1**
+Current target: **v0.6.0**
 
-> **Note:** v0.5.0 shipped material editing + MME output ([CHANGELOG.md](CHANGELOG.md#v050-2026-04-13)). The carry-over items below were originally targeted for earlier releases and are now planned for v0.5.1+.
+> **Note:** v0.5.1 shipped Expression material binds, auxiliary texture slot persistence, Sphere/Toon editing, DrawCall uniform buffer optimization, and material editor UX polish (dirty indicator, copy/paste, PMX-unsupported badge). See [CHANGELOG.md](CHANGELOG.md#v051-2026-04-13). Remaining items are now planned for v0.6.0+.
 
-## Targeted for v0.5.1
-
-### Expression Material Binds (VRM 1.0)
-
-VRM 1.0 Expression supports material-level bindings that the viewer currently ignores during playback:
-
-- **`materialColorBinds`** — bind Expression weights to shade color, rim color, outline color, and matcap color
-- **`textureTransformBinds`** — bind Expression weights to per-material UV scale / offset
-
-The MToon shader side already handles per-draw material color and UV transform parameters. What is missing is the Expression playback pipeline wiring: when an Expression weight changes, the viewer must iterate active binds and write interpolated values into the corresponding `MaterialUniform` entries.
+## Targeted for v0.6.0
 
 ### OBJ / STL Import Options UI Polish
 
@@ -58,18 +56,39 @@ Follow-up to the async load pipeline:
 - **`CpuParseInput::ArchiveEntry` variant** — needed when archive-internal browsing is promoted to background
 - **`CpuParseInput::Reload` variant** — unifies reload-from-source paths currently handled separately
 
-### Material Editor v0.5.1 Enhancements
+### UV Transform Editing UI
 
-Follow-up to the v0.5.0 material editor:
+v0.5.1 wired up expression-driven UV transform playback but did not ship a material-editor UI for per-slot UV edits. Covers all 10 slots that expose `IrTextureInfo` (BaseColor / Emissive / Normal / Shade / ShadingShift / RimMultiply / OutlineWidth / Matcap / UvAnimMask / Toon). Requires extending `MaterialParamOverride` with a `TextureUvOverride` type for persistence.
 
-- UV transform editing for remaining 5 slots (currently BaseColor/Emissive/Normal/Shade/ShadingShift only)
-- Sphere / Toon texture slot editing
-- User custom preset save/load
-- `DrawCall.material_buf` for uniform buffer partial update optimization
-- Multiple material editor windows for side-by-side comparison
+### Drag-and-Drop Slot Selection
+
+When the material editor drawer is open, drag-and-drop of an image file should open a slot-picker dialog (instead of the existing BaseColor-only flow) so users can drop a texture directly into Emissive / Normal / Shade etc.
+
+### Auto-Assign Slot Hints
+
+`auto_assign_textures()` currently matches only filename-to-material-name. Extend to recognize slot-suffix hints in filenames (`*_normal*` → Normal, `*_emissive*` → Emissive, etc.) so batch D&D of PBR texture sets assigns to the correct slots.
+
+### Texture Slot Thumbnails
+
+The material editor drawer "テクスチャスロット" section shows only filenames. Add 32×32 thumbnails backed by `egui::TextureId` registered via `eframe::egui_wgpu::Renderer::register_native_texture()` for visual slot identification.
+
+### Section Collapse State Persistence
+
+Editor drawer section collapsible state currently resets every session. Persist the set of open sections to `popone.toml` under `[material_editor] expanded_sections`.
+
+### User Custom Preset Save / Load
+
+`MaterialPreset` currently has 3 built-in presets (MToon 1.0 / lilToon / PMX-compat). Add a `CustomPreset { name: String, override_: MaterialParamOverride }` type persisted to `popone.toml` and a "save current as preset" button in the editor.
+
+### Multiple Material Editor Windows
+
+Allow multiple editor drawer windows open simultaneously for side-by-side parameter comparison between materials.
+
+### Material Editor Advanced MME Features
+
 - sdPBR `.fx` generation
-- MaskedMaterial (ray-mmd-MaskedMaterial) support
-- MME `.fx` import (parse existing PMX material .fx files)
+- MaskedMaterial (ray-mmd-MaskedMaterial) support with multi-layer composition
+- MME `.fx` import (parse existing PMX material `.fx` files to seed the editor)
 
 ## Future Work (No Target Version)
 
