@@ -288,6 +288,11 @@ pub struct TextureHistoryFile {
     /// key は正規化モデルパス（`history` と同じキー）。
     #[serde(default)]
     pub param_overrides: HashMap<String, Vec<MaterialParamOverrideEntry>>,
+    /// v0.5.5 追加 (Phase 1 頂点 UV 編集): 頂点単位 UV 編集差分。
+    /// `#[serde(default)]` により v0.5.4 以前のファイル（このフィールドがない）も読み込める。
+    /// key は正規化モデルパス（`history` と同じキー）。
+    #[serde(default)]
+    pub vertex_uv_overrides: HashMap<String, Vec<VertexUvOverrideEntry>>,
 }
 
 /// 材質パラメータ編集差分の永続化エントリ (v0.5.0 / §I 最小永続化)。
@@ -303,6 +308,18 @@ pub struct MaterialParamOverrideEntry {
     pub overrides: super::material_edit::MaterialParamOverride,
 }
 
+/// 頂点単位 UV 編集の永続化エントリ (v0.5.5 / Phase 1)。
+///
+/// モデル全体に対して 1 エントリ。`entries` は `[mesh_idx, vertex_idx, uv_x, uv_y]` の
+/// 配列でフラットに保持する（4 要素タプル）。JSON サイズ効率のため、オブジェクト
+/// より配列を選択（1 頂点あたり ~30 byte）。UV0 固定（Phase 3 で uv_set 拡張予定）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VertexUvOverrideEntry {
+    pub mesh_index: u32,
+    pub vertex_index: u32,
+    pub uv: [f32; 2],
+}
+
 fn default_version() -> u32 {
     1
 }
@@ -313,6 +330,7 @@ impl Default for TextureHistoryFile {
             version: 1,
             history: HashMap::new(),
             param_overrides: HashMap::new(),
+            vertex_uv_overrides: HashMap::new(),
         }
     }
 }

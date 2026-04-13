@@ -1507,7 +1507,10 @@ impl ViewerApp {
             })
             .collect();
 
-        if entries.is_empty() && param_entries.is_empty() {
+        // v0.5.5 追加: 頂点単位 UV 編集差分（Phase 1）
+        let uv_entries: Vec<super::persistence::VertexUvOverrideEntry> = self.uv_edit.to_entries();
+
+        if entries.is_empty() && param_entries.is_empty() && uv_entries.is_empty() {
             self.convert_message = Some(ConvertMessage::failure(String::from(
                 "保存対象のテクスチャ割り当て・編集がありません",
             )));
@@ -1516,6 +1519,7 @@ impl ViewerApp {
 
         let tex_count = entries.len();
         let param_count = param_entries.len();
+        let uv_count = uv_entries.len();
         self.texture_history.history.insert(key.clone(), entries);
         // review_011 [P2] 対応: param_entries が空なら古い param_overrides を明示的に消す。
         // 空のまま残すと、ユーザーが編集を「初期値に戻す」で全消しした後でも古い override が
@@ -1523,13 +1527,21 @@ impl ViewerApp {
         if !param_entries.is_empty() {
             self.texture_history
                 .param_overrides
-                .insert(key, param_entries);
+                .insert(key.clone(), param_entries);
         } else {
             self.texture_history.param_overrides.remove(&key);
         }
+        // v0.5.5: 頂点 UV 編集も同じポリシー（空なら明示的に削除）
+        if !uv_entries.is_empty() {
+            self.texture_history
+                .vertex_uv_overrides
+                .insert(key, uv_entries);
+        } else {
+            self.texture_history.vertex_uv_overrides.remove(&key);
+        }
         super::persistence::save_texture_history(&self.data_dir, &self.texture_history);
         self.convert_message = Some(ConvertMessage::success(format!(
-            "履歴を保存しました (テクスチャ{tex_count}件, パラメータ{param_count}件)"
+            "履歴を保存しました (テクスチャ{tex_count}件, パラメータ{param_count}件, UV頂点{uv_count}件)"
         )));
     }
 
@@ -1542,7 +1554,9 @@ impl ViewerApp {
         // パラメータ編集だけ保存したケースで「このモデルの履歴がありません」即 return を防ぐ。
         let has_tex_entries = self.texture_history.history.contains_key(&key);
         let has_param_entries = self.texture_history.param_overrides.contains_key(&key);
-        if !has_tex_entries && !has_param_entries {
+        // v0.5.5: 頂点 UV 編集だけ保存したケースも呼び戻せるようにする
+        let has_uv_entries = self.texture_history.vertex_uv_overrides.contains_key(&key);
+        if !has_tex_entries && !has_param_entries && !has_uv_entries {
             self.convert_message = Some(ConvertMessage::failure(String::from(
                 "このモデルの履歴がありません",
             )));
@@ -1717,9 +1731,30 @@ impl ViewerApp {
             }
             self.mark_material_dirty(mat_idx);
             param_applied += 1;
+            // v0.5.5: 頂点 UV 編集の復元はここから下流で一括処理する（下記 uv_applied 参照）
         }
 
-        let msg = if skipped > 0 || param_applied > 0 {
+        // v0.5.5 追加: 頂点 UV 編集の復元（IR 直書きと GPU 再同期）
+        let mut uv_applied = 0usize;
+        if has_uv_entries {
+            let uv_entries = self
+                .texture_history
+                .vertex_uv_overrides
+                .get(&key)
+                .cloned()
+                .unwrap_or_default();
+            if !uv_entries.is_empty() {
+                self.uv_edit.stage_restore(uv_entries);
+                if let Some(loaded) = self.loaded.as_mut() {
+                    self.uv_edit.apply_pending_restore(&mut loaded.ir);
+                    let queue = self.render_state.queue.clone();
+                    loaded.gpu_model.sync_uvs_from_ir(&loaded.ir, &queue);
+                    uv_applied = self.uv_edit.overrides.len();
+                }
+            }
+        }
+
+        let msg = if skipped > 0 || param_applied > 0 || uv_applied > 0 {
             let parts: Vec<String> = [
                 if applied > 0 {
                     Some(format!("テクスチャ{applied}件"))
@@ -1728,6 +1763,11 @@ impl ViewerApp {
                 },
                 if param_applied > 0 {
                     Some(format!("パラメータ{param_applied}件"))
+                } else {
+                    None
+                },
+                if uv_applied > 0 {
+                    Some(format!("UV頂点{uv_applied}件"))
                 } else {
                     None
                 },
@@ -1746,7 +1786,7 @@ impl ViewerApp {
         } else {
             "履歴がありません".to_string()
         };
-        self.convert_message = Some(if applied > 0 || param_applied > 0 {
+        self.convert_message = Some(if applied > 0 || param_applied > 0 || uv_applied > 0 {
             ConvertMessage::success(msg)
         } else {
             ConvertMessage::failure(msg)

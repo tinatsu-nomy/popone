@@ -3,33 +3,39 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
+  - [v0.5.5 (2026-04-13)](#v055-2026-04-13)
     - [New Features](#new-features)
     - [Internals](#internals)
+    - [Scope Notes](#scope-notes)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
     - [Tests](#tests)
-  - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
+  - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
     - [New Features](#new-features-1)
     - [Internals](#internals-1)
-  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
+    - [Tests](#tests-1)
+  - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
     - [New Features](#new-features-2)
     - [Internals](#internals-2)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
-  - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
+  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
     - [New Features](#new-features-3)
-    - [Performance](#performance)
     - [Internals](#internals-3)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
-    - [Tests](#tests-1)
+  - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
+    - [New Features](#new-features-4)
+    - [Performance](#performance)
+    - [Internals](#internals-4)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-3)
+    - [Tests](#tests-2)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
-    - [New Features](#new-features-4)
-    - [Behavior Changes](#behavior-changes)
-    - [Tests](#tests-2)
-  - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
     - [New Features](#new-features-5)
+    - [Behavior Changes](#behavior-changes)
+    - [Tests](#tests-3)
+  - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
+    - [New Features](#new-features-6)
     - [Behavior Changes](#behavior-changes-1)
-    - [Internals](#internals-4)
+    - [Internals](#internals-5)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -37,6 +43,42 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.5 (2026-04-13)
+
+Introduces a **per-vertex UV editing window** invoked from the material editor panel. v0.5.4 delivered material-level UV transform (offset / scale / rotation). v0.5.5 goes one layer deeper: individual UV vertices can now be selected and dragged directly inside the viewer. This is **Phase 1** — single-vertex selection and drag-move only; rectangle selection, rotation/scale, and texture-background preview are scheduled for v0.5.6+.
+
+### New Features
+
+- **UV Edit Window** — A new "UV 編集" button appears in the material editor panel header. Clicking it opens a dedicated floating `egui::Window` (`Id::new("uv_edit_window")`, 1-instance) whose title reflects the active material name. The window renders a square UV canvas (up to 260×260 px) of the active material's triangle wireframe in UV space with **v=0 at the top** / **v=1 at the bottom**, matching the `convert/uvmap.rs` PSD export so both views are directly comparable.
+- **Vertex Pick & Drag** — Clicking within 12 px of a UV vertex selects it (yellow). Dragging translates the selected vertex in UV space. Edits are written directly to `IrMesh.vertices_mut()[*].uv`, so re-exports (PMX writer) immediately reflect the change.
+- **Material Filter** — The window's ComboBox chooses which material's UVs are visible on the canvas. The button in the material editor panel header auto-sets the active material to whichever material is currently being edited.
+- **Vertex UV Persistence** — `TextureHistoryFile` gains `vertex_uv_overrides: HashMap<path, Vec<VertexUvOverrideEntry>>` (JSON version bumped to v3). "履歴を保存" now writes per-vertex UV deltas alongside texture and parameter deltas; "履歴呼出" restores them and syncs the GPU vertex buffer.
+- **GPU Sync on Mouse-Up** — `GpuModel::sync_uvs_from_ir` re-uploads the full vertex buffer only on drag-stop. Per-frame edits during the drag touch only CPU-side `IrVertex.uv` to keep the frame rate unaffected.
+
+### Internals
+
+- New `src/viewer/app/uv_edit.rs` introduces `UvEditState { overrides, selected, active_material, dragging, pending_restore }`. `apply_to_ir` writes overrides to IR; `apply_pending_restore` is called after `history recall`.
+- `ViewerApp` gains `uv_edit_window_open: bool` wired to `show_uv_edit_window`, which is invoked from `update()` right after `show_material_editor_window`.
+- New `VertexUvOverrideEntry { mesh_index, vertex_index, uv: [f32; 2] }` in `persistence.rs` — flat-array JSON layout (~30 byte per vertex).
+- `TextureHistoryFile` preserves backward compatibility: v0.5.4 and earlier `popone_history.json` files load unchanged via `#[serde(default)]`.
+- `GpuModel::sync_uvs_from_ir` walks IR meshes, uses the existing `global_to_gpu` map to find each GPU vertex index, updates `base_vertices[*].uv`, re-uploads via `queue.write_buffer`, and invalidates the morph cache so the next animation frame re-composites from fresh base data.
+
+### Scope Notes
+
+- **UV0 only.** UV1 (`IrMesh.uvs1`), morph UV, and multi UV-set switching are planned for Phase 3 (v0.5.7+).
+- **Single-vertex selection only.** Rectangle selection, bulk translate/scale/rotate with pivot, snap-to-grid, and zoom/pan are Phase 2 (v0.5.6).
+- **No undo.** "編集をすべてクリア" button discards overrides but does not restore the pre-edit UV (reload is required for a true revert). Undo history is Phase 2 work.
+
+### Bug Fixes (Pre-Release Review)
+
+- **review_result_01 [P1] Reload dropped per-vertex UV edits** — `finish_load_with_gpu` unconditionally called `self.uv_edit.reset()`, so any A-stance / T-stance conversion or `reload_current()` discarded unsaved UV edits. `ReloadSnapshot` now carries `uv_edit_overrides` / `uv_edit_active_material` / `uv_edit_window_open`; `restore_snapshot_on_success` reapplies overrides via `apply_to_ir` and re-uploads the GPU vertex buffer via `sync_uvs_from_ir`. `restore_snapshot_on_failure` also restores the override map so the in-memory state stays consistent after a failed reload.
+- **review_result_02 [P1] Drag-move over-accumulated per frame** — The original implementation added `response.drag_delta()` to the current UV every `dragged()` frame. Because the delta behavior depends on the egui version and can be cumulative from drag-press, long drags caused the vertex UV to fly far beyond the cursor. The implementation now captures each selected vertex's UV *and* the cursor UV position on `drag_started()`, then on every `dragged()` frame recomputes `new_uv = start_uv + (cursor_uv - press_uv)`. This makes the edit robust regardless of the `drag_delta()` frame/cumulative semantics. Added `canvas_to_uv` helper and `UvEditState::{drag_start_uvs, drag_press_uv}` fields (cleared on drag-stop and `reset()`).
+- **Hand-test feedback [P1] Canvas Y-axis disagreed with PSD export** — The initial Phase 1 canvas used the Blender/Maya convention (v=0 at the bottom), but `convert/uvmap.rs` rasterizes UV v directly to image Y (v=0 at the top). Comparing the editor against the exported PSD UV map showed a vertical flip. `uv_to_canvas` / `canvas_to_uv` are now both non-flipping on Y, so the editor visually matches the PSD output and side-by-side workflows work as expected.
+
+### Tests
+
+- Full test suite (179 tests) continues to pass. No new tests were added for Phase 1 — the UV edit surface is UI-driven and its data flow (IR → GpuModel → PMX writer) is already covered by existing round-trip tests.
 
 ## v0.5.4 (2026-04-13)
 

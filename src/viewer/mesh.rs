@@ -472,6 +472,40 @@ impl GpuModel {
         &self.base_indices
     }
 
+    /// IR の頂点 UV を GPU 側（`base_vertices` と `vertex_buf`）に同期する (v0.5.5)。
+    ///
+    /// 頂点編集エディタ（`UvEditState`）で UV を書き換えた後、mouse-up 等の編集確定時に
+    /// 呼び出す。毎フレーム呼ぶ想定ではない（vertex_buf 全体の再転送のため）。
+    /// animated_vertices が存在する場合は UV のみ同期（position/normal 等は次回モーフ適用で更新）。
+    pub fn sync_uvs_from_ir(&mut self, ir: &IrModel, queue: &wgpu::Queue) {
+        let mut global_offset = 0usize;
+        for mesh in &ir.meshes {
+            for (local_vi, v) in mesh.vertices.iter().enumerate() {
+                let global_vi = global_offset + local_vi;
+                if let Some(&gpu_vi) = self.global_to_gpu.get(global_vi) {
+                    if let Some(base_v) = self.base_vertices.get_mut(gpu_vi as usize) {
+                        base_v.uv = v.uv.to_array();
+                    }
+                }
+            }
+            global_offset += mesh.vertices.len();
+        }
+        let base = &self.base_vertices;
+        if let Some(av) = self.animated_vertices.as_mut() {
+            for (i, v) in av.iter_mut().enumerate() {
+                if let Some(bv) = base.get(i) {
+                    v.uv = bv.uv;
+                }
+            }
+        }
+        queue.write_buffer(
+            &self.vertex_buf,
+            0,
+            bytemuck::cast_slice(&self.base_vertices),
+        );
+        self.morph_cache_dirty = true;
+    }
+
     /// GPU モデルの法線を IrModel に書き戻す（PMX 変換時に再計算済み法線を反映）
     /// 座標変換は自己逆（Z反転/X反転を2回で元に戻る）なので同じ関数で逆変換
     pub fn write_normals_back(&self, ir: &mut IrModel) {

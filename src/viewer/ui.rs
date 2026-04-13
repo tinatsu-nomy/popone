@@ -69,13 +69,14 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let panel_w = ui.available_width();
-                let tab_width = (panel_w / 4.0).min(70.0);
-                for (tab, label) in [
+                let tabs: [(SidePanelTab, &str); 4] = [
                     (SidePanelTab::Info, "情報"),
                     (SidePanelTab::Control, "操作"),
                     (SidePanelTab::Display, "表示"),
                     (SidePanelTab::Export, "出力"),
-                ] {
+                ];
+                let tab_width = (panel_w / tabs.len() as f32).min(70.0);
+                for (tab, label) in tabs {
                     let is_active = app.side_panel_tab == tab;
                     let text = egui::RichText::new(label).size(11.0);
                     let text = if is_active {
@@ -1311,7 +1312,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
         .default_height(360.0)
         .frame(panel_frame)
         .show(ctx, |ui| {
-            // ヘッダ行: タイトル + 右端 [×] 閉じるボタン
+            // ヘッダ行: タイトル + 右端 [×] 閉じるボタン + UV 編集ボタン (v0.5.5)
             ui.horizontal(|ui| {
                 ui.heading(&window_title);
                 ui.with_layout(
@@ -1327,6 +1328,15 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             ))
                             .small(),
                         );
+                        // v0.5.5: UV 編集ウィンドウを開く（現在編集中の材質をアクティブにセット）
+                        if ui
+                            .small_button("UV 編集")
+                            .on_hover_text("頂点単位 UV 編集ウィンドウを開く (v0.5.5 Phase 1)")
+                            .clicked()
+                        {
+                            app.uv_edit.active_material = mat_idx;
+                            app.uv_edit_window_open = true;
+                        }
                     },
                 );
             });
@@ -5920,4 +5930,300 @@ fn hsv_to_color32(h: f32, s: f32, v: f32) -> Color32 {
         (g * 255.0 + 0.5) as u8,
         (b * 255.0 + 0.5) as u8,
     )
+}
+
+// ===========================================================================
+// UV編集タブ (v0.5.5 Phase 1: 頂点単位 UV 編集)
+// ===========================================================================
+
+/// UV 座標 (0..1) をキャンバス矩形上の画面座標に変換する。
+///
+/// UV Y=0 を**上端**、UV Y=1 を**下端**にマッピングする（PSD 出力 `convert/uvmap.rs` が
+/// `y = v * dim` で画像 Y に直書きしているのと合わせるため）。これにより UV エディタの
+/// 見え方と `.psd` UV マップの見え方が完全一致し、ユーザーが両者を同時参照できる。
+fn uv_to_canvas(uv: [f32; 2], rect: egui::Rect) -> egui::Pos2 {
+    egui::pos2(
+        rect.min.x + uv[0] * rect.width(),
+        rect.min.y + uv[1] * rect.height(),
+    )
+}
+
+/// キャンバス内の画面座標 (px) を UV 座標 (0..1) に変換する。`uv_to_canvas` の逆変換。
+fn canvas_to_uv(p: egui::Pos2, rect: egui::Rect) -> [f32; 2] {
+    [
+        (p.x - rect.min.x) / rect.width(),
+        (p.y - rect.min.y) / rect.height(),
+    ]
+}
+
+/// UV 編集ウィンドウ（v0.5.5 Phase 1）。材質編集パネルのヘッダボタンから開く。
+///
+/// `egui::Window` としてトップレベルで開き、`Id::new("uv_edit_window")` で 1 つに固定する
+/// （複数インスタンス化を防止）。`app.uv_edit_window_open` が `true` のときだけ描画し、
+/// ユーザーが × ボタンを押すと `false` に戻る。
+pub fn show_uv_edit_window(ctx: &egui::Context, app: &mut ViewerApp) {
+    if !app.uv_edit_window_open {
+        return;
+    }
+    // モデルがない場合は自動で閉じる（材質編集パネルと同じ挙動）
+    if app.loaded.is_none() {
+        app.uv_edit_window_open = false;
+        return;
+    }
+    // タイトルにアクティブ材質名を反映
+    let title = {
+        let mat_count = app
+            .loaded
+            .as_ref()
+            .map(|l| l.mat_cache.names.len())
+            .unwrap_or(0);
+        if app.uv_edit.active_material >= mat_count {
+            app.uv_edit.active_material = 0;
+        }
+        let name = app
+            .loaded
+            .as_ref()
+            .and_then(|l| l.mat_cache.names.get(app.uv_edit.active_material))
+            .cloned()
+            .unwrap_or_default();
+        format!("UV 編集: {}", name)
+    };
+    let mut is_open = true;
+    egui::Window::new(title)
+        .id(egui::Id::new("uv_edit_window"))
+        .default_width(320.0)
+        .default_height(440.0)
+        .resizable(true)
+        .collapsible(true)
+        .open(&mut is_open)
+        .show(ctx, |ui| {
+            show_uv_edit_body(ui, app);
+        });
+    app.uv_edit_window_open = is_open;
+}
+
+fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
+    ui.small("頂点をクリックで選択し、ドラッグで UV を移動 (Phase 1)");
+
+    if app.loaded.is_none() {
+        ui.add_space(8.0);
+        ui.label("モデルを読み込んでください。");
+        return;
+    }
+
+    // 材質一覧の取得（borrow 競合を避けるため clone でコピー）
+    let mat_names: Vec<String> = app
+        .loaded
+        .as_ref()
+        .map(|l| l.mat_cache.names.clone())
+        .unwrap_or_default();
+    let mat_count = mat_names.len();
+    if mat_count == 0 {
+        ui.label("材質がありません。");
+        return;
+    }
+
+    // active_material の正規化（材質数を超えていたら 0 に戻す）
+    if app.uv_edit.active_material >= mat_count {
+        app.uv_edit.active_material = 0;
+    }
+    let active_mat = app.uv_edit.active_material;
+
+    // 材質選択 ComboBox
+    egui::ComboBox::from_id_salt("uv_edit_material_combo")
+        .width(ui.available_width() - 4.0)
+        .selected_text(format!("[{}] {}", active_mat, mat_names[active_mat]))
+        .show_ui(ui, |ui| {
+            for (i, name) in mat_names.iter().enumerate() {
+                ui.selectable_value(
+                    &mut app.uv_edit.active_material,
+                    i,
+                    format!("[{}] {}", i, name),
+                );
+            }
+        });
+
+    // ステータス
+    let override_count = app.uv_edit.overrides.len();
+    let selected_count = app.uv_edit.selected.len();
+    ui.small(format!(
+        "編集済み頂点: {}  /  選択中: {}",
+        override_count, selected_count
+    ));
+
+    ui.horizontal(|ui| {
+        if ui.small_button("選択解除").clicked() {
+            app.uv_edit.selected.clear();
+        }
+        if ui
+            .small_button("編集をすべてクリア")
+            .on_hover_text("このモデルの全頂点 UV 編集を破棄（元の UV には戻らないため、編集前の状態に戻すにはリロードが必要）")
+            .clicked()
+        {
+            app.uv_edit.overrides.clear();
+            app.uv_edit.selected.clear();
+        }
+    });
+
+    ui.separator();
+
+    // キャンバス描画（正方形）
+    let canvas_size = ui.available_width().clamp(160.0, 260.0);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(canvas_size, canvas_size),
+        egui::Sense::click_and_drag(),
+    );
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, Color32::from_rgb(0x10, 0x10, 0x10));
+    painter.rect_stroke(
+        rect,
+        0.0,
+        egui::Stroke::new(1.0, Color32::from_gray(0x50)),
+        egui::StrokeKind::Inside,
+    );
+
+    // 描画: 選択材質のメッシュの UV ワイヤと頂点ドット
+    let wire_stroke = egui::Stroke::new(0.5, Color32::from_rgb(0x80, 0x80, 0x80));
+    let vert_default = Color32::from_rgb(0xE0, 0xE0, 0xE0);
+    let vert_edited = Color32::from_rgb(0x66, 0xBB, 0xFF);
+    let vert_selected = Color32::from_rgb(0xFF, 0xE0, 0x40);
+
+    if let Some(loaded) = app.loaded.as_ref() {
+        for (mi, mesh) in loaded.ir.meshes.iter().enumerate() {
+            if mesh.material_index != active_mat {
+                continue;
+            }
+            let verts = mesh.vertices.as_ref();
+            for tri in mesh.indices.as_ref().chunks_exact(3) {
+                let Some(a) = verts.get(tri[0] as usize) else {
+                    continue;
+                };
+                let Some(b) = verts.get(tri[1] as usize) else {
+                    continue;
+                };
+                let Some(c) = verts.get(tri[2] as usize) else {
+                    continue;
+                };
+                let pa = uv_to_canvas(a.uv.to_array(), rect);
+                let pb = uv_to_canvas(b.uv.to_array(), rect);
+                let pc = uv_to_canvas(c.uv.to_array(), rect);
+                painter.line_segment([pa, pb], wire_stroke);
+                painter.line_segment([pb, pc], wire_stroke);
+                painter.line_segment([pc, pa], wire_stroke);
+            }
+            for (vi, v) in verts.iter().enumerate() {
+                let key = (mi as u32, vi as u32);
+                let color = if app.uv_edit.selected.contains(&key) {
+                    vert_selected
+                } else if app.uv_edit.overrides.contains_key(&key) {
+                    vert_edited
+                } else {
+                    vert_default
+                };
+                let p = uv_to_canvas(v.uv.to_array(), rect);
+                painter.circle_filled(p, 2.5, color);
+            }
+        }
+    }
+
+    // クリック: 最寄頂点を選択（12px 以内のみ）
+    if response.clicked() {
+        if let Some(click_pos) = response.interact_pointer_pos() {
+            let mut best: Option<((u32, u32), f32)> = None;
+            if let Some(loaded) = app.loaded.as_ref() {
+                for (mi, mesh) in loaded.ir.meshes.iter().enumerate() {
+                    if mesh.material_index != active_mat {
+                        continue;
+                    }
+                    for (vi, v) in mesh.vertices.iter().enumerate() {
+                        let p = uv_to_canvas(v.uv.to_array(), rect);
+                        let d = (p - click_pos).length_sq();
+                        if best.is_none_or(|(_, bd)| d < bd) {
+                            best = Some(((mi as u32, vi as u32), d));
+                        }
+                    }
+                }
+            }
+            app.uv_edit.selected.clear();
+            if let Some((key, d2)) = best {
+                if d2 < 144.0 {
+                    app.uv_edit.selected.insert(key);
+                }
+            }
+        }
+    }
+
+    // ドラッグ開始: 選択頂点の UV とカーソル位置を記録（累積方式の基点, review_result_02 [P1]）
+    if response.drag_started() {
+        app.uv_edit.drag_start_uvs.clear();
+        app.uv_edit.drag_press_uv = None;
+        let selected: Vec<(u32, u32)> = app.uv_edit.selected.iter().copied().collect();
+        if let Some(loaded) = app.loaded.as_ref() {
+            for (mi, vi) in &selected {
+                if let Some(mesh) = loaded.ir.meshes.get(*mi as usize) {
+                    if let Some(v) = mesh.vertices.get(*vi as usize) {
+                        app.uv_edit
+                            .drag_start_uvs
+                            .insert((*mi, *vi), v.uv.to_array());
+                    }
+                }
+            }
+        }
+        if let Some(press_pos) = response.interact_pointer_pos() {
+            app.uv_edit.drag_press_uv = Some(canvas_to_uv(press_pos, rect));
+        }
+    }
+
+    // ドラッグ中: start_uv + (cursor_uv - press_uv) で再計算する。
+    // `drag_delta()` の累積/差分仕様に依存しないため、フレーム数に比例して過加算されない。
+    if response.dragged() && !app.uv_edit.drag_start_uvs.is_empty() {
+        if let (Some(press_uv), Some(cursor_pos)) =
+            (app.uv_edit.drag_press_uv, response.interact_pointer_pos())
+        {
+            let cursor_uv = canvas_to_uv(cursor_pos, rect);
+            let dx = cursor_uv[0] - press_uv[0];
+            let dy = cursor_uv[1] - press_uv[1];
+            let starts: Vec<((u32, u32), [f32; 2])> = app
+                .uv_edit
+                .drag_start_uvs
+                .iter()
+                .map(|(&k, &v)| (k, v))
+                .collect();
+            let mut new_entries: Vec<((u32, u32), [f32; 2])> = Vec::with_capacity(starts.len());
+            if let Some(loaded) = app.loaded.as_mut() {
+                for ((mi, vi), start_uv) in starts {
+                    if let Some(mesh) = loaded.ir.meshes.get_mut(mi as usize) {
+                        let verts = mesh.vertices_mut();
+                        if let Some(v) = verts.get_mut(vi as usize) {
+                            let nu = start_uv[0] + dx;
+                            let nv = start_uv[1] + dy;
+                            v.uv.x = nu;
+                            v.uv.y = nv;
+                            new_entries.push(((mi, vi), [nu, nv]));
+                        }
+                    }
+                }
+            }
+            for (k, uv) in new_entries {
+                app.uv_edit.overrides.insert(k, uv);
+            }
+            app.uv_edit.dragging = true;
+        }
+    }
+
+    // ドラッグ終了: GPU 同期（vertex_buf 再アップロード）と開始基点のクリア
+    if response.drag_stopped() && app.uv_edit.dragging {
+        let queue = app.render_state.queue.clone();
+        if let Some(loaded) = app.loaded.as_mut() {
+            loaded.gpu_model.sync_uvs_from_ir(&loaded.ir, &queue);
+        }
+        app.uv_edit.dragging = false;
+        app.uv_edit.drag_start_uvs.clear();
+        app.uv_edit.drag_press_uv = None;
+    }
+
+    ui.add_space(4.0);
+    ui.small(
+        "（UV0 のみ / 単一頂点選択のみ — 矩形選択・スケール・回転・テクスチャ背景は Phase 2 以降）",
+    );
 }

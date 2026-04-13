@@ -3,33 +3,39 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
-  - [v0.5.4（2026-04-13）](#v0542026-04-13)
+  - [v0.5.5（2026-04-13）](#v0552026-04-13)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85)
+    - [スコープ注記](#%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%97%E6%B3%A8%E8%A8%98)
     - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C)
     - [テスト](#%E3%83%86%E3%82%B9%E3%83%88)
-  - [v0.5.3（2026-04-13）](#v0532026-04-13)
+  - [v0.5.4（2026-04-13）](#v0542026-04-13)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-1)
-  - [v0.5.2（2026-04-13）](#v0522026-04-13)
+    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-1)
+    - [テスト](#%E3%83%86%E3%82%B9%E3%83%88-1)
+  - [v0.5.3（2026-04-13）](#v0532026-04-13)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-2)
-    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-1)
-  - [v0.5.1（2026-04-13）](#v0512026-04-13)
+  - [v0.5.2（2026-04-13）](#v0522026-04-13)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
-    - [パフォーマンス](#%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-3)
     - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-2)
-    - [テスト](#%E3%83%86%E3%82%B9%E3%83%88-1)
+  - [v0.5.1（2026-04-13）](#v0512026-04-13)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-4)
+    - [パフォーマンス](#%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9)
+    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-4)
+    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-3)
+    - [テスト](#%E3%83%86%E3%82%B9%E3%83%88-2)
     - [v0.6.0 に延期](#v060-%E3%81%AB%E5%BB%B6%E6%9C%9F)
   - [v0.5.0（2026-04-13）](#v0502026-04-13)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-4)
-    - [挙動の変更](#%E6%8C%99%E5%8B%95%E3%81%AE%E5%A4%89%E6%9B%B4)
-    - [テスト](#%E3%83%86%E3%82%B9%E3%83%88-2)
-  - [v0.4.0（2026-04-11）](#v0402026-04-11)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-5)
+    - [挙動の変更](#%E6%8C%99%E5%8B%95%E3%81%AE%E5%A4%89%E6%9B%B4)
+    - [テスト](#%E3%83%86%E3%82%B9%E3%83%88-3)
+  - [v0.4.0（2026-04-11）](#v0402026-04-11)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-6)
     - [挙動の変更](#%E6%8C%99%E5%8B%95%E3%81%AE%E5%A4%89%E6%9B%B4-1)
-    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-4)
+    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-5)
   - [v0.3.0（2026-04-11）](#v0302026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -37,6 +43,42 @@
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.5.5（2026-04-13）
+
+**材質編集パネルから呼び出す頂点単位 UV 編集ウィンドウ**を追加。v0.5.4 は材質単位の UV 変形（offset / scale / rotation）を提供したが、v0.5.5 は一段下のレイヤーに踏み込み、個々の UV 頂点をビューア内で直接選択・ドラッグできるようになった。本リリースは **Phase 1** で、単一頂点選択とドラッグ移動のみを提供する。矩形選択・回転・スケール・テクスチャ背景プレビューは v0.5.6 以降に分割予定。
+
+### 新機能
+
+- **UV 編集ウィンドウ** — 材質編集パネルのヘッダに「UV 編集」ボタンを追加。クリックでフローティング `egui::Window`（`Id::new("uv_edit_window")` で 1 インスタンス固定）が開き、タイトルにアクティブ材質名を表示。ウィンドウ内に最大 260×260 px の正方形キャンバスでアクティブ材質の三角形ワイヤーフレームを UV 空間（**v=0 を上端 / v=1 を下端**）で表示。`convert/uvmap.rs` の PSD 出力と同じ向きなので両者を直接並べて比較できる
+- **頂点ピック & ドラッグ** — UV 頂点から 12 px 以内をクリックすると選択（黄色）、ドラッグで UV 空間上を平行移動。編集結果は `IrMesh.vertices_mut()[*].uv` に直接書き込まれるため、再エクスポート（PMX 出力）に即時反映される
+- **材質フィルタ** — ウィンドウ内 ComboBox でキャンバスに表示する材質を切り替え。材質編集パネルの「UV 編集」ボタンからの起動時は現在編集中の材質を自動でアクティブにセット
+- **頂点 UV の永続化** — `TextureHistoryFile` に `vertex_uv_overrides: HashMap<path, Vec<VertexUvOverrideEntry>>` を追加（JSON バージョンを v3 に昇格）。「履歴を保存」で頂点単位 UV 差分をテクスチャ・パラメータ差分と並んで書き出し、「履歴呼出」で復元して GPU vertex buffer を再同期
+- **mouse-up 時のみ GPU 同期** — `GpuModel::sync_uvs_from_ir` はドラッグ終了時にのみ vertex buffer を全転送。ドラッグ中は CPU 側の `IrVertex.uv` 更新のみでフレームレートに影響しない
+
+### 内部実装
+
+- 新規 `src/viewer/app/uv_edit.rs` に `UvEditState { overrides, selected, active_material, dragging, pending_restore }` を実装。`apply_to_ir` で IR に差分を書き込み、`apply_pending_restore` で履歴呼出後の反映を行う
+- `ViewerApp` に `uv_edit_window_open: bool` を追加し、`show_uv_edit_window` を `update()` の `show_material_editor_window` 直後に呼び出す
+- `persistence.rs` に `VertexUvOverrideEntry { mesh_index, vertex_index, uv: [f32; 2] }` を追加。フラット配列 JSON レイアウトで 1 頂点あたり ~30 byte
+- `TextureHistoryFile` は `#[serde(default)]` により v0.5.4 以前の `popone_history.json` もそのまま読める後方互換
+- `GpuModel::sync_uvs_from_ir` は IR メッシュを走査し、既存の `global_to_gpu` マップで GPU 頂点Index を逆引きして `base_vertices[*].uv` を書き換え、`queue.write_buffer` で転送後にモーフキャッシュを無効化する
+
+### スコープ注記
+
+- **UV0 のみ対応**。UV1（`IrMesh.uvs1`）・モーフ UV・複数 UV セット切替は Phase 3（v0.5.7 以降）で対応予定
+- **単一頂点選択のみ**。矩形選択・複数頂点一括平行移動/スケール/回転・グリッドスナップ・ズーム/パンは Phase 2（v0.5.6）で対応予定
+- **undo なし**。「編集をすべてクリア」ボタンは overrides を破棄するだけで編集前の UV 値には戻らない（完全な revert にはリロードが必要）。履歴付き undo は Phase 2 で実装
+
+### バグ修正（リリース前レビュー対応）
+
+- **review_result_01 [P1] reload で頂点 UV 編集が消える問題を修正** — `finish_load_with_gpu` が無条件で `self.uv_edit.reset()` を呼んでいたため、A スタンス / T スタンス変換や `reload_current()` を挟むと未保存の UV 編集が失われていた。`ReloadSnapshot` に `uv_edit_overrides` / `uv_edit_active_material` / `uv_edit_window_open` を退避し、`restore_snapshot_on_success` で `apply_to_ir` による IR 反映と `sync_uvs_from_ir` による GPU vertex buffer 再同期を行う。`restore_snapshot_on_failure` でも overrides を書き戻し、失敗時のメモリ状態の整合を保つ
+- **review_result_02 [P1] ドラッグ移動が毎フレーム過加算される問題を修正** — 旧実装は `dragged()` フレーム毎に `response.drag_delta()` を現在 UV へ加算していたが、egui のバージョンによっては `drag_delta()` が「プレス開始点からの累積量」を返すケースがあり、フレーム数に比例して頂点 UV がカーソル移動量より大きく飛んでいた。新実装は `drag_started()` で各選択頂点の開始 UV とカーソル UV 位置を記録し、以降の `dragged()` フレームでは `new_uv = start_uv + (cursor_uv - press_uv)` で再計算する方式に変更。これにより `drag_delta()` が差分/累積どちらの意味論でも破綻しない。`canvas_to_uv` ヘルパーと `UvEditState::{drag_start_uvs, drag_press_uv}` フィールドを追加（ドラッグ終了および `reset()` でクリア）
+- **実機確認 [P1] UV キャンバスと PSD 出力の Y 方向が逆転** — 初期 Phase 1 実装は Blender/Maya 慣例で v=0 を下端に配置していたが、`convert/uvmap.rs` は UV v をそのまま画像 Y にラスタライズ（v=0 が上端）しており、エディタと出力 PSD を並べると上下が逆転して見えていた。`uv_to_canvas` / `canvas_to_uv` を両方 Y 非反転に変更し、PSD 出力と同じ向きに統一。エディタ上での編集結果が PSD 出力と視覚的に完全一致するようになった
+
+### テスト
+
+- 既存 179 テスト全通過。Phase 1 の UV 編集は UI 主体の機能であり、データフロー（IR → GpuModel → PMX writer）は既存のラウンドトリップテストで既にカバー済みのため新規テストは追加なし
 
 ## v0.5.4（2026-04-13）
 

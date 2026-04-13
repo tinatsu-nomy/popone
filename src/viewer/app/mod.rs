@@ -7,6 +7,7 @@ pub mod material_presets;
 pub mod pending;
 pub mod persistence;
 pub mod texture_mgmt;
+pub mod uv_edit;
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -524,6 +525,10 @@ pub struct ViewerApp {
     pending_window_restore: PendingWindowRestore,
     /// テクスチャ割り当て履歴（メモリキャッシュ）
     pub texture_history: persistence::TextureHistoryFile,
+    /// 頂点単位 UV 編集の状態 (v0.5.5)
+    pub uv_edit: uv_edit::UvEditState,
+    /// UV 編集ウィンドウの開閉状態 (v0.5.5)。材質編集パネルから開く。
+    pub uv_edit_window_open: bool,
     /// ダークテーマ適用済みフラグ（update初回で再適用、eframeのスタイルリセット対策）
     dark_theme_applied: bool,
     /// テーマから解決済みのパネル背景色
@@ -828,6 +833,8 @@ impl ViewerApp {
             config_dirty: false,
             pending_window_restore,
             texture_history,
+            uv_edit: uv_edit::UvEditState::default(),
+            uv_edit_window_open: false,
             dark_theme_applied: false,
             theme_panel_bg: Self::theme_color(&theme.panel_bg, DARK_PANEL_BG),
             theme_border: Self::theme_color(&theme.border, DARK_BORDER_COLOR),
@@ -1626,6 +1633,9 @@ impl ViewerApp {
 
         // 新規ロード時: サイドパネルを情報タブに戻す
         self.side_panel_tab = SidePanelTab::Info;
+        // 新規ロード時: UV 編集状態もリセット（メッシュ/頂点Index が変わるため再利用不可）
+        self.uv_edit.reset();
+        self.uv_edit_window_open = false;
         // 新規ロード時: シェーダーを初期値にリセットしてからモデル形式に応じて正規化
         self.display.shader_override = ShaderOverride::Default;
         self.display.use_mmd_path = false;
@@ -2380,6 +2390,9 @@ impl eframe::App for ViewerApp {
         // editing_material_index が Some のときのみ TopBottomPanel が出現し、
         // [編] アイコンOFFまたは [×] でパネル自体が消える（中央ビューポートが拡張される）。
         ui::show_material_editor_window(ctx, self);
+        // UV 編集ウィンドウ (v0.5.5 Phase 1): 材質編集パネル側のボタンから開く。
+        // フローティング `egui::Window` で、Id を固定して複数インスタンス化を防止。
+        ui::show_uv_edit_window(ctx, self);
 
         // 中央ビューポート
         egui::CentralPanel::default()

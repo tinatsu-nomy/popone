@@ -1337,6 +1337,12 @@ pub(crate) struct ReloadSnapshot {
     )>,
     vrma_active_index: Option<usize>,
     display: DisplaySettings,
+    /// v0.5.5: 頂点単位 UV 編集 overrides（reload 経路で保持するため）。
+    /// reload 時に `finish_load_with_gpu` が `uv_edit.reset()` を呼ぶため、
+    /// ここに退避しておき `restore_snapshot_on_success` で IR と GPU に再適用する。
+    uv_edit_overrides: HashMap<(u32, u32), [f32; 2]>,
+    uv_edit_active_material: usize,
+    uv_edit_window_open: bool,
 }
 
 impl ViewerApp {
@@ -4064,6 +4070,10 @@ impl ViewerApp {
             vrma_library: std::mem::take(&mut self.anim.library),
             vrma_active_index: self.anim.active_index.take(),
             display: self.display.clone(),
+            // v0.5.5: reload で新しい IR が組まれた後に再適用するため、現在の overrides を退避
+            uv_edit_overrides: std::mem::take(&mut self.uv_edit.overrides),
+            uv_edit_active_material: self.uv_edit.active_material,
+            uv_edit_window_open: self.uv_edit_window_open,
         }
     }
 
@@ -4090,6 +4100,14 @@ impl ViewerApp {
         self.anim.library = snap.vrma_library;
         self.anim.active_index = snap.vrma_active_index;
         self.display = snap.display;
+        // v0.5.5: リロード失敗時は旧モデルがそのまま残るので overrides を書き戻す。
+        // 旧 IR の頂点 UV も旧モデル内で保持されているため、apply_to_ir も呼び直して整合を取る。
+        self.uv_edit.overrides = snap.uv_edit_overrides;
+        self.uv_edit.active_material = snap.uv_edit_active_material;
+        self.uv_edit_window_open = snap.uv_edit_window_open;
+        if let Some(loaded) = self.loaded.as_mut() {
+            self.uv_edit.apply_to_ir(&mut loaded.ir);
+        }
         self.suppress_tex_match = false;
     }
 
@@ -4159,6 +4177,17 @@ impl ViewerApp {
         }
         // 表示設定を復元（シェーダーオーバーライド・ライト・Bloom 等）
         self.display = snap.display;
+        // v0.5.5: 頂点 UV 編集 overrides を復元し、IR 書き込み + GPU vertex buffer 再同期。
+        // `finish_load_with_gpu` が reset() した直後に上書きするため、ここが「真の復元点」。
+        // 新 IR のメッシュ/頂点数が変わった場合は `apply_to_ir` 内で範囲外を自動スキップする。
+        self.uv_edit.overrides = snap.uv_edit_overrides;
+        self.uv_edit.active_material = snap.uv_edit_active_material;
+        self.uv_edit_window_open = snap.uv_edit_window_open;
+        let queue = self.render_state.queue.clone();
+        if let Some(loaded) = self.loaded.as_mut() {
+            self.uv_edit.apply_to_ir(&mut loaded.ir);
+            loaded.gpu_model.sync_uvs_from_ir(&loaded.ir, &queue);
+        }
         // リロード完了: テクスチャ選択ダイアログ抑制を解除
         self.suppress_tex_match = false;
     }
