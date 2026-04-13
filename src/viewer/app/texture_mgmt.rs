@@ -174,8 +174,8 @@ impl ViewerApp {
         }
     }
 
-    /// 材質キャッシュを更新（テクスチャ割り当て後）
-    pub(super) fn update_mat_cache(&mut self) {
+    /// 材質キャッシュを更新（テクスチャ割り当て後 / 材質名編集後）
+    pub(in crate::viewer) fn update_mat_cache(&mut self) {
         if let Some(ref mut loaded) = self.loaded {
             loaded.mat_cache = Self::build_mat_cache(&loaded.ir, &loaded.gpu_model);
         }

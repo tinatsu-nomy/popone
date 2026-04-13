@@ -120,7 +120,7 @@
     - [UV Animation](#uv-animation)
     - [Transparent Draw Order Control (alphaMode / transparentWithZWrite / renderQueueOffsetNumber)](#transparent-draw-order-control-alphamode--transparentwithzwrite--renderqueueoffsetnumber)
   - [Material Editing and Expression Material Binds (v0.5.0 / v0.5.1)](#material-editing-and-expression-material-binds-v050--v051)
-    - [Material Editor Drawer — Update Path](#material-editor-drawer--update-path)
+    - [Material Editor Panel — Update Path (docked in v0.5.3)](#material-editor-panel--update-path-docked-in-v053)
     - [DrawCall.material_buf — Persistent Uniform Buffer Handle (v0.5.1)](#drawcallmaterial_buf--persistent-uniform-buffer-handle-v051)
     - [Full Rebuild Information-Source Integrity (VRM / PMX / PMD)](#full-rebuild-information-source-integrity-vrm--pmx--pmd)
     - [Texture History Recall Ordering](#texture-history-recall-ordering)
@@ -1959,9 +1959,11 @@ if material.alpha_cutoff < -0.75 {
 
 ## Material Editing and Expression Material Binds (v0.5.0 / v0.5.1)
 
-### Material Editor Drawer — Update Path
+### Material Editor Panel — Update Path (docked in v0.5.3)
 
-The material editor UI (`show_material_editor_window`, ui.rs:1020) opens a floating `egui::Window`, and the closure holds `&mut app` to update both the IR material and `MaterialParamOverride` simultaneously. At closure exit, `pending_override` is merged into `app.material_overrides[mat_idx]` and `material_dirty[mat_idx]` is set.
+The material editor UI (`show_material_editor_window`, ui.rs) was converted from a floating `egui::Window` to a fixed `egui::TopBottomPanel::bottom("material_editor_panel")` in v0.5.3. The panel is pinned directly above the shortcut hint bar, resizable by dragging its top edge, and its content is wrapped in `ScrollArea::vertical`. The `[×]` button sets `is_open = false`; after the closure, `editing_material_index` is cleared to `None`, which causes the panel itself to disappear (the central viewport expands automatically). Inside the closure, `&mut app` is held to update both the IR material and `MaterialParamOverride` simultaneously. At closure exit, `pending_override` is merged into `app.material_overrides[mat_idx]` and `material_dirty[mat_idx]` is set. The v0.5.3 material name edit records `pending_override.name = Some(...)` and — in the post-dirty pass — calls `update_mat_cache()` to refresh the side-panel material list immediately.
+
+The bottom-panel stacking order is "bottom = status_bar / middle = shortcut_hints / top = editor panel". This order is determined by the call order of `TopBottomPanel::bottom().show(ctx, ...)` in `update()` (app/mod.rs), so the material editor call site is placed right after the `shortcut_hints` declaration.
 
 At the end of `update()`, `apply_pending_material_rebuilds()` (app/mod.rs:1859) scans the dirty flags and calls `GpuRenderer::rebuild_material_bind_groups()`. In v0.5.1, this signature adds `queue: &wgpu::Queue` and `uniform_only: bool` — edits without texture changes take the `queue.write_buffer` fast path.
 

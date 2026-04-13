@@ -15,6 +15,20 @@ const DARK_PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x1D, 0x1D);
 /// ダークテーマのボーダー色 (#333333)
 const DARK_BORDER_COLOR: egui::Color32 = egui::Color32::from_rgb(0x33, 0x33, 0x33);
 
+// 材質行アイコン（v0.5.3 で [S][C][N][B][編] から絵文字へ移行）
+// egui の FontDefinitions::default() に含まれる NotoEmoji-Regular がフォールバックとして
+// 動作するため、Noto Sans JP/SC に無いコードポイントでも表示される想定。
+/// 法線平滑化（旧 [S]）— ✨
+const ICON_SMOOTH: &str = "✨";
+/// カスタム法線クリア（旧 [C]）— 🗑
+const ICON_CLEAR_NORMAL: &str = "🗑";
+/// ノーマルマップ（旧 [N]）— 🗺
+const ICON_NORMAL_MAP: &str = "🗺";
+/// エミッシブ（旧 [B]）— 💡
+const ICON_EMISSIVE: &str = "💡";
+/// 材質編集ドロワー（旧 [編]）— ✏
+const ICON_EDIT: &str = "✏";
+
 /// 材質パネルからのテクスチャ割り当てリクエスト
 enum TexAssignRequest {
     /// ファイルダイアログから選択
@@ -26,6 +40,10 @@ enum TexAssignRequest {
 pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
     // テクスチャ割り当てリクエスト（借用制約回避のためパネル外で処理）
     let mut tex_assign_request: Option<TexAssignRequest> = None;
+
+    // v0.5.3: 材質行先頭ボタンのサムネ表示用に IR テクスチャサムネを同期。
+    // 長さ比較で early return するため、同期済なら無コスト。
+    app.sync_ir_thumb_cache();
 
     let dark_panel = DARK_PANEL_BG;
     let dark_border = egui::Stroke::new(1.0, DARK_BORDER_COLOR);
@@ -1173,17 +1191,44 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
     // TextureId は Copy のため clone コストは無視できる。
     let ir_thumb_ids: Vec<Option<egui::TextureId>> = app.tex.ir_thumb_cache.clone();
 
-    egui::Window::new(window_title)
-        .id(egui::Id::new("material_editor_window"))
-        .open(&mut is_open)
+    // v0.5.3: フローティング Window から下部ドック型 TopBottomPanel に変更。
+    // ショートカットヒントバーの直上に固定し、伸縮可能・スクロール可能とする。
+    // 呼び出し側（app/mod.rs）が status_bar / shortcut_hints の後にこの関数を呼ぶことで
+    // パネル積み上げ順が「最下=status_bar / 中=shortcut_hints / 上=この編集パネル」になる。
+    let panel_frame = egui::Frame::new()
+        .fill(DARK_PANEL_BG)
+        .stroke(egui::Stroke::new(1.0, DARK_BORDER_COLOR))
+        .inner_margin(egui::Margin::same(4));
+    egui::TopBottomPanel::bottom("material_editor_panel")
         .resizable(true)
-        .collapsible(true)
-        .default_width(360.0)
+        .min_height(120.0)
+        .default_height(360.0)
+        .frame(panel_frame)
         .show(ctx, |ui| {
-            ui.label(
-                egui::RichText::new(format!("mat_idx: {} / {}", mat_idx, mat_count)).small(),
-            );
+            // ヘッダ行: タイトル + 右端 [×] 閉じるボタン
+            ui.horizontal(|ui| {
+                ui.heading(&window_title);
+                ui.with_layout(
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        if ui.small_button("✕").on_hover_text("編集パネルを閉じる").clicked() {
+                            is_open = false;
+                        }
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "mat_idx: {} / {}",
+                                mat_idx, mat_count
+                            ))
+                            .small(),
+                        );
+                    },
+                );
+            });
             ui.separator();
+            // パネル全体をスクロール可能に
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
 
             let Some(loaded) = app.loaded.as_mut() else {
                 return;
@@ -1191,6 +1236,22 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
             let Some(mat) = loaded.ir.materials.get_mut(mat_idx) else {
                 return;
             };
+
+            // ==================== 材質名編集 (v0.5.3) ====================
+            // 材質名を直接編集できる。変更は `MaterialParamOverride.name` に記録され、
+            // reload 後も apply_to で復元される。`update_mat_cache` で UI 側キャッシュも追従。
+            ui.horizontal(|ui| {
+                ui.label("材質名:");
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut mat.name)
+                        .desired_width(ui.available_width() - 4.0),
+                );
+                if resp.changed() {
+                    pending_override.name = Some(mat.name.clone());
+                    dirty = true;
+                }
+            });
+            ui.separator();
 
             // ==================== MToon 有効化チェックボックス (§G / Step 2-10) ====================
             //
@@ -2211,6 +2272,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                         .unwrap_or(".\\");
                     ui.small(format!("ray-mmd: {}", root_label));
                 });
+            }); // ScrollArea::vertical().show
         });
 
     if dirty {
@@ -2218,9 +2280,15 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
         // reload（A スタンス変換等）で新 IR が構築されても `apply_to()` で自動復元される。
         // `merge_from` が全 24 フィールドを macro で一括処理するため、各セクション追加
         // でもこの dirty 処理は 1 行のままで済む。
+        let name_changed = pending_override.name.is_some();
         let entry = app.material_overrides.entry(mat_idx).or_default();
         entry.merge_from(&pending_override);
         app.mark_material_dirty(mat_idx);
+        // v0.5.3: 材質名が変更された場合、UI 側キャッシュも再構築して
+        // サイドパネルの材質リスト表示に即反映する。
+        if name_changed {
+            app.update_mat_cache();
+        }
     }
 
     // review_024 [P2]: MME カテゴリ「推定に戻す」
@@ -3232,55 +3300,69 @@ fn show_tab_display(
             .iter()
             .any(|d| d.render_style == super::mesh::RenderStyle::Mmd)
     });
-    // per-material 法線フラグの一括切替チェックボックス
+    // per-material 法線フラグの一括切替（ラベル + [on]/[off] ボタン）
     ui.add_enabled_ui(!has_mmd_normals, |ui| {
         // 法線平滑化 一括
-        {
-            let all_on = !app.material_display.is_empty()
-                && app.material_display.iter().all(|d| d.smooth_normals);
-            let mut checked = all_on;
-            let resp = ui.checkbox(&mut checked, "法線平滑化（一括）");
-            if resp.changed() {
+        ui.horizontal(|ui| {
+            ui.label("法線平滑化");
+            let on_resp = ui.small_button("on");
+            let off_resp = ui.small_button("off");
+            let mut new_val: Option<bool> = None;
+            if on_resp.clicked() {
+                new_val = Some(true);
+            }
+            if off_resp.clicked() {
+                new_val = Some(false);
+            }
+            if let Some(v) = new_val {
                 if let Some(ref loaded) = app.loaded {
                     let ir_mats = &loaded.ir.materials;
                     for (i, d) in app.material_display.iter_mut().enumerate() {
-                        // 法線マップ付き材質はスキップ
-                        if ir_mats.get(i).is_some_and(|m| m.normal_texture.is_some()) {
+                        // 法線マップ付き材質は on 操作時に false 強制（既存仕様維持）
+                        if v && ir_mats.get(i).is_some_and(|m| m.normal_texture.is_some()) {
                             d.smooth_normals = false;
                         } else {
-                            d.smooth_normals = checked;
+                            d.smooth_normals = v;
                         }
                     }
                     app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                 }
             }
             if has_mmd_normals {
-                resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
+                on_resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
+                off_resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
             }
-        }
+        });
         // カスタム法線クリア 一括
-        {
-            let all_on = !app.material_display.is_empty()
-                && app.material_display.iter().all(|d| d.clear_normals);
-            let mut checked = all_on;
-            let resp = ui.checkbox(&mut checked, "カスタム法線クリア（一括）");
-            if resp.changed() {
+        ui.horizontal(|ui| {
+            ui.label("カスタム法線クリア");
+            let on_resp = ui.small_button("on");
+            let off_resp = ui.small_button("off");
+            let mut new_val: Option<bool> = None;
+            if on_resp.clicked() {
+                new_val = Some(true);
+            }
+            if off_resp.clicked() {
+                new_val = Some(false);
+            }
+            if let Some(v) = new_val {
                 if let Some(ref loaded) = app.loaded {
                     let ir_mats = &loaded.ir.materials;
                     for (i, d) in app.material_display.iter_mut().enumerate() {
-                        if ir_mats.get(i).is_some_and(|m| m.normal_texture.is_some()) {
+                        if v && ir_mats.get(i).is_some_and(|m| m.normal_texture.is_some()) {
                             d.clear_normals = false;
                         } else {
-                            d.clear_normals = checked;
+                            d.clear_normals = v;
                         }
                     }
                     app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                 }
             }
             if has_mmd_normals {
-                resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
+                on_resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
+                off_resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
             }
-        }
+        });
     });
 
     ui.add_space(12.0);
@@ -3470,7 +3552,7 @@ fn show_tab_display(
                         });
                     let resp = ui.add_enabled(
                         !group_mat_idxs.is_empty(),
-                        egui::SelectableLabel::new(all_on, "S"),
+                        egui::SelectableLabel::new(all_on, ICON_SMOOTH),
                     );
                     if resp.clicked() && !group_mat_idxs.is_empty() {
                         let new_val = !all_on;
@@ -3493,7 +3575,7 @@ fn show_tab_display(
                         });
                     let resp = ui.add_enabled(
                         !group_mat_idxs.is_empty(),
-                        egui::SelectableLabel::new(all_on, "C"),
+                        egui::SelectableLabel::new(all_on, ICON_CLEAR_NORMAL),
                     );
                     if resp.clicked() && !group_mat_idxs.is_empty() {
                         let new_val = !all_on;
@@ -3519,7 +3601,7 @@ fn show_tab_display(
                             .all(|&mi| app.material_display.get(mi).is_none_or(|d| d.normal_map));
                     let resp = ui.add_enabled(
                         !eligible.is_empty(),
-                        egui::SelectableLabel::new(all_on, "N"),
+                        egui::SelectableLabel::new(all_on, ICON_NORMAL_MAP),
                     );
                     if resp.clicked() && !eligible.is_empty() {
                         let new_val = !all_on;
@@ -3545,7 +3627,7 @@ fn show_tab_display(
                             .all(|&mi| app.material_display.get(mi).is_none_or(|d| d.emissive));
                     let resp = ui.add_enabled(
                         !eligible.is_empty(),
-                        egui::SelectableLabel::new(all_on, "B"),
+                        egui::SelectableLabel::new(all_on, ICON_EMISSIVE),
                     );
                     if resp.clicked() && !eligible.is_empty() {
                         let new_val = !all_on;
@@ -3598,6 +3680,9 @@ fn show_tab_display(
                 let mat_tex_info = &loaded.mat_cache.tex_indices;
                 let mat_names = &loaded.mat_cache.names;
                 let mat_src_tex = &loaded.mat_cache.source_tex_names;
+                // v0.5.3: 材質行先頭ボタンのサムネ表示用キャッシュ参照
+                let loaded_ir_thumb_ids: &[Option<egui::TextureId>] =
+                    &app.tex.ir_thumb_cache;
                 for &(i, mat_idx) in &group_draws {
                     if i >= app.material_visibility.len() { continue; }
                     let name = mat_names.get(mat_idx)
@@ -3610,20 +3695,15 @@ fn show_tab_display(
                     }
                     let row_resp = ui.horizontal(|ui| {
                 let mut row_highlight = false;
-                // テクスチャ状態インジケータ
+                // テクスチャ状態インジケータ（v0.5.3: サムネ表示対応）
+                // - 割当 IR テクスチャのサムネが取れる場合は ImageButton（18px）
+                // - has_tex=true だがサムネ未生成 → ■（緑）にフォールバック
+                // - has_tex=false → □（赤茶）プレースホルダ
                 {
-                    let has_tex = mat_tex_info.get(mat_idx)
-                        .and_then(|t| *t)
-                        .is_some();
-                    let indicator = if has_tex {
-                        egui::RichText::new("\u{25A3}")
-                            .color(egui::Color32::from_rgb(0x40, 0xC0, 0x40))
-                            .size(16.0)
-                    } else {
-                        egui::RichText::new("\u{25A1}")
-                            .color(egui::Color32::from_rgb(0xA0, 0x60, 0x60))
-                            .size(16.0)
-                    };
+                    let tex_idx_opt = mat_tex_info.get(mat_idx).and_then(|t| *t);
+                    let has_tex = tex_idx_opt.is_some();
+                    let thumb_id = tex_idx_opt
+                        .and_then(|idx| loaded_ir_thumb_ids.get(idx).copied().flatten());
                     let src_name = mat_src_tex.get(mat_idx)
                         .and_then(|s: &Option<String>| s.as_deref());
                     let tooltip = match (has_tex, src_name) {
@@ -3632,8 +3712,46 @@ fn show_tab_display(
                         (false, Some(s)) => format!("テクスチャ未設定 ({})\nクリックで割り当て", s),
                         (false, None) => "テクスチャ未設定\nクリックで割り当て".to_string(),
                     };
-                    let resp = ui.add(egui::Label::new(indicator).sense(egui::Sense::click()))
-                        .on_hover_text(&tooltip);
+                    // v0.5.3: ImageButton の枠分があるため、画像自体は 14px に抑えて
+                    // 行全体の見た目サイズを絵文字アイコン列と揃える。
+                    const THUMB_PX: f32 = 14.0;
+                    let thumb_size = egui::vec2(THUMB_PX, THUMB_PX);
+                    let resp = if let Some(tid) = thumb_id {
+                        // v0.5.3: コンパクトプリセット（padding=1, stroke=0.5）。
+                        // scope 内のみに適用し他のボタンには波及させない。
+                        ui.scope(|ui| {
+                            let style = ui.style_mut();
+                            style.spacing.button_padding = egui::vec2(1.0, 1.0);
+                            for w in [
+                                &mut style.visuals.widgets.inactive,
+                                &mut style.visuals.widgets.hovered,
+                                &mut style.visuals.widgets.active,
+                            ] {
+                                w.bg_stroke.width = 0.5;
+                            }
+                            ui.add(
+                                egui::ImageButton::new(
+                                    egui::Image::from_texture((tid, thumb_size))
+                                        .fit_to_exact_size(thumb_size),
+                                )
+                                .frame(true),
+                            )
+                            .on_hover_text(&tooltip)
+                        })
+                        .inner
+                    } else {
+                        let indicator = if has_tex {
+                            egui::RichText::new("\u{25A3}")
+                                .color(egui::Color32::from_rgb(0x40, 0xC0, 0x40))
+                                .size(16.0)
+                        } else {
+                            egui::RichText::new("\u{25A1}")
+                                .color(egui::Color32::from_rgb(0xA0, 0x60, 0x60))
+                                .size(16.0)
+                        };
+                        ui.add(egui::Label::new(indicator).sense(egui::Sense::click()))
+                            .on_hover_text(&tooltip)
+                    };
                     if resp.contains_pointer() {
                         row_highlight = true;
                     }
@@ -3713,7 +3831,7 @@ fn show_tab_display(
                     let old = d.smooth_normals;
                     let resp = ui.add_enabled(
                         true,
-                        egui::SelectableLabel::new(old, "S"),
+                        egui::SelectableLabel::new(old, ICON_SMOOTH),
                     );
                     if resp.clicked() {
                         app.material_display[mat_idx].smooth_normals = !old;
@@ -3726,7 +3844,7 @@ fn show_tab_display(
                     let old = d.clear_normals;
                     let resp = ui.add_enabled(
                         true,
-                        egui::SelectableLabel::new(old, "C"),
+                        egui::SelectableLabel::new(old, ICON_CLEAR_NORMAL),
                     );
                     if resp.clicked() {
                         app.material_display[mat_idx].clear_normals = !old;
@@ -3740,7 +3858,7 @@ fn show_tab_display(
                     let old = d.normal_map;
                     let resp = ui.add_enabled(
                         has_nmap,
-                        egui::SelectableLabel::new(old, "N"),
+                        egui::SelectableLabel::new(old, ICON_NORMAL_MAP),
                     );
                     if resp.clicked() && has_nmap {
                         app.material_display[mat_idx].normal_map = !old;
@@ -3755,7 +3873,7 @@ fn show_tab_display(
                     let has_emissive = mat_has_emissive.get(mat_idx).copied().unwrap_or(false);
                     let resp = ui.add_enabled(
                         has_emissive,
-                        egui::SelectableLabel::new(old, "B"),
+                        egui::SelectableLabel::new(old, ICON_EMISSIVE),
                     );
                     if resp.clicked() && has_emissive {
                         app.material_display[mat_idx].emissive = !old;
@@ -3765,13 +3883,13 @@ fn show_tab_display(
                     resp.on_hover_text("エミッシブ");
                 }
 
-                // [編] 材質編集ドロワー開閉（§A）。既存 [S][C][N][B] とは別列として扱い、
-                // クリックでフローティング Window をトグル表示。
-                // ※ 当初は `✎` (U+270E PENCIL) を使っていたが、組み込みの Noto Sans JP/SC には
-                //    絵文字字形が含まれず □ 表示になってしまうため、CJK 1 文字「編」に変更した。
+                // 材質編集パネル開閉（§A）。既存アイコン列とは別列として扱い、
+                // クリックで下部ドック型の編集パネルをトグル表示する。
+                // ※ 旧版で ✎ (U+270E) が表示できなかった件は、egui の NotoEmoji フォールバックに
+                //    含まれない code point だったのが原因。ICON_EDIT (✏ U+270F) はフォールバック対象。
                 {
                     let is_editing = app.editing_material_index == Some(mat_idx);
-                    let resp = ui.selectable_label(is_editing, "編");
+                    let resp = ui.selectable_label(is_editing, ICON_EDIT);
                     if resp.clicked() {
                         app.editing_material_index = if is_editing {
                             None
@@ -3780,7 +3898,7 @@ fn show_tab_display(
                         };
                     }
                     if resp.hovered() { row_highlight = true; }
-                    resp.on_hover_text("材質編集ドロワーを開く");
+                    resp.on_hover_text("材質編集パネルを開く");
                 }
 
                 let cb = if let Some(tex_name) = display_tex {

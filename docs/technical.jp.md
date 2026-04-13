@@ -120,7 +120,7 @@
     - [UV アニメーション](#uv-%E3%82%A2%E3%83%8B%E3%83%A1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3)
     - [透明描画順制御（alphaMode / transparentWithZWrite / renderQueueOffsetNumber）](#%E9%80%8F%E6%98%8E%E6%8F%8F%E7%94%BB%E9%A0%86%E5%88%B6%E5%BE%A1alphamode--transparentwithzwrite--renderqueueoffsetnumber)
   - [材質編集と Expression 材質バインド（v0.5.0 / v0.5.1）](#%E6%9D%90%E8%B3%AA%E7%B7%A8%E9%9B%86%E3%81%A8-expression-%E6%9D%90%E8%B3%AA%E3%83%90%E3%82%A4%E3%83%B3%E3%83%89v050--v051)
-    - [材質編集ドロワー — 更新経路](#%E6%9D%90%E8%B3%AA%E7%B7%A8%E9%9B%86%E3%83%89%E3%83%AD%E3%83%AF%E3%83%BC--%E6%9B%B4%E6%96%B0%E7%B5%8C%E8%B7%AF)
+    - [材質編集パネル — 更新経路（v0.5.3 でドック化）](#%E6%9D%90%E8%B3%AA%E7%B7%A8%E9%9B%86%E3%83%91%E3%83%8D%E3%83%AB--%E6%9B%B4%E6%96%B0%E7%B5%8C%E8%B7%AFv053-%E3%81%A7%E3%83%89%E3%83%83%E3%82%AF%E5%8C%96)
     - [DrawCall.material_buf — uniform バッファの永続ハンドル（v0.5.1）](#drawcallmaterial_buf--uniform-%E3%83%90%E3%83%83%E3%83%95%E3%82%A1%E3%81%AE%E6%B0%B8%E7%B6%9A%E3%83%8F%E3%83%B3%E3%83%89%E3%83%ABv051)
     - [full rebuild の情報源整合性（VRM / PMX / PMD 対応）](#full-rebuild-%E3%81%AE%E6%83%85%E5%A0%B1%E6%BA%90%E6%95%B4%E5%90%88%E6%80%A7vrm--pmx--pmd-%E5%AF%BE%E5%BF%9C)
     - [履歴呼出の順序原則](#%E5%B1%A5%E6%AD%B4%E5%91%BC%E5%87%BA%E3%81%AE%E9%A0%86%E5%BA%8F%E5%8E%9F%E5%89%87)
@@ -1936,9 +1936,11 @@ if material.alpha_cutoff < -0.75 {
 
 ## 材質編集と Expression 材質バインド（v0.5.0 / v0.5.1）
 
-### 材質編集ドロワー — 更新経路
+### 材質編集パネル — 更新経路（v0.5.3 でドック化）
 
-材質編集 UI（`show_material_editor_window`, ui.rs:1020）は `egui::Window` をフローティング表示し、closure 内で `&mut app` を保持して IR 材質と `MaterialParamOverride` を同時に更新する。closure 終端で `pending_override` を `app.material_overrides[mat_idx]` にマージし、`material_dirty[mat_idx]` を立てる。
+材質編集 UI（`show_material_editor_window`, ui.rs）は v0.5.3 でフローティング `egui::Window` から固定ドック型 `egui::TopBottomPanel::bottom("material_editor_panel")` に変更された。ショートカットヒントバー直上に固定表示され、上辺ドラッグで伸縮、内部は `ScrollArea::vertical` でスクロール可能。`[×]` ボタンで `is_open = false` を立て、closure 外で `editing_material_index = None` を設定することでパネル自体が出現しなくなる（中央ビューポートが自動拡張）。closure 内では `&mut app` を保持して IR 材質と `MaterialParamOverride` を同時に更新する。closure 終端で `pending_override` を `app.material_overrides[mat_idx]` にマージし、`material_dirty[mat_idx]` を立てる。v0.5.3 で追加された材質名編集は `pending_override.name = Some(...)` を記録した後、dirty 処理の後段で `update_mat_cache()` を呼んでサイドパネル表示を即時更新する。
+
+下部パネルの積み上げ順は「最下=status_bar / 中=shortcut_hints / 上=編集パネル」。この順序は `app/mod.rs` の `update()` 内で各 `TopBottomPanel::bottom().show(ctx, ...)` を呼ぶ順番で決まるため、材質編集パネルの呼び出しは `shortcut_hints` 宣言の直後に配置している。
 
 `update()` 終端で `apply_pending_material_rebuilds()`（app/mod.rs:1859）が dirty フラグを走査し、`GpuRenderer::rebuild_material_bind_groups()` を呼ぶ。v0.5.1 以降はこのシグネチャに `queue: &wgpu::Queue` と `uniform_only: bool` が追加されており、テクスチャ変更を伴わない編集は `queue.write_buffer` で部分更新される。
 

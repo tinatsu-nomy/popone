@@ -12,7 +12,7 @@
   - [Extras](#extras)
     - [Animation Playback](#animation-playback)
     - [PMX (MikuMikuDance) Conversion](#pmx-mikumikudance-conversion)
-    - [Material Editor (v0.5.0 / extended in v0.5.1 / v0.5.2)](#material-editor-v050--extended-in-v051--v052)
+    - [Material Editor (v0.5.0 – v0.5.3)](#material-editor-v050--v053)
     - [MME (ray-mmd) Output (v0.5.0)](#mme-ray-mmd-output-v050)
   - [Shader Support](#shader-support)
     - [Shader Detection](#shader-detection)
@@ -80,7 +80,7 @@ If the viewer is already running, subsequent launches pass the file path to the 
 - **Physics Visualization** — Rigid bodies (sphere/capsule/box) in 1px wireframe. PMX/PMD colored by physics_mode (bone-follow = green, physics = red, physics+bone = blue), VRM colored by group (collider = red, spring = green). Capsules include hemisphere wireframes (PMX/PMD)
 - **Joint Display** — PMX/PMD joints visualized as yellow cubes (rotation-aware, animation-synced). Adjustable opacity
 - **Shader Override** — 6 shader modes switchable via ▲ ComboBox ▼: Auto (auto-selects based on model format) / MToon/Lambert (force Standard path) / Unlit (texture color only) / GGX Preview (simplified Cook-Torrance specular) / Normal (normal→RGB visualization) / MMD (MMD dedicated path). Resets to Auto when loading a new model
-- **Normal Tools** — Normal smoothing `[S]`, custom normal clear `[C]` (compatible with normal maps: smoothing TBN base normals improves polygon edge visibility), normal map ON/OFF `[N]`, normal direction visualization
+- **Normal Tools** — Normal smoothing ✨, custom normal clear 🗑 (compatible with normal maps: smoothing TBN base normals improves polygon edge visibility), normal map ON/OFF 🗺, normal direction visualization. v0.5.3 adds bulk `法線平滑化 [on][off]` / `カスタム法線クリア [on][off]` button rows above the material list.
 - **MSAA** — 4x anti-aliasing (toggleable). MASK (cutout) materials enable alpha_to_coverage on both surface and outline passes for reduced jaggies on eyelashes, hair cards, etc.
 - **Bloom** — Dual Kawase post-effect. Only emissive components produce bloom (separated via MRT). Intensity, threshold, and radius adjustable in the UI. PMX/PMD materials with specular=(0,0,0) and specular_power≥100 are automatically bloom targets. Also supports Prefab Emission textures/colors. lilToon Screen-blend emission is attenuated to prevent white-out. Zero GPU cost when disabled. Per-material `[B]` toggle for individual emissive ON/OFF control. HDR emissive (component > 1.0) materials default to OFF to prevent white-out
 - **Editable Model Name (PMX output filename + title bar)** — A "Model name" text input in the top bar and another in the right-side "PMX Conversion" panel share the same value, and changes are reflected immediately in the window title, the PMX output filename, and the default UV map export filename. The initial value is determined by the load source: single file → file name; single Prefab → Prefab name; archive (zip / 7z / unitypackage) → archive file name. Appended models preserve the name decided at the first load. The edited name is also retained across reloads (A/T stance toggling, etc.)
@@ -168,10 +168,11 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - Auto-classified display frames (Root / Expression / Upper Body / Arms / Fingers / Legs / Other)
 - UV normalization (clamped to 0..1)
 
-### Material Editor (v0.5.0 / extended in v0.5.1 / v0.5.2)
+### Material Editor (v0.5.0 – v0.5.3)
 
-Click the "編" button on any material row in the Display tab to open the Material Editor drawer.
+Click the ✏ icon on any material row in the Display tab to open the Material Editor as a docked panel directly above the shortcut hint bar. Close it with the `[×]` button at the top right.
 
+- **Material Name Editing (v0.5.3)** — The TextEdit at the top of the panel lets you rename a material in place. The change is recorded into `material_overrides` and is restored across reload / A-stance conversion / history save.
 - **Editable parameters** — diffuse color, alpha mode/cutoff, shade color, shading toony/shift, outline color/width/mode, parametric rim, matcap factor, emissive factor, normal scale, UV animation speeds, render queue offset
 - **Texture slot assignment (refactored in v0.5.2)** — Each parameter section now shows the related texture thumbnail (32px square) as a button at its top:
   - **Basic**: BaseColor

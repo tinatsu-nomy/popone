@@ -92,6 +92,11 @@ pub struct MaterialParamOverride {
     // ===== MME カテゴリ上書き (§K.3 / Step 6) =====
     /// ユーザーが手動で上書きした ray-mmd カテゴリ。`None` = 推定値を使用。
     pub mme_kind: Option<crate::convert::mme::ray_mmd::RayMmdMaterialKind>,
+
+    // ===== 材質名 (v0.5.3) =====
+    /// ユーザーが編集した材質名。`None` = pristine の name をそのまま使用。
+    /// `String` は Copy でないため、merge/apply では個別に clone する。
+    pub name: Option<String>,
 }
 
 impl MaterialParamOverride {
@@ -157,6 +162,10 @@ impl MaterialParamOverride {
             // MME
             mme_kind,
         );
+        // String は Copy でないため個別に clone
+        if let Some(ref v) = other.name {
+            self.name = Some(v.clone());
+        }
     }
 
     /// `Some(_)` のフィールドが 1 つでもあれば `true` を返す。
@@ -188,6 +197,7 @@ impl MaterialParamOverride {
             && self.normal_texture_scale.is_none()
             && self.render_queue_offset.is_none()
             && self.mme_kind.is_none()
+            && self.name.is_none()
     }
 
     /// `pristine`（ロード直後の IR 材質値）と `current`（ユーザー編集後の IR 材質値）を
@@ -206,6 +216,11 @@ impl MaterialParamOverride {
         // enable_mtoon: shader_family の差分
         if pristine.shader_family != current.shader_family {
             out.enable_mtoon = Some(matches!(current.shader_family, ShaderFamily::Mtoon));
+        }
+
+        // 材質名の差分（String は Copy でないため diff_field macro 対象外）
+        if pristine.name != current.name {
+            out.name = Some(current.name.clone());
         }
 
         // 基本
@@ -309,6 +324,11 @@ impl MaterialParamOverride {
     /// **§G との関係**: 通常の MToon 系フィールド適用では `shader_family` を変更しない
     /// が、`enable_mtoon` の明示操作だけは `shader_family` を切替える設計。
     pub fn apply_to(&self, mat: &mut IrMaterial) {
+        // 材質名（v0.5.3）
+        if let Some(ref v) = self.name {
+            mat.name = v.clone();
+        }
+
         // ===== MToon 有効化 (最優先) =====
         // 他の MToon 系フィールド適用より**先**に処理することで、後続の
         // `mtoon_mut()` 呼び出しで不整合が起きないようにする。

@@ -3,25 +3,28 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
+  - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
     - [New Features](#new-features)
     - [Internals](#internals)
+  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
+    - [New Features](#new-features-1)
+    - [Internals](#internals-1)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
   - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
-    - [New Features](#new-features-1)
+    - [New Features](#new-features-2)
     - [Performance](#performance)
-    - [Internals](#internals-1)
+    - [Internals](#internals-2)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
     - [Tests](#tests)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
-    - [New Features](#new-features-2)
+    - [New Features](#new-features-3)
     - [Behavior Changes](#behavior-changes)
     - [Tests](#tests-1)
   - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
-    - [New Features](#new-features-3)
+    - [New Features](#new-features-4)
     - [Behavior Changes](#behavior-changes-1)
-    - [Internals](#internals-2)
+    - [Internals](#internals-3)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -29,6 +32,25 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.3 (2026-04-13)
+
+Material editor UI refresh: the floating window has been replaced with a fixed bottom-dock panel above the shortcut hint bar. Material name editing, row thumbnail buttons, emoji icons, and on/off bulk normal toggles are introduced in a single pass.
+
+### New Features
+
+- **Material Name Editing** — A `TextEdit` field is added at the top of the material editor panel, allowing in-place name changes. Edits are recorded via `MaterialParamOverride.name: Option<String>` into `material_overrides`, and are restored across reload / A-stance conversion / `popone_history.json` save. After editing, `update_mat_cache()` refreshes the side panel material list immediately.
+- **Dockable Material Editor Panel** — The old floating `egui::Window` has been converted to `egui::TopBottomPanel::bottom("material_editor_panel")`. It is pinned directly above the shortcut hint bar, resizable via its top edge, and its content is wrapped in `ScrollArea::vertical`. A `[×]` button in the header closes the panel. When the edit icon is off, the panel is not declared at all, so the central viewport automatically expands.
+- **Thumbnail Leading Button** — The old □/■ character indicator in each material row is replaced by a 14×14 px texture thumbnail `ImageButton` backed by `ir_thumb_cache`. A compact frame preset (`spacing.button_padding = (1,1)` + `stroke = 0.5`) is applied locally via `ui.scope`, leaving other buttons untouched. When no thumbnail is available it falls back to the old □/■ (the filled ■ still signals "assigned but thumbnail not yet built").
+- **Emoji Icon Set** — The `[S][C][N][B][編]` labels on material rows and group headers are replaced with `✨🗑🗺💡✏`. The constants `ICON_SMOOTH / ICON_CLEAR_NORMAL / ICON_NORMAL_MAP / ICON_EMISSIVE / ICON_EDIT` are consolidated at the top of `ui.rs`.
+- **On/Off Bulk Normal Controls** — The "法線平滑化（一括）" / "カスタム法線クリア（一括）" checkboxes are replaced with `label + [on] + [off]` compact button rows. The existing rule of skipping normal-textured materials on the "on" path is preserved.
+
+### Internals
+
+- Added `name: Option<String>` to `MaterialParamOverride`. Because `String` is not `Copy`, it is handled outside the existing `merge!` / `diff_field!` macros with explicit `clone()` in `merge_from` / `diff_from` / `apply_to`.
+- Expanded the visibility of `update_mat_cache` from `pub(super)` to `pub(in crate::viewer)` so that `ui.rs` can rebuild the name cache after an edit.
+- Added a call to `app.sync_ir_thumb_cache()` at the top of `show_side_panel` (length-compare early-return keeps it zero-cost when already synced).
+- Moved the material editor panel call site from before `apply_pending_material_rebuilds()` to after the `shortcut_hints` panel declaration to enforce the bottom-panel stacking order "bottom = status_bar / middle = shortcut_hints / top = editor panel".
 
 ## v0.5.2 (2026-04-13)
 

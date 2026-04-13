@@ -2291,14 +2291,11 @@ impl eframe::App for ViewerApp {
         // 右側パネル
         ui::show_side_panel(ctx, self);
 
-        // 材質編集ドロワー（§A）: editing_material_index が Some のときだけ表示される
-        // フローティング egui::Window。右パネル衝突を避けるためサイドパネルではなく
-        // Window 型ドロワーを採用（TODO-8: Id 固定で単一インスタンス）。
-        ui::show_material_editor_window(ctx, self);
-
         // 材質編集による dirty フラグを消化（§C）:
         // UI 操作で立った material_dirty を見て rebuild_material_bind_groups を呼び、
         // 同フレーム内に標準パスと MMD 互換パスの bind group を両方更新する。
+        // ※ 材質編集パネル本体は status_bar/shortcut_hints の追加後に呼ぶことで
+        //    積み上げ順「最下=status_bar / 中=shortcut_hints / 上=編集パネル」を確保する。
         self.apply_pending_material_rebuilds();
 
         // テクスチャD&Dダイアログ + プレビュー同期
@@ -2378,6 +2375,11 @@ impl eframe::App for ViewerApp {
                     });
                 });
             });
+
+        // 材質編集パネル（v0.5.3）: ショートカットヒントバーの直上に固定表示。
+        // editing_material_index が Some のときのみ TopBottomPanel が出現し、
+        // [編] アイコンOFFまたは [×] でパネル自体が消える（中央ビューポートが拡張される）。
+        ui::show_material_editor_window(ctx, self);
 
         // 中央ビューポート
         egui::CentralPanel::default()
