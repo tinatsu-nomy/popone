@@ -4485,13 +4485,21 @@ impl GpuRenderer {
     /// 現行 `DrawCall` は `wgpu::BindGroup` のみを保持して `wgpu::Buffer` ハンドルを持たないため
     /// `queue.write_buffer` による部分更新は構造上不可能。bind group ごと再生成する方針で割り切り
     /// （プラン §C に明記、将来最適化は DrawCall.material_buf 追加で別 PR にて実施）。
+    /// 材質パラメータの変更を GPU に反映する。
+    ///
+    /// - `uniform_only = true`: カラー/スカラーのみ変更。`queue.write_buffer` で部分更新し、
+    ///   bind group 再生成をスキップする（材質エディタのスライダー操作、Expression 材質バインド用）。
+    /// - `uniform_only = false`: テクスチャ変更を含む。bind group + aux bind group を再生成する。
+    #[allow(clippy::too_many_arguments)]
     pub fn rebuild_material_bind_groups(
         &self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         model: &mut GpuModel,
         ir: &IrModel,
         mat_idx: usize,
         flags: &MaterialBuildFlags,
+        uniform_only: bool,
     ) {
         use super::mesh::{
             build_aux_refs_for, build_material_params_for, rebuild_mtoon_aux_bind_group,
@@ -4505,6 +4513,18 @@ impl GpuRenderer {
 
         // §C: 純関数で params / aux_refs を計算
         let params = build_material_params_for(mat, mat_idx, flags);
+
+        if uniform_only {
+            // ファストパス: buffer 書き込みのみ、bind group 再生成なし
+            for draw in &mut model.draws {
+                if draw.material_index == mat_idx {
+                    write_material_buffer(queue, &draw.material_buf, &params);
+                }
+            }
+            return;
+        }
+
+        // フルパス: bind group 再生成（テクスチャ変更時）
         let aux_refs = build_aux_refs_for(mat);
 
         // 借用衝突を回避するため draws を一時的に奪う（prepare_mmd_resources と同じパターン）
@@ -4517,9 +4537,30 @@ impl GpuRenderer {
                 continue;
             }
 
-            // 標準パス: material_bind_group
-            draw.material_bind_group =
-                create_material_bind_group(device, &self.material_bgl, &params);
+            // 標準パス: material uniform buffer を更新
+            write_material_buffer(queue, &draw.material_buf, &params);
+
+            // v0.5.1 レビュー [P1] 対応: 標準パスの texture_bind_group（BaseColor）も再生成する。
+            // 旧実装は aux / mmd のみ更新していたため、pristine 復元や texture_index の変更が
+            // GPU 側に反映されず、古い BaseColor テクスチャ bind が画面に残る不具合があった。
+            //
+            // レビュー 04 [P1] 対応: 情報源を初回 DrawCall 構築と揃える（mesh.rs:1256）。
+            // 旧実装は `mat.base_color_tex_info` のみを参照していたが、PMX/PMD 材質は
+            // `texture_index` を持つ一方で `base_color_tex_info` が None のため、
+            // full rebuild で `texture_bind_group = None` になり白テクスチャに後退していた。
+            // 修正: `texture_index` を優先し、サンプラーは `base_color_tex_info.sampler` があれば
+            // それ、なければデフォルト `IrSamplerInfo` にフォールバック。
+            draw.texture_bind_group = mat.texture_index.and_then(|tex_idx| {
+                gpu_texture_views.get(tex_idx).map(|srgb_view| {
+                    let sampler_info = mat
+                        .base_color_tex_info
+                        .as_ref()
+                        .map(|ti| ti.sampler)
+                        .unwrap_or_default();
+                    let sampler = super::mesh::create_sampler_from_info(device, &sampler_info);
+                    create_texture_bind_group(device, &self.texture_bgl, srgb_view, &sampler)
+                })
+            });
 
             // 標準パス: mtoon_aux_bind_group（aux_refs が Some の材質のみ）
             if let Some(refs) = &aux_refs {
@@ -4736,11 +4777,9 @@ pub struct MaterialParams {
     pub matcap_uv: ([f32; 4], [f32; 4]),
 }
 
-pub fn create_material_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    params: &MaterialParams,
-) -> wgpu::BindGroup {
+/// `MaterialParams` を `MaterialUniform` に変換し encase でシリアライズする。
+/// `create_material_buffer_and_bind_group` / `write_material_buffer` の共通パス。
+pub fn serialize_material_uniform(params: &MaterialParams) -> Vec<u8> {
     let p = params;
     let uniform = MaterialUniform {
         diffuse: p.diffuse.into(),
@@ -4795,20 +4834,51 @@ pub fn create_material_bind_group(
     };
     let mut encase_buf = encase::UniformBuffer::new(Vec::new());
     encase_buf.write(&uniform).expect("encase write");
+    encase_buf.into_inner()
+}
+
+/// 材質 uniform バッファ（`UNIFORM | COPY_DST`）と bind group を同時に作成する。
+/// モデルロード時に使用。返された `wgpu::Buffer` は `DrawCall.material_buf` に保持し、
+/// `write_material_buffer` で per-frame 部分更新が可能。
+pub fn create_material_buffer_and_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    params: &MaterialParams,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let bytes = serialize_material_uniform(params);
     let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("material_uniform"),
-        contents: encase_buf.as_ref(),
-        usage: wgpu::BufferUsages::UNIFORM,
+        contents: &bytes,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
-
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
+    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("material_bg"),
         layout,
         entries: &[wgpu::BindGroupEntry {
             binding: 0,
             resource: buf.as_entire_binding(),
         }],
-    })
+    });
+    (buf, bg)
+}
+
+/// 既存の材質 uniform バッファに新しいパラメータを書き込む。
+/// bind group 再生成なしで GPU 上の材質パラメータを更新する。
+/// Expression 材質バインドや材質エディタのカラー/スカラー変更時に使用。
+pub fn write_material_buffer(queue: &wgpu::Queue, buf: &wgpu::Buffer, params: &MaterialParams) {
+    let bytes = serialize_material_uniform(params);
+    queue.write_buffer(buf, 0, &bytes);
+}
+
+/// 後方互換シム: `create_material_bind_group` のシグネチャを維持。
+/// 新規コードでは `create_material_buffer_and_bind_group` を使うこと。
+pub fn create_material_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    params: &MaterialParams,
+) -> wgpu::BindGroup {
+    let (_, bg) = create_material_buffer_and_bind_group(device, layout, params);
+    bg
 }
 
 /// MToon 補助テクスチャ bind group layout (group 3) を作成

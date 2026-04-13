@@ -1916,6 +1916,18 @@ fn build_morphs(ir: &IrModel, use_vrm0_coords: bool, scale: f32) -> Vec<PmxMorph
                         .collect();
                     (0u8, PmxMorphOffsets::Group(pmx_offs))
                 }
+                IrMorphKind::Material { .. } => {
+                    // PMX には材質モーフ型があるが、VRM Expression 由来の
+                    // materialColorBind は PMX 材質モーフのセマンティクスと
+                    // 一致しないため、空のグループモーフとして出力する。
+                    log::debug!(
+                        "  [{}:{}] \"{}\" material morph (skipped for PMX)",
+                        panel_name(m.panel),
+                        m.panel,
+                        m.name,
+                    );
+                    (0u8, PmxMorphOffsets::Group(Vec::new()))
+                }
             };
 
             PmxMorph {

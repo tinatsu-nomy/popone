@@ -446,6 +446,9 @@ pub struct ViewerApp {
     /// **Step 3 の移行計画**: 本フィールドは `MaterialEditRecord.param_override` に
     /// 吸収され、`declarative_macro` による diff/apply 自動生成に置き換えられる予定。
     pub material_overrides: std::collections::HashMap<usize, material_edit::MaterialParamOverride>,
+    /// M6 Step 6.4: 材質パラメータのコピー/ペースト用クリップボード。
+    /// テクスチャ割当は含まない（パス依存を避けるため）、カラー/スカラー値のみ。
+    pub clipboard_material: Option<material_edit::MaterialParamOverride>,
     /// 材質フィルター文字列
     pub material_filter: String,
     /// 表情モーフフィルター文字列
@@ -783,6 +786,7 @@ impl ViewerApp {
             pristine_materials: Vec::new(),
             slot_texture_paths: std::collections::HashMap::new(),
             material_overrides: std::collections::HashMap::new(),
+            clipboard_material: None,
             export: ExportState::default(),
             material_filter: String::new(),
             morph_filter: String::new(),
@@ -1871,6 +1875,7 @@ impl ViewerApp {
         };
 
         let device = &self.render_state.device;
+        let queue = &self.render_state.queue;
         let mat_count = loaded.ir.materials.len();
         let flags = Self::per_mat_or_default_display(&self.material_display, mat_count);
         // 古いモデルの dirty が残っている可能性があるので ir.materials.len() にクランプ
@@ -1878,17 +1883,63 @@ impl ViewerApp {
 
         for mat_idx in 0..dirty_len {
             if self.material_dirty[mat_idx] {
+                // テクスチャ変更を伴うかどうかで uniform_only を判定
+                // material_dirty はテクスチャ変更時にも立つため、常に full rebuild を行う
                 renderer.rebuild_material_bind_groups(
                     device,
+                    queue,
                     &mut loaded.gpu_model,
                     &loaded.ir,
                     mat_idx,
                     &flags,
+                    false, // uniform_only: テクスチャ変更の可能性があるため full rebuild
                 );
+
+                // v0.5.1 レビュー [P2] 対応: 材質エディタ編集値が Expression の新しいベース値になる仕様を実装。
+                //
+                // 旧実装は material_base_values をモデルロード時に一度だけキャプチャしており、
+                // 材質エディタで diffuse / emissive / shade / rim / matcap / UV を編集後に
+                // Expression を再生すると、合成基準が「編集後」ではなく「ロード時」のままだった。
+                // dirty 時に `MaterialBaseValues::from_ir()` で再キャプチャして最新値を反映する。
+                if let Some(mat) = loaded.ir.materials.get(mat_idx) {
+                    if mat_idx < loaded.gpu_model.material_base_values.len() {
+                        loaded.gpu_model.material_base_values[mat_idx] =
+                            crate::viewer::mesh::MaterialBaseValues::from_ir(mat);
+                    }
+                }
             }
         }
         // すべての dirty を消化（リサイズが古くてクランプ外でも全消去）
         self.material_dirty.fill(false);
+
+        // v0.5.1 レビュー 02 [P1] 対応: 材質編集の rebuild 後に Expression 材質バインドを
+        // 再適用する。旧実装では dirty 対象材質の uniform は base 値のみ書き込まれており、
+        // 手動モーフで非ゼロの Expression が保持されているケースでは「編集した瞬間に
+        // Expression の材質反映が消える」不具合があった（次フレームの update_animation で
+        // 上書きされるが、再生停止中・手動モーフ単独時は復帰しない）。
+        //
+        // accumulate_expression_materials は Material morph が参照する全材質を dirty 扱いに
+        // するため、編集対象外の材質でも Expression 影響下なら正しく再適用される。
+        if self.morph_weights.iter().any(|w| w.abs() > 1e-6) {
+            let mat_count = loaded.ir.materials.len();
+            let dirty_params = crate::viewer::mesh::accumulate_expression_materials(
+                &loaded.gpu_model.gpu_morphs,
+                &self.morph_weights,
+                &loaded.gpu_model.material_base_values,
+                &loaded.ir.materials,
+                mat_count,
+                &flags,
+            );
+            for (mat_idx, params) in dirty_params.iter().enumerate() {
+                if let Some(p) = params {
+                    for draw in &loaded.gpu_model.draws {
+                        if draw.material_index == mat_idx {
+                            crate::viewer::gpu::write_material_buffer(queue, &draw.material_buf, p);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// VRM の IrTexture（raw ピクセル）を PNG エンコード済みに変換
@@ -2017,6 +2068,32 @@ impl ViewerApp {
                     &self.morph_weights,
                     &loaded.ir,
                 );
+
+                // Expression 材質バインドの GPU 反映
+                let mat_count = loaded.ir.materials.len();
+                let flags = Self::per_mat_or_default_display(&self.material_display, mat_count);
+                let dirty_params = crate::viewer::mesh::accumulate_expression_materials(
+                    &loaded.gpu_model.gpu_morphs,
+                    &self.morph_weights,
+                    &loaded.gpu_model.material_base_values,
+                    &loaded.ir.materials,
+                    mat_count,
+                    &flags,
+                );
+                for (mat_idx, params) in dirty_params.iter().enumerate() {
+                    if let Some(p) = params {
+                        for draw in &loaded.gpu_model.draws {
+                            if draw.material_index == mat_idx {
+                                crate::viewer::gpu::write_material_buffer(
+                                    queue,
+                                    &draw.material_buf,
+                                    p,
+                                );
+                            }
+                        }
+                    }
+                }
+
                 self.morph_dirty = false;
             }
         }
@@ -2326,6 +2403,33 @@ impl eframe::App for ViewerApp {
                     if let Some(ref mut loaded) = self.loaded {
                         let queue = &self.render_state.queue;
                         loaded.gpu_model.apply_morphs(&self.morph_weights, queue);
+
+                        // Expression 材質バインド: スライダー操作時も反映
+                        let mat_count = loaded.ir.materials.len();
+                        let flags =
+                            Self::per_mat_or_default_display(&self.material_display, mat_count);
+                        let dirty_params = crate::viewer::mesh::accumulate_expression_materials(
+                            &loaded.gpu_model.gpu_morphs,
+                            &self.morph_weights,
+                            &loaded.gpu_model.material_base_values,
+                            &loaded.ir.materials,
+                            mat_count,
+                            &flags,
+                        );
+                        for (mat_idx, params) in dirty_params.iter().enumerate() {
+                            if let Some(p) = params {
+                                for draw in &loaded.gpu_model.draws {
+                                    if draw.material_index == mat_idx {
+                                        crate::viewer::gpu::write_material_buffer(
+                                            queue,
+                                            &draw.material_buf,
+                                            p,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
                         self.morph_dirty = false;
                     }
                 }

@@ -322,6 +322,15 @@ pub struct TextureHistoryEntry {
     pub material_index: usize,
     pub material_name: String,
     pub texture_path: String,
+    /// v0.5.1 追加: テクスチャスロット種別。
+    /// `#[serde(default)]` により v0.5.0 以前の JSON（このフィールドがない）は
+    /// `TextureSlot::BaseColor` として解釈される（後方互換）。
+    #[serde(default = "default_base_color_slot")]
+    pub slot: crate::intermediate::types::TextureSlot,
+}
+
+fn default_base_color_slot() -> crate::intermediate::types::TextureSlot {
+    crate::intermediate::types::TextureSlot::BaseColor
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +510,7 @@ mod tests {
             material_index: 1,
             material_name: "face".into(),
             texture_path: "tex.png".into(),
+            slot: crate::intermediate::types::TextureSlot::BaseColor,
         };
         assert_eq!(resolve_material(&materials, &entry), Some(1));
     }
@@ -522,6 +532,7 @@ mod tests {
             material_index: 5,
             material_name: "body".into(),
             texture_path: "tex.png".into(),
+            slot: crate::intermediate::types::TextureSlot::BaseColor,
         };
         assert_eq!(resolve_material(&materials, &entry), Some(1));
     }
@@ -542,6 +553,7 @@ mod tests {
             material_index: 5,
             material_name: "mat".into(),
             texture_path: "tex.png".into(),
+            slot: crate::intermediate::types::TextureSlot::BaseColor,
         };
         // 同名が複数 → None
         assert_eq!(resolve_material(&materials, &entry), None);
@@ -583,6 +595,58 @@ mod tests {
     }
 
     #[test]
+    fn test_texture_history_slot_default_backward_compat() {
+        // v0.5.0 以前のフィールドなし JSON を v0.5.1 で読み込む後方互換テスト
+        let legacy_json = r#"{
+            "material_index": 0,
+            "material_name": "body",
+            "texture_path": "C:\\Tex\\body.png"
+        }"#;
+        let entry: TextureHistoryEntry = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(entry.material_index, 0);
+        assert_eq!(entry.material_name, "body");
+        assert_eq!(
+            entry.slot,
+            crate::intermediate::types::TextureSlot::BaseColor,
+            "slot がない旧エントリは BaseColor として読み込まれる"
+        );
+    }
+
+    #[test]
+    fn test_texture_history_slot_explicit() {
+        // v0.5.1 の slot フィールド付き JSON
+        let json = r#"{
+            "material_index": 1,
+            "material_name": "face",
+            "texture_path": "C:\\Tex\\face_normal.png",
+            "slot": "normal"
+        }"#;
+        let entry: TextureHistoryEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            entry.slot,
+            crate::intermediate::types::TextureSlot::Normal,
+            "明示的な slot 指定が反映される"
+        );
+    }
+
+    #[test]
+    fn test_texture_history_slot_roundtrip() {
+        // serde ラウンドトリップ: Emissive スロット
+        let original = TextureHistoryEntry {
+            material_index: 2,
+            material_name: "face".into(),
+            texture_path: "emissive.png".into(),
+            slot: crate::intermediate::types::TextureSlot::Emissive,
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let parsed: TextureHistoryEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed.slot,
+            crate::intermediate::types::TextureSlot::Emissive
+        );
+    }
+
+    #[test]
     fn test_history_json_roundtrip() {
         let mut h = TextureHistoryFile::default();
         h.history.insert(
@@ -591,6 +655,7 @@ mod tests {
                 material_index: 0,
                 material_name: "body".into(),
                 texture_path: "C:\\Tex\\body.png".into(),
+                slot: crate::intermediate::types::TextureSlot::BaseColor,
             }],
         );
         let json = serde_json::to_string_pretty(&h).unwrap();

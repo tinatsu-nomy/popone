@@ -4,7 +4,8 @@ use std::sync::Arc;
 use glam::Vec3;
 
 use crate::intermediate::types::{
-    IrMaterial, IrMesh, IrModel, IrMorph, IrMorphKind, IrPhysics, IrTexture, IrVertex,
+    IrMaterial, IrMaterialColorBind, IrMesh, IrModel, IrMorph, IrMorphKind, IrPhysics, IrTexture,
+    IrTextureTransformBind, IrVertex,
 };
 
 /// 可視材質のみを含む IrModel を新規構築する。
@@ -112,6 +113,23 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
                 .chain(tangents.iter())
                 .any(|&(vi, _)| vtx_remap.get(vi).copied().flatten().is_some());
         }
+        // v0.5.1 レビュー 03 [P2] 対応: Material morph は「少なくとも 1 つの bind が
+        // 可視材質を参照しているとき」のみ生存。remap 後に bind が全て落ちる場合は
+        // 機能しない「死んだ表情」として除外する（Group から参照されても収束判定で
+        // 孤立した Material morph はそのまま死ぬ）。
+        if let IrMorphKind::Material {
+            color_binds,
+            uv_binds,
+        } = &morph.kind
+        {
+            let any_color = color_binds
+                .iter()
+                .any(|b| mat_remap.contains_key(&b.material_index));
+            let any_uv = uv_binds
+                .iter()
+                .any(|b| mat_remap.contains_key(&b.material_index));
+            morph_alive[i] = any_color || any_uv;
+        }
     }
 
     // グループモーフの有効性を収束するまで反復判定（ネスト対応）
@@ -145,6 +163,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
             let kind_label = match &morph.kind {
                 IrMorphKind::Vertex { .. } => "Vertex",
                 IrMorphKind::Group(_) => "Group",
+                IrMorphKind::Material { .. } => "Material",
             };
             log::warn!(
                 "{} morph \"{}\" references only excluded material vertices, removing.",
@@ -203,6 +222,43 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
                     })
                     .collect();
                 IrMorphKind::Group(remapped)
+            }
+            IrMorphKind::Material {
+                color_binds,
+                uv_binds,
+            } => {
+                // v0.5.1 レビュー 02 [P2] 対応: material_index を mat_remap で再マップ。
+                // 旧実装は clone だけで old material_index が残留し、可視材質のみ export した
+                // IR で Material morph が新しい materials 配列と整合しない状態になっていた。
+                // 除外された材質を指す bind は filter_map で落とす。
+                let new_color_binds: Vec<IrMaterialColorBind> = color_binds
+                    .iter()
+                    .filter_map(|b| {
+                        mat_remap
+                            .get(&b.material_index)
+                            .map(|&new_mi| IrMaterialColorBind {
+                                material_index: new_mi,
+                                bind_type: b.bind_type,
+                                target_value: b.target_value,
+                            })
+                    })
+                    .collect();
+                let new_uv_binds: Vec<IrTextureTransformBind> = uv_binds
+                    .iter()
+                    .filter_map(|b| {
+                        mat_remap
+                            .get(&b.material_index)
+                            .map(|&new_mi| IrTextureTransformBind {
+                                material_index: new_mi,
+                                scale: b.scale,
+                                offset: b.offset,
+                            })
+                    })
+                    .collect();
+                IrMorphKind::Material {
+                    color_binds: new_color_binds,
+                    uv_binds: new_uv_binds,
+                }
             }
         };
         final_morphs.push(IrMorph {

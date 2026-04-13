@@ -2690,6 +2690,40 @@ fn extract_morphs_v1(
         (vertex_offsets, normal_offsets, tangent_offsets)
     };
 
+    // materialColorBinds / textureTransformBinds を IR 型に変換するヘルパー
+    let collect_material_binds = |expr: &crate::vrm::types_v1::Expression|
+     -> (Vec<IrMaterialColorBind>, Vec<IrTextureTransformBind>) {
+        let mut color_binds = Vec::new();
+        let mut uv_binds = Vec::new();
+        if let Some(mcb) = &expr.material_color_binds {
+            for b in mcb {
+                if let Some(bt) = MaterialColorBindType::from_vrm_str(&b.r#type) {
+                    color_binds.push(IrMaterialColorBind {
+                        material_index: b.material as usize,
+                        bind_type: bt,
+                        target_value: b.target_value,
+                    });
+                } else {
+                    log::warn!(
+                        "Unknown materialColorBind type \"{}\" (material={})",
+                        b.r#type,
+                        b.material
+                    );
+                }
+            }
+        }
+        if let Some(ttb) = &expr.texture_transform_binds {
+            for b in ttb {
+                uv_binds.push(IrTextureTransformBind {
+                    material_index: b.material as usize,
+                    scale: b.scale.unwrap_or([1.0, 1.0]),
+                    offset: b.offset.unwrap_or([0.0, 0.0]),
+                });
+            }
+        }
+        (color_binds, uv_binds)
+    };
+
     let mut morphs = Vec::new();
 
     macro_rules! process_expr {
@@ -2702,10 +2736,11 @@ fn extract_morphs_v1(
                     } else {
                         (Vec::new(), Vec::new(), Vec::new())
                     };
-                if !vertex_offsets.is_empty() || !normal_offs.is_empty() || !tangent_offs.is_empty()
-                {
+                let has_vertex =
+                    !vertex_offsets.is_empty() || !normal_offs.is_empty() || !tangent_offs.is_empty();
+                if has_vertex {
                     morphs.push(IrMorph {
-                        name: jp_name,
+                        name: jp_name.clone(),
                         name_en: $preset_name.to_string(),
                         panel,
                         kind: IrMorphKind::Vertex {
@@ -2713,6 +2748,16 @@ fn extract_morphs_v1(
                             normals: normal_offs,
                             tangents: tangent_offs,
                         },
+                    });
+                }
+                // 材質バインド: Vertex morph とは別の IrMorph として発行（同名で登録）
+                let (color_binds, uv_binds) = collect_material_binds(expr);
+                if !color_binds.is_empty() || !uv_binds.is_empty() {
+                    morphs.push(IrMorph {
+                        name: jp_name,
+                        name_en: $preset_name.to_string(),
+                        panel,
+                        kind: IrMorphKind::Material { color_binds, uv_binds },
                     });
                 }
             }
@@ -2749,7 +2794,9 @@ fn extract_morphs_v1(
                 } else {
                     (Vec::new(), Vec::new(), Vec::new())
                 };
-            if !vertex_offsets.is_empty() || !normal_offs.is_empty() || !tangent_offs.is_empty() {
+            let has_vertex =
+                !vertex_offsets.is_empty() || !normal_offs.is_empty() || !tangent_offs.is_empty();
+            if has_vertex {
                 morphs.push(IrMorph {
                     name: name.clone(),
                     name_en: name.clone(),
@@ -2758,6 +2805,19 @@ fn extract_morphs_v1(
                         positions: vertex_offsets,
                         normals: normal_offs,
                         tangents: tangent_offs,
+                    },
+                });
+            }
+            // 材質バインド
+            let (color_binds, uv_binds) = collect_material_binds(expr);
+            if !color_binds.is_empty() || !uv_binds.is_empty() {
+                morphs.push(IrMorph {
+                    name: name.clone(),
+                    name_en: name.clone(),
+                    panel: 4,
+                    kind: IrMorphKind::Material {
+                        color_binds,
+                        uv_binds,
                     },
                 });
             }

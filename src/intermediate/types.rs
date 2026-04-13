@@ -564,6 +564,17 @@ impl IrModel {
                         *morph_idx += morph_offset;
                     }
                 }
+                IrMorphKind::Material {
+                    color_binds,
+                    uv_binds,
+                } => {
+                    for b in color_binds.iter_mut() {
+                        b.material_index += mat_offset;
+                    }
+                    for b in uv_binds.iter_mut() {
+                        b.material_index += mat_offset;
+                    }
+                }
             }
         }
         self.morphs.append(&mut other.morphs);
@@ -1205,9 +1216,62 @@ pub enum IrMorphKind {
     },
     /// グループモーフ: (モーフIndex, 率)
     Group(Vec<(usize, f32)>),
+    /// 材質モーフ: VRM 1.0 Expression の materialColorBinds / textureTransformBinds
+    Material {
+        color_binds: Vec<IrMaterialColorBind>,
+        uv_binds: Vec<IrTextureTransformBind>,
+    },
 }
 
-/// 物理情報
+/// VRM 1.0 materialColorBind の対象プロパティ
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaterialColorBindType {
+    /// baseColorFactor → IrMaterial.diffuse
+    Color,
+    /// emissiveFactor → IrMaterial.emissive_factor
+    EmissionColor,
+    /// shadeColorFactor → MtoonParams.shade_color
+    ShadeColor,
+    /// matcapFactor → MtoonParams.matcap_factor
+    MatcapColor,
+    /// parametricRimColorFactor → MtoonParams.parametric_rim_color
+    RimColor,
+    /// outlineColorFactor → IrMaterial.edge_color
+    OutlineColor,
+}
+
+impl MaterialColorBindType {
+    /// VRM 1.0 Expression の `type` 文字列からパー���
+    pub fn from_vrm_str(s: &str) -> Option<Self> {
+        match s {
+            "color" => Some(Self::Color),
+            "emissionColor" => Some(Self::EmissionColor),
+            "shadeColor" => Some(Self::ShadeColor),
+            "matcapColor" => Some(Self::MatcapColor),
+            "rimColor" => Some(Self::RimColor),
+            "outlineColor" => Some(Self::OutlineColor),
+            _ => None,
+        }
+    }
+}
+
+/// VRM 1.0 Expression の materialColorBind
+#[derive(Debug, Clone)]
+pub struct IrMaterialColorBind {
+    pub material_index: usize,
+    pub bind_type: MaterialColorBindType,
+    pub target_value: [f32; 4],
+}
+
+/// VRM 1.0 Expression ��� textureTransformBind
+#[derive(Debug, Clone)]
+pub struct IrTextureTransformBind {
+    pub material_index: usize,
+    pub scale: [f32; 2],
+    pub offset: [f32; 2],
+}
+
+/// 物理��報
 #[derive(Debug, Default, Clone)]
 pub struct IrPhysics {
     pub rigid_bodies: Vec<IrRigidBody>,
@@ -1657,5 +1721,84 @@ mod tests {
         let linear_count = all.iter().filter(|s| s.is_linear()).count();
         assert_eq!(linear_count, 4, "Linear スロットは 4 種");
         assert_eq!(all.len(), 11, "全 11 バリアント");
+    }
+
+    #[test]
+    fn material_color_bind_type_from_vrm_str() {
+        assert_eq!(
+            MaterialColorBindType::from_vrm_str("color"),
+            Some(MaterialColorBindType::Color)
+        );
+        assert_eq!(
+            MaterialColorBindType::from_vrm_str("emissionColor"),
+            Some(MaterialColorBindType::EmissionColor)
+        );
+        assert_eq!(
+            MaterialColorBindType::from_vrm_str("shadeColor"),
+            Some(MaterialColorBindType::ShadeColor)
+        );
+        assert_eq!(
+            MaterialColorBindType::from_vrm_str("matcapColor"),
+            Some(MaterialColorBindType::MatcapColor)
+        );
+        assert_eq!(
+            MaterialColorBindType::from_vrm_str("rimColor"),
+            Some(MaterialColorBindType::RimColor)
+        );
+        assert_eq!(
+            MaterialColorBindType::from_vrm_str("outlineColor"),
+            Some(MaterialColorBindType::OutlineColor)
+        );
+        assert_eq!(
+            MaterialColorBindType::from_vrm_str("unknownType"),
+            None,
+            "Unknown type should return None"
+        );
+        assert_eq!(
+            MaterialColorBindType::from_vrm_str(""),
+            None,
+            "Empty string should return None"
+        );
+    }
+
+    #[test]
+    fn merge_material_morph_offsets_material_index() {
+        let mut host = IrModel::default();
+        host.materials.push(IrMaterial::default());
+        host.materials.push(IrMaterial::default());
+
+        let mut guest = IrModel::default();
+        guest.materials.push(IrMaterial::default());
+        guest.morphs.push(IrMorph {
+            name: "mat_morph".to_string(),
+            name_en: "mat_morph".to_string(),
+            panel: 4,
+            kind: IrMorphKind::Material {
+                color_binds: vec![IrMaterialColorBind {
+                    material_index: 0,
+                    bind_type: MaterialColorBindType::Color,
+                    target_value: [1.0, 0.0, 0.0, 1.0],
+                }],
+                uv_binds: vec![IrTextureTransformBind {
+                    material_index: 0,
+                    scale: [2.0, 2.0],
+                    offset: [0.5, 0.5],
+                }],
+            },
+        });
+
+        host.merge(guest);
+
+        // host had 2 materials, so guest's material_index 0 should become 2
+        if let IrMorphKind::Material {
+            ref color_binds,
+            ref uv_binds,
+        } = host.morphs[0].kind
+        {
+            assert_eq!(color_binds[0].material_index, 2);
+            assert_eq!(uv_binds[0].material_index, 2);
+        } else {
+            panic!("Expected Material morph kind");
+        }
     }
 }

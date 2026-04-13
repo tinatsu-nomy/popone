@@ -1017,6 +1017,17 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
 /// これにより closure 内の `&mut app` と closure 外の `&mut app` を時間的に逐次化できる。
 /// IR への書き込みと `MaterialParamOverride` への記録は closure 内で同時に行い、
 /// reload 後の再適用（§A / A スタンス対応）も同じ値で一貫する。
+/// M6 Step 6.5: PMX 非対応セクションの先頭に表示する視覚的バッジ。
+/// plain text `(PMX非対応)` をセクションタイトルから切り離し、色付きで強調する。
+fn pmx_unsupported_badge(ui: &mut egui::Ui) {
+    let badge = egui::RichText::new("⚠ PMX 非対応")
+        .small()
+        .color(egui::Color32::from_rgb(230, 175, 90));
+    ui.label(badge).on_hover_text(
+        "この項目は PMX 出力では反映されません。\nMME (.fx) 出力やビューアプレビューでは反映されます。",
+    );
+}
+
 pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
     use crate::intermediate::types::{MtoonParams, ShaderFamily};
 
@@ -1041,7 +1052,20 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
         )
     };
 
-    let window_title = format!("材質編集: {}", mat_name);
+    // M6 Step 6.3: ダーティインジケータ — 編集差分 or テクスチャスロット割当があれば `*` 付与
+    let has_param_override = app
+        .material_overrides
+        .get(&mat_idx)
+        .is_some_and(|o| !o.is_empty());
+    let has_slot_texture = app.slot_texture_paths.keys().any(|(mi, _)| *mi == mat_idx);
+    let has_base_texture = app.tex.assignments.contains_key(&mat_idx);
+    let is_dirty_mat = has_param_override || has_slot_texture || has_base_texture;
+
+    let window_title = if is_dirty_mat {
+        format!("材質編集: {} *", mat_name)
+    } else {
+        format!("材質編集: {}", mat_name)
+    };
     let mut is_open = true;
     let mut dirty = false;
 
@@ -1168,6 +1192,57 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                         mat.name,
                         preset.label()
                     );
+                }
+
+                // M6 Step 6.4: 材質パラメータのコピー/ペースト
+                ui.label("|");
+                if ui
+                    .button("コピー")
+                    .on_hover_text("この材質のカラー/スカラー値をクリップボードにコピー")
+                    .clicked()
+                    && mat_idx < app.pristine_materials.len()
+                {
+                    let diff = super::app::material_edit::MaterialParamOverride::diff_from(
+                        &app.pristine_materials[mat_idx],
+                        mat,
+                    );
+                    app.clipboard_material = diff;
+                    log::info!(
+                        "Material params copied: mat[{}] '{}'",
+                        mat_idx,
+                        mat.name,
+                    );
+                }
+                let can_paste = app.clipboard_material.is_some();
+                if ui
+                    .add_enabled(can_paste, egui::Button::new("ペースト"))
+                    .on_hover_text("クリップボードのパラメータを適用（テクスチャ割当は除く）")
+                    .clicked()
+                {
+                    if let Some(clip) = app.clipboard_material.clone() {
+                        clip.apply_to(mat);
+                        if mat_idx < app.pristine_materials.len() {
+                            let new_override =
+                                super::app::material_edit::MaterialParamOverride::diff_from(
+                                    &app.pristine_materials[mat_idx],
+                                    mat,
+                                );
+                            match new_override {
+                                Some(o) => {
+                                    app.material_overrides.insert(mat_idx, o);
+                                }
+                                None => {
+                                    app.material_overrides.remove(&mat_idx);
+                                }
+                            }
+                        }
+                        dirty = true;
+                        log::info!(
+                            "Material params pasted: mat[{}] '{}'",
+                            mat_idx,
+                            mat.name,
+                        );
+                    }
                 }
             });
             ui.separator();
@@ -1421,9 +1496,10 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
             //
             // 全て MtoonParams フィールドなので、読み取りは `mat.mtoon()`、変更時のみ
             // `mat.mtoon_mut()` を呼ぶパターン。
-            egui::CollapsingHeader::new("リム (PMX非対応)")
+            egui::CollapsingHeader::new("リム")
                 .default_open(false)
                 .show(ui, |ui| {
+                    pmx_unsupported_badge(ui);
                     let (mut rim_rgb, mut fresnel_power, mut rim_lift, mut rim_mix) = {
                         let mp = mat.mtoon();
                         (
@@ -1506,9 +1582,10 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                 });
 
             // ==================== §E-5 MatCap セクション ====================
-            egui::CollapsingHeader::new("MatCap (PMX非対応)")
+            egui::CollapsingHeader::new("MatCap")
                 .default_open(false)
                 .show(ui, |ui| {
+                    pmx_unsupported_badge(ui);
                     let mut matcap_rgb = mat.mtoon().matcap_factor.to_array();
                     let mut matcap_changed = false;
 
@@ -1528,9 +1605,10 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                 });
 
             // ==================== §E-6 UV アニメセクション ====================
-            egui::CollapsingHeader::new("UV アニメ (PMX非対応)")
+            egui::CollapsingHeader::new("UV アニメ")
                 .default_open(false)
                 .show(ui, |ui| {
+                    pmx_unsupported_badge(ui);
                     let (mut scroll_x, mut scroll_y, mut rotation) = {
                         let mp = mat.mtoon();
                         (
@@ -1694,7 +1772,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
 
                     let textures = &loaded.ir.textures;
                     let mp = mat.mtoon();
-                    let slots: [(TextureSlot, &str, Option<usize>); 8] = [
+                    let slots: [(TextureSlot, &str, Option<usize>); 10] = [
                         (TextureSlot::Emissive, "エミッシブ", mat.emissive_texture.as_ref().map(|t| t.index)),
                         (TextureSlot::Normal, "法線", mat.normal_texture.as_ref().map(|t| t.index)),
                         (TextureSlot::ShadeMultiply, "シェード", mp.shade_texture.as_ref().map(|t| t.index)),
@@ -1703,6 +1781,9 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                         (TextureSlot::OutlineWidth, "アウトライン幅", mp.outline_width_texture.as_ref().map(|t| t.index)),
                         (TextureSlot::Matcap, "MatCap", mp.matcap_texture.as_ref().map(|t| t.index)),
                         (TextureSlot::UvAnimMask, "UV アニメマスク", mp.uv_animation_mask_texture.as_ref().map(|t| t.index)),
+                        // M3: Sphere/Toon テクスチャスロット編集（MMD/PMX 専用）
+                        (TextureSlot::Sphere, "スフィア (MMD)", mat.sphere_texture_index),
+                        (TextureSlot::Toon, "トゥーン (MMD)", mat.toon_texture_index),
                     ];
 
                     for (slot, label, tex_idx_opt) in &slots {
@@ -1929,7 +2010,13 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             mp.uv_animation_mask_texture = None;
                         }
                     }
-                    TextureSlot::BaseColor | TextureSlot::Sphere | TextureSlot::Toon => {}
+                    TextureSlot::Sphere => {
+                        mat.sphere_texture_index = None;
+                    }
+                    TextureSlot::Toon => {
+                        mat.toon_texture_index = None;
+                    }
+                    TextureSlot::BaseColor => {}
                 }
             }
         }

@@ -11,7 +11,7 @@ use crate::convert::coord::{
 };
 use crate::intermediate::types::{
     AlphaMode, CullMode, IrMagFilter, IrMaterial, IrMinFilter, IrModel, IrMorphKind, IrSamplerInfo,
-    IrTextureInfo, IrWrapMode, OutlineWidthMode, ShaderFamily,
+    IrTextureInfo, IrWrapMode, MaterialColorBindType, OutlineWidthMode, ShaderFamily,
 };
 
 use super::gpu::{self, Vertex};
@@ -46,6 +46,11 @@ pub(crate) enum GpuMorphEntry {
     Vertex(Vec<(u32, [f32; 3], [f32; 3], [f32; 3])>),
     /// グループモーフ: (サブモーフIndex, ウェイト)
     Group(Vec<(usize, f32)>),
+    /// 材質モーフ: VRM 1.0 Expression の materialColorBinds / textureTransformBinds
+    Material {
+        color_binds: Vec<crate::intermediate::types::IrMaterialColorBind>,
+        uv_binds: Vec<crate::intermediate::types::IrTextureTransformBind>,
+    },
 }
 
 /// 描画方式
@@ -81,6 +86,8 @@ pub struct DrawCall {
     /// MASK モード時の alphaCutoff
     pub alpha_cutoff: f32,
     pub texture_bind_group: Option<wgpu::BindGroup>,
+    /// 材質 uniform バッファ（UNIFORM | COPY_DST）。`queue.write_buffer` で部分更新可能。
+    pub material_buf: wgpu::Buffer,
     pub material_bind_group: wgpu::BindGroup,
     pub material_index: usize,
     pub render_style: RenderStyle,
@@ -124,7 +131,7 @@ pub struct GpuModel {
     /// モーフ適用用作業バッファ（毎フレーム clone を回避）
     morph_work: Vec<Vertex>,
     /// GPU空間モーフデータ（重複排除・座標変換済み）
-    gpu_morphs: Vec<GpuMorphEntry>,
+    pub(crate) gpu_morphs: Vec<GpuMorphEntry>,
     /// グループモーフ循環検出用バッファ（毎回 alloc を回避）
     morph_visited: Vec<bool>,
     /// 前回適用時の morph weights（変化がなければ再計算をスキップ）
@@ -133,6 +140,230 @@ pub struct GpuModel {
     morph_cache_dirty: bool,
     /// アニメーション済み頂点キャッシュ（法線表示同期用）
     animated_vertices: Option<Vec<Vertex>>,
+    /// Expression 材質ブレンド用: ロード時の材質パラメータベース値
+    pub material_base_values: Vec<MaterialBaseValues>,
+}
+
+/// Expression 材質バインドのベース値（ロード時点の材質パラメータ）。
+/// Expression の加算合成 `final = base + Σ((target - base) * weight)` で使用��
+#[derive(Debug, Clone)]
+pub struct MaterialBaseValues {
+    pub diffuse: [f32; 4],
+    pub emissive_factor: [f32; 3],
+    pub shade_color: [f32; 3],
+    pub matcap_factor: [f32; 3],
+    pub rim_color: [f32; 3],
+    pub outline_color: [f32; 4],
+    pub base_uv_offset: [f32; 2],
+    pub base_uv_scale: [f32; 2],
+}
+
+impl MaterialBaseValues {
+    /// `IrMaterial` からベース値をキャプチャ
+    pub fn from_ir(mat: &IrMaterial) -> Self {
+        let mp = mat.mtoon();
+        let uv = mat
+            .base_color_tex_info
+            .as_ref()
+            .map(|ti| (ti.offset, ti.scale))
+            .unwrap_or((glam::Vec2::ZERO, glam::Vec2::ONE));
+        Self {
+            diffuse: mat.diffuse.to_array(),
+            emissive_factor: mat.emissive_factor.to_array(),
+            shade_color: mp.shade_color.unwrap_or(Vec3::ZERO).to_array(),
+            matcap_factor: mp.matcap_factor.to_array(),
+            rim_color: mp.parametric_rim_color.to_array(),
+            outline_color: mat.edge_color.to_array(),
+            base_uv_offset: uv.0.to_array(),
+            base_uv_scale: uv.1.to_array(),
+        }
+    }
+}
+
+/// Expression 材質バインドのアキュムレーション: 全アクティブ Expression のウェイトから
+/// 材質パラメータの変化分を蓄積し、変更のある材質のみ `MaterialParams` を返す。
+pub(crate) fn accumulate_expression_materials(
+    gpu_morphs: &[GpuMorphEntry],
+    morph_weights: &[f32],
+    base_values: &[MaterialBaseValues],
+    ir_materials: &[IrMaterial],
+    mat_count: usize,
+    flags: &MaterialBuildFlags,
+) -> Vec<Option<gpu::MaterialParams>> {
+    // アキュムレータ: 各材質の各カラープロパティの変化量
+    #[derive(Default)]
+    struct ColorAccum {
+        diffuse: [f32; 4],
+        emissive: [f32; 3],
+        shade: [f32; 3],
+        matcap: [f32; 3],
+        rim: [f32; 3],
+        outline: [f32; 4],
+        uv_offset: [f32; 2],
+        uv_scale: [f32; 2],
+        dirty: bool,
+    }
+
+    let mut accum: Vec<ColorAccum> = (0..mat_count).map(|_| ColorAccum::default()).collect();
+
+    // v0.5.1 レビュー [P1] 対応: Material morph が参照する全材質を事前に dirty 扱いにする。
+    //
+    // 旧実装は weight < 1e-6 の morph を完全にスキップしていたため、Expression が
+    // 1.0 → 0.0 に戻ったフレームで「ベース値を書き戻す処理」が一度も走らず、
+    // 最後に適用された色/UV が GPU 側に残留していた。
+    //
+    // 修正: 影響材質は常に dirty 扱いとし、weight=0 のとき accum がゼロになって
+    // 最終値 = base となる（ベース値が write_material_buffer で書き戻される）。
+    // 実用上、Expression で動く材質は数個（顔の肌・目・唇など）のため
+    // per-frame オーバーヘッドは軽微。
+    for entry in gpu_morphs.iter() {
+        if let GpuMorphEntry::Material {
+            color_binds,
+            uv_binds,
+        } = entry
+        {
+            for b in color_binds {
+                if b.material_index < mat_count {
+                    accum[b.material_index].dirty = true;
+                }
+            }
+            for b in uv_binds {
+                if b.material_index < mat_count {
+                    accum[b.material_index].dirty = true;
+                }
+            }
+        }
+    }
+
+    for (morph_idx, entry) in gpu_morphs.iter().enumerate() {
+        let weight = morph_weights.get(morph_idx).copied().unwrap_or(0.0);
+        if weight.abs() < 1e-6 {
+            continue;
+        }
+        if let GpuMorphEntry::Material {
+            color_binds,
+            uv_binds,
+        } = entry
+        {
+            for b in color_binds {
+                let mi = b.material_index;
+                if mi >= mat_count {
+                    continue;
+                }
+                let base = &base_values[mi];
+                let a = &mut accum[mi];
+                a.dirty = true;
+                match b.bind_type {
+                    MaterialColorBindType::Color => {
+                        for i in 0..4 {
+                            a.diffuse[i] += (b.target_value[i] - base.diffuse[i]) * weight;
+                        }
+                    }
+                    MaterialColorBindType::EmissionColor => {
+                        for i in 0..3 {
+                            a.emissive[i] += (b.target_value[i] - base.emissive_factor[i]) * weight;
+                        }
+                    }
+                    MaterialColorBindType::ShadeColor => {
+                        for i in 0..3 {
+                            a.shade[i] += (b.target_value[i] - base.shade_color[i]) * weight;
+                        }
+                    }
+                    MaterialColorBindType::MatcapColor => {
+                        for i in 0..3 {
+                            a.matcap[i] += (b.target_value[i] - base.matcap_factor[i]) * weight;
+                        }
+                    }
+                    MaterialColorBindType::RimColor => {
+                        for i in 0..3 {
+                            a.rim[i] += (b.target_value[i] - base.rim_color[i]) * weight;
+                        }
+                    }
+                    MaterialColorBindType::OutlineColor => {
+                        for i in 0..4 {
+                            a.outline[i] += (b.target_value[i] - base.outline_color[i]) * weight;
+                        }
+                    }
+                }
+            }
+            for b in uv_binds {
+                let mi = b.material_index;
+                if mi >= mat_count {
+                    continue;
+                }
+                let base = &base_values[mi];
+                let a = &mut accum[mi];
+                a.dirty = true;
+                for i in 0..2 {
+                    a.uv_offset[i] += (b.offset[i] - base.base_uv_offset[i]) * weight;
+                    a.uv_scale[i] += (b.scale[i] - base.base_uv_scale[i]) * weight;
+                }
+            }
+        }
+    }
+
+    // dirty な材質のみ最終値を計算して MaterialParams を返す
+    accum
+        .into_iter()
+        .enumerate()
+        .map(|(mi, a)| {
+            if !a.dirty || mi >= ir_materials.len() {
+                return None;
+            }
+            let base = &base_values[mi];
+            // 一時的に IrMaterial をクローンし、アキュ���レーション結果を適用
+            let mut mat = ir_materials[mi].clone();
+            mat.diffuse = glam::Vec4::from_array([
+                base.diffuse[0] + a.diffuse[0],
+                base.diffuse[1] + a.diffuse[1],
+                base.diffuse[2] + a.diffuse[2],
+                base.diffuse[3] + a.diffuse[3],
+            ]);
+            mat.emissive_factor = Vec3::new(
+                base.emissive_factor[0] + a.emissive[0],
+                base.emissive_factor[1] + a.emissive[1],
+                base.emissive_factor[2] + a.emissive[2],
+            );
+            mat.edge_color = glam::Vec4::from_array([
+                base.outline_color[0] + a.outline[0],
+                base.outline_color[1] + a.outline[1],
+                base.outline_color[2] + a.outline[2],
+                base.outline_color[3] + a.outline[3],
+            ]);
+            if let Some(ref mut mtoon) = mat.mtoon {
+                mtoon.shade_color = Some(Vec3::new(
+                    base.shade_color[0] + a.shade[0],
+                    base.shade_color[1] + a.shade[1],
+                    base.shade_color[2] + a.shade[2],
+                ));
+                mtoon.matcap_factor = Vec3::new(
+                    base.matcap_factor[0] + a.matcap[0],
+                    base.matcap_factor[1] + a.matcap[1],
+                    base.matcap_factor[2] + a.matcap[2],
+                );
+                mtoon.parametric_rim_color = Vec3::new(
+                    base.rim_color[0] + a.rim[0],
+                    base.rim_color[1] + a.rim[1],
+                    base.rim_color[2] + a.rim[2],
+                );
+            }
+            // UV transform
+            if a.uv_offset != [0.0; 2] || a.uv_scale != [0.0; 2] {
+                let ti = mat
+                    .base_color_tex_info
+                    .get_or_insert_with(|| IrTextureInfo::from_index(0));
+                ti.offset = glam::Vec2::new(
+                    base.base_uv_offset[0] + a.uv_offset[0],
+                    base.base_uv_offset[1] + a.uv_offset[1],
+                );
+                ti.scale = glam::Vec2::new(
+                    base.base_uv_scale[0] + a.uv_scale[0],
+                    base.base_uv_scale[1] + a.uv_scale[1],
+                );
+            }
+            Some(build_material_params_for(&mat, mi, flags))
+        })
+        .collect()
 }
 
 impl GpuModel {
@@ -416,6 +647,9 @@ impl GpuModel {
                     );
                 }
                 visited[morph_idx] = false;
+            }
+            GpuMorphEntry::Material { .. } => {
+                // 材質モーフは頂点に影響しない — accumulate_expression_materials で処理
             }
         }
     }
@@ -806,6 +1040,7 @@ pub(crate) struct CpuPrepResult {
     pub base_vertices: Vec<Vertex>,
     pub gpu_morphs: Vec<GpuMorphEntry>,
     pub edge_scales: Option<Vec<f32>>,
+    pub material_base_values: Vec<MaterialBaseValues>,
 }
 
 /// CPU プリプロセスフェーズ: 頂点変換・法線平滑化・モーフ前計算（GPU API 呼び出しなし）
@@ -1105,6 +1340,13 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
                 GpuMorphEntry::Vertex(deduped)
             }
             IrMorphKind::Group(goffs) => GpuMorphEntry::Group(goffs.clone()),
+            IrMorphKind::Material {
+                color_binds,
+                uv_binds,
+            } => GpuMorphEntry::Material {
+                color_binds: color_binds.clone(),
+                uv_binds: uv_binds.clone(),
+            },
         })
         .collect();
 
@@ -1141,6 +1383,13 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
         None
     };
 
+    // Expression 材質バインド用ベース値をキャプチャ
+    let material_base_values: Vec<MaterialBaseValues> = ir
+        .materials
+        .iter()
+        .map(MaterialBaseValues::from_ir)
+        .collect();
+
     Ok(CpuPrepResult {
         all_vertices,
         all_indices,
@@ -1152,6 +1401,7 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
         base_vertices,
         gpu_morphs,
         edge_scales,
+        material_base_values,
     })
 }
 
@@ -1190,8 +1440,12 @@ pub(crate) fn gpu_finalize_model(
             })
         });
 
-        // 材質 bind group
-        let mat_bg = gpu::create_material_bind_group(device, &material_bgl, &plan.material_params);
+        // 材質 bind group + buffer（COPY_DST で部分更新可能）
+        let (mat_buf, mat_bg) = gpu::create_material_buffer_and_bind_group(
+            device,
+            &material_bgl,
+            &plan.material_params,
+        );
 
         // MToon 補助テクスチャ bind group（group 3）
         let mtoon_aux_bg = if let Some(ref aux) = plan.aux_refs {
@@ -1284,6 +1538,7 @@ pub(crate) fn gpu_finalize_model(
             render_queue_offset: plan.render_queue_offset,
             alpha_cutoff: plan.alpha_cutoff,
             texture_bind_group: tex_bg,
+            material_buf: mat_buf,
             material_bind_group: mat_bg,
             material_index: plan.material_index,
             render_style: plan.render_style,
@@ -1341,6 +1596,7 @@ pub(crate) fn gpu_finalize_model(
         last_weights: Vec::new(),
         morph_cache_dirty: false,
         animated_vertices: None,
+        material_base_values: prep.material_base_values,
     })
 }
 

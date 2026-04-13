@@ -1253,8 +1253,8 @@ impl ViewerApp {
             return;
         };
 
-        // テクスチャ割当エントリ（既存 v1 互換）
-        let entries: Vec<super::persistence::TextureHistoryEntry> = self
+        // テクスチャ割当エントリ（BaseColor: v1 互換）
+        let mut entries: Vec<super::persistence::TextureHistoryEntry> = self
             .tex
             .assignments
             .iter()
@@ -1270,12 +1270,29 @@ impl ViewerApp {
                         material_index: *mat_idx,
                         material_name: mat_name,
                         texture_path: path.to_string_lossy().into_owned(),
+                        slot: crate::intermediate::types::TextureSlot::BaseColor,
                     })
                 } else {
                     None
                 }
             })
             .collect();
+
+        // v0.5.1 追加 (M5): 補助スロットの割当エントリを追加
+        for ((mat_idx, slot), path) in &self.slot_texture_paths {
+            let mat_name = loaded
+                .ir
+                .materials
+                .get(*mat_idx)
+                .map(|m| m.name.clone())
+                .unwrap_or_default();
+            entries.push(super::persistence::TextureHistoryEntry {
+                material_index: *mat_idx,
+                material_name: mat_name,
+                texture_path: path.to_string_lossy().into_owned(),
+                slot: *slot,
+            });
+        }
 
         // v0.5.0 追加: 材質パラメータ編集差分（§I 最小永続化）
         // pristine_materials との diff を計算して保存する。
@@ -1356,12 +1373,14 @@ impl ViewerApp {
             .unwrap_or_default();
 
         // 照合結果を先に収集（loaded の不変借用を閉じるため）
-        let resolved: Vec<(usize, PathBuf)>;
+        // v0.5.1 M5: (mat_idx, slot, path) の 3 タプルに拡張。同一材質の複数スロットを許容。
+        let resolved: Vec<(usize, crate::intermediate::types::TextureSlot, PathBuf)>;
         let mut skipped = 0usize;
         {
             let Some(loaded) = self.loaded.as_ref() else {
                 return;
             };
+            // v0.5.1 M5: (mat_idx, slot) を重複検出キーに
             let mut seen = std::collections::HashSet::new();
             let mut tmp = Vec::new();
             for entry in &entries {
@@ -1371,46 +1390,29 @@ impl ViewerApp {
                     skipped += 1;
                     continue;
                 };
-                if !seen.insert(mat_idx) {
+                if !seen.insert((mat_idx, entry.slot)) {
                     continue;
                 }
                 let tex_path = PathBuf::from(&entry.texture_path);
                 if !tex_path.is_file() {
                     log::warn!(
-                        "Texture history: file not found, skipping: {}",
-                        entry.texture_path
+                        "Texture history: file not found, skipping: {} (slot={:?})",
+                        entry.texture_path,
+                        entry.slot
                     );
                     skipped += 1;
                     continue;
                 }
-                tmp.push((mat_idx, tex_path));
+                tmp.push((mat_idx, entry.slot, tex_path));
             }
             resolved = tmp;
         }
 
-        // link_same_name を一時的に無効化（reload_current と同じパターン）
-        let saved_link = self.tex.link_same_name;
-        self.tex.link_same_name = false;
-
-        let mut applied = 0usize;
-        for (mat_idx, tex_path) in &resolved {
-            self.convert_message = None;
-            self.assign_texture_to_material(*mat_idx, tex_path);
-            // assign_texture_to_material は失敗時に convert_message に Failure を設定する
-            let failed = self
-                .convert_message
-                .as_ref()
-                .is_some_and(|m| matches!(m.result, super::ConvertResult::Failure(_)));
-            if failed {
-                skipped += 1;
-            } else {
-                applied += 1;
-            }
-        }
-
-        self.tex.link_same_name = saved_link;
-
-        // v0.5.0 追加: 材質パラメータ編集差分の復元（§I 最小永続化）
+        // v0.5.1 レビュー [P1] 対応: 順序修正 — 先に pristine 復元してからテクスチャ/param を適用。
+        //
+        // 旧実装ではテクスチャ復元 → pristine 復元 → param 復元の順で、pristine 復元時に
+        // 補助スロットのテクスチャ参照（IrMaterial.emissive_texture 等）がクリアされ、
+        // 復元した補助スロットが全て消える不具合があった。
         //
         // review_012 [P2] 対応: 保存差分を適用する前に、全材質を pristine に戻して
         // material_overrides をクリアする。これにより「呼出前の unsaved 編集が残る」
@@ -1432,6 +1434,68 @@ impl ViewerApp {
             }
         }
         self.material_overrides.clear();
+        // pristine 復元で補助スロットの参照も消えるため、slot_texture_paths もクリア。
+        // 直後のテクスチャ復元ループで resolved 経由で再設定される。
+        self.slot_texture_paths.clear();
+        // v0.5.1 レビュー 02 [P1] 対応: BaseColor の tex.assignments / pkg_assignments もクリア。
+        // 履歴に BaseColor エントリがない場合、旧実装では古いパスが残留し「次回保存で
+        // 古い BaseColor が混入」「GPU 側に古い bind が表示される」不具合があった。
+        // pristine 復元 = 保存時点の再現なので、assignments もベースラインに戻す。
+        self.tex.assignments.clear();
+        self.tex.pkg_assignments.clear();
+
+        // link_same_name を一時的に無効化（reload_current と同じパターン）
+        let saved_link = self.tex.link_same_name;
+        self.tex.link_same_name = false;
+
+        let mut applied = 0usize;
+        for (mat_idx, slot, tex_path) in &resolved {
+            self.convert_message = None;
+            // v0.5.1 M5: slot に応じて BaseColor と補助スロットで経路を分ける
+            if *slot == crate::intermediate::types::TextureSlot::BaseColor {
+                self.assign_texture_to_material(*mat_idx, tex_path);
+            } else {
+                // 補助スロット: ファイル読み込み + assign_texture_core を直接呼ぶ
+                let data = match std::fs::read(tex_path) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        log::warn!(
+                            "Texture history (aux slot): failed to read {}: {}",
+                            tex_path.display(),
+                            e
+                        );
+                        skipped += 1;
+                        continue;
+                    }
+                };
+                let is_psd = tex_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("psd"))
+                    .unwrap_or(false);
+                let display_name = tex_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                self.assign_texture_core(*mat_idx, *slot, &data, is_psd, &display_name);
+                // 補助スロットのパスを slot_texture_paths にも記録
+                self.slot_texture_paths
+                    .insert((*mat_idx, *slot), tex_path.clone());
+            }
+            // assign_texture_to_material は失敗時に convert_message に Failure を設定する
+            let failed = self
+                .convert_message
+                .as_ref()
+                .is_some_and(|m| matches!(m.result, super::ConvertResult::Failure(_)));
+            if failed {
+                skipped += 1;
+            } else {
+                applied += 1;
+            }
+        }
+
+        self.tex.link_same_name = saved_link;
 
         // テクスチャ復元と同じ「resolve → apply」2 フェーズ分離パターンで
         // immutable borrow (resolve) と mutable borrow (apply) の衝突を避ける。
@@ -1453,6 +1517,7 @@ impl ViewerApp {
                         material_index: entry.material_index,
                         material_name: entry.material_name,
                         texture_path: String::new(),
+                        slot: crate::intermediate::types::TextureSlot::BaseColor,
                     };
                     let mat_idx =
                         super::persistence::resolve_material(&loaded.ir.materials, &dummy)?;
