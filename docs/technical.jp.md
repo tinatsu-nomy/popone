@@ -127,6 +127,7 @@
     - [Expression 再適用のタイミング](#expression-%E5%86%8D%E9%81%A9%E7%94%A8%E3%81%AE%E3%82%BF%E3%82%A4%E3%83%9F%E3%83%B3%E3%82%B0)
     - [Expression 材質バインド — 再生パイプライン](#expression-%E6%9D%90%E8%B3%AA%E3%83%90%E3%82%A4%E3%83%B3%E3%83%89--%E5%86%8D%E7%94%9F%E3%83%91%E3%82%A4%E3%83%97%E3%83%A9%E3%82%A4%E3%83%B3)
     - [テクスチャ履歴の補助スロット永続化（v0.5.1）](#%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E5%B1%A5%E6%AD%B4%E3%81%AE%E8%A3%9C%E5%8A%A9%E3%82%B9%E3%83%AD%E3%83%83%E3%83%88%E6%B0%B8%E7%B6%9A%E5%8C%96v051)
+    - [スロット毎 UV 変形の永続化（v0.5.4）](#%E3%82%B9%E3%83%AD%E3%83%83%E3%83%88%E6%AF%8E-uv-%E5%A4%89%E5%BD%A2%E3%81%AE%E6%B0%B8%E7%B6%9A%E5%8C%96v054)
   - [Bloom ポストエフェクト](#bloom-%E3%83%9D%E3%82%B9%E3%83%88%E3%82%A8%E3%83%95%E3%82%A7%E3%82%AF%E3%83%88)
     - [Dual Kawase アルゴリズム](#dual-kawase-%E3%82%A2%E3%83%AB%E3%82%B4%E3%83%AA%E3%82%BA%E3%83%A0)
     - [MRT (Multiple Render Target) による emissive 分離](#mrt-multiple-render-target-%E3%81%AB%E3%82%88%E3%82%8B-emissive-%E5%88%86%E9%9B%A2)
@@ -2106,6 +2107,50 @@ pub struct TextureHistoryEntry {
 **保存時**: `save_texture_history()` で `tex.assignments`（BaseColor）と `slot_texture_paths`（補助スロット全種）の両方を走査し、単一の `Vec<TextureHistoryEntry>` にマージ保存する。
 
 **復元時**: `reload_texture_history()` でエントリを走査し、`entry.slot == BaseColor` は従来の `assign_texture_to_material` 経路、それ以外は `assign_texture_core(mat_idx, slot, data, is_psd, display_name)` を直接呼んで GPU 反映する。重複検出キーも `HashSet<usize>` から `HashSet<(usize, TextureSlot)>` に拡張され、同一材質の複数スロット同時割当（Emissive + Normal + Shade など）が正しく動作する。
+
+### スロット毎 UV 変形の永続化（v0.5.4）
+
+v0.5.1 で Expression 駆動の UV アニメ（`IrTextureTransformBind`）は配線済みだが、ユーザーが手動で KHR_texture_transform の `offset / scale / rotation` を編集する UI は v0.5.4 で追加した。対象は `IrTextureInfo` を持つ 9 スロット（BaseColor / Emissive / Normal / Shade / ShadingShift / RimMultiply / OutlineWidth / Matcap / UvAnimMask）。
+
+**型定義**（`material_edit.rs`）:
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TextureUvOverride {
+    pub offset: Option<[f32; 2]>,
+    pub scale: Option<[f32; 2]>,
+    pub rotation: Option<f32>,
+}
+```
+
+`MaterialParamOverride` には 9 スロット分の `Option<TextureUvOverride>` フィールド（`base_color_uv` / `emissive_uv` / `normal_uv` / `shade_uv` / `shading_shift_uv` / `rim_multiply_uv` / `outline_width_uv` / `matcap_uv` / `uv_animation_mask_uv`）を追加し、いずれも `#[serde(skip_serializing_if = "Option::is_none")]` で未設定時は JSON に出力しない。これにより v0.5.3 以前の JSON は `#[serde(default)]` でフィールド欠落を許容して読み込めるうえ、履歴サイズの増加も最小化される。
+
+**diff の新規割当フォールバック**:
+
+`TextureUvOverride::diff(pristine, current)` は 4 ケースを以下のように扱う:
+
+| pristine | current | 挙動 |
+|---|---|---|
+| `Some` | `Some` | 直接比較 |
+| `None` | `Some` | **default transform（offset=0 / scale=1 / rotation=0）との比較にフォールバック**（新規割当スロットの UV 編集を保存） |
+| `Some` | `None` | `None` を返す（スロット解除時は UV 情報そのものが消えるため差分に意味がない） |
+| `None` | `None` | `None` を返す |
+
+この `(None, Some)` フォールバックがないと、「未割当スロットにテクスチャを新規割当 → UV を編集 → 履歴保存」の流れで UV 差分が落ち、再読込時に UV 変形が初期値に戻る（v0.5.4 のリリース前レビュー [P1] で指摘・修正）。
+
+**apply の防御**:
+
+`MaterialParamOverride::apply_to(mat)` は UV override を次の 2 経路に分ける:
+
+1. **非 MToon スロット** (`base_color_tex_info` / `emissive_texture` / `normal_texture`) — `IrMaterial` 直下フィールドに直接 `uv.apply(&mut info)`
+2. **MToon スロット** (`shade_texture` / `shading_shift_texture` / `rim_multiply_texture` / `outline_width_texture` / `matcap_texture` / `uv_animation_mask_texture`) — **`mat.mtoon.as_mut()` 経由**で書き込む。`mtoon_mut()` を使うと非 MToon 材質に `MtoonParams::default()` が自動挿入されてしまうため、UV 編集のためだけに勝手に MToon 化させない防御
+
+`TextureUvOverride::apply(info: &mut Option<IrTextureInfo>)` は `info` が `None` のときは no-op。未割当スロットに対して `IrTextureInfo::from_index(0)` を勝手に生成して誤テクスチャを差し込むことがない。
+
+**Expression 駆動 UV アニメとの共存**:
+
+`mesh.rs` の Expression 更新ループは `IrTextureTransformBind` に従って `base_color_tex_info.offset / scale` を weight に応じて加算する。静的 UV override は `apply_to` が IR 再構築後に走るため、順序は「静的 override 適用 → Expression 加算」となり、どちらも正しく反映される。
 
 ## Bloom ポストエフェクト
 

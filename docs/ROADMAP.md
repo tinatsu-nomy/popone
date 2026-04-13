@@ -6,7 +6,6 @@
   - [Targeted for v0.6.0](#targeted-for-v060)
     - [OBJ / STL Import Options UI Polish](#obj--stl-import-options-ui-polish)
     - [Background Load Internals Cleanup](#background-load-internals-cleanup)
-    - [UV Transform Editing UI](#uv-transform-editing-ui)
     - [Drag-and-Drop Slot Selection](#drag-and-drop-slot-selection)
     - [Auto-Assign Slot Hints](#auto-assign-slot-hints)
     - [Section Collapse State Persistence](#section-collapse-state-persistence)
@@ -36,7 +35,7 @@ This document tracks planned work, future improvements, and external feature req
 
 Current target: **v0.6.0**
 
-> **Note:** v0.5.1 shipped Expression material binds, auxiliary texture slot persistence, Sphere/Toon editing, DrawCall uniform buffer optimization, and material editor UX polish (dirty indicator, copy/paste, PMX-unsupported badge). See [CHANGELOG.md](CHANGELOG.md#v051-2026-04-13). Remaining items are now planned for v0.6.0+.
+> **Note:** v0.5.4 shipped per-slot UV transform (offset / scale / rotation) editing in the material editor panel. See [CHANGELOG.md](CHANGELOG.md#v054-2026-04-13). Remaining items are now planned for v0.6.0+.
 
 ## Targeted for v0.6.0
 
@@ -54,10 +53,6 @@ Follow-up to the async load pipeline:
 
 - **`CpuParseInput::ArchiveEntry` variant** — needed when archive-internal browsing is promoted to background
 - **`CpuParseInput::Reload` variant** — unifies reload-from-source paths currently handled separately
-
-### UV Transform Editing UI
-
-v0.5.1 wired up expression-driven UV transform playback but did not ship a material-editor UI for per-slot UV edits. Covers all 10 slots that expose `IrTextureInfo` (BaseColor / Emissive / Normal / Shade / ShadingShift / RimMultiply / OutlineWidth / Matcap / UvAnimMask / Toon). Requires extending `MaterialParamOverride` with a `TextureUvOverride` type for persistence.
 
 ### Drag-and-Drop Slot Selection
 

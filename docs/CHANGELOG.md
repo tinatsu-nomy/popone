@@ -3,28 +3,33 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
+  - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
     - [New Features](#new-features)
     - [Internals](#internals)
-  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
+    - [Tests](#tests)
+  - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
     - [New Features](#new-features-1)
     - [Internals](#internals-1)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
-  - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
+  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
     - [New Features](#new-features-2)
-    - [Performance](#performance)
     - [Internals](#internals-2)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
-    - [Tests](#tests)
+  - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
+    - [New Features](#new-features-3)
+    - [Performance](#performance)
+    - [Internals](#internals-3)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
+    - [Tests](#tests-1)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
-    - [New Features](#new-features-3)
-    - [Behavior Changes](#behavior-changes)
-    - [Tests](#tests-1)
-  - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
     - [New Features](#new-features-4)
+    - [Behavior Changes](#behavior-changes)
+    - [Tests](#tests-2)
+  - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
+    - [New Features](#new-features-5)
     - [Behavior Changes](#behavior-changes-1)
-    - [Internals](#internals-3)
+    - [Internals](#internals-4)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -32,6 +37,37 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.4 (2026-04-13)
+
+Adds per-slot UV transform (offset / scale / rotation) editing to the material editor panel. Nine slots that carry `KHR_texture_transform` data are supported: BaseColor / Emissive / Normal / Shade / ShadingShift / RimMultiply / OutlineWidth / Matcap / UvAnimMask.
+
+### New Features
+
+- **Per-slot UV Transform Editing** — A new compact widget (offset X/Y, scale X/Y, rotation°, and a ⟲ reset button) appears directly beneath each texture slot thumbnail. It is displayed only when a texture is actually assigned, writes into `IrTextureInfo.offset / scale / rotation`, and flows through the existing 9 uniform pairs (`base_uv / shade_uv / ...`) to the shader. Rotation is entered in degrees and stored as radians.
+- **UV Transform Persistence** — `MaterialParamOverride` gains nine `TextureUvOverride { offset, scale, rotation }` fields. Edits are persisted per normalized model path in `popone_history.json` and restored across reload / A-stance conversion / viewer restart. Pre-v0.5.4 JSON files remain fully readable via `#[serde(default)]`.
+- **Coexistence with Expression-driven UV Animation** — The v0.5.1 `IrTextureTransformBind` pipeline remains independent; static UV overrides apply first and Expression animation accumulates on top without interference.
+
+### Internals
+
+- Introduces `TextureUvOverride { offset: Option<[f32;2]>, scale: Option<[f32;2]>, rotation: Option<f32> }`. All fields are optional so partial saves are possible and serialized size stays minimal.
+- `apply_to` only writes UV parameters when the corresponding `IrTextureInfo` is already `Some`. Unassigned slots are a no-op (the override never synthesizes a default `IrTextureInfo::from_index(0)` and cannot bind the wrong texture).
+- MToon-slot UV writes go through `mat.mtoon.as_mut()` rather than `mtoon_mut()`, so non-MToon materials never get an unintended default `MtoonParams` block.
+- `diff_from` skips all six MToon-slot UV overrides when `enable_mtoon == Some(false)`, preserving round-trip consistency.
+- Adds `uv_transform_widget` / `record_uv_override` helpers in `ui.rs`, invoked from all nine slots.
+
+### Bug Fixes (Pre-Release Review)
+
+- **review_result_01 [P1] Newly-assigned slot UV edits were not persisted** — `TextureUvOverride::diff()` only produced a delta for `(Some, Some)` cases, so when a user assigned a texture to a previously-empty slot and then tweaked its UV transform, the UV delta was silently dropped at save time. The diff now falls back to comparing against the identity transform (offset=0 / scale=1 / rotation=0) when `pristine` is `None`, so newly-assigned slot UV edits round-trip through `popone_history.json`.
+
+### Tests
+
+- UV round-trip coverage for BaseColor and MToon-slot (shade) diff → apply.
+- Verification that unassigned slots remain unassigned after `apply_to`, and that MToon is never auto-initialized by UV overrides alone.
+- Verification that MToon OFF excludes MToon-slot UV from `diff_from`.
+- `TextureUvOverride::default().is_empty()` and `merge_from` UV merge behavior.
+- Newly-assigned slot UV persistence and slot-removal UV behavior (2 tests for review_result_01 [P1]).
+- Nine new tests (material_edit module now has 19 tests, 244 total passing).
 
 ## v0.5.3 (2026-04-13)
 

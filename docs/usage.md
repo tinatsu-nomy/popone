@@ -12,7 +12,7 @@
   - [Extras](#extras)
     - [Animation Playback](#animation-playback)
     - [PMX (MikuMikuDance) Conversion](#pmx-mikumikudance-conversion)
-    - [Material Editor (v0.5.0 – v0.5.3)](#material-editor-v050--v053)
+    - [Material Editor (v0.5.0 – v0.5.4)](#material-editor-v050--v054)
     - [MME (ray-mmd) Output (v0.5.0)](#mme-ray-mmd-output-v050)
   - [Shader Support](#shader-support)
     - [Shader Detection](#shader-detection)
@@ -168,7 +168,7 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 - Auto-classified display frames (Root / Expression / Upper Body / Arms / Fingers / Legs / Other)
 - UV normalization (clamped to 0..1)
 
-### Material Editor (v0.5.0 – v0.5.3)
+### Material Editor (v0.5.0 – v0.5.4)
 
 Click the ✏ icon on any material row in the Display tab to open the Material Editor as a docked panel directly above the shortcut hint bar. Close it with the `[×]` button at the top right.
 
@@ -185,6 +185,7 @@ Click the ✏ icon on any material row in the Display tab to open the Material E
   - **MMD Textures (Sphere / Toon)**: Sphere / Toon (MMD/PMX-specific, kept in a dedicated section)
 
   Clicking a thumbnail opens a file dialog to replace or assign a texture. When a texture is assigned, hovering the thumbnail shows the filename as a tooltip. Unassigned slots render a placeholder button with an `×` symbol. A small `×` reset button at the row end clears individual slots when they are assigned.
+- **Per-slot UV Transform Editing (v0.5.4)** — A single-line editor (`UV: off [x] [y]  scale [x] [y]  rot° [⟲]`) appears directly beneath each texture slot thumbnail whenever a texture is assigned. It edits the KHR_texture_transform offset / scale / rotation fields directly; rotation is entered in degrees and stored as radians. The ⟲ button resets a slot to offset=0 / scale=1 / rotation=0. Changes are persisted per normalized model path in `popone_history.json` and restored across reload / A-stance conversion / viewer restart. The path is independent from Expression-driven UV animation, so both coexist cleanly.
 - **MToon enable/disable** — "MToon 有効化" checkbox to promote a non-MToon material
 - **Presets** — MToon 1.0 Default, lilToon Standard, PMX Compatible (3 built-in presets)
 - **Copy / Paste (v0.5.1)** — Copy a material's color/scalar values to the session clipboard and paste them onto another material. Texture assignments are intentionally excluded (path-dependent)

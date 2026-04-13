@@ -6,7 +6,6 @@
   - [v0.6.0 ターゲット](#v060-%E3%82%BF%E3%83%BC%E3%82%B2%E3%83%83%E3%83%88)
     - [OBJ / STL インポートオプション UI の強化](#obj--stl-%E3%82%A4%E3%83%B3%E3%83%9D%E3%83%BC%E3%83%88%E3%82%AA%E3%83%97%E3%82%B7%E3%83%A7%E3%83%B3-ui-%E3%81%AE%E5%BC%B7%E5%8C%96)
     - [バックグラウンドロード内部整備](#%E3%83%90%E3%83%83%E3%82%AF%E3%82%B0%E3%83%A9%E3%82%A6%E3%83%B3%E3%83%89%E3%83%AD%E3%83%BC%E3%83%89%E5%86%85%E9%83%A8%E6%95%B4%E5%82%99)
-    - [UV 変形編集 UI](#uv-%E5%A4%89%E5%BD%A2%E7%B7%A8%E9%9B%86-ui)
     - [ドラッグ＆ドロップによるスロット選択](#%E3%83%89%E3%83%A9%E3%83%83%E3%82%B0%EF%BC%86%E3%83%89%E3%83%AD%E3%83%83%E3%83%97%E3%81%AB%E3%82%88%E3%82%8B%E3%82%B9%E3%83%AD%E3%83%83%E3%83%88%E9%81%B8%E6%8A%9E)
     - [自動割当のスロットヒント](#%E8%87%AA%E5%8B%95%E5%89%B2%E5%BD%93%E3%81%AE%E3%82%B9%E3%83%AD%E3%83%83%E3%83%88%E3%83%92%E3%83%B3%E3%83%88)
     - [セクション折りたたみ状態の永続化](#%E3%82%BB%E3%82%AF%E3%82%B7%E3%83%A7%E3%83%B3%E6%8A%98%E3%82%8A%E3%81%9F%E3%81%9F%E3%81%BF%E7%8A%B6%E6%85%8B%E3%81%AE%E6%B0%B8%E7%B6%9A%E5%8C%96)
@@ -36,7 +35,7 @@
 
 現在のターゲット: **v0.6.0**
 
-> **注記:** v0.5.1 は Expression 材質バインド、補助テクスチャスロット永続化、Sphere/Toon 編集、DrawCall uniform バッファ最適化、材質編集 UX 強化（ダーティインジケータ / コピペ / PMX 非対応バッジ）をリリース（[CHANGELOG.jp.md](CHANGELOG.jp.md#v0512026-04-13) 参照）。残タスクは v0.6.0+ で計画中。
+> **注記:** v0.5.4 でスロット毎 UV 変形（offset / scale / rotation）編集 UI を実装済み（[CHANGELOG.jp.md](CHANGELOG.jp.md#v0542026-04-13) 参照）。残タスクは v0.6.0+ で計画中。
 
 ## v0.6.0 ターゲット
 
@@ -54,10 +53,6 @@
 
 - **`CpuParseInput::ArchiveEntry` バリアント** — アーカイブ内ブラウズを BG 化する際に必要
 - **`CpuParseInput::Reload` バリアント** — 現在個別処理されているリロードパスを統合
-
-### UV 変形編集 UI
-
-v0.5.1 で Expression 駆動の UV 変形再生は配線済みだが、材質エディタ側のスロット毎 UV 編集 UI は未出荷。`IrTextureInfo` を持つ全 10 スロット（BaseColor / Emissive / Normal / Shade / ShadingShift / RimMultiply / OutlineWidth / Matcap / UvAnimMask / Toon）を対象とする。永続化には `MaterialParamOverride` に `TextureUvOverride` 型を追加する必要がある。
 
 ### ドラッグ＆ドロップによるスロット選択
 

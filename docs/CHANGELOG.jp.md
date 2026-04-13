@@ -3,28 +3,33 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
-  - [v0.5.3（2026-04-13）](#v0532026-04-13)
+  - [v0.5.4（2026-04-13）](#v0542026-04-13)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85)
-  - [v0.5.2（2026-04-13）](#v0522026-04-13)
+    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C)
+    - [テスト](#%E3%83%86%E3%82%B9%E3%83%88)
+  - [v0.5.3（2026-04-13）](#v0532026-04-13)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-1)
-    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C)
-  - [v0.5.1（2026-04-13）](#v0512026-04-13)
+  - [v0.5.2（2026-04-13）](#v0522026-04-13)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
-    - [パフォーマンス](#%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-2)
     - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-1)
-    - [テスト](#%E3%83%86%E3%82%B9%E3%83%88)
+  - [v0.5.1（2026-04-13）](#v0512026-04-13)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
+    - [パフォーマンス](#%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9)
+    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-3)
+    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-2)
+    - [テスト](#%E3%83%86%E3%82%B9%E3%83%88-1)
     - [v0.6.0 に延期](#v060-%E3%81%AB%E5%BB%B6%E6%9C%9F)
   - [v0.5.0（2026-04-13）](#v0502026-04-13)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
-    - [挙動の変更](#%E6%8C%99%E5%8B%95%E3%81%AE%E5%A4%89%E6%9B%B4)
-    - [テスト](#%E3%83%86%E3%82%B9%E3%83%88-1)
-  - [v0.4.0（2026-04-11）](#v0402026-04-11)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-4)
+    - [挙動の変更](#%E6%8C%99%E5%8B%95%E3%81%AE%E5%A4%89%E6%9B%B4)
+    - [テスト](#%E3%83%86%E3%82%B9%E3%83%88-2)
+  - [v0.4.0（2026-04-11）](#v0402026-04-11)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-5)
     - [挙動の変更](#%E6%8C%99%E5%8B%95%E3%81%AE%E5%A4%89%E6%9B%B4-1)
-    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-3)
+    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-4)
   - [v0.3.0（2026-04-11）](#v0302026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -32,6 +37,37 @@
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.5.4（2026-04-13）
+
+材質編集パネルにスロット毎の UV 変形（offset / scale / rotation）編集 UI を追加。KHR_texture_transform を持つ 9 スロット（BaseColor / Emissive / Normal / Shade / ShadingShift / RimMultiply / OutlineWidth / Matcap / UvAnimMask）が対象。
+
+### 新機能
+
+- **スロット毎 UV 変形編集 UI** — 各テクスチャスロットのサムネイル直下に UV 変形コントロール（offset X/Y、scale X/Y、rotation°、リセットボタン ⟲）を追加。テクスチャが割り当てられているスロットにのみ表示され、値は `IrTextureInfo.offset / scale / rotation` に即時反映されて GPU uniform（`base_uv / shade_uv / ...` の 9 ペア）へ送信される。rotation は度入力・ラジアン保存
+- **UV 変形の永続化** — `MaterialParamOverride` に 9 スロット分の `TextureUvOverride { offset, scale, rotation }` フィールドを追加。`popone_history.json` にモデルパス単位で保存され、reload / A スタンス変換 / 再起動後に自動復元される。v0.5.3 以前の JSON は `#[serde(default)]` によりフィールド欠落でそのまま読込可能
+- **Expression 駆動 UV アニメとの共存** — v0.5.1 で配線済の `IrTextureTransformBind` とは独立経路で動作し、静的 UV override → Expression 加算の順で両立
+
+### 内部実装
+
+- `TextureUvOverride` 型を新規追加（`offset: Option<[f32;2]>`, `scale: Option<[f32;2]>`, `rotation: Option<f32>`）。全フィールド `Option` のため部分保存が可能で、serde でのサイズも最小化
+- `apply_to` は **既存 `IrTextureInfo` が Some の場合のみ** UV を書き込む。未割当スロットに対しては no-op（勝手に `IrTextureInfo::from_index(0)` を生成して誤テクスチャを差し込まない）
+- MToon スロット UV は `mat.mtoon.as_mut()` 経由で書き込み、`mat.mtoon_mut()` は呼ばない（非 MToon 材質に default mtoon を自動挿入しないための防御）
+- `diff_from` は `enable_mtoon == Some(false)` の場合、MToon スロット UV 6 種も含めて diff を skip（round-trip 一貫性）
+- UI ヘルパー `uv_transform_widget` / `record_uv_override` を `ui.rs` に追加し 9 箇所で共用
+
+### バグ修正（リリース前レビュー対応）
+
+- **review_result_01 [P1] 新規割当スロットの UV 編集が履歴保存されない** — `TextureUvOverride::diff()` が `(Some, Some)` の場合しか差分を返さず、pristine が未割当で current が新規割当 + UV 編集済みのケースで履歴保存時に UV 差分が落ちていた。`(None, Some)` のときも default transform（offset=0 / scale=1 / rotation=0）との比較にフォールバックし、新規割当スロットの UV 編集を正しく保存するよう修正
+
+### テスト
+
+- UV round-trip: BaseColor / MToon スロット (shade) の diff → apply が等価（+2 件）
+- 未割当スロットへの apply が no-op であること / mtoon 未初期化時に mtoon を生成しないこと（+2 件）
+- MToon OFF 時に MToon スロット UV が diff に含まれないこと（+1 件）
+- `TextureUvOverride::default()` の `is_empty` 動作 / `merge_from` の UV マージ（+2 件）
+- 新規割当スロット UV の保存 / スロット解除時の UV 扱い（+2 件、review_result_01 [P1] 対応）
+- 合計 +9 件（material_edit tests 計 19 件、全体 244 件パス）
 
 ## v0.5.3（2026-04-13）
 

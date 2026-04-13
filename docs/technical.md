@@ -127,6 +127,7 @@
     - [Expression Re-application Timing](#expression-re-application-timing)
     - [Expression Material Binds — Playback Pipeline](#expression-material-binds--playback-pipeline)
     - [Texture History Auxiliary Slot Persistence (v0.5.1)](#texture-history-auxiliary-slot-persistence-v051)
+    - [Per-slot UV Transform Persistence (v0.5.4)](#per-slot-uv-transform-persistence-v054)
   - [Bloom Post-Effect](#bloom-post-effect)
     - [Dual Kawase Algorithm](#dual-kawase-algorithm)
     - [MRT (Multiple Render Target) Emissive Separation](#mrt-multiple-render-target-emissive-separation)
@@ -2129,6 +2130,50 @@ pub struct TextureHistoryEntry {
 **Save path**: `save_texture_history()` scans both `tex.assignments` (BaseColor) and `slot_texture_paths` (all auxiliary slots) and merges them into a single `Vec<TextureHistoryEntry>`.
 
 **Restore path**: `reload_texture_history()` walks entries; `entry.slot == BaseColor` takes the existing `assign_texture_to_material` path, while others call `assign_texture_core(mat_idx, slot, data, is_psd, display_name)` directly for GPU reflection. The dedup key is also widened from `HashSet<usize>` to `HashSet<(usize, TextureSlot)>` so multiple simultaneous auxiliary slot assignments on the same material (e.g. Emissive + Normal + Shade) are preserved correctly.
+
+### Per-slot UV Transform Persistence (v0.5.4)
+
+v0.5.1 wired up Expression-driven UV animation via `IrTextureTransformBind`, but a manual editing UI for the KHR_texture_transform `offset / scale / rotation` fields was not shipped until v0.5.4. The editor targets the nine slots that carry an `IrTextureInfo`: BaseColor / Emissive / Normal / Shade / ShadingShift / RimMultiply / OutlineWidth / Matcap / UvAnimMask.
+
+**Type definition** (`material_edit.rs`):
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TextureUvOverride {
+    pub offset: Option<[f32; 2]>,
+    pub scale: Option<[f32; 2]>,
+    pub rotation: Option<f32>,
+}
+```
+
+`MaterialParamOverride` gains nine `Option<TextureUvOverride>` fields (`base_color_uv` / `emissive_uv` / `normal_uv` / `shade_uv` / `shading_shift_uv` / `rim_multiply_uv` / `outline_width_uv` / `matcap_uv` / `uv_animation_mask_uv`). Each is annotated with `#[serde(skip_serializing_if = "Option::is_none")]`, so unused slots add nothing to the JSON. `#[serde(default)]` on the container keeps pre-v0.5.4 JSON readable.
+
+**Newly-assigned-slot fallback in diff**:
+
+`TextureUvOverride::diff(pristine, current)` handles the four cases as follows:
+
+| pristine | current | Behavior |
+|---|---|---|
+| `Some` | `Some` | Direct comparison |
+| `None` | `Some` | **Falls back to comparing against the identity transform (offset=0 / scale=1 / rotation=0)** so that newly-assigned slot UV edits are preserved |
+| `Some` | `None` | Returns `None` — the slot itself is gone, so a UV delta has no meaning |
+| `None` | `None` | Returns `None` |
+
+Without the `(None, Some)` fallback, the flow "assign a texture to a previously-empty slot → edit UV → save history" silently drops the UV delta, and the UV transform resets to identity on reload (reported and fixed during v0.5.4 pre-release review [P1]).
+
+**Defensive apply**:
+
+`MaterialParamOverride::apply_to(mat)` splits UV overrides into two paths:
+
+1. **Non-MToon slots** (`base_color_tex_info` / `emissive_texture` / `normal_texture`) — applied via `uv.apply(&mut info)` directly on `IrMaterial` fields
+2. **MToon slots** (`shade_texture` / `shading_shift_texture` / `rim_multiply_texture` / `outline_width_texture` / `matcap_texture` / `uv_animation_mask_texture`) — writes go through **`mat.mtoon.as_mut()`** rather than `mtoon_mut()`, so a non-MToon material is never silently upgraded by inserting a default `MtoonParams` block just because a UV override exists
+
+`TextureUvOverride::apply(info: &mut Option<IrTextureInfo>)` is a no-op when `info` is `None`. An unassigned slot never gets a synthesized `IrTextureInfo::from_index(0)` that could bind the wrong texture.
+
+**Coexistence with Expression-driven UV animation**:
+
+The `mesh.rs` Expression update loop accumulates `IrTextureTransformBind` weights into `base_color_tex_info.offset / scale`. Static UV overrides are applied earlier via `apply_to` right after IR rebuild, so the effective order is "static override → Expression accumulation", and both contributions survive.
 
 ## Bloom Post-Effect
 

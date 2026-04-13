@@ -17,11 +17,80 @@
 //! 将来形で、`declarative_macro` による diff/apply 自動生成に置き換えられる。本ファイルは
 //! その「手書き最小版」として先行導入し、Step 3 で macro 化して持続可能な構造に移行する。
 
-use glam::{Vec3, Vec4};
+use glam::{Vec2, Vec3, Vec4};
 
 use crate::intermediate::types::{
-    AlphaMode, CullMode, IrMaterial, MtoonParams, OutlineWidthMode, ShaderFamily,
+    AlphaMode, CullMode, IrMaterial, IrTextureInfo, MtoonParams, OutlineWidthMode, ShaderFamily,
 };
+
+/// スロット単位の KHR_texture_transform 上書き値 (v0.5.4)。
+///
+/// `IrTextureInfo` が存在するスロット（BaseColor / Emissive / Normal / Shade /
+/// ShadingShift / RimMultiply / OutlineWidth / Matcap / UvAnimMask）単位で、
+/// `offset / scale / rotation` を差分保存する。全フィールド `None` は「pristine
+/// のまま」を意味する。`rotation` は **ラジアン**（UI では度で入力しラジアンで保存）。
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TextureUvOverride {
+    pub offset: Option<[f32; 2]>,
+    pub scale: Option<[f32; 2]>,
+    pub rotation: Option<f32>,
+}
+
+impl TextureUvOverride {
+    pub fn is_empty(&self) -> bool {
+        self.offset.is_none() && self.scale.is_none() && self.rotation.is_none()
+    }
+
+    /// `pristine` と `current` の IrTextureInfo を比較し、差分のみ `Some(_)` で返す。
+    ///
+    /// - `(Some, Some)`: 両者を直接比較
+    /// - `(None, Some)`: **新規割当スロット**の UV 編集を履歴に載せるため、
+    ///   `current` を default transform（offset=0 / scale=1 / rotation=0）と比較する。
+    ///   これがないと「未割当スロットにテクスチャを新規割当 → UV を編集」のケースで
+    ///   履歴保存時に UV 差分が落ちる（review_result_01 [P1]）。
+    /// - `(Some, None)`: スロット自体が解除された状態。texture_mgmt 側でスロット情報が
+    ///   消えるため UV diff に意味はなく、`None` を返す。
+    /// - `(None, None)`: 変化なし。
+    pub fn diff(pristine: Option<&IrTextureInfo>, current: Option<&IrTextureInfo>) -> Option<Self> {
+        let c = current?;
+        let mut out = Self::default();
+        let (p_offset, p_scale, p_rotation) = match pristine {
+            Some(p) => (p.offset, p.scale, p.rotation),
+            None => (glam::Vec2::ZERO, glam::Vec2::ONE, 0.0),
+        };
+        if p_offset != c.offset {
+            out.offset = Some(c.offset.to_array());
+        }
+        if p_scale != c.scale {
+            out.scale = Some(c.scale.to_array());
+        }
+        if (p_rotation - c.rotation).abs() > f32::EPSILON {
+            out.rotation = Some(c.rotation);
+        }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    }
+
+    /// 既存 `IrTextureInfo` に差分を適用する。対象スロット未割当（`None`）の場合は何もしない。
+    pub fn apply(&self, info: &mut Option<IrTextureInfo>) {
+        let Some(ti) = info.as_mut() else {
+            return;
+        };
+        if let Some(o) = self.offset {
+            ti.offset = Vec2::from_array(o);
+        }
+        if let Some(s) = self.scale {
+            ti.scale = Vec2::from_array(s);
+        }
+        if let Some(r) = self.rotation {
+            ti.rotation = r;
+        }
+    }
+}
 
 /// 材質単位のパラメータ上書き値（`Some(_)` のフィールドだけ IR に書き込まれる）。
 ///
@@ -97,6 +166,31 @@ pub struct MaterialParamOverride {
     /// ユーザーが編集した材質名。`None` = pristine の name をそのまま使用。
     /// `String` は Copy でないため、merge/apply では個別に clone する。
     pub name: Option<String>,
+
+    // ===== スロット毎 UV 変形 (v0.5.4) =====
+    //
+    // 各スロットが `IrTextureInfo` を持つ場合のみ有効。未割当スロットへの
+    // apply は no-op（勝手に `from_index(0)` を挿入しない）。
+    // Expression 駆動の UV アニメ (`IrTextureTransformBind`) とは経路が独立で、
+    // 静的 override → Expression 加算の順で両立する。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_color_uv: Option<TextureUvOverride>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emissive_uv: Option<TextureUvOverride>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normal_uv: Option<TextureUvOverride>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shade_uv: Option<TextureUvOverride>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shading_shift_uv: Option<TextureUvOverride>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rim_multiply_uv: Option<TextureUvOverride>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outline_width_uv: Option<TextureUvOverride>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matcap_uv: Option<TextureUvOverride>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uv_animation_mask_uv: Option<TextureUvOverride>,
 }
 
 impl MaterialParamOverride {
@@ -166,6 +260,27 @@ impl MaterialParamOverride {
         if let Some(ref v) = other.name {
             self.name = Some(v.clone());
         }
+        // UV override は Option<TextureUvOverride> で Copy でないため個別に clone
+        macro_rules! merge_uv {
+            ($($f:ident),* $(,)?) => {
+                $(
+                    if let Some(ref v) = other.$f {
+                        self.$f = Some(v.clone());
+                    }
+                )*
+            };
+        }
+        merge_uv!(
+            base_color_uv,
+            emissive_uv,
+            normal_uv,
+            shade_uv,
+            shading_shift_uv,
+            rim_multiply_uv,
+            outline_width_uv,
+            matcap_uv,
+            uv_animation_mask_uv,
+        );
     }
 
     /// `Some(_)` のフィールドが 1 つでもあれば `true` を返す。
@@ -198,6 +313,15 @@ impl MaterialParamOverride {
             && self.render_queue_offset.is_none()
             && self.mme_kind.is_none()
             && self.name.is_none()
+            && self.base_color_uv.is_none()
+            && self.emissive_uv.is_none()
+            && self.normal_uv.is_none()
+            && self.shade_uv.is_none()
+            && self.shading_shift_uv.is_none()
+            && self.rim_multiply_uv.is_none()
+            && self.outline_width_uv.is_none()
+            && self.matcap_uv.is_none()
+            && self.uv_animation_mask_uv.is_none()
     }
 
     /// `pristine`（ロード直後の IR 材質値）と `current`（ユーザー編集後の IR 材質値）を
@@ -306,6 +430,48 @@ impl MaterialParamOverride {
                 .render_queue_offset);
         } // end if diff_mtoon
 
+        // ===== スロット毎 UV (v0.5.4) =====
+        //
+        // 非 MToon でも参照可能な BaseColor / Emissive / Normal と、MToon 限定の
+        // 6 スロットを別扱いする。MToon 限定スロットは enable_mtoon == Some(false)
+        // のとき全スキップ（round-trip で mtoon = None 側に不要な差分が残らないよう）。
+        out.base_color_uv = TextureUvOverride::diff(
+            pristine.base_color_tex_info.as_ref(),
+            current.base_color_tex_info.as_ref(),
+        );
+        out.emissive_uv = TextureUvOverride::diff(
+            pristine.emissive_texture.as_ref(),
+            current.emissive_texture.as_ref(),
+        );
+        out.normal_uv = TextureUvOverride::diff(
+            pristine.normal_texture.as_ref(),
+            current.normal_texture.as_ref(),
+        );
+        if diff_mtoon {
+            let p = pristine.mtoon();
+            let c = current.mtoon();
+            out.shade_uv =
+                TextureUvOverride::diff(p.shade_texture.as_ref(), c.shade_texture.as_ref());
+            out.shading_shift_uv = TextureUvOverride::diff(
+                p.shading_shift_texture.as_ref(),
+                c.shading_shift_texture.as_ref(),
+            );
+            out.rim_multiply_uv = TextureUvOverride::diff(
+                p.rim_multiply_texture.as_ref(),
+                c.rim_multiply_texture.as_ref(),
+            );
+            out.outline_width_uv = TextureUvOverride::diff(
+                p.outline_width_texture.as_ref(),
+                c.outline_width_texture.as_ref(),
+            );
+            out.matcap_uv =
+                TextureUvOverride::diff(p.matcap_texture.as_ref(), c.matcap_texture.as_ref());
+            out.uv_animation_mask_uv = TextureUvOverride::diff(
+                p.uv_animation_mask_texture.as_ref(),
+                c.uv_animation_mask_texture.as_ref(),
+            );
+        }
+
         if out.is_empty() {
             None
         } else {
@@ -370,6 +536,17 @@ impl MaterialParamOverride {
         }
         if let Some(v) = self.normal_texture_scale {
             mat.normal_texture_scale = v;
+        }
+
+        // 非 MToon スロットの UV override (v0.5.4): テクスチャ未割当時は no-op
+        if let Some(ref uv) = self.base_color_uv {
+            uv.apply(&mut mat.base_color_tex_info);
+        }
+        if let Some(ref uv) = self.emissive_uv {
+            uv.apply(&mut mat.emissive_texture);
+        }
+        if let Some(ref uv) = self.normal_uv {
+            uv.apply(&mut mat.normal_texture);
         }
 
         // MToon 系フィールド: 1 つでも設定があれば mtoon を初期化してから書き込む
@@ -452,6 +629,32 @@ impl MaterialParamOverride {
             // その他
             if let Some(v) = self.render_queue_offset {
                 mp.render_queue_offset = v;
+            }
+        }
+
+        // MToon スロットの UV override (v0.5.4):
+        //
+        // `mtoon_mut()` は使わない（MToon が無効な材質に default mtoon を挿入しないため）。
+        // `mat.mtoon` が既に Some の場合のみ、既存スロットの IrTextureInfo に書き込む。
+        // テクスチャ未割当のスロットに対しては `TextureUvOverride::apply()` が no-op 化する。
+        if let Some(ref mut mp) = mat.mtoon {
+            if let Some(ref uv) = self.shade_uv {
+                uv.apply(&mut mp.shade_texture);
+            }
+            if let Some(ref uv) = self.shading_shift_uv {
+                uv.apply(&mut mp.shading_shift_texture);
+            }
+            if let Some(ref uv) = self.rim_multiply_uv {
+                uv.apply(&mut mp.rim_multiply_texture);
+            }
+            if let Some(ref uv) = self.outline_width_uv {
+                uv.apply(&mut mp.outline_width_texture);
+            }
+            if let Some(ref uv) = self.matcap_uv {
+                uv.apply(&mut mp.matcap_texture);
+            }
+            if let Some(ref uv) = self.uv_animation_mask_uv {
+                uv.apply(&mut mp.uv_animation_mask_texture);
             }
         }
     }
@@ -630,5 +833,225 @@ mod tests {
         // MToon フィールドはスキップされる
         assert!(diff.shade_color.is_none());
         assert!(diff.shading_toony_factor.is_none());
+    }
+
+    // ===== v0.5.4: スロット毎 UV 変形 =====
+
+    /// TextureUvOverride::default() は is_empty が true で、余計な diff 差分を生まない
+    #[test]
+    fn test_uv_override_default_is_empty() {
+        let ov = TextureUvOverride::default();
+        assert!(ov.is_empty());
+        assert!(MaterialParamOverride::default().is_empty());
+    }
+
+    /// BaseColor の UV offset/scale/rotation round-trip: diff → apply で値が復元される
+    #[test]
+    fn test_diff_apply_roundtrip_base_color_uv() {
+        let mut pristine = IrMaterial::default();
+        pristine.base_color_tex_info = Some(IrTextureInfo::from_index(0));
+
+        let mut current = pristine.clone();
+        {
+            let ti = current.base_color_tex_info.as_mut().unwrap();
+            ti.offset = Vec2::new(0.25, -0.5);
+            ti.scale = Vec2::new(2.0, 0.5);
+            ti.rotation = std::f32::consts::FRAC_PI_4;
+        }
+
+        let diff = MaterialParamOverride::diff_from(&pristine, &current)
+            .expect("UV 変更があるので diff は Some");
+        let uv = diff.base_color_uv.as_ref().expect("base_color_uv が Some");
+        assert_eq!(uv.offset, Some([0.25, -0.5]));
+        assert_eq!(uv.scale, Some([2.0, 0.5]));
+        assert_eq!(uv.rotation, Some(std::f32::consts::FRAC_PI_4));
+
+        let mut restored = pristine.clone();
+        diff.apply_to(&mut restored);
+        let ti = restored.base_color_tex_info.as_ref().unwrap();
+        assert_eq!(ti.offset, Vec2::new(0.25, -0.5));
+        assert_eq!(ti.scale, Vec2::new(2.0, 0.5));
+        assert!((ti.rotation - std::f32::consts::FRAC_PI_4).abs() < 1e-6);
+    }
+
+    /// MToon スロット (shade) の UV round-trip
+    #[test]
+    fn test_diff_apply_roundtrip_mtoon_slot_uv() {
+        let mut pristine = IrMaterial::default();
+        pristine.shader_family = ShaderFamily::Mtoon;
+        let mut mp = MtoonParams::default();
+        mp.shade_texture = Some(IrTextureInfo::from_index(3));
+        pristine.mtoon = Some(mp);
+
+        let mut current = pristine.clone();
+        {
+            let ti = current
+                .mtoon
+                .as_mut()
+                .unwrap()
+                .shade_texture
+                .as_mut()
+                .unwrap();
+            ti.offset = Vec2::new(0.1, 0.2);
+            ti.scale = Vec2::new(1.5, 1.5);
+        }
+
+        let diff = MaterialParamOverride::diff_from(&pristine, &current).unwrap();
+        let uv = diff.shade_uv.as_ref().expect("shade_uv が Some");
+        assert_eq!(uv.offset, Some([0.1, 0.2]));
+        assert_eq!(uv.scale, Some([1.5, 1.5]));
+
+        let mut restored = pristine.clone();
+        diff.apply_to(&mut restored);
+        let ti = restored
+            .mtoon
+            .as_ref()
+            .unwrap()
+            .shade_texture
+            .as_ref()
+            .unwrap();
+        assert_eq!(ti.offset, Vec2::new(0.1, 0.2));
+        assert_eq!(ti.scale, Vec2::new(1.5, 1.5));
+    }
+
+    /// 未割当スロットへの apply は no-op（クラッシュせず、勝手に IrTextureInfo を挿入しない）
+    #[test]
+    fn test_uv_apply_to_unassigned_slot_is_noop() {
+        let pristine = IrMaterial::default();
+        assert!(pristine.base_color_tex_info.is_none());
+        assert!(pristine.emissive_texture.is_none());
+
+        let mut ov = MaterialParamOverride::default();
+        ov.base_color_uv = Some(TextureUvOverride {
+            offset: Some([1.0, 1.0]),
+            scale: Some([2.0, 2.0]),
+            rotation: Some(1.0),
+        });
+        ov.emissive_uv = Some(TextureUvOverride {
+            offset: Some([-0.5, 0.3]),
+            ..Default::default()
+        });
+
+        let mut restored = pristine.clone();
+        ov.apply_to(&mut restored);
+        // スロットは None のまま（勝手に from_index(0) を挿入していない）
+        assert!(restored.base_color_tex_info.is_none());
+        assert!(restored.emissive_texture.is_none());
+    }
+
+    /// enable_mtoon = Some(false) のとき MToon スロット UV も diff から除外される
+    #[test]
+    fn test_diff_from_mtoon_off_skips_mtoon_slot_uv() {
+        let mut pristine = IrMaterial::default();
+        pristine.shader_family = ShaderFamily::Mtoon;
+        let mut mp = MtoonParams::default();
+        mp.shade_texture = Some(IrTextureInfo::from_index(0));
+        pristine.mtoon = Some(mp);
+
+        let mut current = pristine.clone();
+        current.shader_family = ShaderFamily::Other;
+        current.mtoon = None;
+
+        let diff = MaterialParamOverride::diff_from(&pristine, &current).unwrap();
+        assert_eq!(diff.enable_mtoon, Some(false));
+        assert!(
+            diff.shade_uv.is_none(),
+            "MToon OFF 時は shade_uv が diff に含まれない"
+        );
+    }
+
+    /// MToon 有効で mtoon_mut() を呼ばずに UV override が適用される
+    /// （非 MToon 材質に勝手に mtoon = Some(default) が挿入されないこと）
+    #[test]
+    fn test_apply_uv_does_not_upgrade_to_mtoon() {
+        let pristine = IrMaterial::default();
+        assert!(pristine.mtoon.is_none());
+
+        let mut ov = MaterialParamOverride::default();
+        ov.shade_uv = Some(TextureUvOverride {
+            offset: Some([0.5, 0.5]),
+            ..Default::default()
+        });
+
+        let mut restored = pristine.clone();
+        ov.apply_to(&mut restored);
+        // mtoon が None のままであることが重要（UV のために mtoon を生成しない）
+        assert!(
+            restored.mtoon.is_none(),
+            "UV override 単体では mtoon を生成してはならない"
+        );
+    }
+
+    /// review_result_01 [P1]: 未割当スロットに新規割当 + UV 編集した差分が diff に載る
+    ///
+    /// pristine: slot=None, current: slot=Some(IrTextureInfo{offset=(0.5,0)})
+    /// → UV override として `{offset: Some([0.5, 0.0])}` が保存される。
+    /// これがないと「テクスチャ新規割当 → UV 編集」ケースの履歴が欠落する。
+    #[test]
+    fn test_diff_from_newly_assigned_slot_uv_is_saved() {
+        let pristine = IrMaterial::default();
+        assert!(pristine.base_color_tex_info.is_none());
+
+        let mut current = pristine.clone();
+        let mut ti = IrTextureInfo::from_index(5);
+        ti.offset = Vec2::new(0.5, 0.0);
+        ti.rotation = 0.25;
+        current.base_color_tex_info = Some(ti);
+
+        let diff =
+            MaterialParamOverride::diff_from(&pristine, &current).expect("UV 差分があるので Some");
+        let uv = diff
+            .base_color_uv
+            .as_ref()
+            .expect("新規割当スロットの UV 差分が保存されるべき");
+        assert_eq!(uv.offset, Some([0.5, 0.0]));
+        assert_eq!(uv.rotation, Some(0.25));
+        // default scale = 1.0 のままなので scale は None
+        assert_eq!(uv.scale, None);
+    }
+
+    /// 逆方向: pristine=Some, current=None（割当解除）では UV diff は None
+    /// （スロット情報そのものが texture_mgmt 側で消えるため）
+    #[test]
+    fn test_diff_from_removed_slot_no_uv_diff() {
+        let mut pristine = IrMaterial::default();
+        let mut ti = IrTextureInfo::from_index(0);
+        ti.offset = Vec2::new(0.3, 0.3);
+        pristine.base_color_tex_info = Some(ti);
+
+        let mut current = pristine.clone();
+        current.base_color_tex_info = None;
+
+        // base_color_tex_info 以外の差分がないので、UV 単体では None
+        let diff = MaterialParamOverride::diff_from(&pristine, &current);
+        // current の slot が None なら UV diff は None
+        if let Some(d) = diff {
+            assert!(d.base_color_uv.is_none());
+        }
+    }
+
+    /// merge_from で UV override が上書きマージされる
+    #[test]
+    fn test_merge_from_uv_override() {
+        let mut base = MaterialParamOverride::default();
+        base.base_color_uv = Some(TextureUvOverride {
+            offset: Some([0.0, 0.0]),
+            scale: Some([1.0, 1.0]),
+            rotation: None,
+        });
+
+        let patch = MaterialParamOverride {
+            base_color_uv: Some(TextureUvOverride {
+                offset: Some([0.5, 0.0]),
+                scale: None,
+                rotation: Some(0.5),
+            }),
+            ..Default::default()
+        };
+        base.merge_from(&patch);
+        // base の値が patch で上書きされる（`Option<TextureUvOverride>` 単位の置換）
+        let uv = base.base_color_uv.as_ref().unwrap();
+        assert_eq!(uv.offset, Some([0.5, 0.0]));
+        assert_eq!(uv.rotation, Some(0.5));
     }
 }

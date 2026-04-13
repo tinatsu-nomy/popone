@@ -1130,6 +1130,112 @@ fn texture_slot_widget(
     (assign_clicked, reset_clicked)
 }
 
+/// KHR_texture_transform（offset / scale / rotation）を 1 行で編集するウィジェット (v0.5.4)。
+/// `info` が `None` のスロットには描画しない設計のため、呼び出し側で事前判定する。
+/// rotation は **度** で入力 / 表示し、`IrTextureInfo.rotation` にはラジアンで保存する。
+/// 変更があれば `true` を返す。
+fn uv_transform_widget(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    info: &mut crate::intermediate::types::IrTextureInfo,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.add_space(16.0);
+        ui.label("UV:");
+        ui.label("off");
+        if ui
+            .add(
+                egui::DragValue::new(&mut info.offset.x)
+                    .speed(0.001)
+                    .fixed_decimals(3)
+                    .range(-10.0..=10.0),
+            )
+            .on_hover_text(format!("{} offset.x", id_salt))
+            .changed()
+        {
+            changed = true;
+        }
+        if ui
+            .add(
+                egui::DragValue::new(&mut info.offset.y)
+                    .speed(0.001)
+                    .fixed_decimals(3)
+                    .range(-10.0..=10.0),
+            )
+            .on_hover_text(format!("{} offset.y", id_salt))
+            .changed()
+        {
+            changed = true;
+        }
+        ui.label("scale");
+        if ui
+            .add(
+                egui::DragValue::new(&mut info.scale.x)
+                    .speed(0.005)
+                    .fixed_decimals(3)
+                    .range(-100.0..=100.0),
+            )
+            .on_hover_text(format!("{} scale.x", id_salt))
+            .changed()
+        {
+            changed = true;
+        }
+        if ui
+            .add(
+                egui::DragValue::new(&mut info.scale.y)
+                    .speed(0.005)
+                    .fixed_decimals(3)
+                    .range(-100.0..=100.0),
+            )
+            .on_hover_text(format!("{} scale.y", id_salt))
+            .changed()
+        {
+            changed = true;
+        }
+        ui.label("rot°");
+        let mut deg = info.rotation.to_degrees();
+        if ui
+            .add(
+                egui::DragValue::new(&mut deg)
+                    .speed(0.5)
+                    .fixed_decimals(1)
+                    .range(-720.0..=720.0)
+                    .suffix("°"),
+            )
+            .on_hover_text(format!("{} rotation (度)", id_salt))
+            .changed()
+        {
+            info.rotation = deg.to_radians();
+            changed = true;
+        }
+        if ui
+            .small_button("⟲")
+            .on_hover_text("UV 変形をリセット (offset=0, scale=1, rotation=0)")
+            .clicked()
+        {
+            info.offset = glam::Vec2::ZERO;
+            info.scale = glam::Vec2::ONE;
+            info.rotation = 0.0;
+            changed = true;
+        }
+    });
+    changed
+}
+
+/// `info` から現在値を読み取り、`pending_override` の UV エントリに全 3 フィールドをセットする。
+/// UI ウィジェットが `changed = true` を返した直後に呼ぶヘルパー。
+fn record_uv_override(
+    target: &mut Option<crate::viewer::app::material_edit::TextureUvOverride>,
+    info: &crate::intermediate::types::IrTextureInfo,
+) {
+    *target = Some(crate::viewer::app::material_edit::TextureUvOverride {
+        offset: Some(info.offset.to_array()),
+        scale: Some(info.scale.to_array()),
+        rotation: Some(info.rotation),
+    });
+}
+
 pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
     use crate::intermediate::types::{MtoonParams, ShaderFamily};
 
@@ -1422,6 +1528,13 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                         pending_tex_clear =
                             Some(crate::intermediate::types::TextureSlot::BaseColor);
                     }
+                    // v0.5.4: BaseColor UV 編集（テクスチャ有り時のみ表示）
+                    if let Some(ti) = mat.base_color_tex_info.as_mut() {
+                        if uv_transform_widget(ui, "base_color", ti) {
+                            record_uv_override(&mut pending_override.base_color_uv, ti);
+                            dirty = true;
+                        }
+                    }
                     ui.horizontal(|ui| {
                         ui.label("diffuse:");
                         let mut rgb = [mat.diffuse.x, mat.diffuse.y, mat.diffuse.z];
@@ -1480,6 +1593,21 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                         if r2 {
                             pending_tex_clear =
                                 Some(crate::intermediate::types::TextureSlot::ShadingShift);
+                        }
+                    }
+                    // v0.5.4: Shade / ShadingShift UV 編集（mtoon 既存かつスロット割当有時のみ）
+                    if let Some(mp) = mat.mtoon.as_mut() {
+                        if let Some(ti) = mp.shade_texture.as_mut() {
+                            if uv_transform_widget(ui, "shade", ti) {
+                                record_uv_override(&mut pending_override.shade_uv, ti);
+                                dirty = true;
+                            }
+                        }
+                        if let Some(ti) = mp.shading_shift_texture.as_mut() {
+                            if uv_transform_widget(ui, "shading_shift", ti) {
+                                record_uv_override(&mut pending_override.shading_shift_uv, ti);
+                                dirty = true;
+                            }
                         }
                     }
 
@@ -1600,6 +1728,15 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                         if r {
                             pending_tex_clear =
                                 Some(crate::intermediate::types::TextureSlot::OutlineWidth);
+                        }
+                    }
+                    // v0.5.4: OutlineWidth UV 編集
+                    if let Some(mp) = mat.mtoon.as_mut() {
+                        if let Some(ti) = mp.outline_width_texture.as_mut() {
+                            if uv_transform_widget(ui, "outline_width", ti) {
+                                record_uv_override(&mut pending_override.outline_width_uv, ti);
+                                dirty = true;
+                            }
                         }
                     }
 
@@ -1749,6 +1886,15 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 Some(crate::intermediate::types::TextureSlot::RimMultiply);
                         }
                     }
+                    // v0.5.4: RimMultiply UV 編集
+                    if let Some(mp) = mat.mtoon.as_mut() {
+                        if let Some(ti) = mp.rim_multiply_texture.as_mut() {
+                            if uv_transform_widget(ui, "rim_multiply", ti) {
+                                record_uv_override(&mut pending_override.rim_multiply_uv, ti);
+                                dirty = true;
+                            }
+                        }
+                    }
                     let (mut rim_rgb, mut fresnel_power, mut rim_lift, mut rim_mix) = {
                         let mp = mat.mtoon();
                         (
@@ -1854,6 +2000,15 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 Some(crate::intermediate::types::TextureSlot::Matcap);
                         }
                     }
+                    // v0.5.4: Matcap UV 編集
+                    if let Some(mp) = mat.mtoon.as_mut() {
+                        if let Some(ti) = mp.matcap_texture.as_mut() {
+                            if uv_transform_widget(ui, "matcap", ti) {
+                                record_uv_override(&mut pending_override.matcap_uv, ti);
+                                dirty = true;
+                            }
+                        }
+                    }
                     let mut matcap_rgb = mat.mtoon().matcap_factor.to_array();
                     let mut matcap_changed = false;
 
@@ -1898,6 +2053,18 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                         if r {
                             pending_tex_clear =
                                 Some(crate::intermediate::types::TextureSlot::UvAnimMask);
+                        }
+                    }
+                    // v0.5.4: UvAnimMask UV 編集（スクロール/回転の動的アニメと併用可）
+                    if let Some(mp) = mat.mtoon.as_mut() {
+                        if let Some(ti) = mp.uv_animation_mask_texture.as_mut() {
+                            if uv_transform_widget(ui, "uv_anim_mask", ti) {
+                                record_uv_override(
+                                    &mut pending_override.uv_animation_mask_uv,
+                                    ti,
+                                );
+                                dirty = true;
+                            }
                         }
                     }
                     let (mut scroll_x, mut scroll_y, mut rotation) = {
@@ -2019,6 +2186,19 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                         if r2 {
                             pending_tex_clear =
                                 Some(crate::intermediate::types::TextureSlot::Normal);
+                        }
+                    }
+                    // v0.5.4: Emissive / Normal UV 編集（IrMaterial 直下スロット）
+                    if let Some(ti) = mat.emissive_texture.as_mut() {
+                        if uv_transform_widget(ui, "emissive", ti) {
+                            record_uv_override(&mut pending_override.emissive_uv, ti);
+                            dirty = true;
+                        }
+                    }
+                    if let Some(ti) = mat.normal_texture.as_mut() {
+                        if uv_transform_widget(ui, "normal", ti) {
+                            record_uv_override(&mut pending_override.normal_uv, ti);
+                            dirty = true;
                         }
                     }
 
