@@ -6,8 +6,8 @@ use eframe::egui;
 use egui::epaint::{Color32, Mesh, Vertex};
 
 use super::app::uv_edit::{
-    material_has_uv1, read_mesh_vertex_uv, write_vertex_uv, UvDragMode, UvGizmoAction,
-    UvRectBehavior,
+    material_has_uv1, mesh_global_offsets_of, morph_uv_entry_count, read_displayed_uv,
+    write_displayed_uv, UvDragMode, UvGizmoAction, UvRectBehavior,
 };
 use super::app::{ConvertMessage, DisplaySettings, PendingOverlay, SidePanelTab, ViewerApp};
 use super::export_filter::build_filtered_ir;
@@ -6129,7 +6129,96 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 .on_hover_text("この材質に属するメッシュは UV1 (TEXCOORD_1) を持っていません");
         }
     });
+
+    // Phase 3 A-2: UV モーフ選択 ComboBox。
+    // active_uv_set と一致する channel を持つ UV モーフのみを選択肢に出す。
+    // モーフ選択中は以下の制約:
+    //   - ドラッグ状態 / selected は別空間として扱うため、切替時にクリア
+    //   - active_uv_set はモーフの channel に強制同期（UV セット不一致を避ける）
+    let uv_morph_list: Vec<(usize, String, u8)> = app
+        .loaded
+        .as_ref()
+        .map(|l| {
+            l.ir.morphs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, m)| {
+                    if let crate::intermediate::types::IrMorphKind::Uv { channel, .. } = &m.kind {
+                        Some((i, m.name.clone(), *channel))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // 現在の active_morph がリスト外 (IR が変わった後など) なら None に戻す
+    if let Some(cur) = app.uv_edit.active_morph {
+        if !uv_morph_list.iter().any(|(i, _, _)| *i == cur) {
+            app.uv_edit.active_morph = None;
+        }
+    }
+    if !uv_morph_list.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label("編集対象:");
+            let current_label: String = match app.uv_edit.active_morph {
+                None => "ベース UV".to_string(),
+                Some(idx) => uv_morph_list
+                    .iter()
+                    .find(|(i, _, _)| *i == idx)
+                    .map(|(_, name, ch)| format!("モーフ「{}」(UV{})", name, ch))
+                    .unwrap_or_else(|| "モーフ (不明)".to_string()),
+            };
+            let mut new_morph = app.uv_edit.active_morph;
+            egui::ComboBox::from_id_salt("uv_edit_morph_combo")
+                .selected_text(current_label)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut new_morph, None, "ベース UV");
+                    for (idx, name, ch) in &uv_morph_list {
+                        ui.selectable_value(
+                            &mut new_morph,
+                            Some(*idx),
+                            format!("{} (UV{})", name, ch),
+                        );
+                    }
+                });
+            if new_morph != app.uv_edit.active_morph {
+                // 切替時: 選択・ドラッグ状態・undo をクリア（別空間のため混線を避ける）
+                app.uv_edit.active_morph = new_morph;
+                app.uv_edit.selected.clear();
+                app.uv_edit.dragging = false;
+                app.uv_edit.drag_mode = UvDragMode::None;
+                app.uv_edit.drag_start_uvs.clear();
+                app.uv_edit.drag_press_uv = None;
+                app.uv_edit.drag_pivot = None;
+                app.uv_edit.gizmo_action = None;
+                app.uv_edit.undo_stack.clear();
+                app.uv_edit.redo_stack.clear();
+                app.uv_edit.pristine_uvs.clear();
+                // モーフ選択時は active_uv_set を channel に強制同期
+                if let Some(idx) = new_morph {
+                    if let Some((_, _, ch)) = uv_morph_list.iter().find(|(i, _, _)| *i == idx) {
+                        app.uv_edit.active_uv_set = *ch;
+                    }
+                }
+            }
+            // モーフ編集時のプレビュー説明（weight を 1.0 にしないと見た目反映されない旨）
+            if app.uv_edit.active_morph.is_some() {
+                ui.small("（side panel でウェイトを 1.0 にすると反映）");
+            }
+        });
+    }
+    // モーフ選択は上の分岐で active_uv_set を更新しうるので、最新値で active_chan を再取得
     let active_chan = app.uv_edit.active_uv_set;
+    let active_morph = app.uv_edit.active_morph;
+    // Phase 3 A-2: UV モーフのエントリは `(global_vi, [f32;4])` 形式で頂点を指すため、
+    // メッシュ毎のグローバル頂点オフセットを先に計算して `read_displayed_uv` 等に渡す。
+    // ベース UV 編集時 (`active_morph == None`) は実質未使用だが、呼び出し箇所の型を揃えるため常に用意する。
+    let global_offsets: Vec<usize> = app
+        .loaded
+        .as_ref()
+        .map(|l| mesh_global_offsets_of(&l.ir))
+        .unwrap_or_default();
 
     // ステータス (現在 UV セットの件数のみ集計)
     let override_count = app
@@ -6404,7 +6493,8 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
     let vert_selected = Color32::from_rgb(0xFF, 0xE0, 0x40);
 
     if let Some(loaded) = app.loaded.as_ref() {
-        for (mi, mesh) in loaded.ir.meshes.iter().enumerate() {
+        let ir = &loaded.ir;
+        for (mi, mesh) in ir.meshes.iter().enumerate() {
             if mesh.material_index != active_mat {
                 continue;
             }
@@ -6413,14 +6503,36 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 continue;
             }
             let vcount = mesh.vertices.len();
+            let mi_u32 = mi as u32;
             for tri in mesh.indices.as_ref().chunks_exact(3) {
-                let Some(a) = read_mesh_vertex_uv(mesh, tri[0] as usize, active_chan) else {
+                let Some(a) = read_displayed_uv(
+                    ir,
+                    mi_u32,
+                    tri[0],
+                    active_chan,
+                    active_morph,
+                    &global_offsets,
+                ) else {
                     continue;
                 };
-                let Some(b) = read_mesh_vertex_uv(mesh, tri[1] as usize, active_chan) else {
+                let Some(b) = read_displayed_uv(
+                    ir,
+                    mi_u32,
+                    tri[1],
+                    active_chan,
+                    active_morph,
+                    &global_offsets,
+                ) else {
                     continue;
                 };
-                let Some(c) = read_mesh_vertex_uv(mesh, tri[2] as usize, active_chan) else {
+                let Some(c) = read_displayed_uv(
+                    ir,
+                    mi_u32,
+                    tri[2],
+                    active_chan,
+                    active_morph,
+                    &global_offsets,
+                ) else {
                     continue;
                 };
                 let pa = uv_to_canvas(a, rect, voff, vzoom);
@@ -6431,10 +6543,18 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 painter.line_segment([pc, pa], wire_stroke);
             }
             for vi in 0..vcount {
-                let Some(uv) = read_mesh_vertex_uv(mesh, vi, active_chan) else {
+                let vi_u32 = vi as u32;
+                let Some(uv) = read_displayed_uv(
+                    ir,
+                    mi_u32,
+                    vi_u32,
+                    active_chan,
+                    active_morph,
+                    &global_offsets,
+                ) else {
                     continue;
                 };
-                let key = (mi as u32, vi as u32, active_chan);
+                let key = (mi_u32, vi_u32, active_chan);
                 let color = if app.uv_edit.selected.contains(&key) {
                     vert_selected
                 } else if app.uv_edit.overrides.contains_key(&key) {
@@ -6462,14 +6582,14 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 if chan != active_chan {
                     continue;
                 }
-                if let Some(mesh) = loaded.ir.meshes.get(mi as usize) {
-                    if let Some(uv) = read_mesh_vertex_uv(mesh, vi as usize, chan) {
-                        u_min = u_min.min(uv[0]);
-                        u_max = u_max.max(uv[0]);
-                        v_min = v_min.min(uv[1]);
-                        v_max = v_max.max(uv[1]);
-                        any = true;
-                    }
+                if let Some(uv) =
+                    read_displayed_uv(&loaded.ir, mi, vi, chan, active_morph, &global_offsets)
+                {
+                    u_min = u_min.min(uv[0]);
+                    u_max = u_max.max(uv[0]);
+                    v_min = v_min.min(uv[1]);
+                    v_max = v_max.max(uv[1]);
+                    any = true;
                 }
             }
         }
@@ -6543,21 +6663,31 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         if let Some(click_pos) = response.interact_pointer_pos() {
             let mut best: Option<((u32, u32, u8), f32)> = None;
             if let Some(loaded) = app.loaded.as_ref() {
-                for (mi, mesh) in loaded.ir.meshes.iter().enumerate() {
+                let ir = &loaded.ir;
+                for (mi, mesh) in ir.meshes.iter().enumerate() {
                     if mesh.material_index != active_mat {
                         continue;
                     }
                     if active_chan == 1 && mesh.uvs1.len() != mesh.vertices.len() {
                         continue;
                     }
+                    let mi_u32 = mi as u32;
                     for vi in 0..mesh.vertices.len() {
-                        let Some(uv) = read_mesh_vertex_uv(mesh, vi, active_chan) else {
+                        let vi_u32 = vi as u32;
+                        let Some(uv) = read_displayed_uv(
+                            ir,
+                            mi_u32,
+                            vi_u32,
+                            active_chan,
+                            active_morph,
+                            &global_offsets,
+                        ) else {
                             continue;
                         };
                         let p = uv_to_canvas(uv, rect, voff, vzoom);
                         let d = (p - click_pos).length_sq();
                         if best.is_none_or(|(_, bd)| d < bd) {
-                            best = Some(((mi as u32, vi as u32, active_chan), d));
+                            best = Some(((mi_u32, vi_u32, active_chan), d));
                         }
                     }
                 }
@@ -6643,20 +6773,30 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
             let mut nearest_any_sq = f32::INFINITY;
             let mut best_any: Option<(u32, u32, u8)> = None;
             if let Some(loaded) = app.loaded.as_ref() {
-                for (mi, mesh) in loaded.ir.meshes.iter().enumerate() {
+                let ir = &loaded.ir;
+                for (mi, mesh) in ir.meshes.iter().enumerate() {
                     if mesh.material_index != active_mat {
                         continue;
                     }
                     if active_chan == 1 && mesh.uvs1.len() != mesh.vertices.len() {
                         continue;
                     }
+                    let mi_u32 = mi as u32;
                     for vi in 0..mesh.vertices.len() {
-                        let Some(uv) = read_mesh_vertex_uv(mesh, vi, active_chan) else {
+                        let vi_u32 = vi as u32;
+                        let Some(uv) = read_displayed_uv(
+                            ir,
+                            mi_u32,
+                            vi_u32,
+                            active_chan,
+                            active_morph,
+                            &global_offsets,
+                        ) else {
                             continue;
                         };
                         let p = uv_to_canvas(uv, rect, voff, vzoom);
                         let d2 = (p - press_pos).length_sq();
-                        let key = (mi as u32, vi as u32, active_chan);
+                        let key = (mi_u32, vi_u32, active_chan);
                         if app.uv_edit.selected.contains(&key) && d2 < nearest_sel_sq {
                             nearest_sel_sq = d2;
                         }
@@ -6722,19 +6862,20 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 let mut v_max = f32::NEG_INFINITY;
                 let mut any = false;
                 if let Some(loaded) = app.loaded.as_ref() {
+                    let ir = &loaded.ir;
                     for (mi, vi, chan) in &selected {
-                        if let Some(mesh) = loaded.ir.meshes.get(*mi as usize) {
-                            if let Some(arr) = read_mesh_vertex_uv(mesh, *vi as usize, *chan) {
-                                app.uv_edit.drag_start_uvs.insert((*mi, *vi, *chan), arr);
-                                // review_result_05 [P2]: 初回ドラッグ時点の UV を pristine として記録
-                                // （or_insert セマンティクスなので 2 回目以降は上書きされない）
-                                app.uv_edit.record_pristine((*mi, *vi, *chan), arr);
-                                u_min = u_min.min(arr[0]);
-                                u_max = u_max.max(arr[0]);
-                                v_min = v_min.min(arr[1]);
-                                v_max = v_max.max(arr[1]);
-                                any = true;
-                            }
+                        if let Some(arr) =
+                            read_displayed_uv(ir, *mi, *vi, *chan, active_morph, &global_offsets)
+                        {
+                            app.uv_edit.drag_start_uvs.insert((*mi, *vi, *chan), arr);
+                            // review_result_05 [P2]: 初回ドラッグ時点の UV を pristine として記録
+                            // （or_insert セマンティクスなので 2 回目以降は上書きされない）
+                            app.uv_edit.record_pristine((*mi, *vi, *chan), arr);
+                            u_min = u_min.min(arr[0]);
+                            u_max = u_max.max(arr[0]);
+                            v_min = v_min.min(arr[1]);
+                            v_max = v_max.max(arr[1]);
+                            any = true;
                         }
                     }
                 }
@@ -6861,8 +7002,16 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                                     } else {
                                         (raw_u, raw_v)
                                     };
-                                // Phase 3 A-1: chan に応じて UV0/UV1 の適切な保持先へ書き込む。
-                                if write_vertex_uv(&mut loaded.ir, mi, vi, [nu, nv], chan) {
+                                // Phase 3 A-1/A-2: chan に応じて UV0/UV1 or モーフオフセットへ書き込む。
+                                if write_displayed_uv(
+                                    &mut loaded.ir,
+                                    mi,
+                                    vi,
+                                    [nu, nv],
+                                    chan,
+                                    active_morph,
+                                    &global_offsets,
+                                ) {
                                     new_entries.push(((mi, vi, chan), [nu, nv]));
                                 }
                             }
@@ -6888,20 +7037,30 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     let mut inside: std::collections::HashSet<(u32, u32, u8)> =
                         std::collections::HashSet::new();
                     if let Some(loaded) = app.loaded.as_ref() {
-                        for (mi, mesh) in loaded.ir.meshes.iter().enumerate() {
+                        let ir = &loaded.ir;
+                        for (mi, mesh) in ir.meshes.iter().enumerate() {
                             if mesh.material_index != active_mat {
                                 continue;
                             }
                             if active_chan == 1 && mesh.uvs1.len() != mesh.vertices.len() {
                                 continue;
                             }
+                            let mi_u32 = mi as u32;
                             for vi in 0..mesh.vertices.len() {
-                                let Some(uv) = read_mesh_vertex_uv(mesh, vi, active_chan) else {
+                                let vi_u32 = vi as u32;
+                                let Some(uv) = read_displayed_uv(
+                                    ir,
+                                    mi_u32,
+                                    vi_u32,
+                                    active_chan,
+                                    active_morph,
+                                    &global_offsets,
+                                ) else {
                                     continue;
                                 };
                                 if uv[0] >= u_lo && uv[0] <= u_hi && uv[1] >= v_lo && uv[1] <= v_hi
                                 {
-                                    inside.insert((mi as u32, vi as u32, active_chan));
+                                    inside.insert((mi_u32, vi_u32, active_chan));
                                 }
                             }
                         }
@@ -6953,11 +7112,12 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
             let mut after: std::collections::HashMap<(u32, u32, u8), [f32; 2]> =
                 std::collections::HashMap::with_capacity(before.len());
             if let Some(loaded) = app.loaded.as_ref() {
+                let ir = &loaded.ir;
                 for &(mi, vi, chan) in before.keys() {
-                    if let Some(mesh) = loaded.ir.meshes.get(mi as usize) {
-                        if let Some(uv) = read_mesh_vertex_uv(mesh, vi as usize, chan) {
-                            after.insert((mi, vi, chan), uv);
-                        }
+                    if let Some(uv) =
+                        read_displayed_uv(ir, mi, vi, chan, active_morph, &global_offsets)
+                    {
+                        after.insert((mi, vi, chan), uv);
                     }
                 }
             }
@@ -6997,7 +7157,17 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
     }
 
     ui.add_space(4.0);
-    ui.small(
-        "（UV セット: UV0 / UV1 / Phase 3 A-1 対応済み — モーフ UV・視覚ギズモは今後の Phase 3）",
-    );
+    if let Some(morph_idx) = active_morph {
+        let n = app
+            .loaded
+            .as_ref()
+            .map(|l| morph_uv_entry_count(&l.ir, morph_idx))
+            .unwrap_or(0);
+        ui.small(format!(
+            "（モーフ編集モード: オフセット {} 頂点記録中 — PMX 保存時のラウンドトリップは未対応）",
+            n
+        ));
+    } else {
+        ui.small("（ベース UV 編集モード — PMX UV モーフがあれば「編集対象」から選択して編集可）");
+    }
 }

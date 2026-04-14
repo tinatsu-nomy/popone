@@ -4,7 +4,7 @@
 
 - [Roadmap](#roadmap)
   - [Targeted for v0.6.0](#targeted-for-v060)
-    - [UV Editor Phase 3 (Data Coverage)](#uv-editor-phase-3-data-coverage)
+    - [UV Editor Follow-ups](#uv-editor-follow-ups)
     - [OBJ / STL Import Options UI Polish](#obj--stl-import-options-ui-polish)
     - [Background Load Internals Cleanup](#background-load-internals-cleanup)
     - [Drag-and-Drop Slot Selection](#drag-and-drop-slot-selection)
@@ -36,13 +36,14 @@ This document tracks planned work, future improvements, and external feature req
 
 Current target: **v0.6.0**
 
-> **Note:** v0.5.4 shipped per-slot UV transform. v0.5.5 shipped **Phase 1 + Phase 2 + Phase 3 A-1 / A-3 / A-4 / A-5** of the per-vertex UV editor (single/multi-vertex select/drag, rectangle selection with additive/subtractive modes, zoom/pan, rotate/scale, undo/redo, texture background, detachable OS window, UV0 / UV1 set switching, 2D gizmo handles). See [CHANGELOG.md](CHANGELOG.md#v055-2026-04-13). The remaining Phase 3 item (morph UV) is the data-coverage expansion for v0.6.0 or beyond.
+> **Note:** v0.5.4 shipped per-slot UV transform. v0.5.5 shipped **Phase 1 + Phase 2 + Phase 3 A-1 / A-2 / A-3 / A-4 / A-5** of the per-vertex UV editor (single/multi-vertex select/drag, rectangle selection with additive/subtractive modes, zoom/pan, rotate/scale, undo/redo, texture background, detachable OS window, UV0 / UV1 set switching, 2D gizmo handles, PMX UV morph editing). See [CHANGELOG.md](CHANGELOG.md#v055-2026-04-13). Phase 3 is complete. The follow-up items below are smaller improvements for v0.6.0 or beyond.
 
 ## Targeted for v0.6.0
 
-### UV Editor Phase 3 (Data Coverage)
+### UV Editor Follow-ups
 
-- **Morph UV (A-2)** — For PMX UV morphs, present a "base UV edit vs. morph edit" mode switch
+- **PMX UV morph round-trip writer** — IR→PMX writer currently emits empty group morphs for `IrMorphKind::Uv`. Add a reverse vertex-index map during extract so the writer can reconstruct `PmxMorphOffsets::Uv` entries, enabling "PMX → edit → PMX" round-trip editing of UV morphs.
+- **Morph weight preview** — Morph edit mode currently needs the user to scrub the side-panel weight slider to 1.0 to see the effect. Optionally auto-set the weight to 1.0 while editing, then restore on exit.
 
 
 

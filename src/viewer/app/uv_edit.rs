@@ -18,7 +18,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::intermediate::types::IrModel;
+use crate::intermediate::types::{IrModel, IrMorphKind};
 
 use super::persistence::VertexUvOverrideEntry;
 
@@ -140,6 +140,12 @@ pub struct UvEditState {
     /// `drag_started()` 時に「press 位置がハンドル上か」を判定して Some にセット、
     /// ドラッグ終了でクリア。`Some` の間は修飾キーよりも優先してスケール/回転を適用する。
     pub gizmo_action: Option<UvGizmoAction>,
+    /// 現在編集対象の UV モーフ (Phase 3 / A-2)。
+    /// `None` = ベース UV 編集（従来通り `IrVertex.uv` / `IrMesh.uvs1` を直接触る）。
+    /// `Some(idx)` = `ir.morphs[idx]` が `IrMorphKind::Uv` である前提で、そのモーフの
+    /// 頂点別オフセットを編集する。read/write は `read_displayed_uv` / `write_displayed_uv`
+    /// 経由で、キャンバスには「ベース + 現在のモーフオフセット (weight=1 相当)」が表示される。
+    pub active_morph: Option<usize>,
 }
 
 impl Default for UvEditState {
@@ -164,6 +170,7 @@ impl Default for UvEditState {
             detached: false,
             active_uv_set: 0,
             gizmo_action: None,
+            active_morph: None,
         }
     }
 }
@@ -190,6 +197,7 @@ impl UvEditState {
         self.rect_initial_selected.clear();
         self.active_uv_set = 0;
         self.gizmo_action = None;
+        self.active_morph = None;
     }
 
     /// 頂点 UV の pristine を記録する（初回ドラッグ開始時に呼ぶ）。
@@ -324,6 +332,113 @@ impl UvEditState {
             write_uv_to_ir(ir, mi, vi, uv, chan);
         }
     }
+}
+
+/// 各メッシュのグローバル頂点オフセットを返す (Phase 3 A-2 helper)。
+/// UV モーフは `(global_vertex_index, [f32; 4])` で頂点を指すため、`(mi, vi) ↔ global_vi`
+/// 変換のために使う。計算量は O(meshes.len()) で毎フレーム呼んでも実用上問題ない。
+pub fn mesh_global_offsets_of(ir: &IrModel) -> Vec<usize> {
+    let mut offs = Vec::with_capacity(ir.meshes.len());
+    let mut cum = 0usize;
+    for m in &ir.meshes {
+        offs.push(cum);
+        cum += m.vertices.len();
+    }
+    offs
+}
+
+/// UV 編集キャンバス上に表示する UV を返す (Phase 3 A-2 helper)。
+/// - `active_morph = None`: ベース UV (`IrVertex.uv` / `IrMesh.uvs1`) をそのまま返す
+/// - `active_morph = Some(idx)`: ベース + モーフのオフセット (weight=1 相当) を返す
+///   - モーフの `channel` が `chan` と不一致なら、そのモーフは対象外として base のみ返す
+pub fn read_displayed_uv(
+    ir: &IrModel,
+    mi: u32,
+    vi: u32,
+    chan: u8,
+    active_morph: Option<usize>,
+    mesh_global_offsets: &[usize],
+) -> Option<[f32; 2]> {
+    let mesh = ir.meshes.get(mi as usize)?;
+    let base = read_mesh_vertex_uv(mesh, vi as usize, chan)?;
+    let Some(morph_idx) = active_morph else {
+        return Some(base);
+    };
+    let morph = ir.morphs.get(morph_idx)?;
+    let IrMorphKind::Uv { channel, offsets } = &morph.kind else {
+        return Some(base);
+    };
+    if *channel != chan {
+        return Some(base);
+    }
+    let global_vi = mesh_global_offsets.get(mi as usize)? + vi as usize;
+    if let Some((_, off)) = offsets.iter().find(|(v, _)| *v == global_vi) {
+        Some([base[0] + off[0], base[1] + off[1]])
+    } else {
+        Some(base)
+    }
+}
+
+/// 表示 UV を新しい値に更新する (Phase 3 A-2 helper)。
+/// - `active_morph = None`: `write_vertex_uv` にフォールバック（ベース UV を直接書き換え）
+/// - `active_morph = Some(idx)`: ベース UV は維持し、モーフオフセットを `new_uv - base` で更新
+pub fn write_displayed_uv(
+    ir: &mut IrModel,
+    mi: u32,
+    vi: u32,
+    new_uv: [f32; 2],
+    chan: u8,
+    active_morph: Option<usize>,
+    mesh_global_offsets: &[usize],
+) -> bool {
+    let Some(morph_idx) = active_morph else {
+        return write_vertex_uv(ir, mi, vi, new_uv, chan);
+    };
+    // split borrow: base UV はメッシュの不変借用で先に取得 → morph の可変借用に進む
+    let base = {
+        let Some(mesh) = ir.meshes.get(mi as usize) else {
+            return false;
+        };
+        let Some(uv) = read_mesh_vertex_uv(mesh, vi as usize, chan) else {
+            return false;
+        };
+        uv
+    };
+    let Some(&mesh_off) = mesh_global_offsets.get(mi as usize) else {
+        return false;
+    };
+    let global_vi = mesh_off + vi as usize;
+    let Some(morph) = ir.morphs.get_mut(morph_idx) else {
+        return false;
+    };
+    let IrMorphKind::Uv { channel, offsets } = &mut morph.kind else {
+        return false;
+    };
+    if *channel != chan {
+        return false;
+    }
+    let du = new_uv[0] - base[0];
+    let dv = new_uv[1] - base[1];
+    // PMX UV モーフは 4 成分。UV0/UV1 編集で実際に意味があるのは xy のみで、zw は 0 で固定。
+    let entry = [du, dv, 0.0, 0.0];
+    if let Some(e) = offsets.iter_mut().find(|(v, _)| *v == global_vi) {
+        e.1 = entry;
+    } else {
+        offsets.push((global_vi, entry));
+    }
+    true
+}
+
+/// 指定 UV モーフの offsets エントリ数を返す (Phase 3 A-2 helper、UI ステータス表示用)。
+/// モーフが存在しないか `IrMorphKind::Uv` でない場合は `0`。
+pub fn morph_uv_entry_count(ir: &IrModel, morph_idx: usize) -> usize {
+    ir.morphs
+        .get(morph_idx)
+        .and_then(|m| match &m.kind {
+            IrMorphKind::Uv { offsets, .. } => Some(offsets.len()),
+            _ => None,
+        })
+        .unwrap_or(0)
 }
 
 /// IR の指定メッシュ/頂点/UV セットから UV を読み取る (Phase 3 A-1 helper)。

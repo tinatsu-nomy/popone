@@ -48,7 +48,7 @@
 
 ## v0.5.5（2026-04-13）
 
-**材質編集パネルから呼び出す頂点単位 UV 編集ウィンドウ**を追加。v0.5.4 は材質単位の UV 変形（offset / scale / rotation）を提供したが、v0.5.5 はその下のレイヤーに踏み込み、**Phase 1**（単一頂点エディタ＋永続化＋reload 保持）、**Phase 2**（テクスチャ背景・矩形選択・ズーム/パン・回転/スケール・undo/redo・Ctrl+A）に加え、**Phase 3** の先行項目（矩形選択の加算/除外、独立 OS ウィンドウ化、UV1 編集、2D ギズモハンドル）を同梱する。
+**材質編集パネルから呼び出す頂点単位 UV 編集ウィンドウ**を追加。v0.5.4 は材質単位の UV 変形（offset / scale / rotation）を提供したが、v0.5.5 はその下のレイヤーに踏み込み、**Phase 1**（単一頂点エディタ＋永続化＋reload 保持）、**Phase 2**（テクスチャ背景・矩形選択・ズーム/パン・回転/スケール・undo/redo・Ctrl+A）に加え、**Phase 3** の全項目（矩形選択の加算/除外、独立 OS ウィンドウ化、UV1 編集、2D ギズモハンドル、PMX UV モーフ編集）を同梱する。
 
 ### 新機能 (Phase 1)
 
@@ -73,6 +73,7 @@
 - **独立 OS ウィンドウ化 (A-3)** — UV 編集ツールバーに「⬈ 分離」ボタンを追加。押下で `egui::Window` によるメインウィンドウ内フローティングから `ctx.show_viewport_immediate`（eframe 0.31 の viewport API）による OS ネイティブの独立ウィンドウへ切り替え、独自のタイトルバー・リサイズ・最小化/閉じるボタンを持つ別デスクトップウィンドウに UV エディタを分離する。メインビューアは背後で 3D シーンを描画し続ける。「⬓ 結合」でメインウィンドウ内に戻す。`UvEditState.detached: bool` がセッション中の設定として値を保持し（reset では変更しない）、`ViewportId::from_hash_of("uv_edit_viewport")` で OS 側のウィンドウ位置/サイズをトグル間で維持。独立ウィンドウの × ボタン押下時は `uv_edit_window_open = false` に戻し、次回 UV 編集を開いた際は独立状態のまま開く。
 - **UV1 編集 (A-1)** — `VertexKey` を `(mesh_idx, vertex_idx)` から `(mesh_idx, vertex_idx, uv_set)` に拡張し、`uv_set = 0` は `IrVertex.uv` (UV0)、`uv_set = 1` は `IrMesh.uvs1[vi]` (UV1 / `TEXCOORD_1`) を指す。新設の「UV セット」ComboBox で UV0 / UV1 を切替可能（アクティブ材質に属するメッシュが UV1 を 1 つも持たない場合は UV1 オプションを自動で disable する）。UV セット切替時は進行中ドラッグを取り消す一方、`selected` / `overrides` / undo 履歴はチャネルごとに別空間として保持されるため UV0/UV1 が混線することはない。ピック/描画/ドラッグ/矩形選択/Ctrl+A の全パスが `active_uv_set` でフィルタされ、UV1 選択時は UV1 を持たないメッシュをスキップし、書き込みは新設の `write_vertex_uv(ir, mi, vi, uv, chan)` 経由で振り分ける。`sync_uvs_from_ir` は UV0 / UV1 両方を GPU vertex buffer（`animated_vertices` 含む）へアップロードするため、UV1 の編集結果は MToon の UV1 ルックアップ・Matcap 等にも drag-stop 時点で反映される。`VertexUvOverrideEntry` に `uv_set: u8` を `#[serde(default)]` 付きで追加したので、v0.5.5 Phase 1 で書き出した UV0 のみの履歴ファイルはそのまま読み込める。
 - **視覚 2D ギズモハンドル (A-5)** — 選択頂点が 2 個以上かつ面積 0 でない bbox を持つとき、選択 bbox を橙色の枠線で描き、4 隅にスケールハンドル（橙色の四角）、上辺外側 24 px に回転ハンドル（青色の丸）を配置する。角ハンドルをドラッグすると「掴んだ角の反対角」を pivot としてスケール（Photoshop/Blender 流）、回転ハンドルは bbox 中心を pivot として回転する。ギズモ経由のドラッグは修飾キーを必要としない — `UvGizmoAction { ScaleCorner { sign_u, sign_v }, Rotate }` が `drag_started()` 時点のヒットテストで確定し、Move ブランチでは修飾キー解釈より優先される。従来の修飾キー方式（Ctrl=スケール、Alt=回転）も互換のために維持される。ハンドルのピック半径は 10 px。回転ハンドルと角の pick 領域が重なった場合は回転を優先する。
+- **PMX UV モーフ編集 (A-2)** — これまで破棄されていた PMX モーフタイプ 3〜7（UV0 モーフ / 追加 UV1〜UV4 モーフ）を IR に `IrMorphKind::Uv { channel, offsets: Vec<(global_vi, [f32; 4])> }` として取り込むようにした。GPU モーフパイプラインに `GpuMorphEntry::Uv` バリアントを追加し、`apply_gpu_morph_recursive` がモーフ適用毎に `(du, dv) * weight` を `vertex.uv` (channel=0) または `vertex.uv1` (channel=1) に加算合成する。UV エディタに「編集対象」ComboBox を追加し、モデルが持つ `Uv` モーフを列挙、選択でキャンバスが「モーフ編集モード」に切替わる。このモードでは read/draw/pick/drag/gizmo が「ベース UV + モーフオフセット」で動き、書き込みは `write_displayed_uv` / `read_displayed_uv` 経由でそのモーフの頂点別オフセットマップを更新する。モーフ選択時は `active_uv_set` をモーフの channel に強制同期し、進行中のドラッグ状態・選択・undo 履歴をクリアすることで UV0 / UV1 / 各モーフの編集空間を独立に保つ。**制約:** (1) channel >= 2 (UV2〜UV4) は読み込み・保持のみで GPU 合成対象外（頂点シェーダーが UV0/UV1 しか持たないため）、(2) IR→PMX writer は `IrMorphKind::Uv` を現状空 Group として書き出す（PMX 頂点 index への逆マップ未保持のため、ラウンドトリップ対応は将来バージョンで追加）、(3) UV エディタのプレビューは weight=1.0 を前提としているため、3D ビューポートで反映を確認するには side panel でモーフウェイトスライダーを 1.0 まで動かす必要がある。
 
 ### 内部実装
 
