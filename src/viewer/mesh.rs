@@ -51,6 +51,12 @@ pub(crate) enum GpuMorphEntry {
         color_binds: Vec<crate::intermediate::types::IrMaterialColorBind>,
         uv_binds: Vec<crate::intermediate::types::IrTextureTransformBind>,
     },
+    /// UV モーフ (Phase 3 A-2): (gpu_vi, [du, dv]) を `channel` (0=UV0, 1=UV1) に加算する。
+    /// channel >= 2 は GPU 頂点に UV2〜4 が無いため empty Vec として保持（apply は no-op）。
+    Uv {
+        channel: u8,
+        offsets: Vec<(u32, [f32; 2])>,
+    },
 }
 
 /// 描画方式
@@ -690,6 +696,31 @@ impl GpuModel {
             }
             GpuMorphEntry::Material { .. } => {
                 // 材質モーフは頂点に影響しない — accumulate_expression_materials で処理
+            }
+            GpuMorphEntry::Uv { channel, offsets } => {
+                // Phase 3 A-2: UV0 / UV1 に (du, dv) * weight を加算する。
+                // GPU の Vertex 構造体に UV2〜4 は無いので channel >= 2 なら offsets は空。
+                match channel {
+                    0 => {
+                        for &(gpu_vi, d) in offsets {
+                            let vi = gpu_vi as usize;
+                            if vi < vertices.len() {
+                                vertices[vi].uv[0] += d[0] * weight;
+                                vertices[vi].uv[1] += d[1] * weight;
+                            }
+                        }
+                    }
+                    1 => {
+                        for &(gpu_vi, d) in offsets {
+                            let vi = gpu_vi as usize;
+                            if vi < vertices.len() {
+                                vertices[vi].uv1[0] += d[0] * weight;
+                                vertices[vi].uv1[1] += d[1] * weight;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -1387,6 +1418,29 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
                 color_binds: color_binds.clone(),
                 uv_binds: uv_binds.clone(),
             },
+            IrMorphKind::Uv { channel, offsets } => {
+                // Phase 3 A-2: IR グローバル頂点 index → GPU 頂点 index。
+                // 同一 GPU 頂点に複数の IR 頂点が dedup されていることがあるため、同じ
+                // gpu_vi に対しては最初に見つかったオフセットだけ採用する
+                // （PMX→IR 時の split 頂点は同じ基底 UV を持つので、同じオフセットを
+                // 両方に流しても大きな問題はないが重複加算は避ける）。
+                let mut seen: HashSet<u32> = HashSet::new();
+                let mut deduped: Vec<(u32, [f32; 2])> = Vec::with_capacity(offsets.len());
+                // channel >= 2 は UV2〜UV4 (GPU に領域なし)。早期 return で空ベクタにする。
+                if *channel < 2 {
+                    for &(global_vi, off) in offsets {
+                        if let Some(&gpu_vi) = global_to_gpu.get(global_vi) {
+                            if seen.insert(gpu_vi) {
+                                deduped.push((gpu_vi, [off[0], off[1]]));
+                            }
+                        }
+                    }
+                }
+                GpuMorphEntry::Uv {
+                    channel: *channel,
+                    offsets: deduped,
+                }
+            }
         })
         .collect();
 

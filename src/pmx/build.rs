@@ -1928,6 +1928,20 @@ fn build_morphs(ir: &IrModel, use_vrm0_coords: bool, scale: f32) -> Vec<PmxMorph
                     );
                     (0u8, PmxMorphOffsets::Group(Vec::new()))
                 }
+                IrMorphKind::Uv { channel, offsets: _ } => {
+                    // Phase 3 A-2: IR → PMX 書き出しの UV モーフは現状未対応
+                    // （ir_global_vi → pmx_vertex_index の逆マップが未保持のため）。
+                    // 読み込みと実行時合成・UI 編集だけを先に実装し、ラウンドトリップは将来対応。
+                    // 空のグループモーフとしてスロットを維持する（PMX ファイル上にモーフ定義は残る）。
+                    log::debug!(
+                        "  [{}:{}] \"{}\" uv morph channel={} (skipped for PMX writer — roundtrip TBD)",
+                        panel_name(m.panel),
+                        m.panel,
+                        m.name,
+                        channel,
+                    );
+                    (0u8, PmxMorphOffsets::Group(Vec::new()))
+                }
             };
 
             PmxMorph {

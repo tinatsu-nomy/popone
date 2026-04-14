@@ -36,8 +36,12 @@ pub fn pmx_to_ir_with_aux(
     let bones = extract_bones(pmx);
     let textures = extract_textures(pmx, pmx_dir, aux_files);
     let materials = extract_materials(pmx);
-    let (meshes, _pmx_to_ir_vertex) = extract_meshes(pmx);
-    let morphs = extract_morphs(pmx, &meshes);
+    let (meshes, pmx_to_ir_vertex) = extract_meshes(pmx);
+    // UV モーフ取り込み (Phase 3 A-2) のため pmx_to_ir_vertex を渡す。
+    // 1:1 マップのため PMX 頂点が複数の IR 頂点に split されたケースでは最後の
+    // マッピングだけが採用される点に注意（実モデルでは UV モーフは 1 material 内に
+    // 収まることが多く、実害は限定的）。
+    let morphs = extract_morphs(pmx, &meshes, &pmx_to_ir_vertex);
     let physics = extract_physics(pmx);
 
     Ok(IrModel {
@@ -484,10 +488,16 @@ fn distribute_vertex_morphs(pmx: &PmxModel, meshes: &mut [IrMesh]) {
     }
 }
 
-/// モーフ抽出: 頂点モーフ・グループモーフ → IrMorph
+/// モーフ抽出: 頂点モーフ・グループモーフ・UV モーフ → IrMorph
 /// 頂点モーフは mesh.morph_targets から構築（generate_tangents の頂点分割に対応）。
 /// グループモーフは PMX データから直接構築（サブモーフインデックスをリマッピング）。
-fn extract_morphs(pmx: &PmxModel, meshes: &[IrMesh]) -> Vec<IrMorph> {
+/// UV モーフは `pmx_to_ir_vertex` マップ経由で PMX 頂点 index → IR グローバル頂点 index
+/// を解決する (Phase 3 A-2)。ボーン・材質モーフは引き続きスキップ。
+fn extract_morphs(
+    pmx: &PmxModel,
+    meshes: &[IrMesh],
+    pmx_to_ir_vertex: &HashMap<u32, usize>,
+) -> Vec<IrMorph> {
     // 各メッシュのグローバル頂点オフセット（分割後の実頂点数ベース）
     let mesh_global_offsets: Vec<usize> = {
         let mut offsets = Vec::with_capacity(meshes.len());
@@ -500,12 +510,12 @@ fn extract_morphs(pmx: &PmxModel, meshes: &[IrMesh]) -> Vec<IrMorph> {
     };
 
     // Pass 1: PMX インデックス → IrModel インデックスのマッピングを構築
-    // スキップされるモーフは None になる
+    // スキップされるモーフ（ボーン・材質）は None になる
     let mut pmx_to_ir_morph: Vec<Option<usize>> = Vec::with_capacity(pmx.morphs.len());
     let mut ir_idx = 0usize;
     for m in &pmx.morphs {
         match &m.offsets {
-            PmxMorphOffsets::Vertex(_) | PmxMorphOffsets::Group(_) => {
+            PmxMorphOffsets::Vertex(_) | PmxMorphOffsets::Group(_) | PmxMorphOffsets::Uv(_) => {
                 pmx_to_ir_morph.push(Some(ir_idx));
                 ir_idx += 1;
             }
@@ -556,7 +566,27 @@ fn extract_morphs(pmx: &PmxModel, meshes: &[IrMesh]) -> Vec<IrMorph> {
                         .collect();
                     IrMorphKind::Group(entries)
                 }
-                _ => return None, // ボーン/材質/UV モーフはスキップ
+                PmxMorphOffsets::Uv(offsets) => {
+                    // PMX morph_type: 3=UV0, 4..=7=UV1..UV4 → channel 0..=4
+                    let channel = match m.morph_type {
+                        3 => 0u8,
+                        4..=7 => m.morph_type - 3,
+                        _ => 0,
+                    };
+                    let entries: Vec<(usize, [f32; 4])> = offsets
+                        .iter()
+                        .filter_map(|off| {
+                            pmx_to_ir_vertex
+                                .get(&off.vertex_index)
+                                .map(|&ir_vi| (ir_vi, off.offset.to_array()))
+                        })
+                        .collect();
+                    IrMorphKind::Uv {
+                        channel,
+                        offsets: entries,
+                    }
+                }
+                _ => return None, // ボーン/材質モーフはスキップ
             };
 
             Some(IrMorph {

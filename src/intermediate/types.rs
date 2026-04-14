@@ -575,6 +575,15 @@ impl IrModel {
                         b.material_index += mat_offset;
                     }
                 }
+                IrMorphKind::Uv {
+                    channel: _,
+                    offsets,
+                } => {
+                    // Phase 3 A-2: アペンドモデル側のグローバル頂点Indexも vtx_offset 分シフト。
+                    for (global_idx, _) in offsets.iter_mut() {
+                        *global_idx += vtx_offset;
+                    }
+                }
             }
         }
         self.morphs.append(&mut other.morphs);
@@ -1220,6 +1229,15 @@ pub enum IrMorphKind {
     Material {
         color_binds: Vec<IrMaterialColorBind>,
         uv_binds: Vec<IrTextureTransformBind>,
+    },
+    /// UV モーフ (v0.5.5 / Phase 3 A-2)。PMX タイプ 3〜7 に対応。
+    /// `channel = 0` は UV0 (`IrVertex.uv`)、`channel = 1..=4` は追加 UV1〜UV4。
+    /// `offsets` は `(グローバル頂点Index, [f32; 4])`。`[f32; 4]` は PMX 仕様そのままで、
+    /// UV0 編集時は xy のみが使われる。`channel >= 2` のオフセットはランタイム合成対象外
+    /// （GPU 側が UV2〜4 を持たないため）で、読み込み・書き戻しのみ対応する。
+    Uv {
+        channel: u8,
+        offsets: Vec<(usize, [f32; 4])>,
     },
 }
 

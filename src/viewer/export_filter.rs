@@ -130,6 +130,16 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
                 .any(|b| mat_remap.contains_key(&b.material_index));
             morph_alive[i] = any_color || any_uv;
         }
+        // Phase 3 A-2: UV モーフは 1 頂点でも可視側に残っていれば生存
+        if let IrMorphKind::Uv {
+            channel: _,
+            offsets,
+        } = &morph.kind
+        {
+            morph_alive[i] = offsets
+                .iter()
+                .any(|&(vi, _)| vtx_remap.get(vi).copied().flatten().is_some());
+        }
     }
 
     // グループモーフの有効性を収束するまで反復判定（ネスト対応）
@@ -164,6 +174,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
                 IrMorphKind::Vertex { .. } => "Vertex",
                 IrMorphKind::Group(_) => "Group",
                 IrMorphKind::Material { .. } => "Material",
+                IrMorphKind::Uv { .. } => "Uv",
             };
             log::warn!(
                 "{} morph \"{}\" references only excluded material vertices, removing.",
@@ -258,6 +269,24 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
                 IrMorphKind::Material {
                     color_binds: new_color_binds,
                     uv_binds: new_uv_binds,
+                }
+            }
+            // Phase 3 A-2: UV モーフは 頂点モーフと同様に vtx_remap で頂点Indexを再マップ。
+            // 除外された頂点を指すオフセットは filter_map で落とす。
+            IrMorphKind::Uv { channel, offsets } => {
+                let new_offsets: Vec<(usize, [f32; 4])> = offsets
+                    .iter()
+                    .filter_map(|&(vi, off)| {
+                        vtx_remap
+                            .get(vi)
+                            .copied()
+                            .flatten()
+                            .map(|new_vi| (new_vi, off))
+                    })
+                    .collect();
+                IrMorphKind::Uv {
+                    channel: *channel,
+                    offsets: new_offsets,
                 }
             }
         };
