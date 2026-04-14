@@ -1854,6 +1854,9 @@ fn build_morphs(ir: &IrModel, use_vrm0_coords: bool, scale: f32) -> Vec<PmxMorph
     log::debug!("--- Morph list ---");
     let mut vertex_count = 0usize;
     let mut group_count = 0usize;
+    let mut uv_count = 0usize;
+    // 同じ index 空間上にあるかの境界チェック用 (build_vertices_and_faces と一致)
+    let total_vertex_count: usize = ir.meshes.iter().map(|m| m.vertices.len()).sum();
 
     let morphs: Vec<PmxMorph> = ir
         .morphs
@@ -1928,19 +1931,52 @@ fn build_morphs(ir: &IrModel, use_vrm0_coords: bool, scale: f32) -> Vec<PmxMorph
                     );
                     (0u8, PmxMorphOffsets::Group(Vec::new()))
                 }
-                IrMorphKind::Uv { channel, offsets: _ } => {
-                    // Phase 3 A-2: IR → PMX 書き出しの UV モーフは現状未対応
-                    // （ir_global_vi → pmx_vertex_index の逆マップが未保持のため）。
-                    // 読み込みと実行時合成・UI 編集だけを先に実装し、ラウンドトリップは将来対応。
-                    // 空のグループモーフとしてスロットを維持する（PMX ファイル上にモーフ定義は残る）。
+                IrMorphKind::Uv { channel, offsets } => {
+                    // IR グローバル頂点 index は build_vertices_and_faces の
+                    // mesh.vertices 順次 push と一致するため、PMX 頂点 index と恒等。
                     log::debug!(
-                        "  [{}:{}] \"{}\" uv morph channel={} (skipped for PMX writer — roundtrip TBD)",
+                        "  [{}:{}] \"{}\" uv morph channel={} (target_vertices={})",
                         panel_name(m.panel),
                         m.panel,
                         m.name,
                         channel,
+                        offsets.len(),
                     );
-                    (0u8, PmxMorphOffsets::Group(Vec::new()))
+                    // PMX morph_type: channel 0 → 3 (UV0), channel 1..=4 → 4..=7 (UV1..UV4)
+                    let morph_type_byte: u8 = if *channel <= 4 {
+                        3 + *channel
+                    } else {
+                        log::warn!(
+                            "  uv morph channel {} exceeds PMX max (4); clamped to UV0",
+                            channel
+                        );
+                        3
+                    };
+                    let mut merged: std::collections::HashMap<u32, glam::Vec4> =
+                        std::collections::HashMap::new();
+                    for &(global_vi, off) in offsets {
+                        if global_vi >= total_vertex_count {
+                            log::warn!(
+                                "  uv morph vertex index {} out of range (vertices={}); skipped",
+                                global_vi,
+                                total_vertex_count
+                            );
+                            continue;
+                        }
+                        *merged.entry(global_vi as u32).or_insert(glam::Vec4::ZERO) +=
+                            glam::Vec4::from_array(off);
+                    }
+                    let mut pmx_offs: Vec<UvMorphOffset> = merged
+                        .into_iter()
+                        .filter(|(_, off)| off.length_squared() > 1e-12)
+                        .map(|(vi, off)| UvMorphOffset {
+                            vertex_index: vi,
+                            offset: off,
+                        })
+                        .collect();
+                    pmx_offs.sort_by_key(|o| o.vertex_index);
+                    uv_count += 1;
+                    (morph_type_byte, PmxMorphOffsets::Uv(pmx_offs))
                 }
             };
 
@@ -1955,10 +1991,11 @@ fn build_morphs(ir: &IrModel, use_vrm0_coords: bool, scale: f32) -> Vec<PmxMorph
         .collect();
 
     log::info!(
-        "Morphs: {} (vertex={}, group={})",
+        "Morphs: {} (vertex={}, group={}, uv={})",
         morphs.len(),
         vertex_count,
-        group_count
+        group_count,
+        uv_count
     );
     morphs
 }

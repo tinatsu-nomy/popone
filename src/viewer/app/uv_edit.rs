@@ -146,6 +146,11 @@ pub struct UvEditState {
     /// 頂点別オフセットを編集する。read/write は `read_displayed_uv` / `write_displayed_uv`
     /// 経由で、キャンバスには「ベース + 現在のモーフオフセット (weight=1 相当)」が表示される。
     pub active_morph: Option<usize>,
+    /// モーフ編集モード進入時に退避した `app.morph_weights[active_morph]` の元値 (v0.5.6)。
+    /// 編集モード中は対象モーフのウェイトが 1.0 に強制されるため、終了時にこの値で復元する。
+    /// 復元/再設定は `switch_active_morph` ヘルパー経由でのみ行うこと（呼び出し側が直接
+    /// `active_morph` を書き換えると退避値が消えて復元できなくなる）。
+    pub morph_weight_saved: Option<f32>,
 }
 
 impl Default for UvEditState {
@@ -171,6 +176,7 @@ impl Default for UvEditState {
             active_uv_set: 0,
             gizmo_action: None,
             active_morph: None,
+            morph_weight_saved: None,
         }
     }
 }
@@ -198,6 +204,38 @@ impl UvEditState {
         self.active_uv_set = 0;
         self.gizmo_action = None;
         self.active_morph = None;
+        // リロード時は `morph_weights` 自体が再構築されるため、退避値を保持しても
+        // 復元先が存在しない（古い IR の index）。確実に破棄する。
+        self.morph_weight_saved = None;
+    }
+
+    /// `active_morph` を切り替え、ウェイトの退避/復元を行う (v0.5.6)。
+    ///
+    /// - 旧 `active_morph` が `Some` だった場合、退避値で `weights` を復元する。
+    /// - 新 `active_morph` が `Some` の場合、現在のウェイトを退避した上で `1.0` にセットする。
+    /// - `new_morph == self.active_morph` の場合は何もせず `false` を返す。
+    ///
+    /// 戻り値: モードが切り替わったかどうか（呼び出し側が `morph_dirty = true` や
+    /// 選択集合のクリア等の副作用を実行する判定に使う）。
+    /// `weights` の境界外 index は静かに無視する（履歴復元等で IR と weights が
+    /// 一時的にズレている可能性を考慮）。
+    pub fn switch_active_morph(&mut self, new_morph: Option<usize>, weights: &mut [f32]) -> bool {
+        if new_morph == self.active_morph {
+            return false;
+        }
+        if let (Some(old_idx), Some(saved)) = (self.active_morph, self.morph_weight_saved.take()) {
+            if let Some(w) = weights.get_mut(old_idx) {
+                *w = saved;
+            }
+        }
+        if let Some(new_idx) = new_morph {
+            if let Some(w) = weights.get_mut(new_idx) {
+                self.morph_weight_saved = Some(*w);
+                *w = 1.0;
+            }
+        }
+        self.active_morph = new_morph;
+        true
     }
 
     /// 頂点 UV の pristine を記録する（初回ドラッグ開始時に呼ぶ）。

@@ -3173,8 +3173,10 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     });
     if ui.small_button("全リセット").clicked() {
+        // UV エディタで編集中のモーフは退避値を維持するためスキップする (v0.5.6)。
+        let uv_locked_morph = app.uv_edit.active_morph;
         for (i, w) in app.morph_weights.iter_mut().enumerate() {
-            if !anim_expr_morphs.contains(&i) {
+            if !anim_expr_morphs.contains(&i) && Some(i) != uv_locked_morph {
                 *w = 0.0;
             }
         }
@@ -3192,8 +3194,12 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
         if i < app.morph_weights.len() {
             let is_anim_controlled = anim_expr_morphs.contains(&i);
+            // v0.5.6: UV エディタで本モーフを編集中はウェイトが 1.0 に固定されるため、
+            // 誤操作を防ぐためスライダー類を無効化する（編集終了時に元値が復元される）。
+            let is_uv_morph_locked = app.uv_edit.active_morph == Some(i);
+            let enabled = !is_anim_controlled && !is_uv_morph_locked;
             ui.horizontal(|ui| {
-                ui.add_enabled_ui(!is_anim_controlled, |ui| {
+                ui.add_enabled_ui(enabled, |ui| {
                     if ui.small_button("0").clicked() {
                         app.morph_weights[i] = 0.0;
                         app.morph_dirty = true;
@@ -3226,6 +3232,9 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 ui.label(&morph.name);
                 if is_anim_controlled {
                     ui.weak("(VRMA)");
+                }
+                if is_uv_morph_locked {
+                    ui.weak("(UV編集中)");
                 }
             });
         }
@@ -6152,10 +6161,15 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 .collect()
         })
         .unwrap_or_default();
-    // 現在の active_morph がリスト外 (IR が変わった後など) なら None に戻す
+    // 現在の active_morph がリスト外 (IR が変わった後など) なら None に戻す。
+    // ヘルパー経由でウェイトの復元も同時に行う。
     if let Some(cur) = app.uv_edit.active_morph {
-        if !uv_morph_list.iter().any(|(i, _, _)| *i == cur) {
-            app.uv_edit.active_morph = None;
+        if !uv_morph_list.iter().any(|(i, _, _)| *i == cur)
+            && app
+                .uv_edit
+                .switch_active_morph(None, &mut app.morph_weights)
+        {
+            app.morph_dirty = true;
         }
     }
     if !uv_morph_list.is_empty() {
@@ -6182,9 +6196,13 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         );
                     }
                 });
-            if new_morph != app.uv_edit.active_morph {
-                // 切替時: 選択・ドラッグ状態・undo をクリア（別空間のため混線を避ける）
-                app.uv_edit.active_morph = new_morph;
+            // 切替時: ヘルパー経由でウェイトの退避/復元と active_morph 更新をまとめて行う。
+            // 戻り値が true（実際にモードが切り替わった）なら、選択・ドラッグ状態・undo もクリア。
+            if app
+                .uv_edit
+                .switch_active_morph(new_morph, &mut app.morph_weights)
+            {
+                app.morph_dirty = true;
                 app.uv_edit.selected.clear();
                 app.uv_edit.dragging = false;
                 app.uv_edit.drag_mode = UvDragMode::None;
@@ -6202,9 +6220,9 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     }
                 }
             }
-            // モーフ編集時のプレビュー説明（weight を 1.0 にしないと見た目反映されない旨）
+            // モーフ編集時の挙動説明（編集中はウェイト 1.0 固定、終了時に元値復元）
             if app.uv_edit.active_morph.is_some() {
-                ui.small("（side panel でウェイトを 1.0 にすると反映）");
+                ui.small("（編集中はウェイト 1.0 固定、終了時に元値へ復元）");
             }
         });
     }

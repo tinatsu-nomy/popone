@@ -126,6 +126,7 @@
     - [履歴呼出の順序原則](#%E5%B1%A5%E6%AD%B4%E5%91%BC%E5%87%BA%E3%81%AE%E9%A0%86%E5%BA%8F%E5%8E%9F%E5%89%87)
     - [Expression 再適用のタイミング](#expression-%E5%86%8D%E9%81%A9%E7%94%A8%E3%81%AE%E3%82%BF%E3%82%A4%E3%83%9F%E3%83%B3%E3%82%B0)
     - [Expression 材質バインド — 再生パイプライン](#expression-%E6%9D%90%E8%B3%AA%E3%83%90%E3%82%A4%E3%83%B3%E3%83%89--%E5%86%8D%E7%94%9F%E3%83%91%E3%82%A4%E3%83%97%E3%83%A9%E3%82%A4%E3%83%B3)
+    - [UV モーフ IR → PMX ラウンドトリップ書き戻し（v0.5.6）](#uv-%E3%83%A2%E3%83%BC%E3%83%95-ir-%E2%86%92-pmx-%E3%83%A9%E3%82%A6%E3%83%B3%E3%83%89%E3%83%88%E3%83%AA%E3%83%83%E3%83%97%E6%9B%B8%E3%81%8D%E6%88%BB%E3%81%97v056)
     - [テクスチャ履歴の補助スロット永続化（v0.5.1）](#%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E5%B1%A5%E6%AD%B4%E3%81%AE%E8%A3%9C%E5%8A%A9%E3%82%B9%E3%83%AD%E3%83%83%E3%83%88%E6%B0%B8%E7%B6%9A%E5%8C%96v051)
     - [スロット毎 UV 変形の永続化（v0.5.4）](#%E3%82%B9%E3%83%AD%E3%83%83%E3%83%88%E6%AF%8E-uv-%E5%A4%89%E5%BD%A2%E3%81%AE%E6%B0%B8%E7%B6%9A%E5%8C%96v054)
   - [Bloom ポストエフェクト](#bloom-%E3%83%9D%E3%82%B9%E3%83%88%E3%82%A8%E3%83%95%E3%82%A7%E3%82%AF%E3%83%88)
@@ -502,7 +503,7 @@ PSD ファイルは `image` crate が未対応のため、`decode_image_data_wit
 - 頂点インデックスマッピング: メッシュ分割時に PMX/PMD グローバル頂点 → IrModel 通し番号のマッピングテーブルを構築し、モーフの頂点インデックスを変換
 - ボーン名マッピング: `pmx_name_to_vrm_bone()` で PMX 日本語ボーン名 → VRM ヒューマノイド名の逆引き（VRMA アニメーション再生用）
 - **重要**: `"センター"` → `"hips"` マッピング（PMX のセンターが VRM の hips に対応。下半身ではない）
-- **モーフインデックスリマッピング**: PMX はボーン/材質/UV モーフを含むが、IrModel では頂点モーフとグループモーフのみ保持する。スキップされるモーフがあるとインデックスがずれるため、`extract_morphs` で 2 パスの変換を行う:
+- **モーフインデックスリマッピング**: PMX はボーン/材質/UV モーフを含むが、IrModel では頂点・グループ・材質（v0.5.1）・UV（v0.5.5）モーフを保持しボーンモーフだけスキップする。スキップされるモーフがあるとインデックスがずれるため、`extract_morphs` で 2 パスの変換を行う:
  1. PMX モーフインデックス → IrModel モーフインデックスのマッピングテーブルを構築（スキップされるモーフは `None`）
  2. グループモーフのサブモーフ参照をリマッピング済みインデックスに変換。スキップされたモーフへの参照は除外
 - **グループモーフ再帰深度制限**: ビューアの `apply_gpu_morph_recursive` はグループモーフを再帰的に展開するが、循環参照や自己参照を持つモデルで無限再帰→スタックオーバーフローを防ぐため最大深度 16 で打ち切り
@@ -2013,6 +2014,10 @@ pub enum IrMorphKind {
         color_binds: Vec<IrMaterialColorBind>,
         uv_binds: Vec<IrTextureTransformBind>,
     },
+    Uv {                                        // v0.5.5 追加（PMX UV モーフ由来）
+        channel: u8,                            // 0 = UV0, 1..=4 = UV1..UV4
+        offsets: Vec<(usize, [f32; 4])>,        // (IR グローバル頂点 index, delta)
+    },
 }
 
 pub enum MaterialColorBindType {
@@ -2083,6 +2088,35 @@ for (mat_idx, params) in dirty_params.iter().enumerate() {
 #### IrModel::merge() での material_index オフセット
 
 model append 時、Guest 側の `IrMorphKind::Material` 内の `material_index` を host の材質数だけオフセット調整する。merge の順序注意: `self.materials.append(&mut other.materials)` より**前**に保持した `mat_offset = self.materials.len()`（関数先頭で計算）を使う必要がある（after では host+guest 合計となり誤った値になる）。
+
+### UV モーフ IR → PMX ラウンドトリップ書き戻し（v0.5.6）
+
+v0.5.5 の UV エディタ（Phase 3 A-2）は PMX UV モーフの取り込み・編集・実行時合成まで実装済みだったが、PMX 再出力側は `IrMorphKind::Uv` を空 Group モーフとしてスタブ化していたため、「PMX 読込 → UV モーフ編集 → PMX 保存」で編集結果が失われていた。v0.5.6 で書き戻しを完成。
+
+#### IR グローバル頂点 index = PMX 頂点 index の恒等性
+
+`build_vertices_and_faces`（`pmx/build.rs`）は `ir.meshes[*].vertices` を出現順にそのまま PMX 頂点配列へ push する。したがって「IR グローバル頂点 index（全 mesh を通した通し番号）」と「PMX 頂点 index」は恒等対応し、`IrMorphKind::Vertex` の `vi as u32` パターン（`pmx/build.rs:1882`）がそのまま成立する。UV モーフも同じ恒等マップで変換できるため逆引きテーブルは不要で、以下の処理で十分:
+
+1. 同一頂点の重複オフセットを `glam::Vec4` で合算（HashMap）
+2. `vertex_index` 昇順ソート（PMX 出力の決定性保証）
+3. 範囲外 index は警告ログ＋スキップ（防御的）
+4. morph_type バイトは channel から再構築: UV0 = 3, UV1..=4 = 4..=7（`if channel <= 4 { 3 + channel }` で clamp）
+
+#### reload snapshot への波及
+
+UV エディタの `write_displayed_uv`（`viewer/app/uv_edit.rs`）は morph 編集モード中、IR 側の `IrMorphKind::Uv.offsets` を直接更新する。このため reload で新 IR を構築し直すと未保存の編集結果が失われる。v0.5.6 では `ReloadSnapshot.uv_morph_offsets: Vec<UvMorphOffsetEntry>` に旧 IR の全 UV モーフ offsets を退避し、`restore_snapshot_on_success` で新 IR の同名モーフに書き戻す。
+
+マッチング: `(name, name_en, channel)` の **完全一致** + 未使用フラグ配列 (`Vec<bool>`) による一意消費。同名モーフが複数ある場合でも N 番目の morph に N 番目の snapshot entry を確実に対応させられる（HashMap での後勝ち上書きを避けるため）。
+
+#### 編集中ウェイトの自動 1.0 化
+
+UV モーフ編集モード進入時に対象モーフの weight を 1.0 に固定してプレビューを有効化し、モード終了時に元値で復元する。実装は `UvEditState::switch_active_morph(new_morph, &mut weights)` ヘルパーに集約されており、`active_morph` の書き換えはすべてこのヘルパー経由で行う（直接代入を禁止する設計）:
+
+- 進入時: `self.morph_weight_saved = Some(weights[new_idx]); weights[new_idx] = 1.0;`
+- 退出時: `weights[old_idx] = self.morph_weight_saved.take().unwrap();`
+- `reset()` 時は退避値も破棄（リロード時の古い IR index を確実に無効化）
+
+`save_reload_snapshot` の冒頭でも `switch_active_morph(None, ...)` を呼び、snapshot に退避される `morph_weights` に「1.0 に固定された一時値」ではなく「ユーザー意図の元値」が入るよう保証する。
 
 ### テクスチャ履歴の補助スロット永続化（v0.5.1）
 

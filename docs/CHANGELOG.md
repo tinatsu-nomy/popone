@@ -3,41 +3,45 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.5.6 (2026-04-14)](#v056-2026-04-14)
+    - [New Features](#new-features)
+    - [Internals](#internals)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
   - [v0.5.5 (2026-04-13)](#v055-2026-04-13)
     - [New Features (Phase 1)](#new-features-phase-1)
     - [New Features (Phase 2)](#new-features-phase-2)
     - [New Features (Phase 3)](#new-features-phase-3)
-    - [Internals](#internals)
+    - [Internals](#internals-1)
     - [Scope Notes](#scope-notes)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
     - [Tests](#tests)
   - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
-    - [New Features](#new-features)
-    - [Internals](#internals-1)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
-    - [Tests](#tests-1)
-  - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
     - [New Features](#new-features-1)
     - [Internals](#internals-2)
-  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
+    - [Tests](#tests-1)
+  - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
     - [New Features](#new-features-2)
     - [Internals](#internals-3)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
-  - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
+  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
     - [New Features](#new-features-3)
-    - [Performance](#performance)
     - [Internals](#internals-4)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-3)
+  - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
+    - [New Features](#new-features-4)
+    - [Performance](#performance)
+    - [Internals](#internals-5)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-4)
     - [Tests](#tests-2)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
-    - [New Features](#new-features-4)
+    - [New Features](#new-features-5)
     - [Behavior Changes](#behavior-changes)
     - [Tests](#tests-3)
   - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
-    - [New Features](#new-features-5)
+    - [New Features](#new-features-6)
     - [Behavior Changes](#behavior-changes-1)
-    - [Internals](#internals-5)
+    - [Internals](#internals-6)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -45,6 +49,28 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.6 (2026-04-14)
+
+Two follow-up improvements to the UV editor.
+
+### New Features
+
+- **PMX UV morph IR→PMX roundtrip writeback** — Up through v0.5.5, `IrMorphKind::Uv` was stubbed out as an empty Group by the PMX writer, so any UV morph edits were lost on PMX save. `build_morphs` in `build.rs` now emits `PmxMorphOffsets::Uv` directly, leveraging the fact that the IR global vertex index produced during `build_vertices_and_faces` (sequential `mesh.vertices` push) is identical to the resulting PMX vertex index. The morph type byte (UV0=3, UV1..4=4..7) is reconstructed from `channel`. Duplicate offsets on the same vertex are coalesced and the output is sorted by `vertex_index` for deterministic writes. The full "PMX load → UV morph edit → PMX save → reload" loop now round-trips.
+- **Auto-set morph weight to 1.0 during edit mode** — Entering UV morph edit mode in the UV editor immediately stashes `app.morph_weights[active_morph]` and sets it to `1.0`, restoring the original value on exit (whether via ComboBox switch, "out-of-list" fallback after IR change, or any future code path). The stash/restore logic is centralised in the new `UvEditState::switch_active_morph` helper, so all entry points share consistent behaviour.
+- **Side-panel slider lock during edit** — While a UV morph is being edited, the corresponding row in the "表情モーフ" side panel disables its slider, `0`/`1` buttons, and DragValue, and shows a `(UV編集中)` hint next to the morph name. The "全リセット" (reset all) button also skips the locked morph to prevent the stash/live-value drift.
+
+### Internals
+
+- `UvEditState` gains a `morph_weight_saved: Option<f32>` field. The new `switch_active_morph(new_morph, &mut weights)` helper is the only sanctioned way to change `active_morph`; direct assignment is by design discouraged. `reset()` also clears `morph_weight_saved` to ensure stale indices from a previous IR are dropped on reload.
+- `pmx/build.rs` `build_morphs` log statistics now include a `uv` count (`Morphs: N (vertex=A, group=B, uv=C)`). Out-of-range vertex indices are warned and skipped defensively.
+
+### Bug Fixes (Pre-Release Review)
+
+- **[Codex 0.5.6/01 P1]** Reloading or A-/T-stance conversion while a UV morph was being edited would persist the locked `1.0` weight: `save_reload_snapshot` captured the temporary value, and `finish_load_with_gpu`'s `uv_edit.reset()` then dropped `morph_weight_saved`, so the post-reload weight stayed at `1.0` with no way back. Fixed by calling `switch_active_morph(None, &mut self.morph_weights)` at the start of `save_reload_snapshot` so the snapshot always captures the user-intended weight.
+- **[Codex 0.5.6/02 P1]** UV morph edit overrides held the displayed value (`base + morph offset`) under a key that had no way to distinguish base vs morph. After reload, `apply_to_ir` was writing those overrides back to the base UV, baking the morph offset into base; re-enabling the morph then double-applied the offset, corrupting both the visible mesh and IR state. Fixed by clearing `overrides` / `pristine_uvs` / `undo` / `redo` / `selected` in `save_reload_snapshot` whenever a UV morph was being edited. Morph edits are already written to the IR via `write_displayed_uv`, so there is no need to preserve the overrides across a reload (and `overrides` is now strictly scoped to base-UV edits).
+- **[Codex 0.5.6/03 P1]** As a consequence of fix 0.5.6/02, unsaved UV morph edits were being silently discarded on reload (the offsets `write_displayed_uv` wrote to the old IR were lost when the new IR was rebuilt from source). Fixed by adding `uv_morph_offsets` to `ReloadSnapshot`, capturing all UV morph offsets from the old IR in `save_reload_snapshot`, and writing them back to same-named morphs in `restore_snapshot_on_success`. Channel mismatches are warned and skipped. Morphs that were not edited simply overwrite themselves with identical values (no-op).
+- **[Codex 0.5.6/04 P1]** The `uv_morph_offsets` map introduced in 0.5.6/03 used `HashMap<name, ...>`, which collapsed same-named UV morphs on `.collect()` (VRM/glTF files can contain multiple morphs sharing a name when `name_en` is empty). Switched to a `Vec<UvMorphOffsetEntry { name, name_en, channel, offsets }>` and changed the restore path to use **a used-flag array + full `(name, name_en, channel)` equality match**, so the Nth same-named morph is correctly restored from the Nth snapshot entry. Snapshot entries that fail to match any new-IR morph are logged as a warning and discarded.
 
 ## v0.5.5 (2026-04-13)
 

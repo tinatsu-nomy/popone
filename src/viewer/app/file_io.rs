@@ -1311,6 +1311,23 @@ fn cpu_parse_source_inner(
     } // match input
 }
 
+/// v0.5.6: UV モーフ offsets の reload 退避用スナップショット (1 モーフ分)。
+///
+/// Codex review 0.5.6/04 P1 対応: 旧版は `HashMap<name, ...>` でキー衝突時に
+/// 後勝ち上書きで編集内容が失われていた（同名 UV morph は VRM/glTF で実在する）。
+/// 現在は Vec で全 UV morph を順序保存し、復元時は `(name, name_en, channel)` の
+/// 完全一致 + 未使用フラグで一意マッチングするため、同名衝突があっても N 番目の
+/// morph に N 番目の offsets が正しく戻る。
+#[derive(Clone)]
+struct UvMorphOffsetEntry {
+    name: String,
+    name_en: String,
+    channel: u8,
+    offsets: Vec<(usize, [f32; 4])>,
+}
+
+type UvMorphOffsetsSnapshot = Vec<UvMorphOffsetEntry>;
+
 /// `reload_current` で退避・復元するフィールドをまとめた構造体。
 /// 新フィールド追加時の漏れを防止する。
 pub(crate) struct ReloadSnapshot {
@@ -1344,6 +1361,11 @@ pub(crate) struct ReloadSnapshot {
     uv_edit_overrides: HashMap<(u32, u32, u8), [f32; 2]>,
     uv_edit_active_material: usize,
     uv_edit_window_open: bool,
+    /// v0.5.6 (Codex review 0.5.6/03 P1 対応): 旧 IR の UV モーフ offsets を退避し、
+    /// reload 成功時に新 IR の同名モーフへ書き戻すことで未保存の UV モーフ編集
+    /// （`write_displayed_uv` が旧 IR に直接書き込んだ分）を失わない。
+    /// キー: morph `name_en`（空なら `name`）、値: (channel, Vec<(global_vi, [f32;4])>)。
+    uv_morph_offsets: UvMorphOffsetsSnapshot,
 }
 
 impl ViewerApp {
@@ -4049,10 +4071,66 @@ impl ViewerApp {
 
     /// リロード前の状態をスナップショットとして退避する。
     fn save_reload_snapshot(&mut self) -> ReloadSnapshot {
+        // v0.5.6 (Codex review 0.5.6/01 P1 対応): UV モーフ編集中は対象モーフの
+        // ウェイトが 1.0 に固定されている。snapshot を取る前に元ウェイトへ復元
+        // しておかないと、reload 後に編集モードが解除されたまま 1.0 が恒久化する。
+        // `switch_active_morph(None, ...)` がウェイト復元と active_morph クリアを同時に行う。
+        let was_morph_editing = self.uv_edit.active_morph.is_some();
+        self.uv_edit
+            .switch_active_morph(None, &mut self.morph_weights);
+        // v0.5.6 (Codex review 0.5.6/02 P1 対応): UV モーフ編集中の `overrides` は
+        // 「base + morph offset」の表示値を持つため、reload 後に `apply_to_ir` で
+        // base UV へ書き戻すと、元の base UV に morph offset が焼き込まれて壊れる
+        // （次に morph を有効にすると offset が二重に効く）。morph 編集結果は
+        // `write_displayed_uv` 経由で IR に直接反映済みのため、新 IR 構築では
+        // いずれにせよ失われる。失敗復元で旧 IR が残るケースでも IR 自体に
+        // 編集が反映済みなので overrides を base として書き戻す必要はない。
+        // よって morph 編集中の reload では overrides 系の状態を全てクリアする。
+        if was_morph_editing {
+            self.uv_edit.overrides.clear();
+            self.uv_edit.pristine_uvs.clear();
+            self.uv_edit.undo_stack.clear();
+            self.uv_edit.redo_stack.clear();
+            self.uv_edit.selected.clear();
+            log::info!(
+                "UV モーフ編集中の reload: overrides を破棄しました（base UV への\
+                 焼き込みを防止するため）"
+            );
+        }
         let appended_models = self
             .loaded
             .as_ref()
             .map(|l| l.appended_models.clone())
+            .unwrap_or_default();
+        // v0.5.6 (Codex review 0.5.6/03 P1 対応): 旧 IR の全 UV モーフ offsets を
+        // 退避しておき、reload 成功時に新 IR の同名モーフへ書き戻す。これにより
+        // `write_displayed_uv` で旧 IR に直接書き込まれた未保存編集が reload で
+        // 消えるのを防ぐ。編集していないモーフは同値上書きで no-op になるだけ。
+        // v0.5.6 (Codex review 0.5.6/04 P1 対応): 同名 UV morph の衝突に対応するため
+        // HashMap から Vec に変更（出現順で全保存）。復元側で `(name, name_en, channel)`
+        // + 未使用フラグによる一意マッチングを行う。
+        let uv_morph_offsets: UvMorphOffsetsSnapshot = self
+            .loaded
+            .as_ref()
+            .map(|l| {
+                l.ir.morphs
+                    .iter()
+                    .filter_map(|m| {
+                        if let crate::intermediate::types::IrMorphKind::Uv { channel, offsets } =
+                            &m.kind
+                        {
+                            Some(UvMorphOffsetEntry {
+                                name: m.name.clone(),
+                                name_en: m.name_en.clone(),
+                                channel: *channel,
+                                offsets: offsets.clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         ReloadSnapshot {
             appended_models,
@@ -4075,6 +4153,7 @@ impl ViewerApp {
             uv_edit_overrides: std::mem::take(&mut self.uv_edit.overrides),
             uv_edit_active_material: self.uv_edit.active_material,
             uv_edit_window_open: self.uv_edit_window_open,
+            uv_morph_offsets,
         }
     }
 
@@ -4187,6 +4266,50 @@ impl ViewerApp {
         let queue = self.render_state.queue.clone();
         if let Some(loaded) = self.loaded.as_mut() {
             self.uv_edit.apply_to_ir(&mut loaded.ir);
+            // v0.5.6 (Codex review 0.5.6/03 P1 対応): 旧 IR で編集された UV モーフ offsets を
+            // 新 IR の同名モーフに書き戻す。`name_en` 優先でマッチング（無ければ `name`）。
+            // 未保存の UV モーフ編集（write_displayed_uv で旧 IR に直接書き込まれた分）を
+            // 失わないための復元。編集していないモーフは同値上書きで no-op。
+            // v0.5.6 (Codex review 0.5.6/04 P1 対応): 同名 UV morph が複数あっても
+            // 正しく N 番目に復元するため、未使用フラグ + 完全一致マッチングで処理する。
+            // マッチング条件: `name` と `name_en` の両方一致、かつ `channel` 一致、かつ未使用。
+            // 旧 HashMap 方式では同名衝突で片方の編集内容が失われていた。
+            if !snap.uv_morph_offsets.is_empty() {
+                let mut used = vec![false; snap.uv_morph_offsets.len()];
+                let mut restored = 0usize;
+                for morph in loaded.ir.morphs.iter_mut() {
+                    if let crate::intermediate::types::IrMorphKind::Uv { channel, offsets } =
+                        &mut morph.kind
+                    {
+                        for (idx, entry) in snap.uv_morph_offsets.iter().enumerate() {
+                            if !used[idx]
+                                && entry.name == morph.name
+                                && entry.name_en == morph.name_en
+                                && entry.channel == *channel
+                            {
+                                *offsets = entry.offsets.clone();
+                                used[idx] = true;
+                                restored += 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if restored > 0 {
+                    log::info!(
+                        "UV モーフ offsets を {} 個復元しました (reload 越しの編集保持)",
+                        restored
+                    );
+                }
+                let unmatched = used.iter().filter(|&&u| !u).count();
+                if unmatched > 0 {
+                    log::warn!(
+                        "UV モーフ offsets の snapshot が {} 個マッチせず破棄されました\
+                         （name/name_en/channel の完全一致が新 IR 側で見つからないため）",
+                        unmatched
+                    );
+                }
+            }
             loaded.gpu_model.sync_uvs_from_ir(&loaded.ir, &queue);
         }
         // リロード完了: テクスチャ選択ダイアログ抑制を解除

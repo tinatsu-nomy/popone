@@ -13,6 +13,7 @@
     - [Animation Playback](#animation-playback)
     - [PMX (MikuMikuDance) Conversion](#pmx-mikumikudance-conversion)
     - [Material Editor (v0.5.0 – v0.5.4)](#material-editor-v050--v054)
+    - [Per-Vertex UV Editor (v0.5.5 – v0.5.6)](#per-vertex-uv-editor-v055--v056)
     - [MME (ray-mmd) Output (v0.5.0)](#mme-ray-mmd-output-v050)
   - [Shader Support](#shader-support)
     - [Shader Detection](#shader-detection)
@@ -194,6 +195,25 @@ Click the ✏ icon on any material row in the Display tab to open the Material E
 - **Live preview** — Changes are reflected immediately in both standard and MMD render paths
 - **Persistence** — Color/scalar edits **and all texture slot assignments** (v0.5.1 extended auxiliary slots) are saved in `popone_history.json` and restored on reload
 - **PMX non-support badges (visually strengthened in v0.5.1)** — Parameters not representable in PMX format show a color-coded `⚠ PMX 非対応` badge at the top of the relevant section with a hover tooltip explaining that MME (.fx) output and viewer preview do honor them
+
+### Per-Vertex UV Editor (v0.5.5 – v0.5.6)
+
+The "UV 編集" button in the material editor header opens a dedicated window for **per-vertex** UV editing on the active material. It complements the per-slot UV transform (v0.5.4) for finer adjustment and supports editing of PMX UV morphs.
+
+- **Canvas** — A square canvas (up to 260×260 px) renders the triangle wireframe in UV space with **v=0 at the top**, matching the `convert/uvmap.rs` PSD export
+- **Vertex pick & drag** — Click within 12 px of a vertex to select (highlighted yellow); dragging translates. Edits are written directly into `IrMesh.vertices_mut()[*].uv` and are preserved through PMX re-export
+- **Multi-select** — Shift+click to add, Ctrl+A to select all. Rect select adds with Shift+drag, subtracts with Ctrl+drag (v0.5.5 Phase 3 A-4)
+- **Rotate / scale** — Alt-drag rotates around the selection bbox centre; corner handles scale around the opposite corner (v0.5.5 Phase 3 A-5, 2D gizmo handles)
+- **Zoom / pan** — Mouse wheel zooms around cursor (0.1–32×); middle drag pans
+- **Undo / redo** — Ctrl+Z / Ctrl+Y, up to 50 entries
+- **Texture background** — The assigned BaseColor texture can be shown behind the wireframe for pixel-accurate alignment
+- **UV set switch** — A ComboBox switches between UV0 and UV1 editing (v0.5.5 Phase 3 A-1, for models with TEXCOORD_1)
+- **Detachable OS window** — Toggle to lift the panel out of `egui::Window` into a native OS window (v0.5.5 Phase 3 A-3, useful on multi-monitor setups)
+- **PMX UV morph editing (v0.5.5 Phase 3 A-2 / roundtrip completed in v0.5.6)** — The "編集対象" ComboBox at the top switches between "ベース UV" and any PMX UV morph. Selecting a morph lets you edit its per-vertex offsets:
+  - **Auto weight 1.0 (v0.5.6)** — Entering morph edit mode automatically locks the target morph's weight to `1.0` so edits are visible in the main viewport. The original weight is restored on exit
+  - **Side-panel slider lock (v0.5.6)** — While a UV morph is being edited, the matching row in the "表情モーフ" side panel disables its slider, `0` / `1` buttons, and DragValue, and shows a `(UV編集中)` marker. The "全リセット" button also skips it
+  - **PMX roundtrip (v0.5.6)** — Edited UV morphs now survive PMX re-export as `PmxMorphOffsets::Uv`, so "PMX load → UV morph edit → PMX save → reload" round-trips correctly (v0.5.5 stubbed them out as empty group morphs)
+- **History persistence** — "履歴を保存" writes per-vertex UV deltas to `popone_history.json`; "履歴呼出" restores them. Stored per model path
 
 ### MME (ray-mmd) Output (v0.5.0)
 

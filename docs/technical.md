@@ -126,6 +126,7 @@
     - [Texture History Recall Ordering](#texture-history-recall-ordering)
     - [Expression Re-application Timing](#expression-re-application-timing)
     - [Expression Material Binds — Playback Pipeline](#expression-material-binds--playback-pipeline)
+    - [UV Morph IR → PMX Roundtrip Writeback (v0.5.6)](#uv-morph-ir-%E2%86%92-pmx-roundtrip-writeback-v056)
     - [Texture History Auxiliary Slot Persistence (v0.5.1)](#texture-history-auxiliary-slot-persistence-v051)
     - [Per-slot UV Transform Persistence (v0.5.4)](#per-slot-uv-transform-persistence-v054)
   - [Bloom Post-Effect](#bloom-post-effect)
@@ -502,7 +503,7 @@ Image decoding goes through `decode_image_data_with_ext`: PSD is decoded by the 
 - Vertex index mapping: When splitting meshes, build a mapping table from PMX/PMD global vertices → IrModel sequential numbers, and convert morph vertex indices
 - Bone name mapping: `pmx_name_to_vrm_bone()` provides reverse lookup from PMX Japanese bone name → VRM humanoid name (for VRMA animation playback)
 - **Important**: `"センター"` → `"hips"` mapping (PMX center (センター) corresponds to VRM hips, not the lower body)
-- **Morph index remapping**: PMX includes bone/material/UV morphs, but IrModel only retains vertex and group morphs. Since skipping morphs shifts indices, `extract_morphs` performs a 2-pass conversion:
+- **Morph index remapping**: PMX includes bone/material/UV morphs; IrModel retains vertex, group, material (v0.5.1) and UV (v0.5.5) morphs while only bone morphs are skipped. Since skipping morphs shifts indices, `extract_morphs` performs a 2-pass conversion:
  1. Build PMX morph index → IrModel morph index mapping table (skipped morphs map to `None`)
  2. Remap group morph sub-morph references to remapped indices. References to skipped morphs are excluded
 - **Group morph recursion depth limit**: The viewer's `apply_gpu_morph_recursive` recursively expands group morphs. To prevent infinite recursion → stack overflow from circular or self-referencing models, expansion is capped at max depth 16
@@ -2036,6 +2037,10 @@ pub enum IrMorphKind {
         color_binds: Vec<IrMaterialColorBind>,
         uv_binds: Vec<IrTextureTransformBind>,
     },
+    Uv {                                        // added in v0.5.5 (PMX UV morphs)
+        channel: u8,                            // 0 = UV0, 1..=4 = UV1..UV4
+        offsets: Vec<(usize, [f32; 4])>,        // (IR global vertex index, delta)
+    },
 }
 
 pub enum MaterialColorBindType {
@@ -2106,6 +2111,35 @@ The same accumulation + write flow is also wired into the morph slider path (app
 #### material_index Offset in IrModel::merge()
 
 When appending a model, guest-side `material_index` values inside `IrMorphKind::Material` variants must be offset by the host's material count. Ordering caveat: use `mat_offset = self.materials.len()` computed at the **top** of `merge()` (before `self.materials.append(&mut other.materials)`). Computing it after the append yields the post-merge total (host + guest) and produces wrong offsets.
+
+### UV Morph IR → PMX Roundtrip Writeback (v0.5.6)
+
+The v0.5.5 UV editor (Phase 3 A-2) already imported, edited and runtime-composited PMX UV morphs, but the PMX writer stubbed out `IrMorphKind::Uv` as an empty group morph. Edits therefore vanished on "PMX load → UV morph edit → PMX save". v0.5.6 closes the loop.
+
+#### IR global vertex index ≡ PMX vertex index
+
+`build_vertices_and_faces` (`pmx/build.rs`) pushes `ir.meshes[*].vertices` into the PMX vertex array in order. So the "IR global vertex index" (numbering running through every mesh) is identical to the final PMX vertex index — the same identity already exploited by the `IrMorphKind::Vertex` branch (`pmx/build.rs:1882` uses `vi as u32` as the PMX vertex index). UV morphs reuse that identity, so no reverse map is needed:
+
+1. Coalesce per-vertex duplicate offsets via a `HashMap<u32, glam::Vec4>`
+2. Sort the result by `vertex_index` (deterministic output)
+3. Warn and skip out-of-range indices (defensive)
+4. Rebuild `morph_type`: UV0 → 3, UV1..=4 → 4..=7 (`if channel <= 4 { 3 + channel }`)
+
+#### Reload snapshot implications
+
+`write_displayed_uv` (`viewer/app/uv_edit.rs`) writes IR `IrMorphKind::Uv.offsets` directly while editing. Rebuilding the IR on reload therefore loses any unsaved morph edits. v0.5.6 stashes the old IR's UV morph offsets into `ReloadSnapshot.uv_morph_offsets: Vec<UvMorphOffsetEntry>` and writes them back to same-named morphs inside `restore_snapshot_on_success`.
+
+Matching uses **full equality** of `(name, name_en, channel)` plus a `Vec<bool>` used-flag array, so the Nth same-named morph is uniquely paired with the Nth snapshot entry. A plain `HashMap<name, ...>` would collapse same-named morphs on `collect()`, which is why the snapshot is a `Vec`.
+
+#### Auto-setting morph weight to 1.0 during edit
+
+Entering UV morph edit mode stashes the target morph's weight and forces it to 1.0; exiting restores the original. All writes to `active_morph` go through the `UvEditState::switch_active_morph(new_morph, &mut weights)` helper — direct assignment is disallowed by design:
+
+- Enter: `self.morph_weight_saved = Some(weights[new_idx]); weights[new_idx] = 1.0;`
+- Exit: `weights[old_idx] = self.morph_weight_saved.take().unwrap();`
+- `reset()` also drops the saved value (guarantees stale IR indices from a previous reload can't leak)
+
+`save_reload_snapshot` calls `switch_active_morph(None, ...)` upfront so the snapshot captures the user's intended weight rather than the temporarily locked 1.0.
 
 ### Texture History Auxiliary Slot Persistence (v0.5.1)
 

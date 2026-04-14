@@ -3,41 +3,45 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
+  - [v0.5.6（2026-04-14）](#v0562026-04-14)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
+    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85)
+    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C)
   - [v0.5.5（2026-04-13）](#v0552026-04-13)
     - [新機能 (Phase 1)](#%E6%96%B0%E6%A9%9F%E8%83%BD-phase-1)
     - [新機能 (Phase 2)](#%E6%96%B0%E6%A9%9F%E8%83%BD-phase-2)
     - [新機能 (Phase 3)](#%E6%96%B0%E6%A9%9F%E8%83%BD-phase-3)
-    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85)
+    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-1)
     - [スコープ注記](#%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%97%E6%B3%A8%E8%A8%98)
-    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C)
+    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-1)
     - [テスト](#%E3%83%86%E3%82%B9%E3%83%88)
   - [v0.5.4（2026-04-13）](#v0542026-04-13)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD)
-    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-1)
-    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-1)
-    - [テスト](#%E3%83%86%E3%82%B9%E3%83%88-1)
-  - [v0.5.3（2026-04-13）](#v0532026-04-13)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-1)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-2)
-  - [v0.5.2（2026-04-13）](#v0522026-04-13)
+    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-2)
+    - [テスト](#%E3%83%86%E3%82%B9%E3%83%88-1)
+  - [v0.5.3（2026-04-13）](#v0532026-04-13)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-2)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-3)
-    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-2)
-  - [v0.5.1（2026-04-13）](#v0512026-04-13)
+  - [v0.5.2（2026-04-13）](#v0522026-04-13)
     - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-3)
-    - [パフォーマンス](#%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-4)
     - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-3)
+  - [v0.5.1（2026-04-13）](#v0512026-04-13)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-4)
+    - [パフォーマンス](#%E3%83%91%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%B3%E3%82%B9)
+    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-5)
+    - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-4)
     - [テスト](#%E3%83%86%E3%82%B9%E3%83%88-2)
     - [v0.6.0 に延期](#v060-%E3%81%AB%E5%BB%B6%E6%9C%9F)
   - [v0.5.0（2026-04-13）](#v0502026-04-13)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-4)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-5)
     - [挙動の変更](#%E6%8C%99%E5%8B%95%E3%81%AE%E5%A4%89%E6%9B%B4)
     - [テスト](#%E3%83%86%E3%82%B9%E3%83%88-3)
   - [v0.4.0（2026-04-11）](#v0402026-04-11)
-    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-5)
+    - [新機能](#%E6%96%B0%E6%A9%9F%E8%83%BD-6)
     - [挙動の変更](#%E6%8C%99%E5%8B%95%E3%81%AE%E5%A4%89%E6%9B%B4-1)
-    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-5)
+    - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-6)
   - [v0.3.0（2026-04-11）](#v0302026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -45,6 +49,28 @@
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.5.6（2026-04-14）
+
+UV エディタの後続改善 2 件を実装。
+
+### 新機能
+
+- **PMX UV モーフの IR→PMX ラウンドトリップ書き戻し** — v0.5.5 まで `IrMorphKind::Uv` は PMX writer で空 Group としてスタブ化され、UV モーフ編集後に PMX 保存しても情報が失われていた。`build.rs` の `build_morphs` で IR グローバル頂点 index → PMX 頂点 index の対応（`build_vertices_and_faces` の mesh.vertices 順次 push と恒等）を活用し、`PmxMorphOffsets::Uv` と morph_type（UV0=3, UV1..4=4..7）を直接書き出すよう変更。これにより「PMX 読込 → UV モーフ編集 → PMX 保存 → 再読込」のラウンドトリップが成立する。同一頂点の重複オフセットは合算し、`vertex_index` でソートして出力の決定性を保証
+- **モーフ編集中のウェイト自動 1.0 化** — UV エディタで UV モーフを編集モードに切り替えた瞬間、`app.morph_weights[active_morph]` を退避して自動的に `1.0` にセット。編集モード終了時（`None` への切替やリスト外フォールバック）に元値で復元する。退避/復元は `UvEditState::switch_active_morph` ヘルパーに集約されるため、ComboBox 切替・IR 変更時のリスト外チェック・モーフ削除等のあらゆる経路で一貫した振る舞いになる
+- **モーフ編集中のサイドパネルスライダーロック** — 編集対象モーフは「表情モーフ」サイドパネル上でスライダー・`0`/`1` ボタン・DragValue がすべて無効化され、ラベル横に `(UV編集中)` の補助表示を追加。「全リセット」ボタンも UV 編集中モーフをスキップ対象にし、退避値とのズレを防ぐ
+
+### 内部実装
+
+- `UvEditState` に `morph_weight_saved: Option<f32>` フィールドを追加。`switch_active_morph(new_morph, &mut weights)` ヘルパーを新設し、active_morph の書き換えはこのヘルパー経由に統一（直接代入を禁止する設計）。`reset()` でも `morph_weight_saved = None` にして、リロード時の古い IR index を確実に破棄する
+- `pmx/build.rs` の `build_morphs` ログ統計に `uv` カウントを追加（`Morphs: N (vertex=A, group=B, uv=C)`）。境界外 index は警告ログ＋スキップで防御
+
+### バグ修正（リリース前レビュー対応）
+
+- **[Codex 0.5.6/01 P1]** UV モーフ編集中に reload や A/T スタンス変換を行うと、`save_reload_snapshot` が「1.0 に固定された一時ウェイト」を退避してしまい、`finish_load_with_gpu` で `uv_edit.reset()` により `morph_weight_saved` が破棄された結果、reload 後に対象モーフのウェイトが 1.0 のまま恒久化していた。`save_reload_snapshot` 冒頭で `switch_active_morph(None, &mut self.morph_weights)` を呼んで snapshot 直前に元ウェイトへ復元するよう修正。snapshot には常にユーザー意図のウェイトが入る
+- **[Codex 0.5.6/02 P1]** UV モーフ編集中の `overrides` は「base UV + morph offset」の表示値を持つが、キーに morph 区別情報がないため、reload 後の `apply_to_ir` がそのまま base UV へ焼き込んでいた。再度 morph を有効にすると offset が二重適用されて見た目と内部データ両方が壊れる。`save_reload_snapshot` で morph 編集中だった場合に `overrides` / `pristine_uvs` / `undo` / `redo` / `selected` を一括クリアするよう修正。morph 編集結果は `write_displayed_uv` 経由で IR に直接反映済みのため、reload 越しに overrides を保持する必要がない（`overrides` の役割を「base UV 編集の永続化専用」に厳格化）
+- **[Codex 0.5.6/03 P1]** 0.5.6/02 の修正で `overrides` を捨てた代償として、未保存の UV モーフ編集が reload で黙って失われていた（`write_displayed_uv` が旧 IR に書いた offsets は新 IR 構築時に失われる）。`ReloadSnapshot` に `uv_morph_offsets` を追加して旧 IR の全 UV モーフ offsets を退避し、`restore_snapshot_on_success` で新 IR の同名モーフに書き戻すよう修正。channel 不一致の場合は警告ログ＋スキップ。編集していないモーフは同値上書きで no-op
+- **[Codex 0.5.6/04 P1]** 0.5.6/03 で導入した `uv_morph_offsets` は `HashMap<name, ...>` だったため、同名の UV morph が複数あると `.collect()` で後勝ち上書きされ片方の編集内容が失われていた（VRM/glTF で `name_en` 空の同名衝突は実在する）。`UvMorphOffsetEntry { name, name_en, channel, offsets }` の `Vec` に変更し、復元時は **未使用フラグ + `(name, name_en, channel)` の完全一致** で一意マッチングするよう修正。同名 N 個があっても N 番目に正しく復元される。一致しない snapshot エントリは警告ログ付きで破棄
 
 ## v0.5.5（2026-04-13）
 
