@@ -477,14 +477,19 @@ impl GpuModel {
     /// 頂点編集エディタ（`UvEditState`）で UV を書き換えた後、mouse-up 等の編集確定時に
     /// 呼び出す。毎フレーム呼ぶ想定ではない（vertex_buf 全体の再転送のため）。
     /// animated_vertices が存在する場合は UV のみ同期（position/normal 等は次回モーフ適用で更新）。
+    /// Phase 3 A-1 以降は UV0 (`IrVertex.uv`) と UV1 (`IrMesh.uvs1[vi]`) の両方を反映する。
     pub fn sync_uvs_from_ir(&mut self, ir: &IrModel, queue: &wgpu::Queue) {
         let mut global_offset = 0usize;
         for mesh in &ir.meshes {
+            let has_uv1 = mesh.uvs1.len() == mesh.vertices.len();
             for (local_vi, v) in mesh.vertices.iter().enumerate() {
                 let global_vi = global_offset + local_vi;
                 if let Some(&gpu_vi) = self.global_to_gpu.get(global_vi) {
                     if let Some(base_v) = self.base_vertices.get_mut(gpu_vi as usize) {
                         base_v.uv = v.uv.to_array();
+                        if has_uv1 {
+                            base_v.uv1 = mesh.uvs1[local_vi];
+                        }
                     }
                 }
             }
@@ -495,6 +500,7 @@ impl GpuModel {
             for (i, v) in av.iter_mut().enumerate() {
                 if let Some(bv) = base.get(i) {
                     v.uv = bv.uv;
+                    v.uv1 = bv.uv1;
                 }
             }
         }

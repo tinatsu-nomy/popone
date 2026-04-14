@@ -1340,7 +1340,8 @@ pub(crate) struct ReloadSnapshot {
     /// v0.5.5: 頂点単位 UV 編集 overrides（reload 経路で保持するため）。
     /// reload 時に `finish_load_with_gpu` が `uv_edit.reset()` を呼ぶため、
     /// ここに退避しておき `restore_snapshot_on_success` で IR と GPU に再適用する。
-    uv_edit_overrides: HashMap<(u32, u32), [f32; 2]>,
+    /// Phase 3 A-1: VertexKey が `(mi, vi, uv_set)` 3 要素化。
+    uv_edit_overrides: HashMap<(u32, u32, u8), [f32; 2]>,
     uv_edit_active_material: usize,
     uv_edit_window_open: bool,
 }

@@ -48,7 +48,7 @@
 
 ## v0.5.5（2026-04-13）
 
-**材質編集パネルから呼び出す頂点単位 UV 編集ウィンドウ**を追加。v0.5.4 は材質単位の UV 変形（offset / scale / rotation）を提供したが、v0.5.5 はその下のレイヤーに踏み込み、**Phase 1**（単一頂点エディタ＋永続化＋reload 保持）、**Phase 2**（テクスチャ背景・矩形選択・ズーム/パン・回転/スケール・undo/redo・Ctrl+A）に加え、**Phase 3** の先行項目（矩形選択の加算/除外、独立 OS ウィンドウ化）を同梱する。
+**材質編集パネルから呼び出す頂点単位 UV 編集ウィンドウ**を追加。v0.5.4 は材質単位の UV 変形（offset / scale / rotation）を提供したが、v0.5.5 はその下のレイヤーに踏み込み、**Phase 1**（単一頂点エディタ＋永続化＋reload 保持）、**Phase 2**（テクスチャ背景・矩形選択・ズーム/パン・回転/スケール・undo/redo・Ctrl+A）に加え、**Phase 3** の先行項目（矩形選択の加算/除外、独立 OS ウィンドウ化、UV1 編集）を同梱する。
 
 ### 新機能 (Phase 1)
 
@@ -71,6 +71,7 @@
 
 - **矩形選択の加算/除外モード (A-4)** — 従来の矩形選択は常に既存選択を置換していたが、Shift+ドラッグで矩形内頂点を既存選択に追加、Ctrl+ドラッグで除外する動作を追加。`UvRectBehavior { Replace, Add, Subtract }` を drag_started 時の修飾キーで確定し、`rect_initial_selected` に開始時点の selected をスナップショット保存。矩形拡大/縮小時の整合は毎フレーム `initial ± inside` で再計算する方式で保つ。Alt は Move モードの「回転」と競合するため、Rect モードの除外は Ctrl を使う（mode は drag 開始位置で確定しているので Ctrl の意味は mode ごとに一意）
 - **独立 OS ウィンドウ化 (A-3)** — UV 編集ツールバーに「⬈ 分離」ボタンを追加。押下で `egui::Window` によるメインウィンドウ内フローティングから `ctx.show_viewport_immediate`（eframe 0.31 の viewport API）による OS ネイティブの独立ウィンドウへ切り替え、独自のタイトルバー・リサイズ・最小化/閉じるボタンを持つ別デスクトップウィンドウに UV エディタを分離する。メインビューアは背後で 3D シーンを描画し続ける。「⬓ 結合」でメインウィンドウ内に戻す。`UvEditState.detached: bool` がセッション中の設定として値を保持し（reset では変更しない）、`ViewportId::from_hash_of("uv_edit_viewport")` で OS 側のウィンドウ位置/サイズをトグル間で維持。独立ウィンドウの × ボタン押下時は `uv_edit_window_open = false` に戻し、次回 UV 編集を開いた際は独立状態のまま開く。
+- **UV1 編集 (A-1)** — `VertexKey` を `(mesh_idx, vertex_idx)` から `(mesh_idx, vertex_idx, uv_set)` に拡張し、`uv_set = 0` は `IrVertex.uv` (UV0)、`uv_set = 1` は `IrMesh.uvs1[vi]` (UV1 / `TEXCOORD_1`) を指す。新設の「UV セット」ComboBox で UV0 / UV1 を切替可能（アクティブ材質に属するメッシュが UV1 を 1 つも持たない場合は UV1 オプションを自動で disable する）。UV セット切替時は進行中ドラッグを取り消す一方、`selected` / `overrides` / undo 履歴はチャネルごとに別空間として保持されるため UV0/UV1 が混線することはない。ピック/描画/ドラッグ/矩形選択/Ctrl+A の全パスが `active_uv_set` でフィルタされ、UV1 選択時は UV1 を持たないメッシュをスキップし、書き込みは新設の `write_vertex_uv(ir, mi, vi, uv, chan)` 経由で振り分ける。`sync_uvs_from_ir` は UV0 / UV1 両方を GPU vertex buffer（`animated_vertices` 含む）へアップロードするため、UV1 の編集結果は MToon の UV1 ルックアップ・Matcap 等にも drag-stop 時点で反映される。`VertexUvOverrideEntry` に `uv_set: u8` を `#[serde(default)]` 付きで追加したので、v0.5.5 Phase 1 で書き出した UV0 のみの履歴ファイルはそのまま読み込める。
 
 ### 内部実装
 

@@ -1,8 +1,10 @@
-//! 頂点単位 UV 編集の状態管理 (v0.5.5 / Phase 1)。
+//! 頂点単位 UV 編集の状態管理 (v0.5.5 / Phase 1 / Phase 3 A-1)。
 //!
 //! 材質編集ドロワー（`material_edit.rs`）が「材質単位」の差分を持つのに対し、こちらは
-//! 「頂点単位」の UV 差分を持つ。キーは `(mesh_index, vertex_index_in_mesh)` の組で、
-//! UV0 のみを対象とする（UV1 / モーフ UV は Phase 3 以降）。
+//! 「頂点単位」の UV 差分を持つ。キーは `(mesh_index, vertex_index_in_mesh, uv_set)` の
+//! 3 要素で、`uv_set` は 0 = UV0 (`IrVertex.uv`), 1 = UV1 (`IrMesh.uvs1`) を指す。
+//! UV セットが違えば overrides / selected / undo 履歴がすべて別空間として扱われるため、
+//! UV0 編集中の選択集合と UV1 編集中の選択集合が混線することはない。
 //!
 //! ## 設計判断
 //!
@@ -20,8 +22,10 @@ use crate::intermediate::types::IrModel;
 
 use super::persistence::VertexUvOverrideEntry;
 
-/// 頂点編集のキー: `(mesh_index, vertex_index_in_mesh)`。
-pub type VertexKey = (u32, u32);
+/// 頂点編集のキー: `(mesh_index, vertex_index_in_mesh, uv_set)`。
+/// `uv_set = 0` なら UV0 (`IrVertex.uv`)、`uv_set = 1` なら UV1 (`IrMesh.uvs1`) を指す。
+/// 将来 UV2/UV3 を足すなら同じ u8 スロットの 2..= を使う余地がある。
+pub type VertexKey = (u32, u32, u8);
 
 /// undo/redo の 1 コマンド (v0.5.5 Phase 2-5)。
 ///
@@ -115,6 +119,11 @@ pub struct UvEditState {
     /// `false` = 従来通り `egui::Window` でメインウィンドウ内のフローティング。
     /// セッション中のユーザー設定として維持し、リロード (`reset`) では変更しない。
     pub detached: bool,
+    /// 現在編集対象の UV セット (Phase 3 / A-1)。`0 = UV0`, `1 = UV1`。
+    /// ComboBox から切り替え、キャンバス描画 / ピック / ドラッグ / Ctrl+A はすべて
+    /// この値に応じた頂点のみを対象とする。selected / overrides 自体は
+    /// `VertexKey` にチャネル情報を含むため、切り替えたときも別集合として温存される。
+    pub active_uv_set: u8,
 }
 
 impl Default for UvEditState {
@@ -137,12 +146,14 @@ impl Default for UvEditState {
             rect_behavior: UvRectBehavior::Replace,
             rect_initial_selected: HashSet::new(),
             detached: false,
+            active_uv_set: 0,
         }
     }
 }
 
 impl UvEditState {
     /// 新規ロード時にクリアする（履歴復元エントリは呼び出し側で別途セット）。
+    /// `detached` はユーザー設定としてリロード越しに維持するので、ここでは触らない。
     pub fn reset(&mut self) {
         self.overrides.clear();
         self.selected.clear();
@@ -160,6 +171,7 @@ impl UvEditState {
         self.pristine_uvs.clear();
         self.rect_behavior = UvRectBehavior::Replace;
         self.rect_initial_selected.clear();
+        self.active_uv_set = 0;
     }
 
     /// 頂点 UV の pristine を記録する（初回ドラッグ開始時に呼ぶ）。
@@ -199,12 +211,12 @@ impl UvEditState {
         let Some(entry) = self.undo_stack.pop() else {
             return false;
         };
-        for (&(mi, vi), &uv) in &entry.before {
-            write_uv_to_ir(ir, mi, vi, uv);
-            if self.matches_pristine((mi, vi), uv) {
-                self.overrides.remove(&(mi, vi));
+        for (&(mi, vi, chan), &uv) in &entry.before {
+            write_uv_to_ir(ir, mi, vi, uv, chan);
+            if self.matches_pristine((mi, vi, chan), uv) {
+                self.overrides.remove(&(mi, vi, chan));
             } else {
-                self.overrides.insert((mi, vi), uv);
+                self.overrides.insert((mi, vi, chan), uv);
             }
         }
         self.redo_stack.push(entry);
@@ -217,12 +229,12 @@ impl UvEditState {
         let Some(entry) = self.redo_stack.pop() else {
             return false;
         };
-        for (&(mi, vi), &uv) in &entry.after {
-            write_uv_to_ir(ir, mi, vi, uv);
-            if self.matches_pristine((mi, vi), uv) {
-                self.overrides.remove(&(mi, vi));
+        for (&(mi, vi, chan), &uv) in &entry.after {
+            write_uv_to_ir(ir, mi, vi, uv, chan);
+            if self.matches_pristine((mi, vi, chan), uv) {
+                self.overrides.remove(&(mi, vi, chan));
             } else {
-                self.overrides.insert((mi, vi), uv);
+                self.overrides.insert((mi, vi, chan), uv);
             }
         }
         self.undo_stack.push(entry);
@@ -240,18 +252,19 @@ impl UvEditState {
         self.overrides.insert(key, uv);
     }
 
-    /// 永続化エントリ（JSON 出力用）を生成する。メッシュ / 頂点Index 昇順にソート。
+    /// 永続化エントリ（JSON 出力用）を生成する。メッシュ / 頂点Index / UV セット昇順にソート。
     pub fn to_entries(&self) -> Vec<VertexUvOverrideEntry> {
         let mut out: Vec<VertexUvOverrideEntry> = self
             .overrides
             .iter()
-            .map(|(&(mi, vi), &uv)| VertexUvOverrideEntry {
+            .map(|(&(mi, vi, chan), &uv)| VertexUvOverrideEntry {
                 mesh_index: mi,
                 vertex_index: vi,
+                uv_set: chan,
                 uv,
             })
             .collect();
-        out.sort_by_key(|e| (e.mesh_index, e.vertex_index));
+        out.sort_by_key(|e| (e.mesh_index, e.vertex_index, e.uv_set));
         out
     }
 
@@ -269,8 +282,9 @@ impl UvEditState {
         let mut applied = 0usize;
         let mut skipped = 0usize;
         for e in entries {
-            if write_uv_to_ir(ir, e.mesh_index, e.vertex_index, e.uv) {
-                self.overrides.insert((e.mesh_index, e.vertex_index), e.uv);
+            if write_uv_to_ir(ir, e.mesh_index, e.vertex_index, e.uv, e.uv_set) {
+                self.overrides
+                    .insert((e.mesh_index, e.vertex_index, e.uv_set), e.uv);
                 applied += 1;
             } else {
                 skipped += 1;
@@ -288,21 +302,83 @@ impl UvEditState {
     /// 現在の `overrides` をすべて IR に書き戻す（リロード後の再適用用）。
     /// `apply_pending_restore` とは独立経路で、既に `overrides` に入っている分を反映する。
     pub fn apply_to_ir(&self, ir: &mut IrModel) {
-        for (&(mi, vi), &uv) in &self.overrides {
-            write_uv_to_ir(ir, mi, vi, uv);
+        for (&(mi, vi, chan), &uv) in &self.overrides {
+            write_uv_to_ir(ir, mi, vi, uv, chan);
         }
     }
 }
 
-/// IR の指定メッシュ/頂点に UV を書き込む。範囲外なら `false` を返して何もしない。
-fn write_uv_to_ir(ir: &mut IrModel, mesh_idx: u32, vert_idx: u32, uv: [f32; 2]) -> bool {
+/// IR の指定メッシュ/頂点/UV セットから UV を読み取る (Phase 3 A-1 helper)。
+/// 存在しない場合 (範囲外、UV1 未所持メッシュ、unknown chan) は `None`。
+pub fn read_mesh_vertex_uv(
+    mesh: &crate::intermediate::types::IrMesh,
+    vi: usize,
+    chan: u8,
+) -> Option<[f32; 2]> {
+    match chan {
+        0 => mesh.vertices.get(vi).map(|v| v.uv.to_array()),
+        1 => {
+            // UV1 を持つのは `uvs1.len() == vertices.len()` の時のみ。
+            // 空 (UV1 なし) / サイズ不一致はいずれも UV1 不在扱い。
+            if mesh.uvs1.len() == mesh.vertices.len() {
+                mesh.uvs1.get(vi).copied()
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// 指定材質に属するメッシュのうち、少なくとも 1 つが UV1 を持つかを判定する
+/// (Phase 3 A-1 helper)。ComboBox で UV1 選択肢を enable/disable する判定に使う。
+pub fn material_has_uv1(ir: &IrModel, material_index: usize) -> bool {
+    ir.meshes.iter().any(|m| {
+        m.material_index == material_index && !m.uvs1.is_empty() && m.uvs1.len() == m.vertices.len()
+    })
+}
+
+/// UI から呼ぶ公開版の UV 書き込み関数 (`write_uv_to_ir` の薄いラップ、Phase 3 A-1)。
+pub fn write_vertex_uv(
+    ir: &mut IrModel,
+    mesh_idx: u32,
+    vert_idx: u32,
+    uv: [f32; 2],
+    chan: u8,
+) -> bool {
+    write_uv_to_ir(ir, mesh_idx, vert_idx, uv, chan)
+}
+
+/// IR の指定メッシュ/頂点に UV を書き込む。範囲外 / UV セット未存在なら `false` を返す。
+/// `chan = 0` → `IrVertex.uv` (UV0)、`chan = 1` → `IrMesh.uvs1[vi]` (UV1)。UV1 は
+/// メッシュが `uvs1.len() == vertices.len()` のときのみ書き込み可（空の場合は UV1 なし）。
+fn write_uv_to_ir(ir: &mut IrModel, mesh_idx: u32, vert_idx: u32, uv: [f32; 2], chan: u8) -> bool {
     let Some(mesh) = ir.meshes.get_mut(mesh_idx as usize) else {
         return false;
     };
-    let verts = mesh.vertices_mut();
-    let Some(v) = verts.get_mut(vert_idx as usize) else {
-        return false;
-    };
-    v.uv = glam::Vec2::from_array(uv);
-    true
+    match chan {
+        0 => {
+            let verts = mesh.vertices_mut();
+            let Some(v) = verts.get_mut(vert_idx as usize) else {
+                return false;
+            };
+            v.uv = glam::Vec2::from_array(uv);
+            true
+        }
+        1 => {
+            let vcount = mesh.vertices.len();
+            // UV1 が存在しない (空 or サイズ不一致) メッシュでは書き込みを諦める。
+            // 自動的に拡張してしまうと VRM エクスポート時に「もともと UV1 が無かったメッシュが
+            // UV1 持ちに変わる」という副作用が起きるため、書き込みは UV1 のある既存メッシュに限定。
+            if mesh.uvs1.len() != vcount {
+                return false;
+            }
+            let Some(slot) = mesh.uvs1.get_mut(vert_idx as usize) else {
+                return false;
+            };
+            *slot = uv;
+            true
+        }
+        _ => false,
+    }
 }

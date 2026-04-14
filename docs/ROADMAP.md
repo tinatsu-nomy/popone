@@ -36,13 +36,12 @@ This document tracks planned work, future improvements, and external feature req
 
 Current target: **v0.6.0**
 
-> **Note:** v0.5.4 shipped per-slot UV transform. v0.5.5 shipped **Phase 1 + Phase 2 + Phase 3 A-3 / A-4** of the per-vertex UV editor (single/multi-vertex select/drag, rectangle selection with additive/subtractive modes, zoom/pan, rotate/scale, undo/redo, texture background, detachable OS window). See [CHANGELOG.md](CHANGELOG.md#v055-2026-04-13). The remaining Phase 3 items below (UV1, morph UV, 2D gizmo handles) are the data-coverage expansion for v0.6.0 or beyond.
+> **Note:** v0.5.4 shipped per-slot UV transform. v0.5.5 shipped **Phase 1 + Phase 2 + Phase 3 A-1 / A-3 / A-4** of the per-vertex UV editor (single/multi-vertex select/drag, rectangle selection with additive/subtractive modes, zoom/pan, rotate/scale, undo/redo, texture background, detachable OS window, UV0 / UV1 set switching). See [CHANGELOG.md](CHANGELOG.md#v055-2026-04-13). The remaining Phase 3 items below (morph UV, 2D gizmo handles) are the data-coverage expansion for v0.6.0 or beyond.
 
 ## Targeted for v0.6.0
 
 ### UV Editor Phase 3 (Data Coverage)
 
-- **UV1 editing (A-1)** — Switch the canvas to edit `IrMesh.uvs1` via a UV-set dropdown
 - **Morph UV (A-2)** — For PMX UV morphs, present a "base UV edit vs. morph edit" mode switch
 - **Visual 2D gizmo handles (A-5)** — Bbox-corner scale handles + rotation anchor as an alternative to the modifier-key mode (Phase 2-4 shipped the key-modifier version only)
 

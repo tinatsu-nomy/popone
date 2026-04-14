@@ -308,15 +308,18 @@ pub struct MaterialParamOverrideEntry {
     pub overrides: super::material_edit::MaterialParamOverride,
 }
 
-/// 頂点単位 UV 編集の永続化エントリ (v0.5.5 / Phase 1)。
+/// 頂点単位 UV 編集の永続化エントリ (v0.5.5 / Phase 1 / Phase 3 A-1)。
 ///
-/// モデル全体に対して 1 エントリ。`entries` は `[mesh_idx, vertex_idx, uv_x, uv_y]` の
-/// 配列でフラットに保持する（4 要素タプル）。JSON サイズ効率のため、オブジェクト
-/// より配列を選択（1 頂点あたり ~30 byte）。UV0 固定（Phase 3 で uv_set 拡張予定）。
+/// モデル全体に対して 1 エントリ。`uv_set` は 0 = UV0, 1 = UV1。
+/// `#[serde(default)]` で JSON 下位互換性を確保する: v0.5.5 Phase 1 で書き出された
+/// UV0 のみのエントリ (uv_set フィールドなし) は `uv_set = 0` として読み込まれる。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VertexUvOverrideEntry {
     pub mesh_index: u32,
     pub vertex_index: u32,
+    /// UV セット (0 = UV0, 1 = UV1)。Phase 3 A-1 で追加。既存ファイルは `0` になる。
+    #[serde(default)]
+    pub uv_set: u8,
     pub uv: [f32; 2],
 }
 
