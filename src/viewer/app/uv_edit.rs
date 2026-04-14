@@ -66,6 +66,18 @@ pub enum UvRectBehavior {
     Subtract,
 }
 
+/// 2D ギズモハンドルによるドラッグ操作の種別 (v0.5.5 Phase 3 / A-5)。
+/// `drag_started()` 時に「press 位置がハンドル内か」を判定して決定する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UvGizmoAction {
+    /// 選択 bbox の角ハンドルをドラッグ（スケール操作、ピボットは反対角）。
+    /// `sign_u`, `sign_v` は掴んだ角を示す: (1,1)=u_max/v_max、(-1,-1)=u_min/v_min
+    /// 反対角は `(-sign_u, -sign_v)` で求められる。
+    ScaleCorner { sign_u: i8, sign_v: i8 },
+    /// 回転ハンドル（bbox 上辺外側）をドラッグ。ピボットは選択 bbox の中心。
+    Rotate,
+}
+
 /// 頂点単位 UV 編集の状態（ViewerApp に 1 つだけ保持）。
 ///
 /// `Default` は手書き（`view_zoom` の初期値を 1.0 にするため）。
@@ -124,6 +136,10 @@ pub struct UvEditState {
     /// この値に応じた頂点のみを対象とする。selected / overrides 自体は
     /// `VertexKey` にチャネル情報を含むため、切り替えたときも別集合として温存される。
     pub active_uv_set: u8,
+    /// 2D ギズモハンドル経由でドラッグ中のアクション (Phase 3 / A-5)。
+    /// `drag_started()` 時に「press 位置がハンドル上か」を判定して Some にセット、
+    /// ドラッグ終了でクリア。`Some` の間は修飾キーよりも優先してスケール/回転を適用する。
+    pub gizmo_action: Option<UvGizmoAction>,
 }
 
 impl Default for UvEditState {
@@ -147,6 +163,7 @@ impl Default for UvEditState {
             rect_initial_selected: HashSet::new(),
             detached: false,
             active_uv_set: 0,
+            gizmo_action: None,
         }
     }
 }
@@ -172,6 +189,7 @@ impl UvEditState {
         self.rect_behavior = UvRectBehavior::Replace;
         self.rect_initial_selected.clear();
         self.active_uv_set = 0;
+        self.gizmo_action = None;
     }
 
     /// 頂点 UV の pristine を記録する（初回ドラッグ開始時に呼ぶ）。

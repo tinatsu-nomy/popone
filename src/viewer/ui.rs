@@ -6,7 +6,8 @@ use eframe::egui;
 use egui::epaint::{Color32, Mesh, Vertex};
 
 use super::app::uv_edit::{
-    material_has_uv1, read_mesh_vertex_uv, write_vertex_uv, UvDragMode, UvRectBehavior,
+    material_has_uv1, read_mesh_vertex_uv, write_vertex_uv, UvDragMode, UvGizmoAction,
+    UvRectBehavior,
 };
 use super::app::{ConvertMessage, DisplaySettings, PendingOverlay, SidePanelTab, ViewerApp};
 use super::export_filter::build_filtered_ir;
@@ -6207,6 +6208,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
     ));
     ui.small("頂点近くから: Shift=スナップ / Alt=回転 / Ctrl=スケール (ピボット=選択中心)");
     ui.small("頂点から遠くから: 矩形選択 / Shift=加算選択 / Ctrl=除外選択");
+    ui.small("選択 bbox の角=スケール / 上辺外の青丸=回転（ハンドル経由は修飾キー不要）");
 
     // Phase 2-5: Undo / Redo ボタン行とキーショートカット（Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z）
     let can_undo = !app.uv_edit.undo_stack.is_empty();
@@ -6446,6 +6448,96 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     }
 
+    // Phase 3 A-5: 選択 bbox と 2D ギズモハンドルを描画する。
+    // 選択頂点が 1 個以下だと bbox が面積 0 になるので 2 個以上のときだけ表示。
+    // bbox が極端に狭い（UV 空間で < 1e-5）ときも無効化する（回転/スケールが数値的に破綻するため）。
+    let selection_bbox_uv: Option<[f32; 4]> = if app.uv_edit.selected.len() >= 2 {
+        let mut u_min = f32::INFINITY;
+        let mut u_max = f32::NEG_INFINITY;
+        let mut v_min = f32::INFINITY;
+        let mut v_max = f32::NEG_INFINITY;
+        let mut any = false;
+        if let Some(loaded) = app.loaded.as_ref() {
+            for &(mi, vi, chan) in app.uv_edit.selected.iter() {
+                if chan != active_chan {
+                    continue;
+                }
+                if let Some(mesh) = loaded.ir.meshes.get(mi as usize) {
+                    if let Some(uv) = read_mesh_vertex_uv(mesh, vi as usize, chan) {
+                        u_min = u_min.min(uv[0]);
+                        u_max = u_max.max(uv[0]);
+                        v_min = v_min.min(uv[1]);
+                        v_max = v_max.max(uv[1]);
+                        any = true;
+                    }
+                }
+            }
+        }
+        if any && (u_max - u_min).abs() > 1e-5 && (v_max - v_min).abs() > 1e-5 {
+            Some([u_min, v_min, u_max, v_max])
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // bbox があればキャンバス上にギズモを描く。ハンドル位置 / ピック閾値の数値はここだけ。
+    const GIZMO_HANDLE_RADIUS: f32 = 5.0;
+    const GIZMO_PICK_RADIUS_SQ: f32 = 100.0; // 10px
+    const GIZMO_ROTATE_OFFSET: f32 = 24.0; // bbox 上辺から何 px 外側に置くか
+    let gizmo_handle_pos: Option<([egui::Pos2; 4], egui::Pos2)> = selection_bbox_uv.map(|bb| {
+        // 4 隅のキャンバス座標: 配列順 [min/min, max/min, min/max, max/max]
+        let p_mm = uv_to_canvas([bb[0], bb[1]], rect, voff, vzoom);
+        let p_xm = uv_to_canvas([bb[2], bb[1]], rect, voff, vzoom);
+        let p_mx = uv_to_canvas([bb[0], bb[3]], rect, voff, vzoom);
+        let p_xx = uv_to_canvas([bb[2], bb[3]], rect, voff, vzoom);
+        // 回転ハンドル: bbox 上辺中央の外側（キャンバス y が小さい方向）に GIZMO_ROTATE_OFFSET
+        let top_mid = egui::pos2((p_mm.x + p_xm.x) * 0.5, (p_mm.y + p_xm.y) * 0.5);
+        let rotate = egui::pos2(top_mid.x, top_mid.y - GIZMO_ROTATE_OFFSET);
+        ([p_mm, p_xm, p_mx, p_xx], rotate)
+    });
+    if let (Some(bb), Some((corners, rot_handle))) = (selection_bbox_uv, gizmo_handle_pos) {
+        let bb_rect = egui::Rect::from_two_pos(corners[0], corners[3]).intersect(rect); // キャンバス外は削る
+        let gizmo_stroke = egui::Stroke::new(
+            1.0,
+            Color32::from_rgba_premultiplied(0xFF, 0xA8, 0x40, 0xE0),
+        );
+        painter.rect_stroke(bb_rect, 0.0, gizmo_stroke, egui::StrokeKind::Inside);
+        // 4 隅スケールハンドル（塗りつぶし四角）
+        let handle_fill = Color32::from_rgba_premultiplied(0xFF, 0xA8, 0x40, 0xFF);
+        for &c in &corners {
+            let hr = egui::Rect::from_center_size(
+                c,
+                egui::vec2(GIZMO_HANDLE_RADIUS * 2.0, GIZMO_HANDLE_RADIUS * 2.0),
+            );
+            painter.rect_filled(hr, 1.0, handle_fill);
+            painter.rect_stroke(
+                hr,
+                1.0,
+                egui::Stroke::new(1.0, Color32::BLACK),
+                egui::StrokeKind::Inside,
+            );
+        }
+        // 回転ハンドル（塗りつぶし円 + 線で bbox 上辺に接続）
+        let top_mid = egui::pos2((corners[0].x + corners[1].x) * 0.5, corners[0].y);
+        painter.line_segment(
+            [top_mid, rot_handle],
+            egui::Stroke::new(1.0, Color32::from_gray(0x70)),
+        );
+        painter.circle_filled(
+            rot_handle,
+            GIZMO_HANDLE_RADIUS,
+            Color32::from_rgba_premultiplied(0x66, 0xCC, 0xFF, 0xFF),
+        );
+        painter.circle_stroke(
+            rot_handle,
+            GIZMO_HANDLE_RADIUS,
+            egui::Stroke::new(1.0, Color32::BLACK),
+        );
+        let _ = bb; // bb は現状ピック時に使うのみで描画では未参照
+    }
+
     // クリック: 最寄頂点を選択（12px 以内のみ）
     if response.clicked() {
         if let Some(click_pos) = response.interact_pointer_pos() {
@@ -6489,9 +6581,63 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         app.uv_edit.drag_start_uvs.clear();
         app.uv_edit.drag_press_uv = None;
         app.uv_edit.drag_mode = UvDragMode::None;
+        app.uv_edit.gizmo_action = None;
 
         if let Some(press_pos) = response.interact_pointer_pos() {
             app.uv_edit.drag_press_uv = Some(canvas_to_uv(press_pos, rect, voff, vzoom));
+
+            // Phase 3 A-5: ギズモハンドルのヒット判定（最優先）
+            // ヒットしたら `drag_mode = Move` + `gizmo_action = Some(...)` にして、以降の
+            // dragged() Move ブランチで gizmo_action を参照して XformMode を強制する。
+            let gizmo_hit: Option<(UvGizmoAction, [f32; 2])> =
+                if let (Some(bb), Some((corners, rot))) = (selection_bbox_uv, gizmo_handle_pos) {
+                    // 各ハンドルとの距離 2 乗を取り、最小 & 閾値内を選ぶ。回転ハンドルが
+                    // 4 隅と重なる構図はないため単純比較で十分。
+                    let d_rot = (rot - press_pos).length_sq();
+                    let d_corners = [
+                        (corners[0] - press_pos).length_sq(),
+                        (corners[1] - press_pos).length_sq(),
+                        (corners[2] - press_pos).length_sq(),
+                        (corners[3] - press_pos).length_sq(),
+                    ];
+                    let (best_idx, best_d) = d_corners.iter().enumerate().fold(
+                        (usize::MAX, f32::INFINITY),
+                        |(bi, bd), (i, d)| {
+                            if *d < bd {
+                                (i, *d)
+                            } else {
+                                (bi, bd)
+                            }
+                        },
+                    );
+                    if d_rot < GIZMO_PICK_RADIUS_SQ && d_rot <= best_d {
+                        // 回転ハンドル: pivot = bbox 中心
+                        Some((
+                            UvGizmoAction::Rotate,
+                            [(bb[0] + bb[2]) * 0.5, (bb[1] + bb[3]) * 0.5],
+                        ))
+                    } else if best_d < GIZMO_PICK_RADIUS_SQ {
+                        // 角ハンドル: sign は 2 bit (u軸, v軸)。配列順序 [mm, xm, mx, xx]
+                        let (sign_u, sign_v): (i8, i8) = match best_idx {
+                            0 => (-1, -1),
+                            1 => (1, -1),
+                            2 => (-1, 1),
+                            3 => (1, 1),
+                            _ => (0, 0),
+                        };
+                        // スケールの pivot は「掴んだ角の反対角」
+                        let pivot_u = if sign_u > 0 { bb[0] } else { bb[2] };
+                        let pivot_v = if sign_v > 0 { bb[1] } else { bb[3] };
+                        Some((
+                            UvGizmoAction::ScaleCorner { sign_u, sign_v },
+                            [pivot_u, pivot_v],
+                        ))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
 
             let mut nearest_sel_sq = f32::INFINITY;
             let mut nearest_any_sq = f32::INFINITY;
@@ -6522,7 +6668,11 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 }
             }
 
-            let mode = if nearest_sel_sq < 144.0 {
+            let mode = if gizmo_hit.is_some() {
+                // Phase 3 A-5: ギズモハンドル上で押下 → Move（変換タイプは gizmo_action で強制）
+                // 選択頂点はそのまま維持する（bbox 内の頂点全体に変換を適用するため）
+                UvDragMode::Move
+            } else if nearest_sel_sq < 144.0 {
                 UvDragMode::Move
             } else if nearest_any_sq < 144.0 {
                 // 新規頂点を単独選択して Move
@@ -6593,6 +6743,13 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 } else {
                     None
                 };
+
+                // Phase 3 A-5: gizmo ヒットがあれば action をセットし、pivot を gizmo の pivot で上書き。
+                // ScaleCorner の pivot は反対角、Rotate の pivot は bbox 中心（既存値と一致）。
+                if let Some((action, pivot)) = gizmo_hit {
+                    app.uv_edit.gizmo_action = Some(action);
+                    app.uv_edit.drag_pivot = Some(pivot);
+                }
             }
         }
     }
@@ -6622,12 +6779,23 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                             Rotate,
                             Scale,
                         }
-                        let xform = if ctrl_down && pivot.is_some() {
-                            XformMode::Scale
-                        } else if alt_down && pivot.is_some() {
-                            XformMode::Rotate
-                        } else {
-                            XformMode::Translate
+                        // Phase 3 A-5: gizmo_action が Some ならハンドル由来のモードを優先し、
+                        // 修飾キー解釈より前にモードを確定する。None の場合は従来通り Ctrl=Scale,
+                        // Alt=Rotate, 無修飾=Translate。
+                        let xform = match app.uv_edit.gizmo_action {
+                            Some(UvGizmoAction::ScaleCorner { .. }) if pivot.is_some() => {
+                                XformMode::Scale
+                            }
+                            Some(UvGizmoAction::Rotate) if pivot.is_some() => XformMode::Rotate,
+                            _ => {
+                                if ctrl_down && pivot.is_some() {
+                                    XformMode::Scale
+                                } else if alt_down && pivot.is_some() {
+                                    XformMode::Rotate
+                                } else {
+                                    XformMode::Translate
+                                }
+                            }
                         };
 
                         // モード別に変換パラメータを事前計算
@@ -6807,6 +6975,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         app.uv_edit.drag_pivot = None;
         app.uv_edit.rect_behavior = UvRectBehavior::Replace;
         app.uv_edit.rect_initial_selected.clear();
+        app.uv_edit.gizmo_action = None;
     }
 
     // Phase 2-4: ドラッグ中の Move モードでピボットを十字マーカーで表示（視覚フィードバック）
