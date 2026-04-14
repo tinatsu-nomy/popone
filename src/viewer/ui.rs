@@ -5975,11 +5975,12 @@ fn snap_to(val: f32, step: f32) -> f32 {
     (val / step).round() * step
 }
 
-/// UV 編集ウィンドウ（v0.5.5 Phase 1）。材質編集パネルのヘッダボタンから開く。
+/// UV 編集ウィンドウ（v0.5.5 Phase 1 / Phase 3 A-3）。材質編集パネルのヘッダボタンから開く。
 ///
-/// `egui::Window` としてトップレベルで開き、`Id::new("uv_edit_window")` で 1 つに固定する
-/// （複数インスタンス化を防止）。`app.uv_edit_window_open` が `true` のときだけ描画し、
-/// ユーザーが × ボタンを押すと `false` に戻る。
+/// `app.uv_edit.detached == false` のときは `egui::Window` でメインウィンドウ内のフローティングとして開き、
+/// `true` のときは `ctx.show_viewport_immediate` で OS ネイティブの独立ウィンドウに切り替える。
+/// どちらも `Id::new("uv_edit_window")` / `ViewportId::from_hash_of("uv_edit_viewport")` で固定 ID 化し、
+/// 複数インスタンス化を防ぐ。`app.uv_edit_window_open` が `true` のときだけ描画する。
 pub fn show_uv_edit_window(ctx: &egui::Context, app: &mut ViewerApp) {
     if !app.uv_edit_window_open {
         return;
@@ -6007,18 +6008,40 @@ pub fn show_uv_edit_window(ctx: &egui::Context, app: &mut ViewerApp) {
             .unwrap_or_default();
         format!("UV 編集: {}", name)
     };
-    let mut is_open = true;
-    egui::Window::new(title)
-        .id(egui::Id::new("uv_edit_window"))
-        .default_width(320.0)
-        .default_height(440.0)
-        .resizable(true)
-        .collapsible(true)
-        .open(&mut is_open)
-        .show(ctx, |ui| {
-            show_uv_edit_body(ui, app);
+
+    if app.uv_edit.detached {
+        // Phase 3 / A-3: OS ネイティブの独立ウィンドウに描画する。
+        // `show_viewport_immediate` はメインと同スレッドで content クロージャを呼ぶため、
+        // `&mut ViewerApp` をそのままクロージャに渡せる（deferred 版と違い Arc<Mutex> 不要）。
+        let viewport_id = egui::ViewportId::from_hash_of("uv_edit_viewport");
+        let builder = egui::ViewportBuilder::default()
+            .with_title(&title)
+            .with_inner_size([480.0, 560.0])
+            .with_min_inner_size([320.0, 280.0]);
+        ctx.show_viewport_immediate(viewport_id, builder, |vctx, _class| {
+            egui::CentralPanel::default().show(vctx, |ui| {
+                show_uv_edit_body(ui, app);
+            });
+            if vctx.input(|i| i.viewport().close_requested()) {
+                // × ボタンで閉じたらウィンドウ表示状態を false に戻す。
+                // detached フラグはユーザー設定として維持（次回「UV 編集」を開いたときも独立化）。
+                app.uv_edit_window_open = false;
+            }
         });
-    app.uv_edit_window_open = is_open;
+    } else {
+        let mut is_open = true;
+        egui::Window::new(title)
+            .id(egui::Id::new("uv_edit_window"))
+            .default_width(320.0)
+            .default_height(440.0)
+            .resizable(true)
+            .collapsible(true)
+            .open(&mut is_open)
+            .show(ctx, |ui| {
+                show_uv_edit_body(ui, app);
+            });
+        app.uv_edit_window_open = is_open;
+    }
 }
 
 fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
@@ -6104,6 +6127,23 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
             .clicked()
         {
             app.uv_edit.reset_view();
+        }
+        // Phase 3 / A-3: 独立ウィンドウへの切り替えトグル。
+        // ボタンを押した瞬間に `detached` が反転し、次フレームの `show_uv_edit_window` で
+        // 描画先 (egui::Window vs show_viewport_immediate) が切り替わる。
+        let (label, hover) = if app.uv_edit.detached {
+            (
+                "⬓ 結合",
+                "独立 OS ウィンドウを閉じてメインウィンドウ内のフローティングに戻す (A-3)",
+            )
+        } else {
+            (
+                "⬈ 分離",
+                "この UV 編集を OS の独立ウィンドウとして分離する (A-3)",
+            )
+        };
+        if ui.small_button(label).on_hover_text(hover).clicked() {
+            app.uv_edit.detached = !app.uv_edit.detached;
         }
     });
     ui.small(format!(

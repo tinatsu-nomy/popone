@@ -110,6 +110,11 @@ pub struct UvEditState {
     /// 矩形選択開始時点の `selected` スナップショット (Phase 3 / A-4)。
     /// Add/Subtract モードで「initial ± rect_inside」の再計算基点に使う。
     pub rect_initial_selected: HashSet<VertexKey>,
+    /// UV 編集ウィンドウを OS の独立ウィンドウとして分離する (Phase 3 / A-3)。
+    /// `true` = `ctx.show_viewport_immediate` で別ネイティブウィンドウ。
+    /// `false` = 従来通り `egui::Window` でメインウィンドウ内のフローティング。
+    /// セッション中のユーザー設定として維持し、リロード (`reset`) では変更しない。
+    pub detached: bool,
 }
 
 impl Default for UvEditState {
@@ -131,6 +136,7 @@ impl Default for UvEditState {
             pristine_uvs: HashMap::new(),
             rect_behavior: UvRectBehavior::Replace,
             rect_initial_selected: HashSet::new(),
+            detached: false,
         }
     }
 }

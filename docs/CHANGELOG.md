@@ -6,6 +6,7 @@
   - [v0.5.5 (2026-04-13)](#v055-2026-04-13)
     - [New Features (Phase 1)](#new-features-phase-1)
     - [New Features (Phase 2)](#new-features-phase-2)
+    - [New Features (Phase 3)](#new-features-phase-3)
     - [Internals](#internals)
     - [Scope Notes](#scope-notes)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
@@ -47,7 +48,7 @@
 
 ## v0.5.5 (2026-04-13)
 
-Introduces a **per-vertex UV editing window** invoked from the material editor panel. v0.5.4 delivered material-level UV transform (offset / scale / rotation). v0.5.5 goes one layer deeper with both **Phase 1** (single-vertex editor + persistence + reload-safe state) and **Phase 2** (texture-background preview, rectangle selection, zoom/pan, rotate/scale, undo/redo, Ctrl+A). Phase 3 (UV1, morph UV, multi-window) is deferred to v0.5.7+.
+Introduces a **per-vertex UV editing window** invoked from the material editor panel. v0.5.4 delivered material-level UV transform (offset / scale / rotation). v0.5.5 goes one layer deeper with **Phase 1** (single-vertex editor + persistence + reload-safe state), **Phase 2** (texture-background preview, rectangle selection, zoom/pan, rotate/scale, undo/redo, Ctrl+A), and **Phase 3** follow-ups (additive/subtractive rect selection, detachable independent OS window).
 
 ### New Features (Phase 1)
 
@@ -65,7 +66,11 @@ Introduces a **per-vertex UV editing window** invoked from the material editor p
 - **Rotate / Scale (2-4)** — Alt + drag rotates around the selection-bbox center (angle diff via `atan2` → `sin_cos`). Ctrl + drag scales around the same pivot (distance ratio). A cross-hair marker is drawn at the pivot during Move drag for visual feedback. Ctrl takes precedence over Alt if both are held.
 - **Undo / Redo (2-5)** — `UvUndoEntry { before, after }` records one entry per drag (on `drag_stopped` Move). `Ctrl+Z` undoes, `Ctrl+Y` / `Ctrl+Shift+Z` redoes. GUI buttons "⟲ 元に戻す" / "⟳ やり直す" mirror the shortcuts. Undo stack is capped at 50 entries (FIFO). New edits clear the redo stack (standard semantics). `wants_keyboard_input()` guard prevents collision with TextEdit widgets elsewhere in the app.
 - **Select All (Ctrl+A)** — Adds all vertices of the active material to `selected` (existing selection is preserved, not replaced). A "全選択" button provides the same action from the GUI.
-- **Additive / Subtractive Rectangle Selection (Phase 3 A-4 pulled forward)** — Previously rectangle selection always replaced the existing selection. Now Shift+drag adds the rect-inside vertices to the current selection, Ctrl+drag removes them. `UvRectBehavior { Replace, Add, Subtract }` is decided at `drag_started()` time from the modifier keys; `rect_initial_selected` snapshots the pre-drag selection so the per-frame rebuild `initial ± inside` stays consistent when the rect shrinks or expands. Ctrl is reused instead of Alt to avoid collision with Move-mode's "rotate" assignment (mode is already fixed by drag-start position, so Ctrl's meaning is unambiguous per mode).
+
+### New Features (Phase 3)
+
+- **Additive / Subtractive Rectangle Selection (A-4)** — Previously rectangle selection always replaced the existing selection. Now Shift+drag adds the rect-inside vertices to the current selection, Ctrl+drag removes them. `UvRectBehavior { Replace, Add, Subtract }` is decided at `drag_started()` time from the modifier keys; `rect_initial_selected` snapshots the pre-drag selection so the per-frame rebuild `initial ± inside` stays consistent when the rect shrinks or expands. Ctrl is reused instead of Alt to avoid collision with Move-mode's "rotate" assignment (mode is already fixed by drag-start position, so Ctrl's meaning is unambiguous per mode).
+- **Detachable Independent OS Window (A-3)** — A new "⬈ 分離" button in the UV edit toolbar promotes the floating `egui::Window` to a real OS-level window via `ctx.show_viewport_immediate` (eframe 0.31 viewport API). Once detached, the UV editor lives in its own desktop window with its own title bar, resize handles, and minimize/close buttons; the main viewer keeps running the 3D scene behind. "⬓ 結合" snaps it back into the main window. `UvEditState.detached: bool` carries the preference across the session (but not across reloads, since `reset` preserves it). `ViewportId::from_hash_of("uv_edit_viewport")` keeps OS-level window position and size stable between toggles. The × button on the native window frame closes the editor by flipping `uv_edit_window_open = false`; the detached preference is preserved so reopening goes straight back to a separate window.
 
 ### Internals
 

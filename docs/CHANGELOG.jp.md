@@ -6,6 +6,7 @@
   - [v0.5.5（2026-04-13）](#v0552026-04-13)
     - [新機能 (Phase 1)](#%E6%96%B0%E6%A9%9F%E8%83%BD-phase-1)
     - [新機能 (Phase 2)](#%E6%96%B0%E6%A9%9F%E8%83%BD-phase-2)
+    - [新機能 (Phase 3)](#%E6%96%B0%E6%A9%9F%E8%83%BD-phase-3)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85)
     - [スコープ注記](#%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%97%E6%B3%A8%E8%A8%98)
     - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C)
@@ -47,7 +48,7 @@
 
 ## v0.5.5（2026-04-13）
 
-**材質編集パネルから呼び出す頂点単位 UV 編集ウィンドウ**を追加。v0.5.4 は材質単位の UV 変形（offset / scale / rotation）を提供したが、v0.5.5 はその下のレイヤーに踏み込み、**Phase 1**（単一頂点エディタ＋永続化＋reload 保持）と **Phase 2**（テクスチャ背景・矩形選択・ズーム/パン・回転/スケール・undo/redo・Ctrl+A）を同梱する。Phase 3（UV1 / モーフ UV / 複数ウィンドウ）は v0.5.7 以降に延期。
+**材質編集パネルから呼び出す頂点単位 UV 編集ウィンドウ**を追加。v0.5.4 は材質単位の UV 変形（offset / scale / rotation）を提供したが、v0.5.5 はその下のレイヤーに踏み込み、**Phase 1**（単一頂点エディタ＋永続化＋reload 保持）、**Phase 2**（テクスチャ背景・矩形選択・ズーム/パン・回転/スケール・undo/redo・Ctrl+A）に加え、**Phase 3** の先行項目（矩形選択の加算/除外、独立 OS ウィンドウ化）を同梱する。
 
 ### 新機能 (Phase 1)
 
@@ -65,7 +66,11 @@
 - **回転 / スケール (2-4)** — Alt+ドラッグで選択 bbox 中心ピボットの回転（`atan2` で角度差 → `sin_cos` で回転行列）。Ctrl+ドラッグで同ピボットのスケール（距離比）。Move ドラッグ中はピボットに十字マーカーを描画して視覚フィードバック。Ctrl と Alt が同時押下の場合は Ctrl 優先
 - **undo / redo (2-5)** — `UvUndoEntry { before, after }` を drag_stopped Move ごとに 1 コマンド記録。`Ctrl+Z` で undo、`Ctrl+Y` / `Ctrl+Shift+Z` で redo。「⟲ 元に戻す」「⟳ やり直す」ボタンが GUI から同等操作を提供。undo スタックは 50 エントリ上限（FIFO）。新編集で redo スタックは自動クリア（標準セマンティクス）。`wants_keyboard_input()` ガードで TextEdit とキー衝突しない
 - **全選択 (Ctrl+A)** — アクティブ材質の全頂点を `selected` に追加（既存選択は保持）。「全選択」ボタンが GUI から同等操作を提供
-- **矩形選択の加算/除外モード (Phase 3 A-4 を前倒し)** — 従来の矩形選択は常に既存選択を置換していたが、Shift+ドラッグで矩形内頂点を既存選択に追加、Ctrl+ドラッグで除外する動作を追加。`UvRectBehavior { Replace, Add, Subtract }` を drag_started 時の修飾キーで確定し、`rect_initial_selected` に開始時点の selected をスナップショット保存。矩形拡大/縮小時の整合は毎フレーム `initial ± inside` で再計算する方式で保つ。Alt は Move モードの「回転」と競合するため、Rect モードの除外は Ctrl を使う（mode は drag 開始位置で確定しているので Ctrl の意味は mode ごとに一意）
+
+### 新機能 (Phase 3)
+
+- **矩形選択の加算/除外モード (A-4)** — 従来の矩形選択は常に既存選択を置換していたが、Shift+ドラッグで矩形内頂点を既存選択に追加、Ctrl+ドラッグで除外する動作を追加。`UvRectBehavior { Replace, Add, Subtract }` を drag_started 時の修飾キーで確定し、`rect_initial_selected` に開始時点の selected をスナップショット保存。矩形拡大/縮小時の整合は毎フレーム `initial ± inside` で再計算する方式で保つ。Alt は Move モードの「回転」と競合するため、Rect モードの除外は Ctrl を使う（mode は drag 開始位置で確定しているので Ctrl の意味は mode ごとに一意）
+- **独立 OS ウィンドウ化 (A-3)** — UV 編集ツールバーに「⬈ 分離」ボタンを追加。押下で `egui::Window` によるメインウィンドウ内フローティングから `ctx.show_viewport_immediate`（eframe 0.31 の viewport API）による OS ネイティブの独立ウィンドウへ切り替え、独自のタイトルバー・リサイズ・最小化/閉じるボタンを持つ別デスクトップウィンドウに UV エディタを分離する。メインビューアは背後で 3D シーンを描画し続ける。「⬓ 結合」でメインウィンドウ内に戻す。`UvEditState.detached: bool` がセッション中の設定として値を保持し（reset では変更しない）、`ViewportId::from_hash_of("uv_edit_viewport")` で OS 側のウィンドウ位置/サイズをトグル間で維持。独立ウィンドウの × ボタン押下時は `uv_edit_window_open = false` に戻し、次回 UV 編集を開いた際は独立状態のまま開く。
 
 ### 内部実装
 
