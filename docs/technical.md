@@ -33,6 +33,7 @@
     - [T-Stance Conversion](#t-stance-conversion)
     - [Rigid Body Rotation](#rigid-body-rotation)
     - [Texture Loading](#texture-loading)
+    - [Missing-Texture Fallback (v0.5.7)](#missing-texture-fallback-v057)
     - [Mipmap Generation](#mipmap-generation)
   - [OBJ/STL Loading](#objstl-loading)
     - [OBJ Reader](#obj-reader)
@@ -537,6 +538,18 @@ The viewer renders rigid bodies and joints in PMX space. `rb.position` and `join
 - MIME hint: Infer MIME type from extension and explicitly specify via `image::load_from_memory_with_format` (TGA has no magic number so auto-detection fails). `.sph/.spa` treated as `image/bmp`
 - UnityPackage textures: `embed_textures_into_ir` derives MIME type from file extension via `mime_for_ext`. Without MIME hints, TGA/BMP auto-detection fails and falls back to magenta
 - **Path sanitization**: All disk-based texture loading paths (DirectX .x, OBJ, PMX, PMD) apply `sanitize_rel_path()` before `base_dir.join()`. This strips `..` components (preventing directory traversal) and `:` characters (preventing Windows absolute path bypass via drive letters like `C:`). Archive-based loading uses `normalize_archive_path()` instead
+
+### Missing-Texture Fallback (v0.5.7)
+
+When a PMX texture path does not resolve to a real file on disk, or when decoding fails for any other reason (unsupported format, corrupted bytes, etc.), the viewer substitutes a **1×1 shared fallback texture** instead of leaving the material unbound. Up through v0.5.6 this was a 1×1 magenta pixel so missing assets were visually obvious, but magenta in a toon/sphere slot (multiplicative or additive composition) bled strongly into faces and other materials — a common regression on PMX models whose internal texture list references e.g. `textures\Skin.png` while the real asset lives under `toon\`.
+
+v0.5.7 replaces the per-failure 1×1 texture with a **process-shared `SharedFallback { tex, srgb_view, unorm_view }`** singleton in `viewer/texture.rs`, guarded by `Mutex<Option<_>>` and lazily initialised on first failure-path upload. All three fallback sites now return clones of the same sRGB / Unorm `TextureView` pair:
+
+- `upload_single_texture` empty-`IrTexture.data` branch
+- `upload_single_texture` `decode_image_to_rgba_with_hint` error branch
+- `upload_textures` unsupported `gltf::image::Format` branch
+
+Because wgpu `TextureView::clone` only bumps an internal Arc, per-failure GPU allocation drops from one `wgpu::Texture` to zero, and the material BindGroups all bind the same underlying texture. Switching the color at runtime — via the "テクスチャ欠落時フォールバックを白に" toggle in the Display tab — calls `set_white_texture_fallback_dynamic(enabled, &queue)`, which flips an `AtomicBool` and (if the shared texture is already initialised) calls `queue.write_texture` with 4 bytes. The view references are unchanged, so no BindGroup re-binding is needed and the new color appears from the next frame. The preference persists in `popone.toml` `[display] white_texture_fallback` via `DisplaySettings` and the new `DisplayConfig` (all `#[serde(default)]` so older TOML files without a `[display]` block are forward-compatible).
 
 ### Mipmap Generation
 

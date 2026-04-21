@@ -33,6 +33,7 @@
     - [Tスタンス変換](#t%E3%82%B9%E3%82%BF%E3%83%B3%E3%82%B9%E5%A4%89%E6%8F%9B)
     - [剛体回転](#%E5%89%9B%E4%BD%93%E5%9B%9E%E8%BB%A2)
     - [テクスチャ読み込み](#%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E8%AA%AD%E3%81%BF%E8%BE%BC%E3%81%BF)
+    - [テクスチャ欠落フォールバック (v0.5.7)](#%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3%E6%AC%A0%E8%90%BD%E3%83%95%E3%82%A9%E3%83%BC%E3%83%AB%E3%83%90%E3%83%83%E3%82%AF-v057)
     - [ミップマップ生成 (最適化)](#%E3%83%9F%E3%83%83%E3%83%97%E3%83%9E%E3%83%83%E3%83%97%E7%94%9F%E6%88%90-%E6%9C%80%E9%81%A9%E5%8C%96)
   - [OBJ/STL ロード](#objstl-%E3%83%AD%E3%83%BC%E3%83%89)
     - [OBJ リーダー](#obj-%E3%83%AA%E3%83%BC%E3%83%80%E3%83%BC)
@@ -537,6 +538,18 @@ PMX/PMD の剛体回転は Euler 角で格納。D3DX 行優先規約 `v * Ry * R
 - MIME ヒント: 拡張子から MIME タイプを推定し、`image::load_from_memory_with_format` で明示指定（TGA はマジックナンバーがなく自動判定が失敗するため）。`.sph/.spa` は `image/bmp` として扱う
 - UnityPackage テクスチャ: `embed_textures_into_ir` でファイル拡張子から `mime_for_ext` 経由で MIME タイプを設定。空 MIME のままだと TGA/BMP 等の自動判定が失敗しマゼンタフォールバックになる
 - **パスサニタイズ**: ディスクベースのテクスチャ読み込み（DirectX .x / OBJ / PMX / PMD）はすべて `base_dir.join()` 前に `sanitize_rel_path()` を適用。`..` コンポーネント（ディレクトリトラバーサル防止）と `:` 文字（Windows ドライブレター `C:` 等による絶対パスバイパス防止）を除去。アーカイブ経由は `normalize_archive_path()` を使用
+
+### テクスチャ欠落フォールバック (v0.5.7)
+
+PMX のテクスチャパスがディスク上に実在しない場合や、デコードに失敗した場合（非対応フォーマット・壊れたバイト列など）、ビューアは材質をアンバインドにせず **1×1 の共有フォールバックテクスチャ** で代替する。v0.5.6 までは失敗ごとに 1×1 マゼンタを作っていたため欠落は目立つが、toon/sphere のような乗算・加算合成スロットでこれが使われると顔などに強いピンク色被りが出る（例: PMX の内部テクスチャが `textures\Skin.png` を参照しているが実物は `toon\` 配下にしかない）。
+
+v0.5.7 では失敗ごとの 1×1 テクスチャ生成をやめ、`viewer/texture.rs` の **プロセス共有シングルトン `SharedFallback { tex, srgb_view, unorm_view }`** を `Mutex<Option<_>>` で遅延初期化する方式に変更。3 つのフォールバック経路は全て同一の sRGB / Unorm `TextureView` ペアのクローンを返す:
+
+- `upload_single_texture` の `IrTexture.data` 空分岐
+- `upload_single_texture` の `decode_image_to_rgba_with_hint` 失敗分岐
+- `upload_textures` の非対応 `gltf::image::Format` 分岐
+
+wgpu の `TextureView::clone` は内部 Arc 参照カウントを増やすだけなので、失敗発生ごとに `wgpu::Texture` を作っていた従来から GPU アロケーションが 0 に改善し、材質の BindGroup はすべて同じテクスチャ本体をバインドする。表示タブの「テクスチャ欠落時フォールバックを白に」トグルで色をランタイム切替する際は `set_white_texture_fallback_dynamic(enabled, &queue)` が `AtomicBool` を更新し、共有テクスチャが初期化済みなら `queue.write_texture` で 4 バイトを書き込む。View 参照は不変のため BindGroup 再構築は不要で、切替は次フレームから反映される。設定は `DisplaySettings` 経由で新設の `DisplayConfig` セクションに永続化（`popone.toml` の `[display] white_texture_fallback`、全フィールド `#[serde(default)]` で `[display]` ブロックのない旧 TOML も前方互換）。
 
 ### ミップマップ生成 (最適化)
 

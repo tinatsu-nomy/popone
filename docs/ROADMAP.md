@@ -27,6 +27,7 @@
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
+
 # Roadmap
 
 [日本語](ROADMAP.jp.md)
@@ -35,7 +36,7 @@ This document tracks planned work, future improvements, and external feature req
 
 Current target: **v0.6.0**
 
-> **Note:** v0.5.4 shipped per-slot UV transform. v0.5.5 shipped **Phase 1 + Phase 2 + Phase 3 A-1 / A-2 / A-3 / A-4 / A-5** of the per-vertex UV editor (single/multi-vertex select/drag, rectangle selection with additive/subtractive modes, zoom/pan, rotate/scale, undo/redo, texture background, detachable OS window, UV0 / UV1 set switching, 2D gizmo handles, PMX UV morph editing). See [CHANGELOG.md](CHANGELOG.md#v055-2026-04-13). v0.5.6 shipped IR→PMX UV morph round-trip writer and auto morph-weight 1.0 during edit mode. See [CHANGELOG.md](CHANGELOG.md#v056-2026-04-14). The follow-up items below are smaller improvements for v0.6.0 or beyond.
+> **Note:** v0.5.4 shipped per-slot UV transform. v0.5.5 shipped **Phase 1 + Phase 2 + Phase 3 A-1 / A-2 / A-3 / A-4 / A-5** of the per-vertex UV editor (single/multi-vertex select/drag, rectangle selection with additive/subtractive modes, zoom/pan, rotate/scale, undo/redo, texture background, detachable OS window, UV0 / UV1 set switching, 2D gizmo handles, PMX UV morph editing). See [CHANGELOG.md](CHANGELOG.md#v055-2026-04-13). v0.5.6 shipped IR→PMX UV morph round-trip writer and auto morph-weight 1.0 during edit mode. See [CHANGELOG.md](CHANGELOG.md#v056-2026-04-14). v0.5.7 switched the missing-texture fallback pixel to white by default (with a runtime-toggleable magenta diagnostic mode) and unified all failure paths onto a single shared 1×1 texture for instant `queue.write_texture` color swapping. See [CHANGELOG.md](CHANGELOG.md#v057-2026-04-22). The follow-up items below are smaller improvements for v0.6.0 or beyond.
 
 ## Targeted for v0.6.0
 
