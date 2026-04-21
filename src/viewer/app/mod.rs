@@ -265,6 +265,9 @@ pub struct DisplaySettings {
     pub bloom_threshold: f32,
     /// Bloom 拡散段数 (3〜6)
     pub bloom_radius: u32,
+    /// テクスチャデコード失敗時のフォールバックを白にするか（既定 true）。
+    /// false の場合は従来どおり 1×1 マゼンタで欠落を目立たせる。
+    pub white_texture_fallback: bool,
 }
 
 impl Default for DisplaySettings {
@@ -301,6 +304,7 @@ impl Default for DisplaySettings {
             bloom_intensity: 0.8,
             bloom_threshold: 0.0,
             bloom_radius: super::bloom::DEFAULT_BLOOM_RADIUS,
+            white_texture_fallback: true,
         }
     }
 }
@@ -773,6 +777,15 @@ impl ViewerApp {
 
         let app_config = app_config.unwrap_or_default();
 
+        // テクスチャフォールバック色（白/マゼンタ）の初期値をグローバルに反映。
+        // 以降のテクスチャアップロード（BG ロード含む）はこの値を参照する。
+        super::texture::set_white_texture_fallback(app_config.display.white_texture_fallback);
+
+        let display = DisplaySettings {
+            white_texture_fallback: app_config.display.white_texture_fallback,
+            ..DisplaySettings::default()
+        };
+
         // テクスチャ履歴を読み込み
         let texture_history = persistence::load_texture_history(&data_dir);
 
@@ -788,7 +801,7 @@ impl ViewerApp {
             convert_message: None,
             morph_weights: Vec::new(),
             morph_dirty: false,
-            display: DisplaySettings::default(),
+            display,
             material_visibility: Vec::new(),
             material_display: Vec::new(),
             material_dirty: Vec::new(),
@@ -2782,6 +2795,10 @@ impl eframe::App for ViewerApp {
             .last_dir
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned());
+
+        // 表示オプション（永続化対象のみ）を config に反映
+        self.app_config.display.white_texture_fallback = self.display.white_texture_fallback;
+
         persistence::save_config(&self.data_dir, &self.app_config);
     }
 }

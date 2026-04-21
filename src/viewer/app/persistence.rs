@@ -75,10 +75,38 @@ pub struct AppConfig {
     pub theme: ThemeConfig,
     #[serde(default)]
     pub log_viewer: LogViewerConfig,
+    #[serde(default)]
+    pub display: DisplayConfig,
     /// ray-mmd ルートフォルダ（§K.2 / Step 6）。MME 出力時の `#include` 相対パス解決に使用。
     /// 未設定（None）時はカレントディレクトリ `.\` をフォールバックとして使用する。
     #[serde(default)]
     pub ray_mmd_root: Option<String>,
+}
+
+/// 表示オプションのうち、セッション越しに永続化する項目。
+///
+/// `DisplaySettings` 全体は serde 未対応で、多くはセッション限定の一時状態のため
+/// 永続化対象のものだけをこの構造体に分離する（`LogViewerConfig` と同様の方針）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisplayConfig {
+    /// テクスチャデコード失敗時のフォールバックを白にするか。
+    /// true = 白（色被りを避ける、既定）。false = マゼンタ（欠落を目立たせる）。
+    #[serde(default = "DisplayConfig::default_true")]
+    pub white_texture_fallback: bool,
+}
+
+impl DisplayConfig {
+    fn default_true() -> bool {
+        true
+    }
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            white_texture_fallback: true,
+        }
+    }
 }
 
 /// ログビュアーウインドウの設定（表示状態・位置・サイズ・レベルフィルタ）。

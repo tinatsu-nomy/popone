@@ -3475,6 +3475,22 @@ fn show_tab_display(
 
     ui.separator();
     ui.checkbox(&mut app.display.msaa, "MSAA (アンチエイリアス)");
+    let white_fallback_resp = ui
+        .checkbox(
+            &mut app.display.white_texture_fallback,
+            "テクスチャ欠落時フォールバックを白に",
+        )
+        .on_hover_text(
+            "テクスチャのロード・デコードに失敗したとき、1×1 白 (既定) か\n\
+             1×1 マゼンタ (診断用) を使用します。\n\
+             切替は即時反映 — 共有テクスチャの色だけが書き換わります。",
+        );
+    if white_fallback_resp.changed() {
+        super::texture::set_white_texture_fallback_dynamic(
+            app.display.white_texture_fallback,
+            &app.render_state.queue,
+        );
+    }
     ui.horizontal(|ui| {
         ui.checkbox(&mut app.display.bloom_enabled, "Bloom");
         if app.display.bloom_enabled && ui.small_button("初期値").clicked() {

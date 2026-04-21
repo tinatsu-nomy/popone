@@ -3,45 +3,48 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.5.6 (2026-04-14)](#v056-2026-04-14)
+  - [v0.5.7 (2026-04-22)](#v057-2026-04-22)
     - [New Features](#new-features)
     - [Internals](#internals)
+  - [v0.5.6 (2026-04-14)](#v056-2026-04-14)
+    - [New Features](#new-features-1)
+    - [Internals](#internals-1)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
   - [v0.5.5 (2026-04-13)](#v055-2026-04-13)
     - [New Features (Phase 1)](#new-features-phase-1)
     - [New Features (Phase 2)](#new-features-phase-2)
     - [New Features (Phase 3)](#new-features-phase-3)
-    - [Internals](#internals-1)
+    - [Internals](#internals-2)
     - [Scope Notes](#scope-notes)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
     - [Tests](#tests)
   - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
-    - [New Features](#new-features-1)
-    - [Internals](#internals-2)
+    - [New Features](#new-features-2)
+    - [Internals](#internals-3)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
     - [Tests](#tests-1)
   - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
-    - [New Features](#new-features-2)
-    - [Internals](#internals-3)
-  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
     - [New Features](#new-features-3)
     - [Internals](#internals-4)
+  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
+    - [New Features](#new-features-4)
+    - [Internals](#internals-5)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-3)
   - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
-    - [New Features](#new-features-4)
+    - [New Features](#new-features-5)
     - [Performance](#performance)
-    - [Internals](#internals-5)
+    - [Internals](#internals-6)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-4)
     - [Tests](#tests-2)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
-    - [New Features](#new-features-5)
+    - [New Features](#new-features-6)
     - [Behavior Changes](#behavior-changes)
     - [Tests](#tests-3)
   - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
-    - [New Features](#new-features-6)
+    - [New Features](#new-features-7)
     - [Behavior Changes](#behavior-changes-1)
-    - [Internals](#internals-6)
+    - [Internals](#internals-7)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -49,6 +52,22 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.7 (2026-04-22)
+
+Fixes a visible regression on PMX models whose internal texture list references a file that does not exist on disk, and adds a runtime toggle for the fallback color.
+
+### New Features
+
+- **White texture fallback (default)** — When a PMX texture references a path that has no real file on disk (e.g. `textures\Skin.png` while the actual asset lives under `toon\`), or when decoding fails for any other reason, the previous behaviour baked a **1×1 magenta** pixel into GPU and used it everywhere the missing texture was referenced. For toon / sphere slots used in multiplicative / additive composition, this caused strong pink/magenta color bleeding on the affected material (commonly the face). v0.5.7 replaces the fallback pixel with **1×1 white (255,255,255,255)** by default, which neutralises the bleed without changing any other lighting path.
+- **Display option: `テクスチャ欠落時フォールバックを白に` toggle** — A new checkbox under the Display tab (below "MSAA") lets you switch between the white (default) and the historical magenta fallback on demand. The magenta mode is kept as a diagnostic option for spotting missing assets quickly. The preference persists across sessions under `[display] white_texture_fallback` in `popone.toml`.
+- **Dynamic switchover** — Toggling the option is immediate: no model reload required. All failure paths now share a single 1×1 fallback texture via `queue.write_texture`, so only 1 pixel needs to be rewritten on the GPU — material BindGroups and draw pipelines are left untouched, and the new color appears in the next frame.
+
+### Internals
+
+- `viewer/texture.rs` gains a `SharedFallback { tex, srgb_view, unorm_view }` singleton behind a `Mutex<Option<_>>`, lazily initialised on first failure-path upload. All three fallback paths — empty `IrTexture.data` (`upload_single_texture`), `decode_image_to_rgba_with_hint` failure (same), and the unsupported `gltf::image::Format` branch (`upload_textures`) — return clones of the shared sRGB / Unorm `TextureView` pair. Because wgpu `TextureView::clone` only bumps an internal Arc, per-failure allocation goes from one 1×1 `wgpu::Texture` to zero.
+- `set_white_texture_fallback_dynamic(enabled, &queue)` flips the `AtomicBool` and, if the shared texture is already initialised, calls `queue.write_texture` with 4 bytes. Not reloading the GPU view means no BindGroup re-binding, so the toggle is safe to press mid-frame.
+- `DisplaySettings` gains a `white_texture_fallback: bool` field (default `true`) mirrored into a new `AppConfig.display: DisplayConfig` section for persistence. `DisplayConfig` uses `#[serde(default)]` throughout so existing `popone.toml` files without a `[display]` block load without issues.
 
 ## v0.5.6 (2026-04-14)
 

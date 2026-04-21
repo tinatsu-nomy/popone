@@ -1,9 +1,138 @@
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::color::{linear_f32_to_rgba8, rgba8_to_linear_f32};
 use crate::intermediate::types::IrModel;
 use anyhow::{Context, Result};
 use eframe::wgpu;
+
+/// テクスチャデコード失敗・参照先不在時のフォールバック色を白にするか。
+/// - true（既定）: 1×1 白 (255,255,255,255) — 乗算/加算系スロットで色被りしない
+/// - false: 1×1 マゼンタ (255,0,255,255) — 欠落を目立たせたい診断用
+///
+/// 値は単独で意味を持つ（デコード前に参照される）。既にアップロード済みの
+/// GPU 上の色は `SharedFallback` 側の `queue.write_texture` によって同期する
+/// （`set_white_texture_fallback_dynamic` を参照）。
+static WHITE_FALLBACK: AtomicBool = AtomicBool::new(true);
+
+pub fn set_white_texture_fallback(enabled: bool) {
+    WHITE_FALLBACK.store(enabled, Ordering::Relaxed);
+}
+
+pub fn white_texture_fallback() -> bool {
+    WHITE_FALLBACK.load(Ordering::Relaxed)
+}
+
+#[inline]
+fn fallback_rgba() -> [u8; 4] {
+    if WHITE_FALLBACK.load(Ordering::Relaxed) {
+        [255, 255, 255, 255]
+    } else {
+        [255, 0, 255, 255]
+    }
+}
+
+/// 失敗経路すべてで共有する 1×1 フォールバックテクスチャ。
+///
+/// 個別に Texture を作らず、同一 `TextureView` を全材質の BindGroup に焼き込む
+/// ことで、色切替時に `queue.write_texture` で中身 1 バイトを書き換えるだけで
+/// 既に描画中のモデルにも即時反映できる（BindGroup 再構築不要）。
+struct SharedFallback {
+    tex: wgpu::Texture,
+    srgb_view: wgpu::TextureView,
+    unorm_view: wgpu::TextureView,
+}
+
+impl SharedFallback {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("fallback_shared_1x1"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+        });
+        let srgb_view = tex.create_view(&Default::default());
+        let unorm_view = tex.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(wgpu::TextureFormat::Rgba8Unorm),
+            ..Default::default()
+        });
+        let me = Self {
+            tex,
+            srgb_view,
+            unorm_view,
+        };
+        me.write_current_color(queue);
+        me
+    }
+
+    fn write_current_color(&self, queue: &wgpu::Queue) {
+        let rgba = fallback_rgba();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    fn views(&self) -> (wgpu::TextureView, wgpu::TextureView) {
+        (self.srgb_view.clone(), self.unorm_view.clone())
+    }
+}
+
+static SHARED_FALLBACK: Mutex<Option<SharedFallback>> = Mutex::new(None);
+
+/// 共有フォールバックテクスチャを（必要なら初期化したうえで）取得する。
+///
+/// テクスチャデコードに失敗した経路から呼ばれ、全呼び出し元で同一の
+/// `TextureView` ペアを共有する。
+fn fallback_views(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> (wgpu::TextureView, wgpu::TextureView) {
+    let mut guard = SHARED_FALLBACK.lock().unwrap_or_else(|p| p.into_inner());
+    if guard.is_none() {
+        *guard = Some(SharedFallback::new(device, queue));
+    }
+    guard
+        .as_ref()
+        .expect("SharedFallback must be Some after init")
+        .views()
+}
+
+/// 色を切り替え、既に初期化済みなら GPU 上の 1×1 に `queue.write_texture` で
+/// 新色を書き込む（View は不変なので BindGroup 再構築不要）。
+///
+/// 未初期化の場合は何もしない — 次回 `fallback_views` 呼び出し時に現行色で
+/// 初期化される。
+pub fn set_white_texture_fallback_dynamic(enabled: bool, queue: &wgpu::Queue) {
+    WHITE_FALLBACK.store(enabled, Ordering::Relaxed);
+    let guard = SHARED_FALLBACK.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(ft) = guard.as_ref() {
+        ft.write_current_color(queue);
+    }
+}
 
 /// sRGB RGBA バイト列を linear 空間で縮小し、sRGB に戻して返す
 fn resize_srgb(
@@ -249,15 +378,10 @@ pub fn upload_textures(
             }
             _ => {
                 log::warn!("Unsupported texture format: {:?} (index {})", img.format, i);
-                // 1x1 マゼンタ
-                vec![255, 0, 255, 255]
+                // 共有フォールバックに切替 — 動的に白/マゼンタへ書き換えられる
+                views.push(fallback_views(device, queue));
+                continue;
             }
-        };
-
-        let (actual_w, actual_h) = if rgba_data.len() == 4 && (width != 1 || height != 1) {
-            (1u32, 1u32)
-        } else {
-            (width, height)
         };
 
         let label = format!("texture_{i}");
@@ -265,8 +389,8 @@ pub fn upload_textures(
             device,
             queue,
             &rgba_data,
-            actual_w,
-            actual_h,
+            width,
+            height,
             Some(&label),
         ));
     }
@@ -369,14 +493,8 @@ pub fn upload_single_texture(
     let is_psd = is_psd_filename(&tex.filename);
     if tex.data.is_empty() {
         log::warn!("Texture '{}' data is empty (index {})", tex.filename, index);
-        return upload_rgba_to_gpu(
-            device,
-            queue,
-            &[255, 0, 255, 255],
-            1,
-            1,
-            Some(&format!("texture_{index}")),
-        );
+        // 共有フォールバックに切替 — 動的に白/マゼンタへ書き換えられる
+        return fallback_views(device, queue);
     }
     // 生 RGBA バイパス（BG ロードパスで事前デコード済み）
     if let crate::intermediate::types::TextureData::RawRgba {
@@ -396,23 +514,22 @@ pub fn upload_single_texture(
             tex.mip_chain.as_deref(),
         );
     }
-    let decoded =
-        match decode_image_to_rgba_with_hint(tex.data.as_bytes(), is_psd, Some(&tex.mime_type)) {
-            Ok(d) => d,
-            Err(e) => {
-                log::warn!(
-                    "Texture '{}' decode failed: {} (index {}, {} bytes)",
-                    tex.filename,
-                    e,
-                    index,
-                    tex.data.len()
-                );
-                (vec![255, 0, 255, 255], 1, 1)
-            }
-        };
-    let (rgba_data, width, height) = decoded;
-    let label = format!("texture_{index}");
-    upload_rgba_to_gpu(device, queue, &rgba_data, width, height, Some(&label))
+    match decode_image_to_rgba_with_hint(tex.data.as_bytes(), is_psd, Some(&tex.mime_type)) {
+        Ok((rgba_data, width, height)) => {
+            let label = format!("texture_{index}");
+            upload_rgba_to_gpu(device, queue, &rgba_data, width, height, Some(&label))
+        }
+        Err(e) => {
+            log::warn!(
+                "Texture '{}' decode failed: {} (index {}, {} bytes)",
+                tex.filename,
+                e,
+                index,
+                tex.data.len()
+            );
+            fallback_views(device, queue)
+        }
+    }
 }
 
 // decode_psd, is_psd_filename は上部で crate::psd から re-export 済み
