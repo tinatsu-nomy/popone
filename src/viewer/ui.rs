@@ -112,45 +112,46 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
 
     // テクスチャ割り当て（借用解放後に処理）
     match tex_assign_request {
-        Some(TexAssignRequest::FileDialog(mat_idx)) => {
-            // ダイアログが既にオープン中なら無視
-            if app.tex.pending_file_dialog.is_none() {
-                let mat_name = app
-                    .loaded
-                    .as_ref()
-                    .and_then(|l| l.mat_cache.names.get(mat_idx))
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "?".to_string());
-                let file_name = app.loaded.as_ref().and_then(|l| {
-                    l.mat_cache
-                        .source_tex_names
-                        .get(mat_idx)
-                        .and_then(|s| s.clone())
-                });
-                let initial_dir = app.tex.last_dir.clone();
+        // ダイアログが既にオープン中なら無視
+        Some(TexAssignRequest::FileDialog(mat_idx)) if app.tex.pending_file_dialog.is_none() => {
+            let mat_name = app
+                .loaded
+                .as_ref()
+                .and_then(|l| l.mat_cache.names.get(mat_idx))
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let file_name = app.loaded.as_ref().and_then(|l| {
+                l.mat_cache
+                    .source_tex_names
+                    .get(mat_idx)
+                    .and_then(|s| s.clone())
+            });
+            let initial_dir = app.tex.last_dir.clone();
 
-                // ファイルダイアログを別スレッドで開く（UIをブロックしない）
-                let (tx, rx) = std::sync::mpsc::channel();
-                let repaint = ctx.clone();
-                std::thread::spawn(move || {
-                    let mut dialog = rfd::FileDialog::new()
-                        .set_title(format!("テクスチャ画像を選択 - {}", mat_name))
-                        .add_filter("Image", &["png", "jpg", "jpeg", "tga", "bmp", "psd", "dds"]);
-                    if let Some(ref name) = file_name {
-                        dialog = dialog.set_file_name(name);
-                    }
-                    if let Some(ref dir) = initial_dir {
-                        dialog = dialog.set_directory(dir);
-                    }
-                    let _ = tx.send(dialog.pick_file());
-                    repaint.request_repaint();
-                });
-                app.tex.pending_file_dialog = Some((
-                    mat_idx,
-                    crate::intermediate::types::TextureSlot::BaseColor,
-                    rx,
-                ));
-            }
+            // ファイルダイアログを別スレッドで開く（UIをブロックしない）
+            let (tx, rx) = std::sync::mpsc::channel();
+            let repaint = ctx.clone();
+            std::thread::spawn(move || {
+                let mut dialog = rfd::FileDialog::new()
+                    .set_title(format!("テクスチャ画像を選択 - {}", mat_name))
+                    .add_filter("Image", &["png", "jpg", "jpeg", "tga", "bmp", "psd", "dds"]);
+                if let Some(ref name) = file_name {
+                    dialog = dialog.set_file_name(name);
+                }
+                if let Some(ref dir) = initial_dir {
+                    dialog = dialog.set_directory(dir);
+                }
+                let _ = tx.send(dialog.pick_file());
+                repaint.request_repaint();
+            });
+            app.tex.pending_file_dialog = Some((
+                mat_idx,
+                crate::intermediate::types::TextureSlot::BaseColor,
+                rx,
+            ));
+        }
+        Some(TexAssignRequest::FileDialog(_)) => {
+            // pending_file_dialog が Some（既にオープン中）→ 無視
         }
         Some(TexAssignRequest::PkgTexture(mat_idx, tex_idx)) => {
             if let Some(ref pkg) = app.tex.pkg_textures {
