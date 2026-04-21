@@ -3,37 +3,39 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.5.8 (2026-04-22)](#v058-2026-04-22)
+    - [Internals](#internals)
   - [v0.5.7 (2026-04-22)](#v057-2026-04-22)
     - [New Features](#new-features)
-    - [Internals](#internals)
+    - [Internals](#internals-1)
   - [v0.5.6 (2026-04-14)](#v056-2026-04-14)
     - [New Features](#new-features-1)
-    - [Internals](#internals-1)
+    - [Internals](#internals-2)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
   - [v0.5.5 (2026-04-13)](#v055-2026-04-13)
     - [New Features (Phase 1)](#new-features-phase-1)
     - [New Features (Phase 2)](#new-features-phase-2)
     - [New Features (Phase 3)](#new-features-phase-3)
-    - [Internals](#internals-2)
+    - [Internals](#internals-3)
     - [Scope Notes](#scope-notes)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
     - [Tests](#tests)
   - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
     - [New Features](#new-features-2)
-    - [Internals](#internals-3)
+    - [Internals](#internals-4)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
     - [Tests](#tests-1)
   - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
     - [New Features](#new-features-3)
-    - [Internals](#internals-4)
+    - [Internals](#internals-5)
   - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
     - [New Features](#new-features-4)
-    - [Internals](#internals-5)
+    - [Internals](#internals-6)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-3)
   - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
     - [New Features](#new-features-5)
     - [Performance](#performance)
-    - [Internals](#internals-6)
+    - [Internals](#internals-7)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-4)
     - [Tests](#tests-2)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
@@ -44,7 +46,7 @@
   - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
     - [New Features](#new-features-7)
     - [Behavior Changes](#behavior-changes-1)
-    - [Internals](#internals-7)
+    - [Internals](#internals-8)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -52,6 +54,17 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.8 (2026-04-22)
+
+A maintenance release that pins the CI Rust toolchain in-repo so that local and GitHub Actions builds use the exact same compiler. No behavioral or feature changes.
+
+### Internals
+
+- **Add `rust-toolchain.toml`** — A new `popone/rust-toolchain.toml` declares `channel = "1.93.1"`, `components = ["rustfmt", "clippy"]`, and `profile = "minimal"`. Running any `cargo` command under `popone/` now causes `rustup` to install and switch to that exact version automatically, eliminating "works on my machine" issues caused by stable point-release drift between contributors.
+- **Add `rust-version = "1.93"` to `Cargo.toml`** — The Cargo MSRV metadata is now explicit, so older toolchains running `cargo install` or `cargo build` get a clear error message before compilation starts.
+- **Switch CI Rust install from `dtolnay/rust-toolchain@stable` to `@master`** — `@stable` forces stable on the Action side and ignores any in-repo `rust-toolchain.toml`. `@master` with no `toolchain` input reads `rust-toolchain.toml`, so the toolchain version is now defined in a single place. The `with: components: rustfmt, clippy` line was removed since the same components are already declared in `rust-toolchain.toml`.
+- **Include `rust-toolchain.toml` in the CI cache key** — `actions/cache@v4`'s key changed from `hashFiles('Cargo.lock')` to `hashFiles('rust-toolchain.toml', 'Cargo.lock')`, so the `target/` cache invalidates automatically when the Rust version is bumped, preventing stale artifacts compiled by a different rustc from being reused.
 
 ## v0.5.7 (2026-04-22)
 
