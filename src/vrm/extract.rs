@@ -2891,15 +2891,11 @@ fn remap_vrm0_render_queue_offsets(
         if let Some(v0_prop) = v0_mat_props.get(i) {
             if let Some(rq) = v0_prop.render_queue {
                 match mat.alpha_mode {
-                    AlphaMode::Blend => {
-                        if (2951..=3000).contains(&rq) {
-                            blend_offsets.insert(rq - 3000);
-                        }
+                    AlphaMode::Blend if (2951..=3000).contains(&rq) => {
+                        blend_offsets.insert(rq - 3000);
                     }
-                    AlphaMode::BlendWithZWrite => {
-                        if (2501..=2550).contains(&rq) {
-                            blend_zw_offsets.insert(rq - 2501);
-                        }
+                    AlphaMode::BlendWithZWrite if (2501..=2550).contains(&rq) => {
+                        blend_zw_offsets.insert(rq - 2501);
                     }
                     _ => {}
                 }
@@ -2928,19 +2924,11 @@ fn remap_vrm0_render_queue_offsets(
             if let Some(rq) = v0_prop.render_queue {
                 if let Some(ref mut mtoon) = mat.mtoon {
                     mtoon.render_queue_offset = match mat.alpha_mode {
-                        AlphaMode::Blend => {
-                            if (2951..=3000).contains(&rq) {
-                                *blend_map.get(&(rq - 3000)).unwrap_or(&0)
-                            } else {
-                                0
-                            }
+                        AlphaMode::Blend if (2951..=3000).contains(&rq) => {
+                            *blend_map.get(&(rq - 3000)).unwrap_or(&0)
                         }
-                        AlphaMode::BlendWithZWrite => {
-                            if (2501..=2550).contains(&rq) {
-                                *blend_zw_map.get(&(rq - 2501)).unwrap_or(&0)
-                            } else {
-                                0
-                            }
+                        AlphaMode::BlendWithZWrite if (2501..=2550).contains(&rq) => {
+                            *blend_zw_map.get(&(rq - 2501)).unwrap_or(&0)
                         }
                         _ => 0,
                     };
