@@ -5974,15 +5974,21 @@ fn hsv_to_color32(h: f32, s: f32, v: f32) -> Color32 {
 ///
 /// Phase 2-3 でビュー変換 (`view_offset`, `view_zoom`) を追加: キャンバス左上端に
 /// 置かれる UV 座標が `view_offset`、ズーム倍率が `view_zoom`。
+///
+/// スケールは X/Y 共通の固定値 (`UV_BASE_PX_PER_UNIT × view_zoom` px/UV) で、
+/// UV [0,1] は `view_zoom = 1.0` のとき `UV_BASE_PX_PER_UNIT × UV_BASE_PX_PER_UNIT` px の正方形になる。
+/// キャンバスの縦横比に依存しないため、Window を横長/縦長にしても UV の見た目比率 (1:1) は保たれ、
+/// 「ウィンドウは UV 空間を覗くビューポート」として振る舞う (DCC ツール標準動作)。
 fn uv_to_canvas(
     uv: [f32; 2],
     rect: egui::Rect,
     view_offset: [f32; 2],
     view_zoom: f32,
 ) -> egui::Pos2 {
+    let s = view_zoom * UV_BASE_PX_PER_UNIT;
     egui::pos2(
-        rect.min.x + (uv[0] - view_offset[0]) * view_zoom * rect.width(),
-        rect.min.y + (uv[1] - view_offset[1]) * view_zoom * rect.height(),
+        rect.min.x + (uv[0] - view_offset[0]) * s,
+        rect.min.y + (uv[1] - view_offset[1]) * s,
     )
 }
 
@@ -5993,11 +5999,17 @@ fn canvas_to_uv(
     view_offset: [f32; 2],
     view_zoom: f32,
 ) -> [f32; 2] {
+    let s = view_zoom * UV_BASE_PX_PER_UNIT;
     [
-        (p.x - rect.min.x) / (view_zoom * rect.width()) + view_offset[0],
-        (p.y - rect.min.y) / (view_zoom * rect.height()) + view_offset[1],
+        (p.x - rect.min.x) / s + view_offset[0],
+        (p.y - rect.min.y) / s + view_offset[1],
     ]
 }
+
+/// UV 編集キャンバスの基準スケール (px / UV 単位、`view_zoom = 1.0` のとき)。
+/// X/Y 共通で使われるため UV[0,1] は常に正方形 (1:1 アスペクト) として描画される。
+/// 値 256 は起動時のキャンバス縦 (~250px) にほぼ収まるサイズとして選定。
+const UV_BASE_PX_PER_UNIT: f32 = 256.0;
 
 /// Shift スナップ用: `val` を `step` の倍数に丸める。
 fn snap_to(val: f32, step: f32) -> f32 {
@@ -6046,7 +6058,7 @@ pub fn show_uv_edit_window(ctx: &egui::Context, app: &mut ViewerApp) {
         let builder = egui::ViewportBuilder::default()
             .with_title(&title)
             .with_inner_size([480.0, 560.0])
-            .with_min_inner_size([320.0, 280.0]);
+            .with_min_inner_size([320.0, 440.0]);
         ctx.show_viewport_immediate(viewport_id, builder, |vctx, _class| {
             egui::CentralPanel::default().show(vctx, |ui| {
                 show_uv_edit_body(ui, app);
@@ -6059,10 +6071,15 @@ pub fn show_uv_edit_window(ctx: &egui::Context, app: &mut ViewerApp) {
         });
     } else {
         let mut is_open = true;
+        // v0.5.7: ユーザーが自由にリサイズできるよう、min/max は一切設けない。
+        // 自動成長ループは `show_uv_edit_body` 内のキャンバス確保時に
+        // フッター分の高さを事前予約することで遮断している。
+        // default_height を 520 に拡大して、起動時にキャンバス縦が ~250px 確保され、
+        // UV エリアが小さく見えないようにする (header が ~200px 取るため)。
         egui::Window::new(title)
             .id(egui::Id::new("uv_edit_window"))
             .default_width(320.0)
-            .default_height(440.0)
+            .default_height(520.0)
             .resizable(true)
             .collapsible(true)
             .open(&mut is_open)
@@ -6453,10 +6470,18 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     }
 
-    // キャンバス描画（正方形）
-    let canvas_size = ui.available_width().clamp(160.0, 260.0);
+    // キャンバス描画: Window 追従の長方形（正方形強制はしない）。
+    //   - canvas_w = avail.x - 4 (右側に 4px の余白)
+    //   - canvas_h = avail.y - 32 (フッター予約: 本関数末尾の add_space(4) + small() を逃がす)
+    //     → これが無いと Window が auto-grow ループに陥り、縦リサイズも無効化される。
+    //   - UV [0,1] は `rect.width() × rect.height()` でキャンバス全域に伸縮 (uv_to_canvas 参照)。
+    //     Window を縦長/横長にすると UV 表示も同じ縦横比に伸びる。
+    const UV_FOOTER_RESERVE_PX: f32 = 32.0;
+    let avail = ui.available_size();
+    let canvas_w = (avail.x - 4.0).max(160.0);
+    let canvas_h = (avail.y - UV_FOOTER_RESERVE_PX).max(160.0);
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(canvas_size, canvas_size),
+        egui::vec2(canvas_w, canvas_h),
         egui::Sense::click_and_drag(),
     );
     let painter = ui.painter_at(rect);
@@ -6477,12 +6502,12 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     }
 
-    // 中ボタンドラッグ: パン (Phase 2-3)
+    // 中ボタンドラッグ: パン (Phase 2-3, 固定スケール対応)
     let (mid_down, ptr_delta) = ui.input(|i| (i.pointer.middle_down(), i.pointer.delta()));
     if response.hovered() && mid_down && (ptr_delta.x.abs() + ptr_delta.y.abs()) > 0.0 {
-        let vzoom_cur = app.uv_edit.view_zoom;
-        app.uv_edit.view_offset[0] -= ptr_delta.x / (rect.width() * vzoom_cur);
-        app.uv_edit.view_offset[1] -= ptr_delta.y / (rect.height() * vzoom_cur);
+        let s = app.uv_edit.view_zoom * UV_BASE_PX_PER_UNIT;
+        app.uv_edit.view_offset[0] -= ptr_delta.x / s;
+        app.uv_edit.view_offset[1] -= ptr_delta.y / s;
     }
 
     // 以降の描画・ピック・ドラッグで参照するビュー状態（本フレーム確定値）
@@ -6494,7 +6519,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
     let uv01_br = uv_to_canvas([1.0, 1.0], rect, voff, vzoom);
     let uv01_rect = egui::Rect::from_two_pos(uv01_tl, uv01_br);
 
-    // 背景: キャンバス全体を暗色で塗る（UV [0,1] の外側も視覚的に示すため）
+    // 背景: キャンバス全体を暗色で塗る (UV [0,1] の外側も視覚的に示すため)
     painter.rect_filled(rect, 0.0, Color32::from_rgb(0x0A, 0x0A, 0x0A));
     // BaseColor テクスチャがあれば UV [0,1] 矩形に等倍描画
     if let Some((_, tex_id)) = app.uv_edit_bg_tex {
