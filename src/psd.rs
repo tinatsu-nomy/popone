@@ -4,6 +4,7 @@
 //! convert/texture.rs (CLI) と viewer/texture.rs (ビューア) の両方から利用される。
 
 use anyhow::Result;
+use rust_i18n::t;
 
 /// ファイル名が PSD かどうか判定
 #[inline]
@@ -17,14 +18,23 @@ pub fn is_psd_filename(name: &str) -> bool {
 pub fn decode_psd(data: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
     // --- ファイルヘッダ (26 bytes) ---
     if data.len() < 26 {
-        anyhow::bail!("PSD ファイルが短すぎます ({} bytes)", data.len());
+        anyhow::bail!(
+            "{}",
+            t!("error.psd.too_short", size = data.len().to_string())
+        );
     }
     if &data[0..4] != b"8BPS" {
-        anyhow::bail!("PSD シグネチャが不正です");
+        anyhow::bail!("{}", t!("error.psd.invalid_signature"));
     }
     let version = u16::from_be_bytes([data[4], data[5]]);
     if version != 1 {
-        anyhow::bail!("PSD バージョン {} は未対応です (v1 のみ対応)", version);
+        anyhow::bail!(
+            "{}",
+            t!(
+                "error.psd.unsupported_version",
+                version = version.to_string()
+            )
+        );
     }
     let channel_count = u16::from_be_bytes([data[12], data[13]]) as usize;
     let height = u32::from_be_bytes([data[14], data[15], data[16], data[17]]);
@@ -33,39 +43,42 @@ pub fn decode_psd(data: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
     // color_mode: data[24..26] (未使用)
 
     if depth != 8 && depth != 16 {
-        anyhow::bail!("PSD ビット深度 {} は未対応です (8/16 のみ対応)", depth);
+        anyhow::bail!(
+            "{}",
+            t!("error.psd.unsupported_depth", depth = depth.to_string())
+        );
     }
 
     // --- 可変長セクションをスキップしてイメージデータセクションへ ---
     let mut pos: usize = 26;
 
-    // Color Mode Data セクション (4 bytes length + data)
+    // Color Mode Data section (4 bytes length + data)
     if pos + 4 > data.len() {
-        anyhow::bail!("PSD: Color Mode Data セクションが不正");
+        anyhow::bail!("{}", t!("error.psd.invalid_color_mode_section"));
     }
     let section_len =
         u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
     pos += 4 + section_len;
 
-    // Image Resources セクション (4 bytes length + data)
+    // Image Resources section (4 bytes length + data)
     if pos + 4 > data.len() {
-        anyhow::bail!("PSD: Image Resources セクションが不正");
+        anyhow::bail!("{}", t!("error.psd.invalid_image_resources_section"));
     }
     let section_len =
         u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
     pos += 4 + section_len;
 
-    // Layer and Mask Information セクション (4 bytes length + data) — スキップ!
+    // Layer and Mask Information section (4 bytes length + data) -- skipped
     if pos + 4 > data.len() {
-        anyhow::bail!("PSD: Layer and Mask セクションが不正");
+        anyhow::bail!("{}", t!("error.psd.invalid_layer_mask_section"));
     }
     let section_len =
         u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
     pos += 4 + section_len;
 
-    // --- Image Data セクション ---
+    // --- Image Data section ---
     if pos + 2 > data.len() {
-        anyhow::bail!("PSD: Image Data セクションが不正");
+        anyhow::bail!("{}", t!("error.psd.invalid_image_data_section"));
     }
     let compression = u16::from_be_bytes([data[pos], data[pos + 1]]);
     pos += 2;
@@ -121,7 +134,12 @@ pub fn psd_to_png(psd_data: &[u8]) -> Result<Vec<u8>> {
         use image::ImageEncoder;
         encoder
             .write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
-            .map_err(|e| anyhow::anyhow!("PNG エンコード失敗: {}", e))?;
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "{}",
+                    t!("error.psd.png_encode_failed", detail = e.to_string())
+                )
+            })?;
     }
     Ok(png_data)
 }
@@ -145,7 +163,10 @@ fn decode_psd_image_channels(
                 let start = ch * channel_byte_count;
                 let end = start + channel_byte_count;
                 if end > data.len() {
-                    anyhow::bail!("PSD Raw: チャンネル {} のデータが不足", ch);
+                    anyhow::bail!(
+                        "{}",
+                        t!("error.psd.raw_channel_short", channel = ch.to_string())
+                    );
                 }
                 let ch_data = if depth == 16 {
                     // 16bit → 8bit に変換
@@ -165,7 +186,7 @@ fn decode_psd_image_channels(
             let scanline_counts = channel_count * height;
             let header_bytes = scanline_counts * 2;
             if data.len() < header_bytes {
-                anyhow::bail!("PSD RLE: スキャンラインヘッダが不足");
+                anyhow::bail!("{}", t!("error.psd.rle_scanline_header_short"));
             }
 
             // 各チャンネルのバイト数を集計
@@ -183,7 +204,10 @@ fn decode_psd_image_channels(
             for (ch, &ch_bytes) in ch_byte_counts.iter().enumerate() {
                 let end = offset + ch_bytes;
                 if end > data.len() {
-                    anyhow::bail!("PSD RLE: チャンネル {} のデータが不足", ch);
+                    anyhow::bail!(
+                        "{}",
+                        t!("error.psd.rle_channel_short", channel = ch.to_string())
+                    );
                 }
                 let decompressed = packbits_decompress(&data[offset..end]);
                 let ch_data = if depth == 16 {
@@ -206,8 +230,11 @@ fn decode_psd_image_channels(
             Ok(channels)
         }
         _ => anyhow::bail!(
-            "PSD 圧縮方式 {} は未対応です (Raw/RLE のみ対応)",
-            compression
+            "{}",
+            t!(
+                "error.psd.unsupported_compression",
+                mode = compression.to_string()
+            )
         ),
     }
 }

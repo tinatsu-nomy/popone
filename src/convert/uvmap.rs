@@ -1,6 +1,7 @@
 //! UVマップを材質ごとにレイヤー分けした PSD ファイルとして出力する。
 //! グループ化指定により、複数モデルマージ時にモデル別フォルダを生成できる。
 
+use rust_i18n::t;
 use std::io::{self, Write};
 use std::ops::Range;
 use std::path::Path;
@@ -138,26 +139,33 @@ fn validate_groups(groups: &[(String, Range<usize>)], mat_count: usize) -> io::R
         if range.start > range.end {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!(
-                    "グループ '{}' の範囲が逆順です: {}..{}",
-                    name, range.start, range.end
-                ),
+                t!(
+                    "error.uvmap.group_range_reversed",
+                    name = name.clone(),
+                    start = range.start.to_string(),
+                    end = range.end.to_string()
+                )
+                .to_string(),
             ));
         }
         if range.end > mat_count {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!(
-                    "グループ '{}' の範囲が材質数 {} を超えています: {}..{}",
-                    name, mat_count, range.start, range.end
-                ),
+                t!(
+                    "error.uvmap.group_range_out_of_bounds",
+                    name = name.clone(),
+                    count = mat_count.to_string(),
+                    start = range.start.to_string(),
+                    end = range.end.to_string()
+                )
+                .to_string(),
             ));
         }
         for i in range.clone() {
             if processed[i] {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!("材質 {} が複数のグループに含まれています", i),
+                    t!("error.uvmap.group_overlap", index = i.to_string()).to_string(),
                 ));
             }
             processed[i] = true;

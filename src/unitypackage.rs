@@ -4,6 +4,7 @@ use crate::error::{PoponeError, Result, ResultExt};
 use crate::intermediate::types::{SourceMaterialRef, TextureData};
 use flate2::read::GzDecoder;
 use rayon::prelude::*;
+use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 use std::sync::Arc;
@@ -176,11 +177,15 @@ fn build_unity_package_index_with_limit(
     let mut metas: HashMap<String, String> = HashMap::new();
     let mut total_bytes: u64 = 0;
 
-    for entry in archive.entries().context("tarエントリ読み込み失敗")? {
-        let mut entry = entry.context("tarエントリ解析失敗")?;
+    for entry in archive
+        .entries()
+        .with_context(|| t!("error.unitypackage.tar_entries_failed").to_string())?
+    {
+        let mut entry =
+            entry.with_context(|| t!("error.unitypackage.tar_entry_parse_failed").to_string())?;
         let path = entry
             .path()
-            .context("パス取得失敗")?
+            .with_context(|| t!("error.unitypackage.path_failed").to_string())?
             .to_string_lossy()
             .to_string();
         // パスは "GUID/filename" 形式
@@ -196,7 +201,7 @@ fn build_unity_package_index_with_limit(
                 let mut s = String::new();
                 entry
                     .read_to_string(&mut s)
-                    .context("pathname読み込み失敗")?;
+                    .with_context(|| t!("error.unitypackage.pathname_read_failed").to_string())?;
                 // B-9: pathname の読み込みバイト数も加算
                 total_bytes += s.len() as u64;
                 if total_bytes > max_bytes {
@@ -216,7 +221,9 @@ fn build_unity_package_index_with_limit(
                     )));
                 }
                 let mut data = Vec::new();
-                entry.read_to_end(&mut data).context("asset読み込み失敗")?;
+                entry
+                    .read_to_end(&mut data)
+                    .with_context(|| t!("error.unitypackage.asset_read_failed").to_string())?;
                 total_bytes += data.len() as u64;
                 if total_bytes > max_bytes {
                     return Err(PoponeError::UnityPackage(format!(
@@ -230,7 +237,7 @@ fn build_unity_package_index_with_limit(
                 let mut data = Vec::new();
                 entry
                     .read_to_end(&mut data)
-                    .context("asset.meta読み込み失敗")?;
+                    .with_context(|| t!("error.unitypackage.asset_meta_read_failed").to_string())?;
                 // B-9: asset.meta の読み込みバイト数も加算
                 total_bytes += data.len() as u64;
                 if total_bytes > max_bytes {

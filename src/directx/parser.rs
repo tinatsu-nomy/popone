@@ -1,5 +1,6 @@
 use crate::error::{PoponeError, Result};
 use glam::{Mat4, Vec2, Vec3};
+use rust_i18n::t;
 use std::collections::HashMap;
 
 /// DirectX .x パース済みモデル
@@ -231,10 +232,13 @@ impl Parser {
     fn expect_lbrace(&mut self) -> Result<()> {
         match self.next() {
             Some(Token::LBrace) => Ok(()),
-            other => Err(PoponeError::DirectXParse(format!(
-                "期待: '{{', 実際: {:?}",
-                other
-            ))),
+            other => Err(PoponeError::DirectXParse(
+                t!(
+                    "error.directx.expected_brace",
+                    actual = format!("{:?}", other)
+                )
+                .to_string(),
+            )),
         }
     }
 
@@ -255,43 +259,56 @@ impl Parser {
 
     fn read_float(&mut self) -> Result<f32> {
         match self.next() {
-            Some(Token::Num(s)) => s
-                .parse::<f32>()
-                .map_err(|e| PoponeError::DirectXParse(format!("float パース失敗: {}", e))),
-            other => Err(PoponeError::DirectXParse(format!(
-                "期待: 数値, 実際: {:?}",
-                other
-            ))),
+            Some(Token::Num(s)) => s.parse::<f32>().map_err(|e| {
+                PoponeError::DirectXParse(
+                    t!("error.directx.float_parse_failed", detail = e.to_string()).to_string(),
+                )
+            }),
+            other => Err(PoponeError::DirectXParse(
+                t!(
+                    "error.directx.expected_number",
+                    actual = format!("{:?}", other)
+                )
+                .to_string(),
+            )),
         }
     }
 
     fn read_int(&mut self) -> Result<u32> {
+        let int_err = |e: std::num::ParseIntError| {
+            PoponeError::DirectXParse(
+                t!("error.directx.int_parse_failed", detail = e.to_string()).to_string(),
+            )
+        };
         match self.next() {
             Some(Token::Num(s)) => {
-                // 小数点を含む場合は切り捨て
+                // Truncate at a decimal point if present
                 if let Some(dot) = s.find('.') {
-                    s[..dot]
-                        .parse::<u32>()
-                        .map_err(|e| PoponeError::DirectXParse(format!("int パース失敗: {}", e)))
+                    s[..dot].parse::<u32>().map_err(int_err)
                 } else {
-                    s.parse::<u32>()
-                        .map_err(|e| PoponeError::DirectXParse(format!("int パース失敗: {}", e)))
+                    s.parse::<u32>().map_err(int_err)
                 }
             }
-            other => Err(PoponeError::DirectXParse(format!(
-                "期待: 整数, 実際: {:?}",
-                other
-            ))),
+            other => Err(PoponeError::DirectXParse(
+                t!(
+                    "error.directx.expected_integer",
+                    actual = format!("{:?}", other)
+                )
+                .to_string(),
+            )),
         }
     }
 
     fn read_string(&mut self) -> Result<String> {
         match self.next() {
             Some(Token::Str(s)) => Ok(s.clone()),
-            other => Err(PoponeError::DirectXParse(format!(
-                "期待: 文字列, 実際: {:?}",
-                other
-            ))),
+            other => Err(PoponeError::DirectXParse(
+                t!(
+                    "error.directx.expected_string",
+                    actual = format!("{:?}", other)
+                )
+                .to_string(),
+            )),
         }
     }
 
@@ -959,12 +976,12 @@ pub fn read_x_from_data(data: &[u8], name: &str) -> Result<XModel> {
             let header_str = std::str::from_utf8(header).unwrap_or("");
             if header_str.contains("bin") {
                 return Err(PoponeError::DirectXParse(
-                    "バイナリ形式の .x ファイルは未対応です".into(),
+                    t!("error.directx.binary_unsupported").to_string(),
                 ));
             }
             if header_str.contains("cmp") || header_str.contains("zip") {
                 return Err(PoponeError::DirectXParse(
-                    "圧縮形式の .x ファイルは未対応です".into(),
+                    t!("error.directx.compressed_unsupported").to_string(),
                 ));
             }
         }
@@ -978,7 +995,7 @@ pub fn read_x_from_data(data: &[u8], name: &str) -> Result<XModel> {
             let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(data);
             if had_errors {
                 return Err(PoponeError::DirectXParse(
-                    "テキストデコード失敗（UTF-8/Shift_JIS いずれでもない）".into(),
+                    t!("error.directx.text_decode_failed").to_string(),
                 ));
             }
             decoded.into_owned()
@@ -991,7 +1008,7 @@ pub fn read_x_from_data(data: &[u8], name: &str) -> Result<XModel> {
 
     if parser.meshes.is_empty() {
         return Err(PoponeError::DirectXParse(
-            "Mesh が見つかりません（空の .x ファイル）".into(),
+            t!("error.directx.no_mesh").to_string(),
         ));
     }
 

@@ -11,6 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use crate::error::{PoponeError, Result};
+use rust_i18n::t;
 
 /// アーカイブ対応モデル拡張子（unitypackage も二重展開で対応）
 pub const MODEL_EXTENSIONS: &[&str] = &[
@@ -125,9 +126,9 @@ pub fn normalize_archive_path(raw: &str) -> Result<PathBuf> {
             Component::Normal(part) => out.push(part),
             Component::CurDir => {}
             _ => {
-                return Err(PoponeError::Archive(format!(
-                    "安全でないアーカイブパス: {raw}"
-                )))
+                return Err(PoponeError::Archive(
+                    t!("error.archive.unsafe_path", raw = raw.to_string()).to_string(),
+                ))
             }
         }
     }
@@ -226,7 +227,13 @@ pub fn extract_model_bundle(
     model_index: usize,
 ) -> Result<ModelBundle> {
     let (_, model_path, _, kind) = contents.models.get(model_index).ok_or_else(|| {
-        PoponeError::Archive(format!("モデルインデックスが範囲外: {model_index}"))
+        PoponeError::Archive(
+            t!(
+                "error.archive.model_index_out_of_range",
+                index = model_index.to_string()
+            )
+            .to_string(),
+        )
     })?;
     let model_path = model_path.clone();
     let kind = *kind;
@@ -256,10 +263,13 @@ fn extract_bundle_from_zip(
                 .into_iter()
                 .find(|e| e.path == model_path)
                 .ok_or_else(|| {
-                    PoponeError::Archive(format!(
-                        "モデルファイルが展開できません: {}",
-                        model_path.display()
-                    ))
+                    PoponeError::Archive(
+                        t!(
+                            "error.archive.model_file_extract_failed",
+                            path = model_path.display().to_string()
+                        )
+                        .to_string(),
+                    )
                 })?;
 
             // テクスチャ参照パスを取得
@@ -296,10 +306,13 @@ fn extract_bundle_from_zip(
                 .into_iter()
                 .find(|e| e.path == model_path)
                 .ok_or_else(|| {
-                    PoponeError::Archive(format!(
-                        "モデルファイルが展開できません: {}",
-                        model_path.display()
-                    ))
+                    PoponeError::Archive(
+                        t!(
+                            "error.archive.model_file_extract_failed",
+                            path = model_path.display().to_string()
+                        )
+                        .to_string(),
+                    )
                 })?;
             Ok(ModelBundle {
                 model: model_entry,
@@ -363,8 +376,11 @@ fn extract_bundle_from_zip(
             }
 
             Ok(ModelBundle {
-                model: model_entry
-                    .ok_or_else(|| PoponeError::Archive("モデルファイルが展開できません".into()))?,
+                model: model_entry.ok_or_else(|| {
+                    PoponeError::Archive(
+                        t!("error.archive.model_file_extract_failed_simple").to_string(),
+                    )
+                })?,
                 kind,
                 textures,
                 aux_files,
@@ -392,10 +408,13 @@ fn extract_bundle_from_entries(
     }
 
     let model_entry = model_entry.ok_or_else(|| {
-        PoponeError::Archive(format!(
-            "モデルファイルが見つかりません: {}",
-            model_path.display()
-        ))
+        PoponeError::Archive(
+            t!(
+                "error.archive.model_file_not_found",
+                path = model_path.display().to_string()
+            )
+            .to_string(),
+        )
     })?;
 
     match kind {

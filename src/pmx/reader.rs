@@ -1,5 +1,6 @@
 use crate::error::{PoponeError, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
+use rust_i18n::t;
 use std::io::Read;
 
 use crate::pmx::types::*;
@@ -9,11 +10,23 @@ pub struct PmxReader<R: Read> {
     header: PmxHeader,
 }
 
-/// i32 カウントを usize に変換（負値は破損ファイルとしてエラー）
+/// Convert an i32 count to usize. Negative values are treated as a
+/// corrupted file and produce a localized error.
+///
+/// `field_key` is an i18n key (e.g. `"error.pmx.field.vertex_count"`)
+/// that resolves to the localized field name shown in the error.
 #[inline]
-fn checked_count(val: i32, field: &str) -> Result<usize> {
+fn checked_count(val: i32, field_key: &str) -> Result<usize> {
     if val < 0 {
-        return Err(PoponeError::PmxParse(format!("{field}が負: {val}")));
+        let field = t!(field_key).to_string();
+        return Err(PoponeError::PmxParse(
+            t!(
+                "error.pmx.field_negative",
+                field = field,
+                val = val.to_string()
+            )
+            .to_string(),
+        ));
     }
     Ok(val as usize)
 }
@@ -64,23 +77,31 @@ impl<R: Read> PmxReader<R> {
         let mut magic = [0u8; 4];
         self.reader.read_exact(&mut magic)?;
         if &magic != b"PMX " {
-            return Err(PoponeError::PmxParse(format!(
-                "PMXマジックナンバーが不正: {magic:?}"
-            )));
+            return Err(PoponeError::PmxParse(
+                t!("error.pmx.invalid_magic", magic = format!("{magic:?}")).to_string(),
+            ));
         }
 
         let version = self.reader.read_f32::<LittleEndian>()?;
         if !(2.0..=2.1).contains(&version) {
-            return Err(PoponeError::PmxParse(format!(
-                "未対応のPMXバージョン: {version}"
-            )));
+            return Err(PoponeError::PmxParse(
+                t!(
+                    "error.pmx.unsupported_version",
+                    version = version.to_string()
+                )
+                .to_string(),
+            ));
         }
 
         let globals_count = self.reader.read_u8()?;
         if globals_count != 8 {
-            return Err(PoponeError::PmxParse(format!(
-                "PMXヘッダのグローバル数が不正: {globals_count} (期待値: 8)"
-            )));
+            return Err(PoponeError::PmxParse(
+                t!(
+                    "error.pmx.invalid_globals_count",
+                    count = globals_count.to_string()
+                )
+                .to_string(),
+            ));
         }
 
         let encoding = self.reader.read_u8()?;
@@ -108,9 +129,13 @@ impl<R: Read> PmxReader<R> {
     fn read_text(&mut self) -> Result<String> {
         let byte_len_i32 = self.reader.read_i32::<LittleEndian>()?;
         if byte_len_i32 < 0 {
-            return Err(PoponeError::PmxParse(format!(
-                "テキスト長が負: {byte_len_i32}"
-            )));
+            return Err(PoponeError::PmxParse(
+                t!(
+                    "error.pmx.text_length_negative",
+                    len = byte_len_i32.to_string()
+                )
+                .to_string(),
+            ));
         }
         let byte_len = byte_len_i32 as usize;
         let mut buf = vec![0u8; byte_len];
@@ -119,10 +144,9 @@ impl<R: Read> PmxReader<R> {
         if self.header.encoding == 0 {
             // UTF-16LE
             if !buf.len().is_multiple_of(2) {
-                return Err(PoponeError::PmxParse(format!(
-                    "UTF-16LEテキストのバイト長が奇数: {}",
-                    buf.len()
-                )));
+                return Err(PoponeError::PmxParse(
+                    t!("error.pmx.utf16_length_odd", len = buf.len().to_string()).to_string(),
+                ));
             }
             let utf16: Vec<u16> = buf
                 .chunks_exact(2)
@@ -216,7 +240,10 @@ impl<R: Read> PmxReader<R> {
     }
 
     fn read_vertices(&mut self) -> Result<Vec<PmxVertex>> {
-        let count = checked_count(self.reader.read_i32::<LittleEndian>()?, "頂点数")?;
+        let count = checked_count(
+            self.reader.read_i32::<LittleEndian>()?,
+            "error.pmx.field.vertex_count",
+        )?;
         let mut vertices = Vec::with_capacity(count);
 
         for _ in 0..count {
@@ -275,9 +302,13 @@ impl<R: Read> PmxReader<R> {
                     }
                 }
                 _ => {
-                    return Err(PoponeError::PmxParse(format!(
-                        "未対応のウェイト変形方式: {weight_type}"
-                    )))
+                    return Err(PoponeError::PmxParse(
+                        t!(
+                            "error.pmx.unsupported_weight_type",
+                            weight_type = weight_type.to_string()
+                        )
+                        .to_string(),
+                    ))
                 }
             };
 
@@ -295,12 +326,18 @@ impl<R: Read> PmxReader<R> {
     }
 
     fn read_faces(&mut self) -> Result<Vec<[u32; 3]>> {
-        let index_count =
-            checked_count(self.reader.read_i32::<LittleEndian>()?, "面インデックス数")?;
+        let index_count = checked_count(
+            self.reader.read_i32::<LittleEndian>()?,
+            "error.pmx.field.face_index_count",
+        )?;
         if !index_count.is_multiple_of(3) {
-            return Err(PoponeError::PmxParse(format!(
-                "面インデックス数が3の倍数でない: {index_count}"
-            )));
+            return Err(PoponeError::PmxParse(
+                t!(
+                    "error.pmx.face_index_count_not_multiple_of_3",
+                    count = index_count.to_string()
+                )
+                .to_string(),
+            ));
         }
         let face_count = index_count / 3;
         let mut faces = Vec::with_capacity(face_count);
@@ -314,7 +351,10 @@ impl<R: Read> PmxReader<R> {
     }
 
     fn read_textures(&mut self) -> Result<Vec<String>> {
-        let count = checked_count(self.reader.read_i32::<LittleEndian>()?, "テクスチャ数")?;
+        let count = checked_count(
+            self.reader.read_i32::<LittleEndian>()?,
+            "error.pmx.field.texture_count",
+        )?;
         let mut textures = Vec::with_capacity(count);
         for _ in 0..count {
             textures.push(self.read_text()?);
@@ -323,7 +363,10 @@ impl<R: Read> PmxReader<R> {
     }
 
     fn read_materials(&mut self) -> Result<Vec<PmxMaterial>> {
-        let count = checked_count(self.reader.read_i32::<LittleEndian>()?, "材質数")?;
+        let count = checked_count(
+            self.reader.read_i32::<LittleEndian>()?,
+            "error.pmx.field.material_count",
+        )?;
         let mut materials = Vec::with_capacity(count);
         for _ in 0..count {
             let name = self.read_text()?;
@@ -380,7 +423,10 @@ impl<R: Read> PmxReader<R> {
     }
 
     fn read_bones(&mut self) -> Result<Vec<PmxBone>> {
-        let count = checked_count(self.reader.read_i32::<LittleEndian>()?, "ボーン数")?;
+        let count = checked_count(
+            self.reader.read_i32::<LittleEndian>()?,
+            "error.pmx.field.bone_count",
+        )?;
         let mut bones = Vec::with_capacity(count);
         for _ in 0..count {
             let name = self.read_text()?;
@@ -430,8 +476,10 @@ impl<R: Read> PmxReader<R> {
                 let target_bone = self.read_bone_index()?;
                 let loop_count = self.reader.read_i32::<LittleEndian>()?;
                 let limit_angle = self.reader.read_f32::<LittleEndian>()?;
-                let link_count =
-                    checked_count(self.reader.read_i32::<LittleEndian>()?, "IKリンク数")?;
+                let link_count = checked_count(
+                    self.reader.read_i32::<LittleEndian>()?,
+                    "error.pmx.field.ik_link_count",
+                )?;
                 let mut links = Vec::with_capacity(link_count);
                 for _ in 0..link_count {
                     let bone_index = self.read_bone_index()?;
@@ -474,7 +522,10 @@ impl<R: Read> PmxReader<R> {
     }
 
     fn read_morphs(&mut self) -> Result<Vec<PmxMorph>> {
-        let count = checked_count(self.reader.read_i32::<LittleEndian>()?, "モーフ数")?;
+        let count = checked_count(
+            self.reader.read_i32::<LittleEndian>()?,
+            "error.pmx.field.morph_count",
+        )?;
         let mut morphs = Vec::with_capacity(count);
         for _ in 0..count {
             let name = self.read_text()?;
@@ -483,7 +534,7 @@ impl<R: Read> PmxReader<R> {
             let morph_type = self.reader.read_u8()?;
             let offset_count = checked_count(
                 self.reader.read_i32::<LittleEndian>()?,
-                "モーフオフセット数",
+                "error.pmx.field.morph_offset_count",
             )?;
 
             let offsets = match morph_type {
@@ -587,9 +638,13 @@ impl<R: Read> PmxReader<R> {
                     PmxMorphOffsets::Group(Vec::new())
                 }
                 _ => {
-                    return Err(PoponeError::PmxParse(format!(
-                        "未対応のモーフ種類: {morph_type}"
-                    )))
+                    return Err(PoponeError::PmxParse(
+                        t!(
+                            "error.pmx.unsupported_morph_type",
+                            morph_type = morph_type.to_string()
+                        )
+                        .to_string(),
+                    ))
                 }
             };
 
@@ -605,14 +660,19 @@ impl<R: Read> PmxReader<R> {
     }
 
     fn read_display_frames(&mut self) -> Result<Vec<PmxDisplayFrame>> {
-        let count = checked_count(self.reader.read_i32::<LittleEndian>()?, "表示枠数")?;
+        let count = checked_count(
+            self.reader.read_i32::<LittleEndian>()?,
+            "error.pmx.field.display_frame_count",
+        )?;
         let mut frames = Vec::with_capacity(count);
         for _ in 0..count {
             let name = self.read_text()?;
             let name_en = self.read_text()?;
             let is_special = self.reader.read_u8()?;
-            let elem_count =
-                checked_count(self.reader.read_i32::<LittleEndian>()?, "表示枠要素数")?;
+            let elem_count = checked_count(
+                self.reader.read_i32::<LittleEndian>()?,
+                "error.pmx.field.display_frame_element_count",
+            )?;
             let mut elements = Vec::with_capacity(elem_count);
             for _ in 0..elem_count {
                 let elem_type = self.reader.read_u8()?;
@@ -634,7 +694,10 @@ impl<R: Read> PmxReader<R> {
     }
 
     fn read_rigid_bodies(&mut self) -> Result<Vec<PmxRigidBody>> {
-        let count = checked_count(self.reader.read_i32::<LittleEndian>()?, "剛体数")?;
+        let count = checked_count(
+            self.reader.read_i32::<LittleEndian>()?,
+            "error.pmx.field.rigid_body_count",
+        )?;
         let mut bodies = Vec::with_capacity(count);
         for _ in 0..count {
             let name = self.read_text()?;
@@ -674,7 +737,10 @@ impl<R: Read> PmxReader<R> {
     }
 
     fn read_joints(&mut self) -> Result<Vec<PmxJoint>> {
-        let count = checked_count(self.reader.read_i32::<LittleEndian>()?, "ジョイント数")?;
+        let count = checked_count(
+            self.reader.read_i32::<LittleEndian>()?,
+            "error.pmx.field.joint_count",
+        )?;
         let mut joints = Vec::with_capacity(count);
         for _ in 0..count {
             let name = self.read_text()?;
@@ -742,15 +808,20 @@ impl<R: Read> PmxReader<R> {
                 let _ = self.reader.read_f32::<LittleEndian>()?;
             }
             // アンカー剛体
-            let anchor_count =
-                checked_count(self.reader.read_i32::<LittleEndian>()?, "アンカー数")?;
+            let anchor_count = checked_count(
+                self.reader.read_i32::<LittleEndian>()?,
+                "error.pmx.field.anchor_count",
+            )?;
             for _ in 0..anchor_count {
                 let _ = self.read_rigid_index()?;
                 let _ = self.read_vertex_index()?;
                 let _ = self.reader.read_u8()?;
             }
             // Pin頂点
-            let pin_count = checked_count(self.reader.read_i32::<LittleEndian>()?, "Pin頂点数")?;
+            let pin_count = checked_count(
+                self.reader.read_i32::<LittleEndian>()?,
+                "error.pmx.field.pin_vertex_count",
+            )?;
             for _ in 0..pin_count {
                 let _ = self.read_vertex_index()?;
             }

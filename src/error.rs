@@ -1,57 +1,64 @@
-/// popone ライブラリのエラー型
-///
-/// 公開API (`lib.rs`) で返すエラーを構造化する。
-/// バイナリ側 (`main.rs`) では `anyhow` でラップして使用する。
+//! popone library error type.
+//!
+//! Structured errors returned from the public API (`lib.rs`). The binary
+//! side (`main.rs`) wraps these with `anyhow` for terminal display.
+//!
+//! Each variant's user-facing prefix is resolved through `rust-i18n`'s
+//! `t!()` macro at format time, so the same `PoponeError` value renders
+//! in the active locale (ja / en / zh) without needing to be reconstructed.
+
+use rust_i18n::t;
+
 #[derive(Debug, thiserror::Error)]
 pub enum PoponeError {
-    #[error("ファイル読み込み失敗: {0}")]
+    #[error("{}: {}", t!("error.io_failed"), .0)]
     Io(#[from] std::io::Error),
 
-    #[error("GLB/VRM パース失敗: {0}")]
+    #[error("{}: {}", t!("error.gltf_parse_failed"), .0)]
     GltfParse(#[from] gltf::Error),
 
-    #[error("FBX パース失敗: {0}")]
+    #[error("{}: {}", t!("error.fbx_parse_failed"), .0)]
     FbxParse(String),
 
-    #[error("PMX パース失敗: {0}")]
+    #[error("{}: {}", t!("error.pmx_parse_failed"), .0)]
     PmxParse(String),
 
-    #[error("PMD パース失敗: {0}")]
+    #[error("{}: {}", t!("error.pmd_parse_failed"), .0)]
     PmdParse(String),
 
-    #[error("OBJ パース失敗: {0}")]
+    #[error("{}: {}", t!("error.obj_parse_failed"), .0)]
     ObjParse(String),
 
-    #[error("STL パース失敗: {0}")]
+    #[error("{}: {}", t!("error.stl_parse_failed"), .0)]
     StlParse(String),
 
-    #[error("DirectX パース失敗: {0}")]
+    #[error("{}: {}", t!("error.directx_parse_failed"), .0)]
     DirectXParse(String),
 
-    #[error("中間表現の抽出に失敗: {0}")]
+    #[error("{}: {}", t!("error.extraction_failed"), .0)]
     Extraction(String),
 
-    #[error("PMX モデル構築失敗: {0}")]
+    #[error("{}: {}", t!("error.build_failed"), .0)]
     Build(String),
 
-    #[error("テクスチャ書き出し失敗: {0}")]
+    #[error("{}: {}", t!("error.texture_failed"), .0)]
     Texture(String),
 
-    #[error("画像処理失敗: {0}")]
+    #[error("{}: {}", t!("error.image_failed"), .0)]
     Image(#[from] image::ImageError),
 
-    #[error("unitypackage 展開失敗: {0}")]
+    #[error("{}: {}", t!("error.unitypackage_failed"), .0)]
     UnityPackage(String),
 
-    #[error("アーカイブ処理失敗: {0}")]
+    #[error("{}: {}", t!("error.archive_failed"), .0)]
     Archive(String),
 
     #[error("{0}")]
     Other(String),
 
-    /// コンテキストメッセージ付きエラー。
-    /// `ResultExt::context()` / `with_context()` 経由で生成され、
-    /// 元エラーの `source()` チェーンを保持する。
+    /// Error with a contextual message attached. Created via
+    /// `ResultExt::context()` / `with_context()`; the original error
+    /// chain is preserved through `source()`.
     #[error("{context}")]
     WithContext {
         context: String,
@@ -59,8 +66,8 @@ pub enum PoponeError {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
-    /// anyhow::Error の構造化エラーチェーンをそのまま保持するバリアント。
-    /// `From<anyhow::Error>` 経由で自動変換される。
+    /// Carries an `anyhow::Error` chain verbatim. Constructed
+    /// automatically via `From<anyhow::Error>`.
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 }

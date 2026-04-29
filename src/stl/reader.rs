@@ -1,6 +1,7 @@
 use crate::error::{PoponeError, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use glam::Vec3;
+use rust_i18n::t;
 use std::io::Cursor;
 
 /// STL 三角形
@@ -53,11 +54,14 @@ pub fn read_stl_from_data(data: &[u8], name: &str) -> Result<StlModel> {
 fn parse_binary(data: &[u8], name: &str, tri_count: usize) -> Result<StlModel> {
     let expected = 84 + tri_count * 50;
     if data.len() < expected {
-        return Err(PoponeError::StlParse(format!(
-            "バイナリ STL データ長不足: 期待 {} バイト、実際 {} バイト",
-            expected,
-            data.len()
-        )));
+        return Err(PoponeError::StlParse(
+            t!(
+                "error.stl.binary_too_short",
+                expected = expected.to_string(),
+                actual = data.len().to_string()
+            )
+            .to_string(),
+        ));
     }
 
     let mut triangles = Vec::with_capacity(tri_count);
@@ -65,20 +69,58 @@ fn parse_binary(data: &[u8], name: &str, tri_count: usize) -> Result<StlModel> {
 
     for i in 0..tri_count {
         let normal = read_vec3(&mut cursor).map_err(|e| {
-            PoponeError::StlParse(format!("三角形 {} の法線読み込み失敗: {}", i, e))
+            PoponeError::StlParse(
+                t!(
+                    "error.stl.triangle_normal_failed",
+                    index = i.to_string(),
+                    detail = e.to_string()
+                )
+                .to_string(),
+            )
         })?;
         let v0 = read_vec3(&mut cursor).map_err(|e| {
-            PoponeError::StlParse(format!("三角形 {} の頂点0読み込み失敗: {}", i, e))
+            PoponeError::StlParse(
+                t!(
+                    "error.stl.triangle_vertex_failed",
+                    index = i.to_string(),
+                    vertex = "0".to_string(),
+                    detail = e.to_string()
+                )
+                .to_string(),
+            )
         })?;
         let v1 = read_vec3(&mut cursor).map_err(|e| {
-            PoponeError::StlParse(format!("三角形 {} の頂点1読み込み失敗: {}", i, e))
+            PoponeError::StlParse(
+                t!(
+                    "error.stl.triangle_vertex_failed",
+                    index = i.to_string(),
+                    vertex = "1".to_string(),
+                    detail = e.to_string()
+                )
+                .to_string(),
+            )
         })?;
         let v2 = read_vec3(&mut cursor).map_err(|e| {
-            PoponeError::StlParse(format!("三角形 {} の頂点2読み込み失敗: {}", i, e))
+            PoponeError::StlParse(
+                t!(
+                    "error.stl.triangle_vertex_failed",
+                    index = i.to_string(),
+                    vertex = "2".to_string(),
+                    detail = e.to_string()
+                )
+                .to_string(),
+            )
         })?;
-        // 属性バイト（2バイト）をスキップ
+        // Skip attribute bytes (2 bytes)
         let _attr = cursor.read_u16::<LittleEndian>().map_err(|e| {
-            PoponeError::StlParse(format!("三角形 {} の属性読み込み失敗: {}", i, e))
+            PoponeError::StlParse(
+                t!(
+                    "error.stl.triangle_attr_failed",
+                    index = i.to_string(),
+                    detail = e.to_string()
+                )
+                .to_string(),
+            )
         })?;
 
         triangles.push(StlTriangle {
@@ -94,8 +136,9 @@ fn parse_binary(data: &[u8], name: &str, tri_count: usize) -> Result<StlModel> {
 }
 
 fn parse_ascii(data: &[u8], name: &str) -> Result<StlModel> {
-    let text = std::str::from_utf8(data)
-        .map_err(|e| PoponeError::StlParse(format!("ASCII STL の UTF-8 デコード失敗: {}", e)))?;
+    let text = std::str::from_utf8(data).map_err(|e| {
+        PoponeError::StlParse(t!("error.stl.ascii_utf8_failed", detail = e.to_string()).to_string())
+    })?;
 
     let mut triangles = Vec::new();
     let mut lines = text.lines().map(|l| l.trim());
@@ -125,20 +168,24 @@ fn parse_ascii(data: &[u8], name: &str) -> Result<StlModel> {
         // outer loop
         let loop_line = lines
             .next()
-            .ok_or_else(|| PoponeError::StlParse("outer loop が見つかりません".into()))?;
+            .ok_or_else(|| PoponeError::StlParse(t!("error.stl.outer_loop_missing").to_string()))?;
         if !loop_line.starts_with("outer loop") {
-            return Err(PoponeError::StlParse(format!(
-                "期待: 'outer loop'、実際: '{}'",
-                loop_line
-            )));
+            return Err(PoponeError::StlParse(
+                t!(
+                    "error.stl.expect_actual",
+                    expected = "outer loop".to_string(),
+                    actual = loop_line.to_string()
+                )
+                .to_string(),
+            ));
         }
 
-        // vertex x y z × 3
+        // vertex x y z (three of them)
         let mut verts = [Vec3::ZERO; 3];
         for v in &mut verts {
-            let vline = lines
-                .next()
-                .ok_or_else(|| PoponeError::StlParse("vertex 行が不足しています".into()))?;
+            let vline = lines.next().ok_or_else(|| {
+                PoponeError::StlParse(t!("error.stl.vertex_line_missing").to_string())
+            })?;
             *v = parse_vec3_from_line(vline, "vertex")?;
         }
 
@@ -154,7 +201,7 @@ fn parse_ascii(data: &[u8], name: &str) -> Result<StlModel> {
 
     if triangles.is_empty() {
         return Err(PoponeError::StlParse(
-            "三角形が見つかりません（空の STL ファイル）".into(),
+            t!("error.stl.no_triangles").to_string(),
         ));
     }
 
@@ -167,24 +214,33 @@ fn parse_ascii(data: &[u8], name: &str) -> Result<StlModel> {
 fn parse_vec3_from_line(line: &str, prefix: &str) -> Result<Vec3> {
     let rest = line
         .strip_prefix(prefix)
-        .ok_or_else(|| PoponeError::StlParse(format!("期待: '{prefix}'、実際: '{line}'")))?
+        .ok_or_else(|| {
+            PoponeError::StlParse(
+                t!(
+                    "error.stl.expect_actual",
+                    expected = prefix.to_string(),
+                    actual = line.to_string()
+                )
+                .to_string(),
+            )
+        })?
         .trim();
     let parts: Vec<&str> = rest.split_whitespace().collect();
     if parts.len() < 3 {
-        return Err(PoponeError::StlParse(format!(
-            "Vec3 パース失敗（要素不足）: '{}'",
-            rest
-        )));
+        return Err(PoponeError::StlParse(
+            t!("error.stl.vec3_parse_failed", rest = rest.to_string()).to_string(),
+        ));
     }
-    let x: f32 = parts[0]
-        .parse()
-        .map_err(|e| PoponeError::StlParse(format!("float パース失敗: {}", e)))?;
-    let y: f32 = parts[1]
-        .parse()
-        .map_err(|e| PoponeError::StlParse(format!("float パース失敗: {}", e)))?;
-    let z: f32 = parts[2]
-        .parse()
-        .map_err(|e| PoponeError::StlParse(format!("float パース失敗: {}", e)))?;
+    let parse_float = |s: &str| -> Result<f32> {
+        s.parse::<f32>().map_err(|e| {
+            PoponeError::StlParse(
+                t!("error.stl.float_parse_failed", detail = e.to_string()).to_string(),
+            )
+        })
+    };
+    let x = parse_float(parts[0])?;
+    let y = parse_float(parts[1])?;
+    let z = parse_float(parts[2])?;
     Ok(Vec3::new(x, y, z))
 }
 

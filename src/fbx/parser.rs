@@ -1,6 +1,7 @@
 use crate::error::{PoponeError, Result, ResultExt};
 use byteorder::{LittleEndian, ReadBytesExt};
 use flate2::read::ZlibDecoder;
+use rust_i18n::t;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 
 const MAGIC: &[u8; 23] = b"Kaydara FBX Binary  \x00\x1a\x00";
@@ -125,7 +126,9 @@ pub fn parse(data: &[u8]) -> Result<FbxDocument> {
     let mut magic = [0u8; 23];
     cursor.read_exact(&mut magic)?;
     if &magic != MAGIC {
-        return Err(PoponeError::FbxParse("Invalid FBX magic number".into()));
+        return Err(PoponeError::FbxParse(
+            t!("error.fbx.invalid_magic").to_string(),
+        ));
     }
 
     let version = cursor.read_u32::<LittleEndian>()?;
@@ -151,11 +154,15 @@ fn parse_node(
     data_len: u64,
     depth: u32,
 ) -> Result<Option<FbxNode>> {
-    // B-8: 再帰深さ制限
+    // B-8: recursion depth guard
     if depth > MAX_NODE_DEPTH {
-        return Err(PoponeError::FbxParse(format!(
-            "ノード再帰深さが上限 ({MAX_NODE_DEPTH}) を超えました"
-        )));
+        return Err(PoponeError::FbxParse(
+            t!(
+                "error.fbx.node_depth_exceeded",
+                limit = MAX_NODE_DEPTH.to_string()
+            )
+            .to_string(),
+        ));
     }
 
     let (end_offset, num_properties, _property_list_len) = if version >= 7500 {
@@ -177,32 +184,49 @@ fn parse_node(
         return Ok(None);
     }
 
-    // B-5: end_offset の範囲検証
+    // B-5: validate end_offset range
     if end_offset <= cursor.position() || end_offset > data_len {
-        return Err(PoponeError::FbxParse(format!(
-            "不正な end_offset: {} (現在位置: {}, データ長: {})",
-            end_offset,
-            cursor.position(),
-            data_len
-        )));
+        return Err(PoponeError::FbxParse(
+            t!(
+                "error.fbx.invalid_end_offset",
+                offset = end_offset.to_string(),
+                pos = cursor.position().to_string(),
+                len = data_len.to_string()
+            )
+            .to_string(),
+        ));
     }
 
-    // B-4: プロパティ数の検証
+    // B-4: validate property count
     if num_properties > MAX_NUM_PROPERTIES {
-        return Err(PoponeError::FbxParse(format!(
-            "プロパティ数 ({num_properties}) が上限 ({MAX_NUM_PROPERTIES}) を超えています"
-        )));
+        return Err(PoponeError::FbxParse(
+            t!(
+                "error.fbx.too_many_properties",
+                count = num_properties.to_string(),
+                limit = MAX_NUM_PROPERTIES.to_string()
+            )
+            .to_string(),
+        ));
     }
     let num_properties_usize = usize::try_from(num_properties).map_err(|_| {
-        PoponeError::FbxParse(format!(
-            "プロパティ数 ({num_properties}) が usize に変換できません"
-        ))
+        PoponeError::FbxParse(
+            t!(
+                "error.fbx.properties_count_overflow",
+                count = num_properties.to_string()
+            )
+            .to_string(),
+        )
     })?;
     let remaining = data_len.saturating_sub(cursor.position());
     if num_properties > remaining {
-        return Err(PoponeError::FbxParse(format!(
-            "プロパティ数 ({num_properties}) が残りバイト数 ({remaining}) を超えています"
-        )));
+        return Err(PoponeError::FbxParse(
+            t!(
+                "error.fbx.properties_count_too_large",
+                count = num_properties.to_string(),
+                remaining = remaining.to_string()
+            )
+            .to_string(),
+        ));
     }
 
     let name_len = cursor.read_u8()? as usize;
@@ -317,9 +341,13 @@ fn parse_property(cursor: &mut Cursor<&[u8]>) -> Result<FbxProperty> {
             Ok(FbxProperty::Binary(buf))
         }
 
-        _ => Err(PoponeError::FbxParse(format!(
-            "Unknown property type code: 0x{type_code:02x}"
-        ))),
+        _ => Err(PoponeError::FbxParse(
+            t!(
+                "error.fbx.unknown_property_type",
+                code = format!("{type_code:02x}")
+            )
+            .to_string(),
+        )),
     }
 }
 
@@ -328,30 +356,50 @@ fn read_array_raw(cursor: &mut Cursor<&[u8]>, element_size: usize) -> Result<Vec
     let encoding = cursor.read_u32::<LittleEndian>()?;
     let compressed_len = cursor.read_u32::<LittleEndian>()? as usize;
 
-    // B-6: 乗算オーバーフロー検証とサイズ上限チェック
+    // B-6: multiplication overflow check and size cap
     let expected_size = array_len.checked_mul(element_size).ok_or_else(|| {
-        PoponeError::FbxParse(format!(
-            "配列サイズのオーバーフロー: {array_len} * {element_size}"
-        ))
+        PoponeError::FbxParse(
+            t!(
+                "error.fbx.array_size_overflow",
+                len = array_len.to_string(),
+                element_size = element_size.to_string()
+            )
+            .to_string(),
+        )
     })?;
     if expected_size > MAX_ARRAY_SIZE {
-        return Err(PoponeError::FbxParse(format!(
-            "配列サイズ ({expected_size}) が上限 ({MAX_ARRAY_SIZE}) を超えています"
-        )));
+        return Err(PoponeError::FbxParse(
+            t!(
+                "error.fbx.array_size_too_large",
+                size = expected_size.to_string(),
+                limit = MAX_ARRAY_SIZE.to_string()
+            )
+            .to_string(),
+        ));
     }
 
-    // B-7: compressed_len が残りバイト数を超えないことを検証
+    // B-7: ensure compressed_len does not exceed remaining bytes
     let data_len = cursor.get_ref().len() as u64;
     let remaining = data_len.saturating_sub(cursor.position()) as usize;
     if compressed_len > remaining {
-        return Err(PoponeError::FbxParse(format!(
-            "圧縮データ長 ({compressed_len}) が残りバイト数 ({remaining}) を超えています"
-        )));
+        return Err(PoponeError::FbxParse(
+            t!(
+                "error.fbx.compressed_too_large",
+                len = compressed_len.to_string(),
+                remaining = remaining.to_string()
+            )
+            .to_string(),
+        ));
     }
     if compressed_len > MAX_ARRAY_SIZE {
-        return Err(PoponeError::FbxParse(format!(
-            "圧縮データ長 ({compressed_len}) が上限 ({MAX_ARRAY_SIZE}) を超えています"
-        )));
+        return Err(PoponeError::FbxParse(
+            t!(
+                "error.fbx.compressed_exceeds_limit",
+                len = compressed_len.to_string(),
+                limit = MAX_ARRAY_SIZE.to_string()
+            )
+            .to_string(),
+        ));
     }
 
     let mut compressed = vec![0u8; compressed_len];
@@ -362,15 +410,21 @@ fn read_array_raw(cursor: &mut Cursor<&[u8]>, element_size: usize) -> Result<Vec
         1 => {
             let mut decoder = ZlibDecoder::new(&compressed[..]);
             let mut decompressed = vec![0u8; expected_size];
-            decoder
-                .read_exact(&mut decompressed)
-                .map_err(|e| PoponeError::FbxParse(format!("zlib decompression failed: {e}")))?;
+            decoder.read_exact(&mut decompressed).map_err(|e| {
+                PoponeError::FbxParse(
+                    t!("error.fbx.zlib_decompress_failed", detail = e.to_string()).to_string(),
+                )
+            })?;
             decompressed
         }
         _ => {
-            return Err(PoponeError::FbxParse(format!(
-                "Unknown encoding: {encoding}"
-            )))
+            return Err(PoponeError::FbxParse(
+                t!(
+                    "error.fbx.unknown_encoding",
+                    encoding = encoding.to_string()
+                )
+                .to_string(),
+            ))
         }
     };
 
@@ -442,7 +496,13 @@ impl<'a> AsciiParser<'a> {
 
         // ノード名と値部分を分離（引用符外の最初の `:` で分割）
         let colon_pos = ascii_find_colon(line).ok_or_else(|| {
-            PoponeError::FbxParse(format!("Expected ':' in: {}", &line[..line.len().min(80)]))
+            PoponeError::FbxParse(
+                t!(
+                    "error.fbx.ascii_expected_colon",
+                    line = line[..line.len().min(80)].to_string()
+                )
+                .to_string(),
+            )
         })?;
         let name = line[..colon_pos].trim().to_string();
         let after_colon = line[colon_pos + 1..].trim();
@@ -572,7 +632,12 @@ impl<'a> AsciiParser<'a> {
                     .iter()
                     .map(|s| {
                         s.parse::<f64>().with_context(|| {
-                            format!("ASCII FBX: '{s}' を f64 に変換できません (node: {node_name})")
+                            t!(
+                                "error.fbx.ascii_f64_failed",
+                                value = s.to_string(),
+                                node = node_name.to_string()
+                            )
+                            .to_string()
                         })
                     })
                     .collect::<Result<_>>()?;
@@ -583,7 +648,12 @@ impl<'a> AsciiParser<'a> {
                     .iter()
                     .map(|s| {
                         s.parse::<i32>().with_context(|| {
-                            format!("ASCII FBX: '{s}' を i32 に変換できません (node: {node_name})")
+                            t!(
+                                "error.fbx.ascii_i32_failed",
+                                value = s.to_string(),
+                                node = node_name.to_string()
+                            )
+                            .to_string()
                         })
                     })
                     .collect::<Result<_>>()?;
@@ -594,7 +664,12 @@ impl<'a> AsciiParser<'a> {
                     .iter()
                     .map(|s| {
                         s.parse::<i64>().with_context(|| {
-                            format!("ASCII FBX: '{s}' を i64 に変換できません (node: {node_name})")
+                            t!(
+                                "error.fbx.ascii_i64_failed",
+                                value = s.to_string(),
+                                node = node_name.to_string()
+                            )
+                            .to_string()
                         })
                     })
                     .collect::<Result<_>>()?;
