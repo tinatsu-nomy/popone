@@ -609,29 +609,57 @@ mod tests {
         assert_eq!(&block3[12..16], &3u32.to_be_bytes());
     }
 
+    // The three tests below intentionally avoid asserting on a specific
+    // localized phrase from the error message. After the i18n migration
+    // the wording depends on the active locale (which on CI runners is
+    // typically `en`), so we anchor the assertions on locale-independent
+    // signals instead: `io::ErrorKind` and the data values that appear
+    // verbatim regardless of language (group name, index numbers).
+
     #[test]
     fn test_validate_groups_rejects_out_of_range() {
-        let groups = vec![("A".to_string(), 0..5)];
-        let result = validate_groups(&groups, 3);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("超えています"));
+        let groups = vec![("OutOfRangeGroup".to_string(), 0..5)];
+        let err = validate_groups(&groups, 3).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("OutOfRangeGroup"),
+            "expected group name in error: {msg}"
+        );
+        assert!(
+            msg.contains('3') && msg.contains('5'),
+            "expected mat count and range bound in error: {msg}"
+        );
     }
 
     #[test]
     fn test_validate_groups_rejects_overlap() {
-        let groups = vec![("A".to_string(), 0..3), ("B".to_string(), 2..5)];
-        let result = validate_groups(&groups, 5);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("複数のグループ"));
+        let groups = vec![
+            ("OverlapA".to_string(), 0..3),
+            ("OverlapB".to_string(), 2..5),
+        ];
+        let err = validate_groups(&groups, 5).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        // Material at index 2 is the first overlap and should appear in the message.
+        let msg = err.to_string();
+        assert!(msg.contains('2'), "expected overlapping index in: {msg}");
     }
 
     #[test]
     #[allow(clippy::reversed_empty_ranges)]
     fn test_validate_groups_rejects_reversed_range() {
-        let groups = vec![("A".to_string(), 3..1)];
-        let result = validate_groups(&groups, 5);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("逆順"));
+        let groups = vec![("ReversedGroup".to_string(), 3..1)];
+        let err = validate_groups(&groups, 5).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ReversedGroup"),
+            "expected group name in error: {msg}"
+        );
+        assert!(
+            msg.contains('3') && msg.contains('1'),
+            "expected reversed range bounds in error: {msg}"
+        );
     }
 
     #[test]
