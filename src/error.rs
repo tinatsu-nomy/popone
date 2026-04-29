@@ -92,8 +92,8 @@ impl From<crate::unitypackage::PkgError> for PoponeError {
 
 pub type Result<T> = std::result::Result<T, PoponeError>;
 
-/// `anyhow::Context` 相当のヘルパートレイト。
-/// `Result<T, E>` に `.context("msg")` / `.with_context(|| "msg")` を提供する。
+/// Helper trait equivalent to `anyhow::Context`.
+/// Provides `.context("msg")` / `.with_context(|| "msg")` for `Result<T, E>`.
 pub trait ResultExt<T> {
     fn context(self, msg: &str) -> Result<T>;
     fn with_context<F: FnOnce() -> String>(self, f: F) -> Result<T>;

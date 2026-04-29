@@ -84,19 +84,19 @@ mod tests {
             return;
         };
 
-        // GLBとして読み込み
+        // Load as GLB
         let glb = super::load_glb(&sample).expect("VRM読み込み失敗");
         let version = crate::vrm::detect::detect_version(&glb.document);
         let all_extensions = super::get_raw_extensions(&glb.document);
 
-        // VRM 1.0 であることを確認
+        // Verify VRM 1.0
         assert_eq!(
             version,
             crate::vrm::detect::VrmVersion::V1,
             "Seed-san.vrm は VRM 1.0 であるべき"
         );
 
-        // IrModel に変換
+        // Convert to IrModel
         let ir = crate::vrm::extract::extract_ir_model(
             &glb.document,
             &glb.buffers,

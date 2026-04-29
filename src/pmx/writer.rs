@@ -55,13 +55,13 @@ impl<W: Write> PmxWriter<W> {
     }
 
     fn write_header(&mut self, header: &PmxHeader) -> Result<()> {
-        // マジックナンバー "PMX "
+        // Magic number "PMX "
         self.writer.write_all(b"PMX ")?;
-        // バージョン
+        // Version
         self.writer.write_f32::<LittleEndian>(header.version)?;
-        // 後続バイト数 = 8
+        // Trailing byte count = 8
         self.writer.write_u8(8)?;
-        // 設定バイト列
+        // Settings byte sequence
         self.writer.write_u8(header.encoding)?;
         self.writer.write_u8(header.additional_uvs)?;
         self.writer.write_u8(header.vertex_index_size)?;
@@ -83,7 +83,7 @@ impl<W: Write> PmxWriter<W> {
             }
             bytes
         } else {
-            // UTF8 — 直接書き出し（コピー不要）
+            // UTF-8 — write directly (no copy needed)
             self.writer.write_i32::<LittleEndian>(text.len() as i32)?;
             self.writer.write_all(text.as_bytes())?;
             return Ok(());
@@ -212,7 +212,7 @@ impl<W: Write> PmxWriter<W> {
     }
 
     fn write_faces(&mut self, faces: &[[u32; 3]]) -> Result<()> {
-        // 面数は頂点参照数（面数×3）
+        // Face count is the number of vertex references (faces * 3)
         self.writer
             .write_i32::<LittleEndian>((faces.len() * 3) as i32)?;
         for face in faces {
@@ -246,14 +246,14 @@ impl<W: Write> PmxWriter<W> {
             self.write_vec4(mat.edge_color)?;
             self.writer.write_f32::<LittleEndian>(mat.edge_size)?;
 
-            // テクスチャIndex
+            // Texture index
             self.write_texture_index(mat.texture_index.unwrap_or(-1))?;
-            // スフィアテクスチャIndex
+            // Sphere texture index
             self.write_texture_index(mat.sphere_texture_index.unwrap_or(-1))?;
-            // スフィアモード
+            // Sphere mode
             self.writer.write_u8(mat.sphere_mode)?;
 
-            // Toon参照
+            // Toon reference
             match &mat.toon_ref {
                 PmxToonRef::Texture(idx) => {
                     self.writer.write_u8(0)?;
@@ -282,19 +282,19 @@ impl<W: Write> PmxWriter<W> {
             self.writer.write_i32::<LittleEndian>(bone.deform_layer)?;
             self.writer.write_u16::<LittleEndian>(bone.flags)?;
 
-            // 接続先
+            // Tail connection
             match &bone.tail {
                 BoneTail::Offset(off) => {
-                    // flags の bit0 = 0 (座標オフセット)
+                    // flags bit0 = 0 (coord offset)
                     self.write_vec3(*off)?;
                 }
                 BoneTail::BoneIndex(idx) => {
-                    // flags の bit0 = 1 (ボーンIndex)
+                    // flags bit0 = 1 (bone index)
                     self.write_bone_index(*idx)?;
                 }
             }
 
-            // 付与（回転付与 or 移動付与フラグがある場合）
+            // Grant (when rotation-grant or move-grant flag is set)
             if bone.flags & (BONE_FLAG_ROTATION_GRANT | BONE_FLAG_MOVE_GRANT) != 0 {
                 let grant = bone.grant.as_ref();
                 self.write_bone_index(grant.map(|g| g.parent_index).unwrap_or(-1))?;
@@ -480,7 +480,7 @@ mod tests {
 
         let reloaded = crate::pmx::reader::read_pmx(&temp_path).expect("再読み込み失敗");
 
-        // 基本プロパティの一致確認
+        // Verify basic property match
         assert_eq!(original.bones.len(), reloaded.bones.len(), "ボーン数不一致");
         assert_eq!(
             original.vertices.len(),
@@ -513,7 +513,7 @@ mod tests {
             "ジョイント数不一致"
         );
 
-        // ボーン名の一致
+        // Bone name match
         for (i, (a, b)) in original.bones.iter().zip(reloaded.bones.iter()).enumerate() {
             assert_eq!(a.name, b.name, "ボーン[{i}]名不一致");
         }

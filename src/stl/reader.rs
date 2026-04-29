@@ -4,21 +4,21 @@ use glam::Vec3;
 use rust_i18n::t;
 use std::io::Cursor;
 
-/// STL 三角形
+/// STL triangle.
 #[derive(Debug, Clone)]
 pub struct StlTriangle {
     pub normal: Vec3,
     pub vertices: [Vec3; 3],
 }
 
-/// STL モデル（パース済み）
+/// Parsed STL model.
 #[derive(Debug)]
 pub struct StlModel {
     pub name: String,
     pub triangles: Vec<StlTriangle>,
 }
 
-/// STL ファイルをパスから読み込む
+/// Read an STL model from a file path.
 pub fn read_stl(path: &std::path::Path) -> Result<StlModel> {
     let data = std::fs::read(path)?;
     let name = path
@@ -29,14 +29,14 @@ pub fn read_stl(path: &std::path::Path) -> Result<StlModel> {
     read_stl_from_data(&data, &name)
 }
 
-/// STL データをメモリから読み込む
+/// Read an STL model from in-memory bytes.
 pub fn read_stl_from_data(data: &[u8], name: &str) -> Result<StlModel> {
     if data.len() < 84 {
-        // 最低限のバイナリヘッダサイズ未満 → ASCII を試行
+        // Below the minimum binary header size; try ASCII instead
         return parse_ascii(data, name);
     }
 
-    // バイナリ長整合チェック: 84 + tri_count * 50 == data.len()
+    // Binary length check: 84 + tri_count * 50 == data.len()
     let tri_count = {
         let mut cursor = Cursor::new(&data[80..84]);
         cursor.read_u32::<LittleEndian>().unwrap_or(0) as usize
@@ -46,7 +46,7 @@ pub fn read_stl_from_data(data: &[u8], name: &str) -> Result<StlModel> {
     if expected_len == data.len() && tri_count > 0 {
         parse_binary(data, name, tri_count)
     } else {
-        // バイナリ長が合わない → ASCII として試行
+        // Binary length mismatch; try as ASCII
         parse_ascii(data, name)
     }
 }
@@ -144,7 +144,7 @@ fn parse_ascii(data: &[u8], name: &str) -> Result<StlModel> {
     let mut lines = text.lines().map(|l| l.trim());
     let mut model_name = name.to_string();
 
-    // "solid <name>" ヘッダ
+    // "solid <name>" header
     if let Some(first) = lines.next() {
         if let Some(n) = first.strip_prefix("solid") {
             let n = n.trim();
@@ -257,11 +257,11 @@ mod tests {
 
     #[test]
     fn parse_binary_stl_header() {
-        // 最小バイナリ STL: ヘッダ80バイト + 三角形数0
+        // Minimal binary STL: 80-byte header + 0 triangles
         let mut data = vec![0u8; 84];
         // tri_count = 0
         data[80..84].copy_from_slice(&0u32.to_le_bytes());
-        // tri_count==0 かつ長さ一致だが、空なので ASCII フォールバック → エラー
+        // tri_count == 0 with matching length, but empty -> falls through to ASCII -> error
         let result = read_stl_from_data(&data, "test");
         assert!(result.is_err());
     }
@@ -271,14 +271,14 @@ mod tests {
         let mut data = vec![0u8; 84 + 50];
         // tri_count = 1
         data[80..84].copy_from_slice(&1u32.to_le_bytes());
-        // 法線 (0, 0, 1)
+        // Normal (0, 0, 1)
         data[84..88].copy_from_slice(&0f32.to_le_bytes());
         data[88..92].copy_from_slice(&0f32.to_le_bytes());
         data[92..96].copy_from_slice(&1f32.to_le_bytes());
-        // 頂点0 (0, 0, 0)
-        // 頂点1 (1, 0, 0)
+        // Vertex 0 (0, 0, 0)
+        // Vertex 1 (1, 0, 0)
         data[108..112].copy_from_slice(&1f32.to_le_bytes());
-        // 頂点2 (0, 1, 0)
+        // Vertex 2 (0, 1, 0)
         data[124..128].copy_from_slice(&1f32.to_le_bytes());
 
         let model = read_stl_from_data(&data, "test").unwrap();

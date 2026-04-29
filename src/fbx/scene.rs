@@ -224,13 +224,13 @@ impl<'a> FbxScene<'a> {
         result
     }
 
-    /// Geometry ごとに (先頭親 Model, Geometry, world_transform, material_slots) を返す
+    /// Per Geometry, return (first parent Model, Geometry, world_transform, material_slots).
     pub fn geometry_instances(&self) -> Vec<GeometryInstance<'_>> {
         let geometries = self.geometries();
         let mut instances = Vec::with_capacity(geometries.len());
 
         for geom in &geometries {
-            // 親 Model を Connection から取得（class == "Model" でフィルタ）
+            // Get parent Models from Connections (filter by class == "Model")
             let parent_models: Vec<i64> = self
                 .parents_of(geom.id)
                 .iter()
@@ -277,7 +277,7 @@ impl<'a> FbxScene<'a> {
         instances
     }
 
-    /// Model に直接接続された Material を Connection 順で返す
+    /// Return Materials directly connected to a Model, in Connection order.
     pub fn material_slots_for_instance(
         &self,
         model_id: i64,
@@ -286,7 +286,7 @@ impl<'a> FbxScene<'a> {
         let mut slots = Vec::new();
         let mut slot_index: u16 = 0;
 
-        // connections をイテレートし、parent_id == model_id かつ子の class == "Material"
+        // Iterate connections; parent_id == model_id and child class == "Material"
         for conn in &self.connections {
             if conn.parent_id != model_id {
                 continue;
@@ -305,39 +305,39 @@ impl<'a> FbxScene<'a> {
         slots
     }
 
-    /// Model の階層パスを構築（"/" 区切り）
-    /// 同名 sibling は ordinal 付加: 例 "Body" と "Body[1]"
+    /// Build the hierarchy path of a Model (separated by "/").
+    /// Same-name siblings get an ordinal suffix, e.g. "Body" and "Body[1]".
     pub fn model_hierarchy_path(&self, model_id: i64) -> String {
         let mut path = String::new();
         self.build_hierarchy_path(model_id, &mut path);
         path
     }
 
-    /// 再帰的に階層パスを構築（アロケーション最適化: &mut String 引き回し）
+    /// Recursively build the hierarchy path (allocation-optimized: pass `&mut String`)
     fn build_hierarchy_path(&self, model_id: i64, out: &mut String) {
         let obj = match self.objects.get(&model_id) {
             Some(o) if o.class == "Model" => o,
             _ => return,
         };
 
-        // 親 Model を探す
+        // Look up parent Model
         let parent_model_id = self
             .parents_of(model_id)
             .iter()
             .find(|&&pid| self.objects.get(&pid).is_some_and(|o| o.class == "Model"))
             .copied();
 
-        // 親があれば先に再帰
+        // Recurse into the parent first if present
         if let Some(pid) = parent_model_id {
             self.build_hierarchy_path(pid, out);
             out.push('/');
         }
 
-        // 同名 sibling の ordinal を計算
+        // Compute ordinal for same-name siblings
         let ordinal = if let Some(pid) = parent_model_id {
             self.compute_sibling_ordinal(pid, model_id, &obj.name)
         } else {
-            // ルートレベルの sibling
+            // Root-level sibling
             self.compute_root_sibling_ordinal(model_id, &obj.name)
         };
 
@@ -349,7 +349,7 @@ impl<'a> FbxScene<'a> {
         }
     }
 
-    /// 同じ親の子で同名のノードの ordinal を計算
+    /// Compute the ordinal for same-name children of the same parent.
     fn compute_sibling_ordinal(&self, parent_id: i64, target_id: i64, name: &str) -> usize {
         let mut ordinal = 0;
         for &child_id in self.children_of(parent_id) {
@@ -365,9 +365,9 @@ impl<'a> FbxScene<'a> {
         0
     }
 
-    /// ルートレベルの同名ノードの ordinal を計算
+    /// Compute the ordinal for same-name root-level nodes.
     fn compute_root_sibling_ordinal(&self, target_id: i64, name: &str) -> usize {
-        // ルートレベル = 親 Model がないすべての Model
+        // Root level = all Models without a parent Model
         let mut root_models: Vec<_> = self
             .objects
             .values()
@@ -390,8 +390,8 @@ impl<'a> FbxScene<'a> {
         0
     }
 
-    /// Model ノードのワールド変換行列を計算
-    /// Model 階層を root まで辿り、各ノードのローカル変換を累積
+    /// Compute the world transform of a Model node.
+    /// Walks up the Model hierarchy to the root and accumulates local transforms.
     fn compute_world_transform(&self, model_id: i64) -> Mat4 {
         let mut chain = Vec::new();
         let mut current_id = model_id;
@@ -413,7 +413,7 @@ impl<'a> FbxScene<'a> {
             }
         }
 
-        // root → leaf の順で累積
+        // Accumulate root -> leaf order
         let mut world = Mat4::IDENTITY;
         for local in chain.into_iter().rev() {
             world *= local;

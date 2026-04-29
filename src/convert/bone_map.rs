@@ -1,6 +1,6 @@
-/// PMX日本語ボーン名 → VRMヒューマノイドボーン名（逆引き）
+/// PMX Japanese bone name -> VRM humanoid bone name (reverse lookup).
 pub fn pmx_name_to_vrm_bone(pmx_name: &str) -> Option<&'static str> {
-    // vrm_bone_to_pmx_name の逆引きテーブル
+    // Reverse lookup table for `vrm_bone_to_pmx_name`
     Some(match pmx_name {
         "センター" => "hips",
         "上半身" => "spine",
@@ -61,7 +61,7 @@ pub fn pmx_name_to_vrm_bone(pmx_name: &str) -> Option<&'static str> {
     })
 }
 
-/// VRMボーン名 → (PMX日本語名, PMX英語名)
+/// VRM bone name -> (PMX Japanese name, PMX English name).
 pub fn vrm_bone_to_pmx_name(vrm_name: &str) -> Option<(&'static str, &'static str)> {
     Some(match vrm_name {
         "hips" => ("下半身", "lower body"),
@@ -73,27 +73,27 @@ pub fn vrm_bone_to_pmx_name(vrm_name: &str) -> Option<(&'static str, &'static st
         "leftEye" => ("左目", "eye_L"),
         "rightEye" => ("右目", "eye_R"),
         "jaw" => ("顎", "jaw"),
-        // 左腕
+        // Left arm
         "leftShoulder" => ("左肩", "shoulder_L"),
         "leftUpperArm" => ("左腕", "arm_L"),
         "leftLowerArm" => ("左ひじ", "elbow_L"),
         "leftHand" => ("左手首", "wrist_L"),
-        // 右腕
+        // Right arm
         "rightShoulder" => ("右肩", "shoulder_R"),
         "rightUpperArm" => ("右腕", "arm_R"),
         "rightLowerArm" => ("右ひじ", "elbow_R"),
         "rightHand" => ("右手首", "wrist_R"),
-        // 左足
+        // Left leg
         "leftUpperLeg" => ("左足", "leg_L"),
         "leftLowerLeg" => ("左ひざ", "knee_L"),
         "leftFoot" => ("左足首", "ankle_L"),
         "leftToes" => ("左つま先", "toe_L"),
-        // 右足
+        // Right leg
         "rightUpperLeg" => ("右足", "leg_R"),
         "rightLowerLeg" => ("右ひざ", "knee_R"),
         "rightFoot" => ("右足首", "ankle_R"),
         "rightToes" => ("右つま先", "toe_R"),
-        // 左手指
+        // Left fingers
         "leftThumbMetacarpal" => ("左親指０", "thumb0_L"),
         "leftThumbProximal" => ("左親指１", "thumb1_L"),
         "leftThumbDistal" => ("左親指２", "thumb2_L"),
@@ -109,7 +109,7 @@ pub fn vrm_bone_to_pmx_name(vrm_name: &str) -> Option<(&'static str, &'static st
         "leftLittleProximal" => ("左小指１", "little1_L"),
         "leftLittleIntermediate" => ("左小指２", "little2_L"),
         "leftLittleDistal" => ("左小指３", "little3_L"),
-        // 右手指
+        // Right fingers
         "rightThumbMetacarpal" => ("右親指０", "thumb0_R"),
         "rightThumbProximal" => ("右親指１", "thumb1_R"),
         "rightThumbDistal" => ("右親指２", "thumb2_R"),
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_vrm_to_pmx_basic_bones() {
-        // 基本ボーンの変換が正しいか
+        // Verify basic bone conversions
         assert_eq!(vrm_bone_to_pmx_name("hips"), Some(("下半身", "lower body")));
         assert_eq!(vrm_bone_to_pmx_name("head"), Some(("頭", "head")));
         assert_eq!(
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn test_pmx_to_vrm_basic_bones() {
-        // 逆引きテーブルは "センター" => "hips"（"下半身" ではない）
+        // Reverse lookup uses "センター" => "hips" (not "下半身")
         assert_eq!(pmx_name_to_vrm_bone("センター"), Some("hips"));
         assert_eq!(pmx_name_to_vrm_bone("頭"), Some("head"));
         assert_eq!(pmx_name_to_vrm_bone("左手首"), Some("leftHand"));
@@ -171,8 +171,8 @@ mod tests {
 
     #[test]
     fn test_roundtrip_vrm_pmx_vrm() {
-        // VRM → PMX → VRM ラウンドトリップ
-        // 注: "hips" は順方向="下半身"、逆方向="センター"→"hips" で不整合のため除外
+        // VRM -> PMX -> VRM roundtrip
+        // Note: "hips" is excluded because forward = "下半身" but reverse = "センター" -> "hips"
         let vrm_names = [
             "spine",
             "chest",
@@ -203,30 +203,30 @@ mod tests {
                 "Roundtrip failed for {vrm_name} → {pmx_jp} → {back}"
             );
         }
-        // "hips" は特殊: 順方向 "下半身"、逆方向 "センター" → "hips"
+        // "hips" is special: forward "下半身", reverse "センター" -> "hips"
         assert_eq!(pmx_name_to_vrm_bone("センター"), Some("hips"));
         assert_eq!(vrm_bone_to_pmx_name("hips"), Some(("下半身", "lower body")));
     }
 
     #[test]
     fn test_all_finger_bones_mapped() {
-        // 全指ボーンがマッピングされているか
-        // Thumb: Metacarpal/Proximal/Distal の3関節（Intermediate なし）
-        // 他4指: Proximal/Intermediate/Distal の3関節
-        // 合計: 左右 × (Thumb3 + 4指×3) = 2 × 15 = 30
+        // Verify all finger bones are mapped.
+        // Thumb: 3 joints (Metacarpal/Proximal/Distal); no Intermediate.
+        // Other 4 fingers: 3 joints each (Proximal/Intermediate/Distal).
+        // Total: sides * (Thumb 3 + 4 fingers * 3) = 2 * 15 = 30
         let fingers = ["Thumb", "Index", "Middle", "Ring", "Little"];
         let mut count = 0;
         for side in ["left", "right"] {
             for finger in &fingers {
                 if *finger == "Thumb" {
-                    // Thumb は Metacarpal/Proximal/Distal
+                    // Thumb has Metacarpal/Proximal/Distal
                     for joint in &["Metacarpal", "Proximal", "Distal"] {
                         let name = format!("{side}{finger}{joint}");
                         assert!(vrm_bone_to_pmx_name(&name).is_some(), "Missing: {name}");
                         count += 1;
                     }
                 } else {
-                    // 他4指は Proximal/Intermediate/Distal
+                    // The other 4 fingers have Proximal/Intermediate/Distal
                     for joint in &["Proximal", "Intermediate", "Distal"] {
                         let name = format!("{side}{finger}{joint}");
                         assert!(vrm_bone_to_pmx_name(&name).is_some(), "Missing: {name}");

@@ -1,7 +1,7 @@
 use super::parser::{FbxNode, FbxProperty};
 use std::collections::HashMap;
 
-/// f64/f32 配列の統一アクセス
+/// Unified accessor over f64/f32 arrays.
 pub(crate) enum VertexData<'a> {
     F64(&'a [f64]),
     F32(&'a [f32]),
@@ -192,8 +192,9 @@ pub(crate) fn get_normal(
     normals.get3(idx).unwrap_or([0.0; 3])
 }
 
-/// ゼロ法線の頂点をフラット法線で補完する
-/// 全頂点がゼロの場合は全て計算し、一部がゼロの場合はその面の法線のみ補完
+/// Fill in zero-normal vertices with a flat face normal.
+/// If all vertices are zero, all are computed; if only some are zero,
+/// only that face's normal is recomputed.
 pub(crate) fn fill_missing_normals(
     positions: &[[f32; 3]],
     normals: &mut [[f32; 3]],
@@ -206,7 +207,7 @@ pub(crate) fn fill_missing_normals(
         if i0 >= positions.len() || i1 >= positions.len() || i2 >= positions.len() {
             continue;
         }
-        // この三角形の頂点にゼロ法線があるか
+        // Whether any vertex of this triangle has a zero normal
         let has_zero = normals[i0] == zero || normals[i1] == zero || normals[i2] == zero;
         if !has_zero {
             continue;
@@ -258,13 +259,13 @@ pub(crate) fn extract_diffuse_color(mat_node: &FbxNode) -> [f32; 3] {
     [0.8, 0.8, 0.8]
 }
 
-/// 材質の追加プロパティ
+/// Additional material properties.
 pub(crate) struct MaterialProps {
     pub specular: [f32; 3],
     pub shininess: f32,
     pub ambient: [f32; 3],
     pub opacity: f32,
-    /// Opacity=0 と TransparencyFactor=1 が両方明示されている（Unity FBX Exporter の既知パターン）
+    /// Both Opacity=0 and TransparencyFactor=1 are explicitly set (a known Unity FBX Exporter pattern).
     pub opacity_both_zero: bool,
     pub reflection_color: [f32; 3],
     pub reflection_factor: f32,
@@ -353,7 +354,7 @@ pub(crate) fn extract_material_props(mat_node: &FbxNode) -> MaterialProps {
                 if tf >= 1.0 {
                     has_transparency_factor_one = true;
                 }
-                // Opacity が明示されていなければ TransparencyFactor から算出
+                // Derive opacity from TransparencyFactor if Opacity is not explicit
                 if !has_opacity {
                     props.opacity = 1.0 - tf;
                 }
@@ -385,12 +386,12 @@ pub(crate) fn extract_material_props(mat_node: &FbxNode) -> MaterialProps {
             _ => {}
         }
     }
-    // Opacity=0 と TransparencyFactor=1 が両方明示 → Unity FBX Exporter パターン
+    // Both Opacity=0 and TransparencyFactor=1 explicit -> Unity FBX Exporter pattern
     props.opacity_both_zero = has_opacity && props.opacity <= 0.0 && has_transparency_factor_one;
     props
 }
 
-/// Skin ウェイトをコントロールポイント→展開頂点にマッピング
+/// Map skin weights from control points to expanded vertices.
 pub(crate) fn build_vertex_weights(
     skin: &super::skin::SkinData,
     bone_id_to_ir: &HashMap<i64, usize>,
@@ -416,7 +417,7 @@ pub(crate) fn build_vertex_weights(
         }
     }
 
-    // 頂点あたり最大4ボーンに制限・正規化
+    // Limit to at most 4 bones per vertex and normalize
     for w in &mut weights {
         w.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         w.truncate(4);

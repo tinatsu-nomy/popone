@@ -140,7 +140,7 @@ impl HumanBone {
             HumanBone::RightLowerLeg => "rightLowerLeg",
             HumanBone::RightFoot => "rightFoot",
             HumanBone::RightToes => "rightToes",
-            // Unity ThumbProximal = VRM thumbMetacarpal (1段ずれ)
+            // Unity ThumbProximal corresponds to VRM thumbMetacarpal (off-by-one)
             HumanBone::LeftThumbProximal => "leftThumbMetacarpal",
             HumanBone::LeftThumbIntermediate => "leftThumbProximal",
             HumanBone::LeftThumbDistal => "leftThumbDistal",
@@ -207,7 +207,7 @@ pub fn detect_humanoid(bone_names: &[(usize, &str)]) -> HumanoidMapping {
         let lower = strip_namespace_lower(name);
         let stripped = lower.replace("mixamorig:", "").replace("mixamorig_", "");
 
-        // Blender リグ: スペース/ドット/アンダースコアを正規化してマッチ
+        // Blender rig: normalize space/dot/underscore before matching
         let normalized = if rig_type == RigType::Blender {
             stripped.replace([' ', '.'], "_")
         } else {
@@ -225,7 +225,7 @@ pub fn detect_humanoid(bone_names: &[(usize, &str)]) -> HumanoidMapping {
     HumanoidMapping { rig_type, mapping }
 }
 
-/// "Model::Hips" → "hips" のように名前空間プレフィックスを除去して小文字化
+/// Strip namespace prefix (e.g. "Model::Hips" -> "hips") and lowercase.
 fn strip_namespace_lower(name: &str) -> String {
     let s = if let Some(pos) = name.rfind("::") {
         &name[pos + 2..]
@@ -266,7 +266,7 @@ fn detect_rig_type(bone_names: &[(usize, &str)]) -> RigType {
         return RigType::Unreal;
     }
 
-    // プレフィックスなし Mixamo: "Hips" + "Spine1" + "LeftArm" が存在
+    // Prefix-less Mixamo: requires "Hips" + "Spine1" + "LeftArm"
     let has_hips = names.iter().any(|n| n == "hips" || n == "下半身");
     let has_spine1 = names.iter().any(|n| n == "spine1" || n == "上半身2");
     let has_leftarm = names.iter().any(|n| n == "leftarm");
@@ -274,9 +274,9 @@ fn detect_rig_type(bone_names: &[(usize, &str)]) -> RigType {
         return RigType::Mixamo;
     }
 
-    // Blender 汎用: "Hips" + ("Head" or "Spine") が存在
-    // Head なしの部分スケルトン（衣装FBX等）も Blender と判定する
-    // 日本語ボーン名（下半身/上半身/頭）も許容
+    // Blender (generic): requires "Hips" + ("Head" or "Spine").
+    // Partial skeletons without Head (e.g. costume FBX) are also classified as Blender.
+    // Japanese bone names (e.g. 下半身/上半身/頭) are also accepted.
     let has_head = names.iter().any(|n| n == "head" || n == "頭");
     let has_spine = names.iter().any(|n| n == "spine" || n == "上半身");
     if has_hips && (has_head || has_spine) {
@@ -368,8 +368,8 @@ const VROID_MAP: &[(&str, HumanBone)] = &[
     ("j_bip_r_toebase", HumanBone::RightToes),
 ];
 
-/// Blender 汎用ボーン名（スペース/ドット/アンダースコアは "_" に正規化済み）
-/// Mixamo 風英語名・日本語ボーン名も含む（混合リグ FBX 対応）
+/// Generic Blender bone names (space/dot/underscore are normalized to "_").
+/// Includes Mixamo-style English names and Japanese bone names (for mixed-rig FBX).
 const BLENDER_MAP: &[(&str, HumanBone)] = &[
     ("hips", HumanBone::Hips),
     ("spine", HumanBone::Spine),
@@ -406,7 +406,7 @@ const BLENDER_MAP: &[(&str, HumanBone)] = &[
     ("toe_r", HumanBone::RightToes),
     ("lefteye", HumanBone::LeftEye),
     ("righteye", HumanBone::RightEye),
-    // --- Mixamo 風英語名（プレフィックスなし・日英混合リグ対応） ---
+    // --- Mixamo-style English names (prefix-less; supports mixed JP/EN rigs) ---
     ("leftshoulder", HumanBone::LeftShoulder),
     ("rightshoulder", HumanBone::RightShoulder),
     ("leftarm", HumanBone::LeftUpperArm),
@@ -453,7 +453,7 @@ const BLENDER_MAP: &[(&str, HumanBone)] = &[
     ("righthandpinky1", HumanBone::RightLittleProximal),
     ("righthandpinky2", HumanBone::RightLittleIntermediate),
     ("righthandpinky3", HumanBone::RightLittleDistal),
-    // --- 日本語ボーン名（PMX/MMD 慣習） ---
+    // --- Japanese bone names (PMX/MMD convention) ---
     ("下半身", HumanBone::Hips),
     ("上半身", HumanBone::Spine),
     ("上半身2", HumanBone::Chest),
@@ -498,7 +498,7 @@ const BLENDER_MAP: &[(&str, HumanBone)] = &[
     ("intermediate_little_r", HumanBone::RightLittleIntermediate),
     ("distal_little_l", HumanBone::LeftLittleDistal),
     ("distal_little_r", HumanBone::RightLittleDistal),
-    // 逆順パターン: "Finger Position.Side" → "finger_position_side"
+    // Reversed-order pattern: "Finger Position.Side" -> "finger_position_side"
     ("index_proximal_l", HumanBone::LeftIndexProximal),
     ("index_proximal_r", HumanBone::RightIndexProximal),
     ("index_intermediate_l", HumanBone::LeftIndexIntermediate),
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn test_blender_without_head() {
-        // 衣装FBXなど Head なしの部分スケルトン
+        // Partial skeleton without Head (e.g. costume FBX)
         let n = names(&["Armature", "Hips", "Spine", "Neck"]);
         let m = detect_humanoid(&n);
         assert_eq!(m.rig_type, RigType::Blender);

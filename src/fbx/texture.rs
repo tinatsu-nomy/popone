@@ -9,8 +9,9 @@ pub struct TextureData {
     pub height: u32,
 }
 
-/// FBX 近傍テクスチャ検索キャッシュ
-/// 初回アクセス時に FBX 親ディレクトリ以下を走査し、basename(小文字)→パスのマップを構築
+/// FBX-adjacent texture search cache.
+/// On first access, scans below the FBX parent directory and builds a
+/// `basename (lowercase) -> path` map.
 pub struct TextureSearchCache {
     map: Option<HashMap<String, PathBuf>>,
 }
@@ -65,7 +66,7 @@ fn collect_files(dir: &Path, map: &mut HashMap<String, PathBuf>, depth: u8) {
         if ft.is_file() {
             if let Some(name) = entry.file_name().to_str() {
                 let key = name.to_lowercase();
-                // 画像ファイルのみキャッシュ
+                // Cache only image files
                 if matches!(
                     Path::new(&key).extension().and_then(|e| e.to_str()),
                     Some("png" | "jpg" | "jpeg" | "tga" | "bmp" | "dds" | "psd" | "tif" | "tiff")
@@ -79,7 +80,7 @@ fn collect_files(dir: &Path, map: &mut HashMap<String, PathBuf>, depth: u8) {
     }
 }
 
-/// テクスチャリストから Diffuse テクスチャを選択（共通ロジック）
+/// Pick a diffuse texture from a texture list (shared logic).
 fn find_diffuse_texture<'a>(
     textures: &[(&'a super::scene::FbxObject<'a>, Option<String>)],
 ) -> Option<&'a super::scene::FbxObject<'a>> {
@@ -94,7 +95,7 @@ fn find_diffuse_texture<'a>(
         .map(|(obj, _)| *obj)
 }
 
-/// テクスチャノードからファイル名（ベースネーム）を取得
+/// Extract the file basename from a texture node.
 fn extract_basename_from_texture(tex_obj: &super::scene::FbxObject) -> Option<String> {
     for child_name in &["RelativeFilename", "FileName"] {
         if let Some(node) = tex_obj.node.child(child_name) {
@@ -119,7 +120,7 @@ pub fn extract_texture_for_material(
     let textures = scene.textures_for_material(mat_id);
     let tex_obj = find_diffuse_texture(&textures)?;
 
-    // テクスチャ名: 実ファイル名を優先し、無ければ FBX オブジェクト名
+    // Texture name: prefer the actual filename, fall back to the FBX object name
     let file_basename = extract_basename_from_texture(tex_obj);
     let tex_name = file_basename
         .as_deref()
@@ -132,7 +133,7 @@ pub fn extract_texture_for_material(
         })
         .unwrap_or_else(|| tex_obj.name.clone());
 
-    // 拡張子ヒント（ファイル名から抽出、埋め込み・外部ファイル両方で使用）
+    // Extension hint (extracted from the filename; used for both embedded and external files)
     let ext_owned: Option<String> = file_basename
         .as_deref()
         .and_then(|b| Path::new(b).extension())
@@ -141,7 +142,7 @@ pub fn extract_texture_for_material(
     let ext_hint = ext_owned.as_deref();
 
     // Try embedded Video content first (binary FBX only)
-    // ASCII FBX の Content はテキスト表現のため画像デコードできない → 外部ファイルフォールバックに委ねる
+    // ASCII FBX Content is text-encoded so image decoding is not possible; rely on the external-file fallback
     if let Some(video) = scene.video_for_texture(tex_obj.id) {
         if let Some(content) = video.node.child("Content") {
             if let Some(data) = content.properties.first().and_then(|p| p.as_binary()) {
@@ -183,8 +184,8 @@ pub fn extract_texture_for_material(
         }
     }
 
-    // Fallback: basename で FBX 近傍ディレクトリをキャッシュ検索
-    // Unity/Blender エクスポート FBX で RelativeFilename のパスが実際のディレクトリ構造と異なる場合に対応
+    // Fallback: cached lookup over directories near the FBX, by basename.
+    // Handles Unity/Blender-exported FBX where RelativeFilename does not match the actual directory layout.
     let basename = file_basename?;
     if let Some(found) = search_cache.lookup(fbx_dir, &basename) {
         log::info!(
@@ -220,7 +221,7 @@ fn decode_image_data_with_ext(
     name: &str,
     ext_hint: Option<&str>,
 ) -> Option<TextureData> {
-    // PSD: image crate は PSD 未対応のため、自前デコーダーで先に処理
+    // PSD: the image crate has no PSD support, so handle it via our own decoder first
     if crate::psd::is_psd_filename(name)
         || ext_hint
             .map(|e| e.eq_ignore_ascii_case("psd"))
@@ -242,7 +243,7 @@ fn decode_image_data_with_ext(
         }
     }
 
-    // まず自動判別を試行
+    // Try automatic format detection first
     if let Ok(img) = image::load_from_memory(data) {
         let rgba = img.to_rgba8();
         let width = rgba.width();
@@ -255,7 +256,7 @@ fn decode_image_data_with_ext(
         });
     }
 
-    // TGA 等マジックナンバーのない形式は拡張子からフォーマットを推定してリトライ
+    // For formats without a magic number (e.g. TGA), retry by inferring the format from the extension
     let ext = ext_hint.or_else(|| Path::new(name).extension().and_then(|e| e.to_str()));
     if let Some(ext) = ext {
         if let Some(format) = image::ImageFormat::from_extension(ext) {

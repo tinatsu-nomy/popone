@@ -6,9 +6,9 @@ use std::io::Read;
 
 use super::types::*;
 
-/// Shift_JIS (cp932) の固定長バイト列を UTF-8 文字列に変換
+/// Decode a fixed-length Shift_JIS (cp932) byte slice into a UTF-8 string.
 fn decode_sjis(buf: &[u8]) -> String {
-    // NUL終端を探す
+    // Find NUL terminator
     let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
     let (cow, _, _) = encoding_rs::SHIFT_JIS.decode(&buf[..len]);
     cow.into_owned()
@@ -21,7 +21,7 @@ fn read_vec3<R: Read>(r: &mut R) -> Result<Vec3> {
     Ok(Vec3::new(x, y, z))
 }
 
-/// バイト列から PMD を読み込む（オンメモリキャッシュ用）
+/// Read a PMD from a byte slice (for in-memory cache).
 pub fn read_pmd_from_data(data: &[u8]) -> Result<PmdModel> {
     let mut cursor = std::io::Cursor::new(data);
     read_pmd_inner(&mut cursor)
@@ -34,7 +34,7 @@ pub fn read_pmd(path: &std::path::Path) -> Result<PmdModel> {
 }
 
 fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
-    // ヘッダ: "Pmd" + version(float) + name(20) + comment(256)
+    // Header: "Pmd" + version(float) + name(20) + comment(256)
     let mut magic = [0u8; 3];
     r.read_exact(&mut magic)?;
     if &magic != b"Pmd" {
@@ -62,7 +62,7 @@ fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
         comment: decode_sjis(&comment_buf),
     };
 
-    // 頂点
+    // Vertices
     let vertex_count = r.read_u32::<LittleEndian>()? as usize;
     let mut vertices = Vec::with_capacity(vertex_count);
     for _ in 0..vertex_count {
@@ -85,7 +85,7 @@ fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
         });
     }
 
-    // 面
+    // Faces
     let face_index_count = r.read_u32::<LittleEndian>()? as usize;
     if !face_index_count.is_multiple_of(3) {
         return Err(PoponeError::PmdParse(
@@ -105,7 +105,7 @@ fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
         faces.push([a, b, c]);
     }
 
-    // 材質
+    // Materials
     let material_count = r.read_u32::<LittleEndian>()? as usize;
     let mut materials = Vec::with_capacity(material_count);
     for _ in 0..material_count {
@@ -135,7 +135,7 @@ fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
         });
     }
 
-    // ボーン
+    // Bones
     let bone_count = r.read_u16::<LittleEndian>()? as usize;
     let mut bones = Vec::with_capacity(bone_count);
     for _ in 0..bone_count {
@@ -179,7 +179,7 @@ fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
         });
     }
 
-    // モーフ（表情）
+    // Morphs (facial expressions)
     let morph_count = r.read_u16::<LittleEndian>()? as usize;
     let mut morphs = Vec::with_capacity(morph_count);
     for _ in 0..morph_count {
@@ -201,14 +201,14 @@ fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
         });
     }
 
-    // 表情表示枠
+    // Morph display panel
     let morph_display_count = r.read_u8()? as usize;
     let mut morph_display = Vec::with_capacity(morph_display_count);
     for _ in 0..morph_display_count {
         morph_display.push(r.read_u16::<LittleEndian>()?);
     }
 
-    // ボーン表示枠名
+    // Bone display panel names
     let bone_display_name_count = r.read_u8()? as usize;
     let mut bone_display_names = Vec::with_capacity(bone_display_name_count);
     for _ in 0..bone_display_name_count {
@@ -217,7 +217,7 @@ fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
         bone_display_names.push(decode_sjis(&buf));
     }
 
-    // ボーン表示枠
+    // Bone display panel
     let bone_display_count = r.read_u32::<LittleEndian>()? as usize;
     let mut bone_display = Vec::with_capacity(bone_display_count);
     for _ in 0..bone_display_count {
@@ -226,17 +226,17 @@ fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
         bone_display.push((bone_idx, frame_idx));
     }
 
-    // 英語ヘッダ（オプション）
+    // English header (optional)
     let english_header =
         read_english_header(&mut r, bone_count, morph_count, bone_display_name_count).ok();
 
-    // トゥーンテクスチャ
+    // Toon textures
     let mut toon_textures = std::array::from_fn(|_| String::new());
     if read_toon_textures(&mut r, &mut toon_textures).is_err() {
-        // トゥーンテクスチャがない古いPMDファイルもある
+        // Older PMD files may not include toon textures
     }
 
-    // 剛体（物理拡張、ファイル末尾にオプション）
+    // Rigid bodies (physics extension, optional at the file tail)
     let mut rigid_bodies = Vec::new();
     let mut joints = Vec::new();
 
@@ -276,7 +276,7 @@ fn read_pmd_inner<R: Read>(mut r: &mut R) -> Result<PmdModel> {
             });
         }
 
-        // ジョイント
+        // Joints
         if let Ok(joint_count) = r.read_u32::<LittleEndian>() {
             joints.reserve(joint_count as usize);
             for _ in 0..joint_count {
@@ -352,7 +352,7 @@ fn read_english_header<R: Read>(
         bone_names.push(decode_sjis(&buf));
     }
 
-    // base モーフを除いた数
+    // Count excluding the base morph
     let en_morph_count = if morph_count > 0 { morph_count - 1 } else { 0 };
     let mut morph_names = Vec::with_capacity(en_morph_count);
     for _ in 0..en_morph_count {
@@ -405,7 +405,7 @@ mod tests {
         assert_eq!(model.rigid_bodies.len(), 45);
         assert_eq!(model.joints.len(), 27);
 
-        // 面数合計 = 材質のface_count合計 / 3
+        // Total face count = sum of material face_count / 3
         let total_face_verts: u32 = model.materials.iter().map(|m| m.face_count).sum();
         assert_eq!(total_face_verts as usize / 3, model.faces.len());
     }

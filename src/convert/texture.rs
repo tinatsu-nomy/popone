@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::intermediate::types::{IrTexture, TextureData};
 
-/// テクスチャをPNGとして書き出す
+/// Write a texture as PNG.
 pub fn write_texture(
     tex: &IrTexture,
     output_dir: &Path,
@@ -13,14 +13,14 @@ pub fn write_texture(
 ) -> Result<String> {
     let out_path = output_dir.join(&tex.filename);
 
-    // 生ピクセルデータ（gltf::image::Data.pixels）はRGB8またはRGBA8
-    // widthとheightが必要
+    // Raw pixel data (`gltf::image::Data.pixels`) is RGB8 or RGBA8.
+    // Width and height are required.
     let bytes = tex.data.as_bytes();
     if bytes.len() == (width * height * 4) as usize {
-        // RGBA8 — スライス参照から直接保存（clone 回避）
+        // RGBA8 — save directly from a slice ref (avoid clone)
         image::save_buffer(&out_path, bytes, width, height, image::ColorType::Rgba8)?;
     } else if bytes.len() == (width * height * 3) as usize {
-        // RGB8 → RGBA8変換
+        // RGB8 -> RGBA8 conversion
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
         for chunk in bytes.chunks(3) {
             rgba.push(chunk[0]);
@@ -30,7 +30,7 @@ pub fn write_texture(
         }
         image::save_buffer(&out_path, &rgba, width, height, image::ColorType::Rgba8)?;
     } else {
-        // サイズ不一致の場合は空白画像
+        // Blank image on size mismatch
         log::warn!(
             "Texture '{}' size mismatch (data={}, expected={}x{})",
             tex.filename,
@@ -45,8 +45,8 @@ pub fn write_texture(
     Ok(tex.filename.clone())
 }
 
-/// 全テクスチャを書き出す
-/// gltf::image::DataのwidthとheightをImagesから取得
+/// Write all textures.
+/// Width/height for each `gltf::image::Data` are obtained from `Images`.
 pub fn write_all_textures(
     textures: &[IrTexture],
     images: &[gltf::image::Data],
@@ -65,8 +65,8 @@ pub fn write_all_textures(
     Ok(filenames)
 }
 
-/// IrTexture のデータ（PNG/JPEG バイナリ）をそのまま書き出す（FBX 用）
-/// PSD データの場合は PNG に変換して書き出す
+/// Write `IrTexture` data (PNG/JPEG binary) as-is (used for FBX).
+/// PSD data is converted to PNG before writing.
 pub fn write_all_textures_from_ir(
     textures: &[IrTexture],
     output_dir: &Path,
@@ -74,8 +74,8 @@ pub fn write_all_textures_from_ir(
     write_all_textures_from_ir_opt_cancel(textures, output_dir, None)
 }
 
-/// テクスチャ書き出し（協調キャンセル対応版）。
-/// `cancel` が Some の場合、テクスチャ 1 枚ごとにキャンセルを確認する。
+/// Write textures (cooperative cancellation variant).
+/// When `cancel` is `Some`, the cancellation flag is checked once per texture.
 pub fn write_all_textures_from_ir_opt_cancel(
     textures: &[IrTexture],
     output_dir: &Path,
@@ -86,7 +86,7 @@ pub fn write_all_textures_from_ir_opt_cancel(
     }
     std::fs::create_dir_all(output_dir)?;
 
-    // 書き出し済みファイル名を逐次追跡（全テクスチャの衝突検出・回避用）
+    // Track written filenames incrementally (for collision detection across all textures)
     let mut used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     let mut filenames = Vec::new();
@@ -99,7 +99,7 @@ pub fn write_all_textures_from_ir_opt_cancel(
             }
         }
         if crate::psd::is_psd_filename(&tex.filename) {
-            // PSD → PNG 変換
+            // PSD -> PNG conversion
             match crate::psd::psd_to_png(tex.data.as_bytes()) {
                 Ok(png_data) => {
                     let stem = std::path::Path::new(&tex.filename)
@@ -125,7 +125,7 @@ pub fn write_all_textures_from_ir_opt_cancel(
                 }
                 Err(e) => {
                     log::warn!("PSD->PNG conversion failed, exporting as PSD: {e}");
-                    // 衝突回避（非PSD分岐と同じロジック）
+                    // Collision avoidance (same logic as the non-PSD branch)
                     let mut out_name = tex.filename.clone();
                     if used_names.contains(&out_name.to_lowercase()) {
                         let p = std::path::Path::new(&tex.filename);
@@ -156,7 +156,7 @@ pub fn write_all_textures_from_ir_opt_cancel(
                 }
             }
         } else {
-            // 非PSD: 同名ファイルの衝突回避（手動割当で PSD→PNG 済みの同名エントリ等）
+            // Non-PSD: avoid filename collision (e.g. manually-assigned PSD->PNG entries with the same name)
             let mut out_name = tex.filename.clone();
             if used_names.contains(&out_name.to_lowercase()) {
                 let p = std::path::Path::new(&tex.filename);
@@ -188,7 +188,7 @@ pub fn write_all_textures_from_ir_opt_cancel(
                     width,
                     height,
                 } => {
-                    // 生 RGBA は PNG エンコードして書き出す
+                    // Encode raw RGBA as PNG and write
                     if let Some(img) = image::RgbaImage::from_raw(*width, *height, pixels.to_vec())
                     {
                         img.save(&out_path)?;
