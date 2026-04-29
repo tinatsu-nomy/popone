@@ -1433,6 +1433,9 @@ pub struct RenderParams<'a> {
     pub camera: &'a OrbitCamera,
     pub width: u32,
     pub height: u32,
+    /// 中央ビューポート上に被さる下部オーバーレイ（材質編集パネル等）の実 px 高。
+    /// view_proj/proj_11 で FOV を補正してパネル開閉前後のモデル見た目サイズを保つ。
+    pub overlay_h_pixels: f32,
     pub material_visibility: &'a [bool],
     pub display: &'a super::app::DisplaySettings,
     /// アニメーション済みボーングローバル行列（glTF空間、None=レストポーズ）
@@ -3724,7 +3727,10 @@ impl GpuRenderer {
 
     /// カメラユニフォームを構築する
     fn build_camera_uniform(params: &RenderParams) -> CameraUniform {
-        let aspect = params.width as f32 / params.height as f32;
+        let viewport_w = params.width as f32;
+        let viewport_h = params.height as f32;
+        let aspect = viewport_w / viewport_h;
+        let overlay_h = params.overlay_h_pixels;
         let light_dir = match params.display.light_mode {
             LightMode::CameraFollow => params.camera.camera_following_light_dir(),
             LightMode::Fixed => OrbitCamera::fixed_light_dir(),
@@ -3734,7 +3740,7 @@ impl GpuRenderer {
         let s = &params.display.ambient_sky_color;
         let g = &params.display.ambient_ground_color;
         CameraUniform {
-            view_proj: params.camera.view_proj(aspect),
+            view_proj: params.camera.view_proj(viewport_w, viewport_h, overlay_h),
             light_dir,
             light_intensity: params.display.light_intensity,
             ambient: glam::Vec3::new(s[0] * ai, s[1] * ai, s[2] * ai),
@@ -3750,7 +3756,7 @@ impl GpuRenderer {
             },
             time: params.time,
             aspect,
-            proj_11: params.camera.proj_11(),
+            proj_11: params.camera.proj_11(viewport_h, overlay_h),
             gi_equalized: glam::Vec3::new(
                 (s[0] + g[0]) * 0.5 * ai,
                 (s[1] + g[1]) * 0.5 * ai,

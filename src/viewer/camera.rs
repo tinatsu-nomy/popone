@@ -29,6 +29,9 @@ pub struct OrbitCamera {
     pub model_radius: f32,
     /// 透視投影（true）/ 正射影（false）
     pub perspective: bool,
+    /// 基準垂直 FOV（ラジアン）。レンダリング時にオーバーレイ高さに応じて
+    /// 内部で更に補正された effective FOV が計算される。
+    pub fov_y_radians: f32,
 }
 
 impl Default for OrbitCamera {
@@ -40,6 +43,7 @@ impl Default for OrbitCamera {
             pitch: 0.0,
             model_radius: 20.0,
             perspective: true,
+            fov_y_radians: FOV_DEGREES.to_radians(),
         }
     }
 }
@@ -70,7 +74,7 @@ impl OrbitCamera {
             || response.dragged_by(egui::PointerButton::Middle);
         if is_pan {
             let delta = response.drag_delta();
-            let fov_scale = FOV_DEGREES / 45.0;
+            let fov_scale = self.fov_y_radians.to_degrees() / 45.0;
             let speed = self.distance * PAN_SPEED_FACTOR * fov_scale * fine;
             let (right, up) = self.view_axes();
             self.target += -right * delta.x * speed + up * delta.y * speed;
@@ -127,24 +131,47 @@ impl OrbitCamera {
         Mat4::look_at_lh(self.eye(), self.target, self.up_vector())
     }
 
+    /// オーバーレイ補正後の有効垂直 FOV（ラジアン）。
+    ///
+    /// 中央ビューポートが下部パネル（材質編集パネル等）で `overlay_h` ピクセル分
+    /// 縮められた状態でも、モデルのスクリーン上ピクセル単位サイズが
+    /// 「オーバーレイなし時」と一致するように FOV をスケールダウンする。
+    ///
+    /// `tan(fov_eff/2) = tan(fov_y/2) * viewport_h / (viewport_h + overlay_h)`
+    pub fn effective_fov_y_radians(&self, viewport_h: f32, overlay_h: f32) -> f32 {
+        if overlay_h > 0.0 && viewport_h > 0.0 {
+            let scale = viewport_h / (viewport_h + overlay_h);
+            2.0 * ((self.fov_y_radians * 0.5).tan() * scale).atan()
+        } else {
+            self.fov_y_radians
+        }
+    }
+
     /// 射影行列の [1][1] 成分（= 1/tan(fov_y/2)）
-    /// MToon ScreenCoordinates アウトラインの距離クランプ用
-    pub fn proj_11(&self) -> f32 {
-        1.0 / (FOV_DEGREES.to_radians() * 0.5).tan()
+    /// MToon ScreenCoordinates アウトラインの距離クランプ用。
+    /// `view_proj` と同じ effective FOV を用いてアウトライン太さの整合を保つ。
+    pub fn proj_11(&self, viewport_h: f32, overlay_h: f32) -> f32 {
+        let fov_eff = self.effective_fov_y_radians(viewport_h, overlay_h);
+        1.0 / (fov_eff * 0.5).tan()
     }
 
     /// View-Projection 行列（左手系、Reverse-Z: near→1.0, far→0.0）
-    /// near/far はカメラ距離に応じて動的調整
-    pub fn view_proj(&self, aspect: f32) -> Mat4 {
+    /// near/far はカメラ距離に応じて動的調整。
+    ///
+    /// `overlay_h` に下部オーバーレイパネルの実 px 高を渡すと、
+    /// モデルの画面上ピクセル単位サイズがパネル開閉前後で保持される。
+    pub fn view_proj(&self, viewport_w: f32, viewport_h: f32, overlay_h: f32) -> Mat4 {
         let view = self.view_matrix();
         let near = (self.distance * NEAR_FACTOR).clamp(NEAR_MIN, NEAR_MAX);
         let far = (self.distance * FAR_FACTOR).clamp(FAR_MIN, FAR_MAX);
+        let aspect = viewport_w.max(1.0) / viewport_h.max(1.0);
+        let fov_eff = self.effective_fov_y_radians(viewport_h, overlay_h);
         let proj = if self.perspective {
             // Reverse-Z: near と far を入れ替えて depth 0→far, 1→near にマッピング
-            Mat4::perspective_lh(FOV_DEGREES.to_radians(), aspect, far, near)
+            Mat4::perspective_lh(fov_eff, aspect, far, near)
         } else {
             // 正射影 Reverse-Z: near/far を入れ替え
-            let fov_half = (FOV_DEGREES / 2.0).to_radians();
+            let fov_half = fov_eff * 0.5;
             let half_h = self.distance * fov_half.tan();
             let half_w = half_h * aspect;
             Mat4::orthographic_lh(-half_w, half_w, -half_h, half_h, far, near)
@@ -240,7 +267,7 @@ impl OrbitCamera {
 
         let (half_w, half_h, half_d) = self.projected_half_extents(bbox_min, bbox_max);
         let aspect = viewport_w.max(1.0) / viewport_h.max(1.0);
-        let fov_y_half = (FOV_DEGREES / 2.0).to_radians();
+        let fov_y_half = self.fov_y_radians * 0.5;
 
         // 上部オーバーレイ + 下部ヒントで約60px分の余白が必要
         let margin_px = 60.0;

@@ -1245,6 +1245,12 @@ fn record_uv_override(
 pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
     use crate::intermediate::types::{MtoonParams, ShaderFamily};
 
+    // v0.5.9: パネル不在時は overlay_h を必ず 0 にしておく。
+    // 早期 return / 開いていない場合に古い値が残ると、中央ビューポートで
+    // 不要な FOV 補正が適用されモデルが意図せず縮んだままになる。
+    // パネルが実際に表示された場合は show() 後に正しい値で上書きする。
+    app.material_panel_height_px = 0.0;
+
     let Some(mat_idx) = app.editing_material_index else {
         return;
     };
@@ -1311,7 +1317,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
         .fill(DARK_PANEL_BG)
         .stroke(egui::Stroke::new(1.0, DARK_BORDER_COLOR))
         .inner_margin(egui::Margin::same(4));
-    egui::TopBottomPanel::bottom("material_editor_panel")
+    let panel_inner = egui::TopBottomPanel::bottom("material_editor_panel")
         .resizable(true)
         .min_height(120.0)
         .default_height(360.0)
@@ -2469,6 +2475,11 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                 });
             }); // ScrollArea::vertical().show
         });
+
+    // v0.5.9: パネルの実 px 高（egui logical pt × pixels_per_point）を記録し、
+    // 中央ビューポート描画時の FOV 補正に使う。これによりパネル開閉・パネル
+    // リサイズに対してモデルのスクリーン上ピクセル単位サイズが保たれる。
+    app.material_panel_height_px = panel_inner.response.rect.height() * ctx.pixels_per_point();
 
     if dirty {
         // 編集差分を `material_overrides` にマージする（既存エントリがあれば上書き）。

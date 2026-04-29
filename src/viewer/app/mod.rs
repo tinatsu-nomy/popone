@@ -472,6 +472,10 @@ pub struct ViewerApp {
     pub last_viewport_width: f32,
     /// ビューポートの高さ（フィット計算用）
     pub last_viewport_height: f32,
+    /// 材質編集パネル（下部 TopBottomPanel）が中央ビューポート上に被さっている実 px 高。
+    /// 開いていない / 表示されていない時は 0.0。レンダリング側で FOV 補正に使用し、
+    /// パネル開閉前後でモデルのスクリーン上ピクセル単位サイズを保つ。
+    pub material_panel_height_px: f32,
     /// テクスチャ割り当て状態
     pub tex: TextureState,
     /// 遅延処理の集約状態
@@ -820,6 +824,7 @@ impl ViewerApp {
             normalize_to_tstance: false,
             last_viewport_width: 1280.0,
             last_viewport_height: 720.0,
+            material_panel_height_px: 0.0,
             tex,
             pending: PendingState::default(),
             frame_times: VecDeque::with_capacity(120),
@@ -2495,6 +2500,7 @@ impl eframe::App for ViewerApp {
                                 camera: &self.camera,
                                 width,
                                 height,
+                                overlay_h_pixels: self.material_panel_height_px,
                                 material_visibility: &self.material_visibility,
                                 display: &self.display,
                                 animated_bone_globals: animated_globals,
