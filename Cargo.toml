@@ -39,6 +39,8 @@ dunce        = "1"
 tempfile     = "3"
 rayon        = "1"
 pathdiff     = "0.2"
+rust-i18n    = "3"
+sys-locale   = "0.3"
 
 # ビューア用（feature gate で CLI ビルドには影響なし）
 eframe   = { version = "0.31", optional = true, default-features = false, features = ["wgpu", "default_fonts"] }

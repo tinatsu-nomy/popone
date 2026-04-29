@@ -1,18 +1,18 @@
-//! ZIP アーカイブの展開（2パス: 一覧→選択展開）
+//! ZIP archive extraction (two-pass: list, then selective extract).
 
 use crate::error::{PoponeError, Result};
 use std::io::Read;
 
 use super::{normalize_archive_path, ArchiveEntry, ArchiveEntryMeta};
 
-/// ZIP エントリのファイル名を取得（UTF-8 → Shift_JIS フォールバック）
+/// Decode a ZIP entry filename (UTF-8 first, Shift_JIS as fallback).
 fn decode_filename(file: &zip::read::ZipFile) -> Result<String> {
     let raw = file.name_raw();
-    // UTF-8 として試行
+    // Try UTF-8 first
     if let Ok(s) = std::str::from_utf8(raw) {
         return Ok(s.to_string());
     }
-    // Shift_JIS フォールバック
+    // Shift_JIS fallback
     let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(raw);
     if had_errors {
         return Err(PoponeError::Archive(format!(
@@ -22,7 +22,7 @@ fn decode_filename(file: &zip::read::ZipFile) -> Result<String> {
     Ok(decoded.into_owned())
 }
 
-/// Pass 1: メタデータのみ取得（データ展開なし）
+/// Pass 1: collect entry metadata only (no data extraction).
 pub fn list_entries(data: &[u8]) -> Result<Vec<ArchiveEntryMeta>> {
     let reader = std::io::Cursor::new(data);
     let mut archive = zip::ZipArchive::new(reader)?;
@@ -42,8 +42,8 @@ pub fn list_entries(data: &[u8]) -> Result<Vec<ArchiveEntryMeta>> {
     Ok(entries)
 }
 
-/// Pass 2: 指定パスのファイル群のみ展開
-/// max_total_bytes: 総展開サイズ上限（zip bomb 対策）
+/// Pass 2: extract only the files matching the given paths.
+/// `max_total_bytes`: total extraction size limit (zip-bomb defense).
 pub fn extract_files(
     data: &[u8],
     paths: &[&std::path::Path],
@@ -66,7 +66,7 @@ pub fn extract_files(
             continue;
         }
 
-        // サイズチェック（declared size）
+        // Size check (declared size)
         let declared = file.size();
         if total + declared > max_total_bytes {
             return Err(PoponeError::Archive(format!(
@@ -74,7 +74,7 @@ pub fn extract_files(
             )));
         }
 
-        // 実際の読み込み（take でハード制限）
+        // Actual read; cap with `take` as a hard limit
         let limit = max_total_bytes - total;
         let mut buf = Vec::with_capacity(declared as usize);
         file.take(limit).read_to_end(&mut buf)?;

@@ -9,23 +9,23 @@ use std::sync::Arc;
 
 use super::reader;
 
-/// STL ファイルを読み込んで IrModel に変換する（デフォルト: mm, Z-Up）
+/// Read an STL file and convert it to an `IrModel` (defaults: mm, Z-Up).
 pub fn load_stl(path: &Path) -> Result<IrModel> {
     load_stl_with_params(path, 0.001, true)
 }
 
-/// STL ファイルを読み込んで IrModel に変換する（カスタムパラメータ）
+/// Read an STL file and convert it to an `IrModel` with custom parameters.
 pub fn load_stl_with_params(path: &Path, scale: f32, z_up: bool) -> Result<IrModel> {
     let stl = reader::read_stl(path)?;
     stl_to_ir(&stl, scale, z_up)
 }
 
-/// STL データをメモリから読み込んで IrModel に変換する（デフォルト: mm, Z-Up）
+/// Read STL data from memory and convert it to an `IrModel` (defaults: mm, Z-Up).
 pub fn load_stl_from_data(data: &[u8], name: &str) -> Result<IrModel> {
     load_stl_from_data_with_params(data, name, 0.001, true)
 }
 
-/// STL データをメモリから読み込んで IrModel に変換する（カスタムパラメータ）
+/// Read STL data from memory and convert it to an `IrModel` with custom parameters.
 pub fn load_stl_from_data_with_params(
     data: &[u8],
     name: &str,
@@ -58,11 +58,11 @@ fn stl_to_ir(stl: &reader::StlModel, scale: f32, z_up: bool) -> Result<IrModel> 
         grant: None,
     };
 
-    // STL はフラットシェーディング: 各三角形が独立した3頂点を持つ
+    // STL is flat-shaded: each triangle owns its own 3 vertices.
     let mut vertices = Vec::with_capacity(stl.triangles.len() * 3);
     let mut indices = Vec::with_capacity(stl.triangles.len() * 3);
 
-    // 座標変換: ユーザー指定の単位スケールと Z-Up 変換を適用
+    // Coordinate transform: apply user-specified unit scale and Z-Up conversion.
     let pos_to_gltf: fn(Vec3, f32) -> Vec3 = if z_up {
         |v: Vec3, s: f32| Vec3::new(v.x * s, v.z * s, v.y * s)
     } else {
@@ -71,7 +71,7 @@ fn stl_to_ir(stl: &reader::StlModel, scale: f32, z_up: bool) -> Result<IrModel> 
 
     for (i, tri) in stl.triangles.iter().enumerate() {
         let base = (i * 3) as u32;
-        // 法線: Z-Up の場合は Y↔Z 入替
+        // Normal: swap Y<->Z when source is Z-Up
         let raw_normal = if z_up {
             Vec3::new(tri.normal.x, tri.normal.z, tri.normal.y)
         } else {
@@ -82,7 +82,7 @@ fn stl_to_ir(stl: &reader::StlModel, scale: f32, z_up: bool) -> Result<IrModel> 
             let p1 = pos_to_gltf(tri.vertices[1], scale);
             let p2 = pos_to_gltf(tri.vertices[2], scale);
             if z_up {
-                // b↔c swap 後の巻き順に合わせて法線を計算
+                // Recompute the normal to match the winding after b<->c swap
                 (p2 - p0).cross(p1 - p0).normalize_or_zero()
             } else {
                 (p1 - p0).cross(p2 - p0).normalize_or_zero()
@@ -107,7 +107,7 @@ fn stl_to_ir(stl: &reader::StlModel, scale: f32, z_up: bool) -> Result<IrModel> 
             });
         }
         if z_up {
-            // Y↔Z 入替は行列式 -1 → 面の巻き順を反転 (b↔c swap)
+            // Y<->Z swap has determinant -1, so flip face winding (b<->c swap).
             indices.push(base);
             indices.push(base + 2);
             indices.push(base + 1);

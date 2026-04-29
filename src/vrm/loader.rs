@@ -1,4 +1,5 @@
 use crate::error::{Result, ResultExt};
+use rust_i18n::t;
 use serde_json::Value;
 use std::path::Path;
 
@@ -10,10 +11,15 @@ pub struct GlbData {
 }
 
 pub fn load_glb(path: &Path) -> Result<GlbData> {
-    let (document, buffers, images) = gltf::import(path)
-        .with_context(|| format!("GLBファイルの読み込みに失敗: {}", path.display()))?;
+    let (document, buffers, images) = gltf::import(path).with_context(|| {
+        t!(
+            "error.glb_file_load_failed",
+            path = path.display().to_string()
+        )
+        .to_string()
+    })?;
 
-    // VRM拡張をJSONから取得
+    // Extract VRM extension data from the document JSON
     let vrm_extension = extract_vrm_extension(&document)?;
 
     Ok(GlbData {
@@ -24,10 +30,10 @@ pub fn load_glb(path: &Path) -> Result<GlbData> {
     })
 }
 
-/// バイト列から GLB/VRM を読み込む（unitypackage 内 VRM 用）
+/// Load a GLB/VRM from a byte slice (used for VRMs embedded in a unitypackage).
 pub fn load_glb_from_data(data: &[u8]) -> Result<GlbData> {
     let (document, buffers, images) =
-        gltf::import_slice(data).context("GLBデータの読み込みに失敗")?;
+        gltf::import_slice(data).with_context(|| t!("error.glb_data_load_failed").to_string())?;
 
     let vrm_extension = extract_vrm_extension(&document)?;
 
@@ -56,7 +62,7 @@ fn extract_vrm_extension(document: &gltf::Document) -> Result<Value> {
     Ok(Value::Object(serde_json::Map::new()))
 }
 
-/// GLBドキュメントの全extensions（フラット）をValueとして返す
+/// Return all glTF extensions from the GLB document as a flat JSON value.
 pub fn get_raw_extensions(document: &gltf::Document) -> Value {
     let json = document.as_json();
     if let Some(exts) = &json.extensions {

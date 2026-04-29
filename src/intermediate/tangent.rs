@@ -177,7 +177,7 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
             }
             split_count += 1;
             log::trace!(
-                "tangent w 分割: mesh='{}' vertex={} → new={} (minority_w={:.0})",
+                "tangent w split: mesh='{}' vertex={} -> new={} (minority_w={:.0})",
                 mesh.name,
                 vi,
                 new_vi,

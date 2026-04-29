@@ -1,4 +1,4 @@
-/// VRM 0.0 プリセット名 → (PMX日本語名, パネル)
+/// VRM 0.0 preset name -> (PMX Japanese name, panel)
 pub fn preset_to_jp_v0(preset: &str) -> (String, u8) {
     let (name, panel) = match preset.to_lowercase().as_str() {
         "a" => ("あ", 3),
@@ -23,7 +23,7 @@ pub fn preset_to_jp_v0(preset: &str) -> (String, u8) {
     (name.to_string(), panel)
 }
 
-/// VRM 1.0 プリセット名 → (PMX日本語名, パネル)
+/// VRM 1.0 preset name -> (PMX Japanese name, panel)
 pub fn preset_to_jp_v1(preset: &str) -> (String, u8) {
     let (name, panel) = match preset {
         "aa" => ("あ", 3),

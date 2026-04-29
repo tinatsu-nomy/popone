@@ -9,64 +9,114 @@ use popone::{convert, intermediate, pmx, vrm};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use rust_i18n::t;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+// Embed translations (`locales/{ja,en,zh}.yml`) for the binary crate.
+// `t!()` is resolved per-crate, so the bin needs its own `i18n!()` call
+// in addition to the one in `lib.rs`.
+rust_i18n::i18n!("locales", fallback = "en");
+
+// Help text on each `///` doc and the `about` line below is the static
+// fallback used when locale loading fails. The actual user-facing help
+// strings are overridden at runtime in `main()` via `Command::about()`
+// and `Command::mut_arg(...).help(...)`, so they always reflect the
+// detected (or user-selected) locale.
 #[derive(Parser, Debug)]
-#[command(
-    name = "popone",
-    about = "VRMファイルをPMX形式に変換します\n引数なしで起動するとビューアが開きます"
-)]
+#[command(name = "popone", about = "Convert VRM files to PMX format")]
 struct Args {
-    /// 入力ファイルパス（VRM/FBX）
+    /// Input file path
     input: Option<PathBuf>,
 
-    /// 出力PMXファイルパス
+    /// Output PMX file path
     output: Option<PathBuf>,
 
-    /// ボーン・頂点数のみ出力してPMX生成しない
+    /// Print bone/vertex counts only; do not generate a PMX
     #[arg(long)]
     dump: bool,
 
-    /// 物理変換をスキップ
+    /// Skip physics conversion
     #[arg(long)]
     no_physics: bool,
 
-    /// 剛体の回転をボーン方向に揃える（デフォルト: off）
+    /// Align rigid body rotation to bone direction
     #[arg(long)]
     align_rigid_rotation: bool,
 
-    /// Tポーズの腕をAスタンスに変換する（デフォルト: off）
+    /// Convert T-pose arms to A-stance
     #[arg(long)]
     normalize_pose: bool,
 
-    /// Aスタンスの腕をTスタンスに変換する（FBX用、デフォルト: off）
+    /// Convert A-stance arms to T-stance (FBX only)
     #[arg(long)]
     normalize_to_tstance: bool,
 
-    /// ログレベル (error, warn, info, debug)
+    /// Log level (error, warn, info, debug)
     #[arg(long, default_value = "info")]
     log_level: String,
 
-    /// unitypackage内のFBXファイル名を指定（省略時はファイルサイズ最大のFBXを自動選択）
+    /// FBX file name inside a unitypackage
     #[arg(long)]
     fbx_name: Option<String>,
 
-    /// アーカイブ内のモデルファイル名を指定（省略時: 1つなら自動、複数ならエラー）
+    /// Model file name inside an archive
     #[arg(long)]
     model_name: Option<String>,
 
-    /// アーカイブ内のモデル一覧を表示して終了
+    /// List models inside the archive and exit
     #[arg(long)]
     list_models: bool,
 
-    /// 標準ボーン挿入をスキップ（元のボーン構造を維持）
+    /// Skip standard bone insertion (preserve the original bone structure)
     #[arg(long)]
     raw_structure: bool,
 
-    /// PMX出力倍率（デフォルト: 1.0）
+    /// PMX output scale factor
     #[arg(long, default_value = "1.0")]
     scale: f32,
+}
+
+/// Build a `clap::Command` whose `about` and per-argument `help` strings
+/// are localized via `rust-i18n`. The command derived by `#[derive(Parser)]`
+/// is used as the structural base; only the human-readable text is
+/// overridden so that `--help` and clap's built-in usage messages reflect
+/// the detected locale.
+fn build_localized_command() -> clap::Command {
+    use clap::CommandFactory;
+    Args::command()
+        .about(format!(
+            "{}\n{}",
+            t!("cli.about.summary"),
+            t!("cli.about.viewer_hint")
+        ))
+        .mut_arg("input", |a| a.help(t!("cli.arg.input").to_string()))
+        .mut_arg("output", |a| a.help(t!("cli.arg.output").to_string()))
+        .mut_arg("dump", |a| a.help(t!("cli.arg.dump").to_string()))
+        .mut_arg("no_physics", |a| {
+            a.help(t!("cli.arg.no_physics").to_string())
+        })
+        .mut_arg("align_rigid_rotation", |a| {
+            a.help(t!("cli.arg.align_rigid_rotation").to_string())
+        })
+        .mut_arg("normalize_pose", |a| {
+            a.help(t!("cli.arg.normalize_pose").to_string())
+        })
+        .mut_arg("normalize_to_tstance", |a| {
+            a.help(t!("cli.arg.normalize_to_tstance").to_string())
+        })
+        .mut_arg("log_level", |a| a.help(t!("cli.arg.log_level").to_string()))
+        .mut_arg("fbx_name", |a| a.help(t!("cli.arg.fbx_name").to_string()))
+        .mut_arg("model_name", |a| {
+            a.help(t!("cli.arg.model_name").to_string())
+        })
+        .mut_arg("list_models", |a| {
+            a.help(t!("cli.arg.list_models").to_string())
+        })
+        .mut_arg("raw_structure", |a| {
+            a.help(t!("cli.arg.raw_structure").to_string())
+        })
+        .mut_arg("scale", |a| a.help(t!("cli.arg.scale").to_string()))
 }
 
 use popone::SharedLogBuffer;
@@ -156,7 +206,7 @@ fn setup_logging(
     }
 
     base.apply()
-        .map_err(|e| anyhow::anyhow!("ロガー初期化失敗: {}", e))
+        .map_err(|e| anyhow::anyhow!("{}: {}", t!("cli.error.logger_init_failed"), e))
 }
 
 /// Windows GUI サブシステムの場合、親コンソールにアタッチして
@@ -258,55 +308,127 @@ fn detach_console() {
     }
 }
 
-/// IrModel のダンプ出力（共通処理）
+/// IrModel dump output (shared between CLI flows). All user-facing
+/// labels are localized; numeric values and identifier names (bone names,
+/// morph names, etc.) are passed through unchanged so that automation that
+/// reads names still works.
 fn dump_ir(ir: &intermediate::types::IrModel) {
-    println!("=== {} dump ===", ir.source_format.label());
-    println!("Model name: {}", ir.name);
-    println!("Bones: {}", ir.bones.len());
-    println!("Meshes: {}", ir.meshes.len());
-    println!("Vertices (total): {}", ir.total_vertices());
-    println!("Faces (total): {}", ir.total_faces());
-    println!("Materials: {}", ir.materials.len());
-    println!("Textures: {}", ir.textures.len());
-    println!("Morphs: {}", ir.morphs.len());
-    println!("Rigidbodies: {}", ir.physics.rigid_bodies.len());
-    println!("Joints: {}", ir.physics.joints.len());
+    println!(
+        "{}",
+        t!("cli.dump.header", format = ir.source_format.label())
+    );
+    println!("{}", t!("cli.dump.model_name", name = ir.name.clone()));
+    println!(
+        "{}",
+        t!("cli.dump.bones", count = ir.bones.len().to_string())
+    );
+    println!(
+        "{}",
+        t!("cli.dump.meshes", count = ir.meshes.len().to_string())
+    );
+    println!(
+        "{}",
+        t!(
+            "cli.dump.vertices_total",
+            count = ir.total_vertices().to_string()
+        )
+    );
+    println!(
+        "{}",
+        t!("cli.dump.faces_total", count = ir.total_faces().to_string())
+    );
+    println!(
+        "{}",
+        t!("cli.dump.materials", count = ir.materials.len().to_string())
+    );
+    println!(
+        "{}",
+        t!("cli.dump.textures", count = ir.textures.len().to_string())
+    );
+    println!(
+        "{}",
+        t!("cli.dump.morphs", count = ir.morphs.len().to_string())
+    );
+    println!(
+        "{}",
+        t!(
+            "cli.dump.rigidbodies",
+            count = ir.physics.rigid_bodies.len().to_string()
+        )
+    );
+    println!(
+        "{}",
+        t!(
+            "cli.dump.joints",
+            count = ir.physics.joints.len().to_string()
+        )
+    );
     if let Some(ref rig) = ir.rig_type {
         println!(
-            "Rig type: {} (Humanoid: {} bones)",
-            rig, ir.humanoid_bone_count
+            "{}",
+            t!(
+                "cli.dump.rig_type",
+                rig = rig.to_string(),
+                count = ir.humanoid_bone_count.to_string()
+            )
         );
     }
 
-    println!("\n--- Bone list ---");
+    println!("\n{}", t!("cli.dump.bone_list_header"));
     for (i, bone) in ir.bones.iter().enumerate() {
         let vrm_name = bone.vrm_bone_name.as_deref().unwrap_or("-");
-        println!("  [{:3}] {} (vrm: {})", i, bone.name, vrm_name);
+        println!(
+            "{}",
+            t!(
+                "cli.dump.bone_entry",
+                index = format!("{:3}", i),
+                name = bone.name.clone(),
+                vrm = vrm_name.to_string()
+            )
+        );
     }
 
-    println!("\n--- Morph list ---");
+    println!("\n{}", t!("cli.dump.morph_list_header"));
     for morph in &ir.morphs {
-        println!("  [panel{}] {}", morph.panel, morph.name);
+        println!(
+            "{}",
+            t!(
+                "cli.dump.morph_entry",
+                panel = morph.panel.to_string(),
+                name = morph.name.clone()
+            )
+        );
     }
 }
 
 fn main() {
+    // Apply OS-detected locale before any user-visible string is generated.
+    popone::i18n::init_default_locale();
+
     // GUI サブシステムでも CLI 引数がある場合はコンソール出力を有効にする
     #[cfg(all(feature = "viewer", target_os = "windows"))]
     if std::env::args().len() > 1 {
         attach_parent_console();
     }
 
-    let args = match Args::try_parse() {
-        Ok(args) => args,
+    use clap::FromArgMatches;
+    let matches = match build_localized_command().try_get_matches() {
+        Ok(m) => m,
         Err(e) => {
             let _ = e.print();
             std::process::exit(e.exit_code());
         }
     };
+    let args = match Args::from_arg_matches(&matches) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
 
     if let Err(e) = run_main(args) {
-        eprintln!("Error: {e:#}");
+        eprintln!("{}: {e:#}", t!("cli.output.error_prefix"));
         std::process::exit(1);
     }
 }
@@ -320,11 +442,7 @@ fn run_main(mut args: Args) -> Result<()> {
         }
         #[cfg(not(feature = "viewer"))]
         {
-            anyhow::bail!(
-                "ビューアは viewer feature 付きでビルドする必要があります。\n\
-                 使い方: popone <入力.vrm> <出力.pmx>\n\
-                 ビューア: cargo build --features viewer"
-            );
+            anyhow::bail!("{}", t!("cli.error.viewer_feature_required"));
         }
     }
 
@@ -335,22 +453,35 @@ fn run_main(mut args: Args) -> Result<()> {
 
     // --list-models が非アーカイブファイルに使われた場合はエラー
     if args.list_models && !matches!(ext.as_str(), "zip" | "7z") {
-        anyhow::bail!("--list-models はアーカイブファイル（.zip / .7z）専用です");
+        anyhow::bail!("{}", t!("cli.error.list_models_archive_only"));
     }
 
     // アーカイブ: --list-models はビューアモードより先に処理
     if args.list_models && matches!(ext.as_str(), "zip" | "7z") {
-        let data = std::fs::read(&input)
-            .with_context(|| format!("アーカイブ読み込み失敗: {}", input.display()))?;
-        let format = popone::archive::archive_format_from_ext(&ext)
-            .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
+        let data = std::fs::read(&input).with_context(|| {
+            t!(
+                "cli.error.archive_load_failed",
+                path = input.display().to_string()
+            )
+            .to_string()
+        })?;
+        let format = popone::archive::archive_format_from_ext(&ext).with_context(|| {
+            t!("cli.error.unsupported_archive_format", ext = ext.clone()).to_string()
+        })?;
         let contents = popone::archive::list_models(&data, format)
-            .context("アーカイブ内モデル一覧取得失敗")?;
+            .with_context(|| t!("cli.error.archive_list_failed").to_string())?;
         if contents.models.is_empty() {
-            println!("No model files found in archive");
+            println!("{}", t!("cli.output.no_models_in_archive"));
         } else {
             for (_, path, _, kind) in &contents.models {
-                println!("[{}] {}", kind.label(), path.display());
+                println!(
+                    "{}",
+                    t!(
+                        "cli.output.archive_entry",
+                        kind = kind.label().to_string(),
+                        path = path.display().to_string()
+                    )
+                );
             }
         }
         return Ok(());
@@ -359,7 +490,7 @@ fn run_main(mut args: Args) -> Result<()> {
     // --model-name はCLI変換専用（ビューアモードでは使用不可）
     #[cfg(feature = "viewer")]
     if args.model_name.is_some() && args.output.is_none() && !args.dump {
-        anyhow::bail!("--model-name はCLI変換時のみ有効です。出力ファイルを指定してください");
+        anyhow::bail!("{}", t!("cli.error.model_name_cli_only"));
     }
 
     // viewer feature: 出力未指定 → ビューアモードで開く
@@ -372,15 +503,18 @@ fn run_main(mut args: Args) -> Result<()> {
 
     // アーカイブ経由のPMX変換
     if matches!(ext.as_str(), "zip" | "7z") {
-        let output = args.output.as_ref().context(
-            "出力ファイルパスを指定してください。\n使い方: popone <入力.zip> <出力.pmx>",
-        )?;
+        let output = args
+            .output
+            .as_ref()
+            .with_context(|| t!("cli.error.output_required_zip").to_string())?;
         return run_archive_convert(&input, output, &ext, &args);
     }
 
     let output = args
         .output
-        .context("出力ファイルパスを指定してください。\n使い方: popone <入力.vrm> <出力.pmx>")?;
+        .as_ref()
+        .with_context(|| t!("cli.error.output_required_vrm").to_string())?
+        .clone();
 
     // ロガー初期化（dump 時はファイルログなし）
     let log_level = args
@@ -392,7 +526,8 @@ fn run_main(mut args: Args) -> Result<()> {
     } else {
         Some(output.with_extension("log"))
     };
-    setup_logging(log_level, log_path.as_deref(), None).context("ロガー初期化失敗")?;
+    setup_logging(log_level, log_path.as_deref(), None)
+        .with_context(|| t!("cli.error.logger_init_failed").to_string())?;
     if let Some(ref p) = log_path {
         log::info!("Log file: {}", p.display());
     }
@@ -403,35 +538,47 @@ fn run_main(mut args: Args) -> Result<()> {
     // VRM の場合は glb を保持してテクスチャ書き出しに再利用（二重読み込み回避）
     let (ir, glb_for_tex) = match ext.as_str() {
         "obj" => {
-            let ir = popone::obj::extract::load_obj(&input).context("OBJ中間表現の抽出に失敗")?;
+            let ir = popone::obj::extract::load_obj(&input)
+                .with_context(|| t!("cli.error.obj_extract_failed").to_string())?;
             (ir, None)
         }
         "stl" => {
-            let ir = popone::stl::extract::load_stl(&input).context("STL中間表現の抽出に失敗")?;
+            let ir = popone::stl::extract::load_stl(&input)
+                .with_context(|| t!("cli.error.stl_extract_failed").to_string())?;
             (ir, None)
         }
         "x" => {
-            let ir =
-                popone::directx::extract::load_x(&input).context("DirectX中間表現の抽出に失敗")?;
+            let ir = popone::directx::extract::load_x(&input)
+                .with_context(|| t!("cli.error.directx_extract_failed").to_string())?;
             (ir, None)
         }
         "fbx" => {
-            let data = std::fs::read(&input)
-                .with_context(|| format!("FBXファイル読み込み失敗: {}", input.display()))?;
+            let data = std::fs::read(&input).with_context(|| {
+                t!(
+                    "cli.error.fbx_read_failed",
+                    path = input.display().to_string()
+                )
+                .to_string()
+            })?;
             let ir = popone::fbx::extract::extract_ir_model_from_fbx_with_options(
                 &data,
                 Some(&input),
                 args.normalize_pose,
                 args.normalize_to_tstance,
             )
-            .context("FBX中間表現の抽出に失敗")?;
+            .with_context(|| t!("cli.error.fbx_extract_failed").to_string())?;
             (ir, None)
         }
         "unitypackage" => {
-            let archive_data = std::fs::read(&input)
-                .with_context(|| format!("unitypackage読み込み失敗: {}", input.display()))?;
+            let archive_data = std::fs::read(&input).with_context(|| {
+                t!(
+                    "cli.error.unitypackage_read_failed",
+                    path = input.display().to_string()
+                )
+                .to_string()
+            })?;
             let pkg = popone::unitypackage::build_unity_package_index(&archive_data)
-                .context("unitypackage展開失敗")?;
+                .with_context(|| t!("cli.error.unitypackage_extract_failed").to_string())?;
 
             // FBX 一覧を取得
             let fbx_indices: Vec<(usize, String)> = pkg
@@ -450,9 +597,7 @@ fn run_main(mut args: Args) -> Result<()> {
                 .collect();
 
             if fbx_indices.is_empty() {
-                return Err(anyhow::anyhow!(
-                    ".unitypackage 内に FBX ファイルが見つかりません"
-                ));
+                return Err(anyhow::anyhow!("{}", t!("cli.error.unitypackage_no_fbx")));
             }
 
             if fbx_indices.len() > 1 {
@@ -470,14 +615,18 @@ fn run_main(mut args: Args) -> Result<()> {
                     .find(|(_, name)| name.to_lowercase().contains(&target_lower))
                     .map(|(idx, _)| *idx)
                     .ok_or_else(|| {
+                        let candidates = fbx_indices
+                            .iter()
+                            .map(|(_, n)| n.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
                         anyhow::anyhow!(
-                            "指定された FBX '{}' が見つかりません。利用可能: {}",
-                            target,
-                            fbx_indices
-                                .iter()
-                                .map(|(_, n)| n.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ")
+                            "{}",
+                            t!(
+                                "cli.error.fbx_not_found",
+                                name = target.clone(),
+                                candidates = candidates
+                            )
                         )
                     })?
             } else {
@@ -485,7 +634,7 @@ fn run_main(mut args: Args) -> Result<()> {
             };
 
             let prepared = popone::unitypackage::prepare_pkg_fbx(&pkg, selected_idx)
-                .context("Prefab テクスチャ解決失敗")?;
+                .with_context(|| t!("cli.error.prefab_resolve_failed").to_string())?;
             log::info!("FBX in unitypackage: {}", prepared.model.pathname);
 
             // unitypackage 経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
@@ -495,7 +644,7 @@ fn run_main(mut args: Args) -> Result<()> {
                 args.normalize_pose,
                 args.normalize_to_tstance,
             )
-            .context("FBX中間表現の抽出に失敗")?;
+            .with_context(|| t!("cli.error.fbx_extract_failed").to_string())?;
 
             if !prepared.resolved.is_empty() {
                 let prefab_label = format!(
@@ -523,8 +672,13 @@ fn run_main(mut args: Args) -> Result<()> {
             (ir, None)
         }
         _ => {
-            let glb = vrm::loader::load_glb(&input)
-                .with_context(|| format!("GLB読み込み失敗: {}", input.display()))?;
+            let glb = vrm::loader::load_glb(&input).with_context(|| {
+                t!(
+                    "cli.error.glb_load_failed",
+                    path = input.display().to_string()
+                )
+                .to_string()
+            })?;
             let version = vrm::detect::detect_version(&glb.document);
             log::info!("VRM version: {:?}", version);
             let all_extensions = vrm::loader::get_raw_extensions(&glb.document);
@@ -537,7 +691,7 @@ fn run_main(mut args: Args) -> Result<()> {
                 &all_extensions,
                 args.normalize_pose,
             )
-            .context("VRM中間表現の抽出に失敗")?;
+            .with_context(|| t!("cli.error.vrm_extract_failed").to_string())?;
             (ir, Some(glb))
         }
     };
@@ -552,17 +706,22 @@ fn run_main(mut args: Args) -> Result<()> {
 
     // 出力ディレクトリ確定
     let output_dir = output.parent().unwrap_or(Path::new(".")).to_path_buf();
-    std::fs::create_dir_all(&output_dir)
-        .with_context(|| format!("出力ディレクトリ作成失敗: {}", output_dir.display()))?;
+    std::fs::create_dir_all(&output_dir).with_context(|| {
+        t!(
+            "cli.error.output_dir_create_failed",
+            path = output_dir.display().to_string()
+        )
+        .to_string()
+    })?;
 
     // テクスチャ書き出し（VRM は保持済み glb を再利用）
     let tex_dir = output_dir.join("textures");
     let written_filenames = if let Some(ref glb) = glb_for_tex {
         convert::texture::write_all_textures(&ir.textures, &glb.images, &tex_dir)
-            .context("テクスチャ書き出し失敗")?
+            .with_context(|| t!("cli.error.texture_write_failed").to_string())?
     } else {
         convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)
-            .context("テクスチャ書き出し失敗")?
+            .with_context(|| t!("cli.error.texture_write_failed").to_string())?
     };
 
     // PMXモデル構築
@@ -574,7 +733,7 @@ fn run_main(mut args: Args) -> Result<()> {
     };
     let (mut pmx_model, toon_textures) =
         pmx::build::build_pmx_model_with_options(&ir, &build_options)
-            .context("PMXモデル構築失敗")?;
+            .with_context(|| t!("cli.error.pmx_build_failed").to_string())?;
     // PSD→PNG 変換でファイル名が変わった場合、PMX テクスチャパスを補正
     for (i, name) in written_filenames.iter().enumerate() {
         if i < pmx_model.textures.len() {
@@ -593,21 +752,29 @@ fn run_main(mut args: Args) -> Result<()> {
     }
 
     // PMX書き出し
-    let output_file = std::fs::File::create(&output)
-        .with_context(|| format!("出力ファイル作成失敗: {}", output.display()))?;
+    let output_file = std::fs::File::create(&output).with_context(|| {
+        t!(
+            "cli.error.output_file_create_failed",
+            path = output.display().to_string()
+        )
+        .to_string()
+    })?;
     let writer = std::io::BufWriter::new(output_file);
 
     let header = pmx_model.header.clone();
     let mut pmx_writer = pmx::writer::PmxWriter::new(writer, header);
     pmx_writer
         .write_model(&pmx_model)
-        .context("PMX書き出し失敗")?;
+        .with_context(|| t!("cli.error.pmx_write_failed").to_string())?;
 
     log::info!("Conversion complete: {}", output.display());
     println!(
-        "Conversion complete: {} -> {}",
-        input.display(),
-        output.display()
+        "{}",
+        t!(
+            "cli.output.conversion_complete",
+            input = input.display().to_string(),
+            output = output.display().to_string()
+        )
     );
 
     Ok(())
@@ -624,19 +791,30 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
     } else {
         Some(output.with_extension("log"))
     };
-    setup_logging(log_level, log_path.as_deref(), None).context("ロガー初期化失敗")?;
+    setup_logging(log_level, log_path.as_deref(), None)
+        .with_context(|| t!("cli.error.logger_init_failed").to_string())?;
 
     log::info!("Input file (archive): {}", input.display());
 
-    let data = std::fs::read(input)
-        .with_context(|| format!("アーカイブ読み込み失敗: {}", input.display()))?;
-    let format = popone::archive::archive_format_from_ext(ext)
-        .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
-    let contents =
-        popone::archive::list_models(&data, format).context("アーカイブ内モデル一覧取得失敗")?;
+    let data = std::fs::read(input).with_context(|| {
+        t!(
+            "cli.error.archive_load_failed",
+            path = input.display().to_string()
+        )
+        .to_string()
+    })?;
+    let format = popone::archive::archive_format_from_ext(ext).with_context(|| {
+        t!(
+            "cli.error.unsupported_archive_format",
+            ext = ext.to_string()
+        )
+        .to_string()
+    })?;
+    let contents = popone::archive::list_models(&data, format)
+        .with_context(|| t!("cli.error.archive_list_failed").to_string())?;
 
     if contents.models.is_empty() {
-        anyhow::bail!("アーカイブ内にモデルファイルが見つかりません");
+        anyhow::bail!("{}", t!("cli.error.archive_no_models_found"));
     }
 
     // モデル選択
@@ -660,8 +838,13 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                     .map(|&i| contents.models[i].1.display().to_string())
                     .collect();
                 anyhow::bail!(
-                    "\"{}\" に完全一致するモデルが {} 個あります:\n  {}\n--list-models で確認し、パスで指定してください。",
-                    name, exact.len(), candidates.join("\n  ")
+                    "{}",
+                    t!(
+                        "cli.error.model_name_exact_multiple",
+                        name = name.clone(),
+                        count = exact.len().to_string(),
+                        candidates = candidates.join("\n  ")
+                    )
                 );
             } else {
                 let prefix: Vec<usize> = contents
@@ -679,8 +862,13 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                         .map(|&i| contents.models[i].1.display().to_string())
                         .collect();
                     anyhow::bail!(
-                        "\"{}\" に前方一致するモデルが {} 個あります:\n  {}\nより具体的に指定してください。",
-                        name, prefix.len(), candidates.join("\n  ")
+                        "{}",
+                        t!(
+                            "cli.error.model_name_prefix_multiple",
+                            name = name.clone(),
+                            count = prefix.len().to_string(),
+                            candidates = candidates.join("\n  ")
+                        )
                     );
                 } else {
                     let substr: Vec<usize> = contents
@@ -698,13 +886,18 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                             .map(|&i| contents.models[i].1.display().to_string())
                             .collect();
                         anyhow::bail!(
-                            "\"{}\" に部分一致するモデルが {} 個あります:\n  {}\nより具体的に指定してください。",
-                            name, substr.len(), candidates.join("\n  ")
+                            "{}",
+                            t!(
+                                "cli.error.model_name_substr_multiple",
+                                name = name.clone(),
+                                count = substr.len().to_string(),
+                                candidates = candidates.join("\n  ")
+                            )
                         );
                     } else {
                         anyhow::bail!(
-                            "アーカイブ内に \"{}\" に一致するモデルが見つかりません。\n--list-models で一覧を確認してください。",
-                            name
+                            "{}",
+                            t!("cli.error.model_name_no_match", name = name.clone())
                         );
                     }
                 }
@@ -713,7 +906,8 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         (None, 1) => 0,
         (None, n) => {
             anyhow::bail!(
-                "{n} 個のモデルが見つかりました。--model-name で指定するか --list-models で一覧を確認してください"
+                "{}",
+                t!("cli.error.archive_multiple_models", count = n.to_string())
             );
         }
     };
@@ -721,30 +915,30 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
     log::info!("Selected model: {}", contents.models[selected].1.display());
 
     let bundle = popone::archive::extract_model_bundle(&data, format, contents, selected)
-        .context("モデル展開失敗")?;
+        .with_context(|| t!("cli.error.archive_model_extract_failed").to_string())?;
 
     // 種別で分岐して中間表現を構築
     use popone::archive::ArchiveModelKind;
     let ir = match bundle.kind {
         ArchiveModelKind::Pmx => {
             let pmx_model = popone::pmx::reader::read_pmx_from_data(&bundle.model.data)
-                .context("PMX読み込み失敗")?;
+                .with_context(|| t!("cli.error.pmx_read_failed").to_string())?;
             popone::pmx::extract::pmx_to_ir_with_aux(
                 &pmx_model,
                 Path::new("."),
                 Some(&bundle.aux_files),
             )
-            .context("PMX中間表現の抽出に失敗")?
+            .with_context(|| t!("cli.error.pmx_extract_failed").to_string())?
         }
         ArchiveModelKind::Pmd => {
             let pmd_model = popone::pmd::reader::read_pmd_from_data(&bundle.model.data)
-                .context("PMD読み込み失敗")?;
+                .with_context(|| t!("cli.error.pmd_read_failed").to_string())?;
             popone::pmd::extract::pmd_to_ir_with_aux(
                 &pmd_model,
                 &bundle.model.path,
                 Some(&bundle.aux_files),
             )
-            .context("PMD中間表現の抽出に失敗")?
+            .with_context(|| t!("cli.error.pmd_extract_failed").to_string())?
         }
         ArchiveModelKind::Fbx => {
             // アーカイブ経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
@@ -754,7 +948,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                 args.normalize_pose,
                 args.normalize_to_tstance,
             )
-            .context("FBX中間表現の抽出に失敗")?;
+            .with_context(|| t!("cli.error.fbx_extract_failed").to_string())?;
             let label = format!(
                 "archive({})",
                 input.file_name().unwrap_or_default().to_string_lossy()
@@ -768,7 +962,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         }
         ArchiveModelKind::Vrm | ArchiveModelKind::Glb => {
             let glb = popone::vrm::loader::load_glb_from_data(&bundle.model.data)
-                .context("VRM/GLB読み込み失敗")?;
+                .with_context(|| t!("cli.error.vrm_glb_read_failed").to_string())?;
             let version = popone::vrm::detect::detect_version(&glb.document);
             log::info!("VRM version: {:?}", version);
             let all_extensions = popone::vrm::loader::get_raw_extensions(&glb.document);
@@ -781,7 +975,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                 &all_extensions,
                 args.normalize_pose,
             )
-            .context("VRM中間表現の抽出に失敗")?
+            .with_context(|| t!("cli.error.vrm_extract_failed").to_string())?
         }
         ArchiveModelKind::Obj => {
             let base_dir = bundle
@@ -801,7 +995,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                 base_dir,
                 Some(&bundle.aux_files),
             )
-            .context("OBJ中間表現の抽出に失敗")?
+            .with_context(|| t!("cli.error.obj_extract_failed").to_string())?
         }
         ArchiveModelKind::Stl => {
             let name = bundle
@@ -811,7 +1005,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                 .and_then(|s| s.to_str())
                 .unwrap_or("Model");
             popone::stl::extract::load_stl_from_data(&bundle.model.data, name)
-                .context("STL中間表現の抽出に失敗")?
+                .with_context(|| t!("cli.error.stl_extract_failed").to_string())?
         }
         ArchiveModelKind::DirectX => {
             let base_dir = bundle
@@ -831,12 +1025,12 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                 base_dir,
                 Some(&bundle.aux_files),
             )
-            .context("DirectX中間表現の抽出に失敗")?
+            .with_context(|| t!("cli.error.directx_extract_failed").to_string())?
         }
         ArchiveModelKind::UnityPackage => {
             // アーカイブ内 .unitypackage を二重展開
             let pkg = popone::unitypackage::build_unity_package_index(&bundle.model.data)
-                .context("アーカイブ内 unitypackage 展開失敗")?;
+                .with_context(|| t!("cli.error.archive_unitypackage_extract_failed").to_string())?;
 
             // FBX 一覧を取得
             let fbx_indices: Vec<(usize, String)> = pkg
@@ -855,7 +1049,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                 .collect();
 
             if fbx_indices.is_empty() {
-                anyhow::bail!("アーカイブ内 .unitypackage に FBX が見つかりません");
+                anyhow::bail!("{}", t!("cli.error.archive_unitypackage_no_fbx"));
             }
 
             let selected_idx = if let Some(ref target) = args.fbx_name {
@@ -865,14 +1059,17 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                     .find(|(_, name)| name.to_lowercase().contains(&target_lower))
                     .map(|(idx, _)| *idx)
                     .ok_or_else(|| {
-                        anyhow::anyhow!("指定された FBX '{}' が見つかりません", target)
+                        anyhow::anyhow!(
+                            "{}",
+                            t!("cli.error.fbx_not_found_simple", name = target.clone())
+                        )
                     })?
             } else {
                 popone::unitypackage::select_best_fbx_index(&pkg, &fbx_indices)
             };
 
             let prepared = popone::unitypackage::prepare_pkg_fbx(&pkg, selected_idx)
-                .context("Prefab テクスチャ解決失敗")?;
+                .with_context(|| t!("cli.error.prefab_resolve_failed").to_string())?;
             log::info!(
                 "FBX in unitypackage: {} textures: {}",
                 prepared.model.pathname,
@@ -886,7 +1083,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                 args.normalize_pose,
                 args.normalize_to_tstance,
             )
-            .context("FBX中間表現の抽出に失敗")?;
+            .with_context(|| t!("cli.error.fbx_extract_failed").to_string())?;
 
             if !prepared.resolved.is_empty() {
                 let prefab_label = format!(
@@ -924,11 +1121,16 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
 
     // テクスチャ書き出し（アーカイブ経由は常に write_all_textures_from_ir を使用）
     let output_dir = output.parent().unwrap_or(Path::new(".")).to_path_buf();
-    std::fs::create_dir_all(&output_dir)
-        .with_context(|| format!("出力ディレクトリ作成失敗: {}", output_dir.display()))?;
+    std::fs::create_dir_all(&output_dir).with_context(|| {
+        t!(
+            "cli.error.output_dir_create_failed",
+            path = output_dir.display().to_string()
+        )
+        .to_string()
+    })?;
     let tex_dir = output_dir.join("textures");
     let written_filenames = convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)
-        .context("テクスチャ書き出し失敗")?;
+        .with_context(|| t!("cli.error.texture_write_failed").to_string())?;
 
     // PMXモデル構築 & 書き出し
     let build_options = pmx::build::PmxBuildOptions {
@@ -939,7 +1141,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
     };
     let (mut pmx_model, toon_textures) =
         pmx::build::build_pmx_model_with_options(&ir, &build_options)
-            .context("PMXモデル構築失敗")?;
+            .with_context(|| t!("cli.error.pmx_build_failed").to_string())?;
     // PSD→PNG 変換でファイル名が変わった場合、PMX テクスチャパスを補正
     for (i, name) in written_filenames.iter().enumerate() {
         if i < pmx_model.textures.len() {
@@ -955,20 +1157,28 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
             pmx_model.textures[pmx_idx] = format!("textures\\{}", name);
         }
     }
-    let output_file = std::fs::File::create(output)
-        .with_context(|| format!("出力ファイル作成失敗: {}", output.display()))?;
+    let output_file = std::fs::File::create(output).with_context(|| {
+        t!(
+            "cli.error.output_file_create_failed",
+            path = output.display().to_string()
+        )
+        .to_string()
+    })?;
     let writer = std::io::BufWriter::new(output_file);
     let header = pmx_model.header.clone();
     let mut pmx_writer = pmx::writer::PmxWriter::new(writer, header);
     pmx_writer
         .write_model(&pmx_model)
-        .context("PMX書き出し失敗")?;
+        .with_context(|| t!("cli.error.pmx_write_failed").to_string())?;
 
     log::info!("Conversion complete: {}", output.display());
     println!(
-        "Conversion complete: {} -> {}",
-        input.display(),
-        output.display()
+        "{}",
+        t!(
+            "cli.output.conversion_complete",
+            input = input.display().to_string(),
+            output = output.display().to_string()
+        )
     );
     Ok(())
 }
@@ -1048,7 +1258,8 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
     }
 
     let png = include_bytes!("../assets/popone_icon.png");
-    let img = image::load_from_memory(png).context("アイコン画像の読み込み失敗")?;
+    let img = image::load_from_memory(png)
+        .with_context(|| t!("cli.error.viewer_icon_load_failed").to_string())?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
     let icon = eframe::egui::IconData {
@@ -1143,5 +1354,10 @@ fn run_viewer_inner(
             Ok(Box::new(app))
         }),
     )
-    .map_err(|e| anyhow::anyhow!("ビューア起動失敗: {e}"))
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "{}",
+            t!("cli.error.viewer_launch_failed", detail = e.to_string())
+        )
+    })
 }

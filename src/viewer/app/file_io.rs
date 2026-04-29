@@ -4093,8 +4093,7 @@ impl ViewerApp {
             self.uv_edit.redo_stack.clear();
             self.uv_edit.selected.clear();
             log::info!(
-                "UV モーフ編集中の reload: overrides を破棄しました（base UV への\
-                 焼き込みを防止するため）"
+                "Reload during UV morph editing: dropped overrides to prevent baking into base UV"
             );
         }
         let appended_models = self
@@ -4297,15 +4296,14 @@ impl ViewerApp {
                 }
                 if restored > 0 {
                     log::info!(
-                        "UV モーフ offsets を {} 個復元しました (reload 越しの編集保持)",
+                        "UV morph offsets restored: {} entries (preserved across reload)",
                         restored
                     );
                 }
                 let unmatched = used.iter().filter(|&&u| !u).count();
                 if unmatched > 0 {
                     log::warn!(
-                        "UV モーフ offsets の snapshot が {} 個マッチせず破棄されました\
-                         （name/name_en/channel の完全一致が新 IR 側で見つからないため）",
+                        "UV morph offsets snapshot: {} entries dropped (no exact match for name/name_en/channel in new IR)",
                         unmatched
                     );
                 }

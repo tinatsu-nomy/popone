@@ -4,6 +4,7 @@ pub mod convert;
 pub mod directx;
 pub mod error;
 pub mod fbx;
+pub mod i18n;
 pub mod intermediate;
 pub mod obj;
 pub mod pmd;
@@ -16,6 +17,10 @@ pub mod vrm;
 
 #[cfg(feature = "viewer")]
 pub mod viewer;
+
+// Embed translations (`locales/{ja,en,zh}.yml`) into the binary at compile time.
+// English is used as the fallback when a key is missing in the active locale.
+rust_i18n::i18n!("locales", fallback = "en");
 
 use std::path::{Path, PathBuf};
 

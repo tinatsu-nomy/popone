@@ -1,3 +1,3 @@
-//! MME (ray-mmd) マテリアル生成モジュール (§K / Step 6)
+//! MME (ray-mmd) material generation module (§K / Step 6)
 
 pub mod ray_mmd;

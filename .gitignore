@@ -2,6 +2,10 @@
 Cargo.lock
 *.log
 
+# Temporary working directories
+/cargo_target_review/
+/tmp_build/
+
 # ビルド生成物
 *.exe
 *.dll

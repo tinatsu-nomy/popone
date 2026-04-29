@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// VRM 0.0 ルート拡張
+/// VRM 0.0 root extension
 #[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct VrmV0 {
@@ -100,7 +100,7 @@ pub struct SecondaryAnimation {
     pub collider_groups: Vec<ColliderGroup>,
 }
 
-/// VRM 0.0 の Vec3フィールドは配列でなくオブジェクト {"x":...,"y":...,"z":...} 形式
+/// VRM 0.0 Vec3 fields are objects of the form {"x":...,"y":...,"z":...}, not arrays
 #[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 pub struct Vec3Json {
     pub x: f32,
@@ -118,7 +118,7 @@ impl From<Vec3Json> for glam::Vec3 {
 #[serde(rename_all = "camelCase")]
 pub struct BoneGroup {
     pub comment: Option<String>,
-    pub stiffiness: Option<f32>, // VRM0.0はtypoあり
+    pub stiffiness: Option<f32>, // typo in the VRM 0.0 spec
     pub gravity_power: Option<f32>,
     pub gravity_dir: Option<Vec3Json>,
     pub drag_force: Option<f32>,

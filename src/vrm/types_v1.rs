@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// VRM 1.0 VRMC_vrm拡張ルート
+/// VRM 1.0 VRMC_vrm extension root
 #[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct VrmV1 {
@@ -44,7 +44,7 @@ pub struct VrmHumanoid {
     pub human_bones: HumanBones,
 }
 
-/// VRM 1.0のヒューマノイドボーンはオブジェクト形式
+/// VRM 1.0 humanoid bones are encoded as an object
 #[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct HumanBones {
@@ -73,7 +73,7 @@ pub struct HumanBones {
     pub right_upper_arm: Option<HumanBoneRef>,
     pub right_lower_arm: Option<HumanBoneRef>,
     pub right_hand: Option<HumanBoneRef>,
-    // 指
+    // Fingers
     pub left_thumb_metacarpal: Option<HumanBoneRef>,
     pub left_thumb_proximal: Option<HumanBoneRef>,
     pub left_thumb_distal: Option<HumanBoneRef>,
@@ -210,7 +210,7 @@ pub struct TextureTransformBind {
     pub offset: Option<[f32; 2]>,
 }
 
-// VRMC_springBone 拡張
+// VRMC_springBone extension
 #[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SpringBoneV1 {

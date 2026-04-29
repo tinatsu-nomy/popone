@@ -1,6 +1,6 @@
 use glam::{Vec2, Vec3, Vec4};
 
-/// PMXモデル全体
+/// PMX model (root structure).
 #[derive(Debug, Default)]
 pub struct PmxModel {
     pub header: PmxHeader,
@@ -19,7 +19,7 @@ pub struct PmxModel {
 #[derive(Debug, Clone)]
 pub struct PmxHeader {
     pub version: f32,
-    pub encoding: u8, // 0:UTF16 1:UTF8
+    pub encoding: u8, // 0: UTF-16, 1: UTF-8
     pub additional_uvs: u8,
     pub vertex_index_size: u8,
     pub texture_index_size: u8,
@@ -33,7 +33,7 @@ impl Default for PmxHeader {
     fn default() -> Self {
         Self {
             version: 2.0,
-            encoding: 0, // UTF16LE
+            encoding: 0, // UTF-16LE
             additional_uvs: 0,
             vertex_index_size: 2,
             texture_index_size: 1,
@@ -53,7 +53,7 @@ pub struct PmxModelInfo {
     pub comment_en: String,
 }
 
-/// 頂点
+/// Vertex.
 #[derive(Debug, Clone)]
 pub struct PmxVertex {
     pub position: Vec3,
@@ -79,7 +79,7 @@ pub enum PmxWeightType {
     },
 }
 
-/// 材質
+/// Material.
 #[derive(Debug, Clone)]
 pub struct PmxMaterial {
     pub name: String,
@@ -96,7 +96,7 @@ pub struct PmxMaterial {
     pub sphere_mode: u8,
     pub toon_ref: PmxToonRef,
     pub memo: String,
-    pub face_count: u32, // 面数×3
+    pub face_count: u32, // number of faces * 3
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -105,14 +105,14 @@ pub enum PmxToonRef {
     Shared(u8),
 }
 
-/// 付与データ（回転付与・移動付与）
+/// Grant data (rotation grant / move grant).
 #[derive(Debug, Clone)]
 pub struct PmxGrant {
     pub parent_index: i32,
     pub ratio: f32,
 }
 
-/// ボーン
+/// Bone.
 #[derive(Debug, Clone)]
 pub struct PmxBone {
     pub name: String,
@@ -148,7 +148,7 @@ pub struct IkLink {
     pub limit_max: Vec3,
 }
 
-/// PMXボーンフラグ定数
+/// PMX bone flag constants.
 pub const BONE_FLAG_TAIL_IS_BONE: u16 = 0x0001;
 pub const BONE_FLAG_ROTATABLE: u16 = 0x0002;
 pub const BONE_FLAG_TRANSLATABLE: u16 = 0x0004;
@@ -163,7 +163,7 @@ pub const BONE_FLAG_LOCAL_AXIS: u16 = 0x0800;
 pub const BONE_FLAG_PHYS_AFTER: u16 = 0x1000;
 pub const BONE_FLAG_EXT_PARENT: u16 = 0x2000;
 
-/// モーフ
+/// Morph.
 #[derive(Debug, Clone)]
 pub struct PmxMorph {
     pub name: String,
@@ -222,7 +222,7 @@ pub struct UvMorphOffset {
     pub offset: glam::Vec4,
 }
 
-/// 表示枠
+/// Display frame.
 #[derive(Debug, Clone)]
 pub struct PmxDisplayFrame {
     pub name: String,
@@ -237,7 +237,7 @@ pub enum DisplayFrameElement {
     Morph(i32),
 }
 
-/// 剛体
+/// Rigid body.
 #[derive(Debug, Clone)]
 pub struct PmxRigidBody {
     pub name: String,
@@ -245,7 +245,7 @@ pub struct PmxRigidBody {
     pub bone_index: i32,
     pub group: u8,
     pub no_collision_mask: u16,
-    pub shape: u8, // 0:球 1:箱 2:カプセル
+    pub shape: u8, // 0: sphere, 1: box, 2: capsule
     pub size: Vec3,
     pub position: Vec3,
     pub rotation: Vec3,
@@ -257,7 +257,7 @@ pub struct PmxRigidBody {
     pub physics_mode: u8,
 }
 
-/// ジョイント
+/// Joint.
 #[derive(Debug, Clone)]
 pub struct PmxJoint {
     pub name: String,

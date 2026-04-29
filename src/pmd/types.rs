@@ -1,6 +1,6 @@
 use glam::{Vec2, Vec3, Vec4};
 
-/// PMDモデル全体
+/// PMD model (root structure).
 #[derive(Debug)]
 pub struct PmdModel {
     pub header: PmdHeader,
@@ -16,14 +16,14 @@ pub struct PmdModel {
     pub toon_textures: [String; 10],
     pub rigid_bodies: Vec<PmdRigidBody>,
     pub joints: Vec<PmdJoint>,
-    /// 英語ヘッダ（あれば）
+    /// Optional English header.
     pub english_header: Option<PmdEnglishHeader>,
 }
 
 #[derive(Debug)]
 pub struct PmdHeader {
-    pub name: String,    // 20byte Shift_JIS
-    pub comment: String, // 256byte Shift_JIS
+    pub name: String,    // 20 bytes, Shift_JIS
+    pub comment: String, // 256 bytes, Shift_JIS
 }
 
 #[derive(Debug)]
@@ -35,7 +35,7 @@ pub struct PmdEnglishHeader {
     pub display_names: Vec<String>,
 }
 
-/// PMD頂点 (38byte固定)
+/// PMD vertex (fixed 38 bytes).
 #[derive(Debug, Clone)]
 pub struct PmdVertex {
     pub position: Vec3,
@@ -43,11 +43,11 @@ pub struct PmdVertex {
     pub uv: Vec2,
     pub bone1: u16,
     pub bone2: u16,
-    pub weight: u8,    // bone1のウェイト (0〜100)
-    pub edge_flag: u8, // 0:エッジあり 1:エッジなし（※材質の edge_flag とは逆の意味）
+    pub weight: u8,    // weight of bone1 (0..=100)
+    pub edge_flag: u8, // 0: edge enabled, 1: edge disabled (note: opposite of material edge_flag)
 }
 
-/// PMD材質 (70byte固定)
+/// PMD material (fixed 70 bytes).
 #[derive(Debug, Clone)]
 pub struct PmdMaterial {
     pub diffuse: Vec4, // RGBA
@@ -55,71 +55,71 @@ pub struct PmdMaterial {
     pub specular: Vec3,
     pub ambient: Vec3,
     pub toon_index: u8,
-    pub edge_flag: u8,        // 1:エッジあり 0:エッジなし
-    pub face_count: u32,      // 面頂点数（面数×3）
-    pub texture_name: String, // 20byte "*"でスフィア区切り
+    pub edge_flag: u8,        // 1: edge enabled, 0: edge disabled
+    pub face_count: u32,      // face vertex count (number of faces * 3)
+    pub texture_name: String, // 20 bytes; sphere texture separated by '*'
 }
 
-/// PMDボーン (39byte固定)
+/// PMD bone (fixed 39 bytes).
 #[derive(Debug, Clone)]
 pub struct PmdBone {
-    pub name: String,   // 20byte
-    pub parent: u16,    // 0xFFFF = ルート
-    pub child: u16,     // 0 or 0xFFFF = なし
-    pub bone_type: u8, // 0:回転 1:回転移動 2:IK 3:不明 4:IK影響下 5:回転影響下 6:IK接続先 7:非表示 8:捩り 9:回転連動
-    pub ik_parent: u16, // 0 = なし
+    pub name: String,   // 20 bytes
+    pub parent: u16,    // 0xFFFF = root
+    pub child: u16,     // 0 or 0xFFFF = none
+    pub bone_type: u8, // 0: rotate, 1: rotate+translate, 2: IK, 3: unknown, 4: under IK, 5: under rotate, 6: IK target, 7: hidden, 8: twist, 9: rotation link
+    pub ik_parent: u16, // 0 = none
     pub position: Vec3,
 }
 
-/// PMD IK
+/// PMD IK chain.
 #[derive(Debug, Clone)]
 pub struct PmdIk {
-    pub bone_index: u16,  // IKボーン
-    pub target_bone: u16, // IKターゲットボーン
-    pub chain_length: u8, // IKチェーンの長さ
-    pub iterations: u16,  // 再帰演算回数
-    pub limit_angle: f32, // IK値制限角度
-    pub chain: Vec<u16>,  // IKチェーンボーンIndex
+    pub bone_index: u16,  // IK bone
+    pub target_bone: u16, // IK target bone
+    pub chain_length: u8, // IK chain length
+    pub iterations: u16,  // iteration count
+    pub limit_angle: f32, // IK angle limit
+    pub chain: Vec<u16>,  // IK chain bone indices
 }
 
-/// PMDモーフ（表情）
+/// PMD morph (facial expression).
 #[derive(Debug, Clone)]
 pub struct PmdMorph {
-    pub name: String, // 20byte
+    pub name: String, // 20 bytes
     pub vertex_count: u32,
-    pub morph_type: u8, // 0:base 1:眉 2:目 3:口 4:その他
+    pub morph_type: u8, // 0: base, 1: brow, 2: eye, 3: mouth, 4: other
     pub vertices: Vec<PmdMorphVertex>,
 }
 
 #[derive(Debug, Clone)]
 pub struct PmdMorphVertex {
-    pub index: u32,   // base: グローバル頂点Index, other: baseモーフ内のIndex
-    pub offset: Vec3, // base: 絶対位置, other: オフセット
+    pub index: u32,   // base: global vertex index; other: index within the base morph
+    pub offset: Vec3, // base: absolute position; other: offset
 }
 
-/// PMD剛体
+/// PMD rigid body.
 #[derive(Debug, Clone)]
 pub struct PmdRigidBody {
-    pub name: String, // 20byte
+    pub name: String, // 20 bytes
     pub bone_index: u16,
     pub group: u8,
     pub no_collision_mask: u16,
-    pub shape: u8, // 0:球 1:箱 2:カプセル
+    pub shape: u8, // 0: sphere, 1: box, 2: capsule
     pub size: Vec3,
     pub position: Vec3,
-    pub rotation: Vec3, // ラジアン
+    pub rotation: Vec3, // radians
     pub mass: f32,
     pub linear_damping: f32,
     pub angular_damping: f32,
     pub restitution: f32,
     pub friction: f32,
-    pub physics_mode: u8, // 0:ボーン追従 1:物理 2:物理+Bone
+    pub physics_mode: u8, // 0: follow bone, 1: physics, 2: physics + bone
 }
 
-/// PMDジョイント
+/// PMD joint.
 #[derive(Debug, Clone)]
 pub struct PmdJoint {
-    pub name: String, // 20byte
+    pub name: String, // 20 bytes
     pub rigid_a: u32,
     pub rigid_b: u32,
     pub position: Vec3,
