@@ -205,20 +205,26 @@ fn build_unity_package_index_with_limit(
                 // B-9: pathname の読み込みバイト数も加算
                 total_bytes += s.len() as u64;
                 if total_bytes > max_bytes {
-                    return Err(PoponeError::UnityPackage(format!(
-                        ".unitypackage 展開サイズが上限 ({}MB) を超えました",
-                        max_bytes / (1024 * 1024)
-                    )));
+                    return Err(PoponeError::UnityPackage(
+                        t!(
+                            "error.unitypackage.size_limit_exceeded",
+                            limit_mb = (max_bytes / (1024 * 1024)).to_string()
+                        )
+                        .to_string(),
+                    ));
                 }
                 pathnames.insert(guid, s.trim().to_string());
             }
             "asset" => {
                 let entry_size = entry.header().size().unwrap_or(0);
                 if total_bytes.saturating_add(entry_size) > max_bytes {
-                    return Err(PoponeError::UnityPackage(format!(
-                        ".unitypackage 展開サイズが上限 ({}MB) を超えました",
-                        max_bytes / (1024 * 1024)
-                    )));
+                    return Err(PoponeError::UnityPackage(
+                        t!(
+                            "error.unitypackage.size_limit_exceeded",
+                            limit_mb = (max_bytes / (1024 * 1024)).to_string()
+                        )
+                        .to_string(),
+                    ));
                 }
                 let mut data = Vec::new();
                 entry
@@ -226,10 +232,13 @@ fn build_unity_package_index_with_limit(
                     .with_context(|| t!("error.unitypackage.asset_read_failed").to_string())?;
                 total_bytes += data.len() as u64;
                 if total_bytes > max_bytes {
-                    return Err(PoponeError::UnityPackage(format!(
-                        ".unitypackage 展開サイズが上限 ({}MB) を超えました",
-                        max_bytes / (1024 * 1024)
-                    )));
+                    return Err(PoponeError::UnityPackage(
+                        t!(
+                            "error.unitypackage.size_limit_exceeded",
+                            limit_mb = (max_bytes / (1024 * 1024)).to_string()
+                        )
+                        .to_string(),
+                    ));
                 }
                 assets.insert(guid, data);
             }
@@ -241,10 +250,13 @@ fn build_unity_package_index_with_limit(
                 // B-9: asset.meta の読み込みバイト数も加算
                 total_bytes += data.len() as u64;
                 if total_bytes > max_bytes {
-                    return Err(PoponeError::UnityPackage(format!(
-                        ".unitypackage 展開サイズが上限 ({}MB) を超えました",
-                        max_bytes / (1024 * 1024)
-                    )));
+                    return Err(PoponeError::UnityPackage(
+                        t!(
+                            "error.unitypackage.size_limit_exceeded",
+                            limit_mb = (max_bytes / (1024 * 1024)).to_string()
+                        )
+                        .to_string(),
+                    ));
                 }
                 let cow = String::from_utf8_lossy(&data);
                 if matches!(&cow, std::borrow::Cow::Owned(_)) {
@@ -320,9 +332,13 @@ pub fn take_fbx_and_textures(
     fbx_index: usize,
 ) -> Result<FbxWithTextures> {
     if fbx_index >= assets.len() {
-        return Err(PoponeError::UnityPackage(format!(
-            "FBXインデックスが範囲外: {fbx_index}"
-        )));
+        return Err(PoponeError::UnityPackage(
+            t!(
+                "error.unitypackage.fbx_index_out_of_range",
+                index = fbx_index.to_string()
+            )
+            .to_string(),
+        ));
     }
 
     let fbx_asset = &assets[fbx_index];
@@ -369,9 +385,13 @@ pub fn find_vrm_list(assets: &[ExtractedAsset]) -> Vec<(usize, String)> {
 /// 展開済みアセットから指定VRMを参照ベースで取得する
 pub fn take_vrm(assets: &[ExtractedAsset], vrm_index: usize) -> Result<(Arc<[u8]>, String)> {
     if vrm_index >= assets.len() {
-        return Err(PoponeError::UnityPackage(format!(
-            "VRMインデックスが範囲外: {vrm_index}"
-        )));
+        return Err(PoponeError::UnityPackage(
+            t!(
+                "error.unitypackage.vrm_index_out_of_range",
+                index = vrm_index.to_string()
+            )
+            .to_string(),
+        ));
     }
     let vrm_asset = &assets[vrm_index];
     let vrm_name = vrm_asset.filename();
@@ -416,15 +436,19 @@ pub fn extract_fbx_from_unitypackage(
             .find(|(_, name)| name.to_lowercase().contains(&target_lower))
             .map(|(idx, _)| *idx)
             .ok_or_else(|| {
-                PoponeError::UnityPackage(format!(
-                    "指定された FBX '{}' が見つかりません。利用可能: {}",
-                    target,
-                    fbx_list
-                        .iter()
-                        .map(|(_, n)| n.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
+                let candidates = fbx_list
+                    .iter()
+                    .map(|(_, n)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                PoponeError::UnityPackage(
+                    t!(
+                        "error.unitypackage.fbx_not_found",
+                        name = target.to_string(),
+                        candidates = candidates
+                    )
+                    .to_string(),
+                )
             })?
     } else {
         fbx_list[0].0

@@ -1,6 +1,7 @@
 //! ZIP archive extraction (two-pass: list, then selective extract).
 
 use crate::error::{PoponeError, Result};
+use rust_i18n::t;
 use std::io::Read;
 
 use super::{normalize_archive_path, ArchiveEntry, ArchiveEntryMeta};
@@ -15,9 +16,13 @@ fn decode_filename(file: &zip::read::ZipFile) -> Result<String> {
     // Shift_JIS fallback
     let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(raw);
     if had_errors {
-        return Err(PoponeError::Archive(format!(
-            "ファイル名のデコードに失敗: {raw:?}"
-        )));
+        return Err(PoponeError::Archive(
+            t!(
+                "error.archive.filename_decode_failed",
+                raw = format!("{raw:?}")
+            )
+            .to_string(),
+        ));
     }
     Ok(decoded.into_owned())
 }
@@ -69,9 +74,15 @@ pub fn extract_files(
         // Size check (declared size)
         let declared = file.size();
         if total + declared > max_total_bytes {
-            return Err(PoponeError::Archive(format!(
-                "展開サイズ上限超過: {total} + {declared} > {max_total_bytes} bytes"
-            )));
+            return Err(PoponeError::Archive(
+                t!(
+                    "error.archive.size_limit_exceeded",
+                    total = total.to_string(),
+                    size = declared.to_string(),
+                    limit = max_total_bytes.to_string()
+                )
+                .to_string(),
+            ));
         }
 
         // Actual read; cap with `take` as a hard limit

@@ -1,6 +1,7 @@
 //! 7z archive extraction (full extract, filtered by extension).
 
 use crate::error::Result;
+use rust_i18n::t;
 use std::path::Path;
 
 use super::{normalize_archive_path, ArchiveEntry, MODEL_EXTENSIONS, TEXTURE_EXTENSIONS};
@@ -44,10 +45,15 @@ pub fn extract_filtered(data: &[u8], max_total_bytes: u64) -> Result<Vec<Archive
         let size = entry.size();
         // Overflow-safe pre-check with saturating_add
         if total.saturating_add(size) > max_total_bytes {
-            return Err(std::io::Error::other(format!(
-                "展開サイズ上限超過: {} + {} > {} bytes",
-                total, size, max_total_bytes
-            ))
+            return Err(std::io::Error::other(
+                t!(
+                    "error.archive.size_limit_exceeded",
+                    total = total.to_string(),
+                    size = size.to_string(),
+                    limit = max_total_bytes.to_string()
+                )
+                .to_string(),
+            )
             .into());
         }
 
@@ -66,10 +72,15 @@ pub fn extract_filtered(data: &[u8], max_total_bytes: u64) -> Result<Vec<Archive
             }
             read_total += n as u64;
             if read_total > remaining {
-                return Err(std::io::Error::other(format!(
-                    "展開サイズ上限超過（実読込）: {} + {} > {} bytes",
-                    total, read_total, max_total_bytes
-                ))
+                return Err(std::io::Error::other(
+                    t!(
+                        "error.archive.size_limit_exceeded_actual",
+                        total = total.to_string(),
+                        actual = read_total.to_string(),
+                        limit = max_total_bytes.to_string()
+                    )
+                    .to_string(),
+                )
                 .into());
             }
             buf.extend_from_slice(&chunk[..n]);

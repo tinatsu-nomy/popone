@@ -1,5 +1,6 @@
 use crate::error::{PoponeError, Result, ResultExt};
 use glam::{Quat, Vec3};
+use rust_i18n::t;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -23,8 +24,13 @@ pub fn load_unity_anim_with_params(
     muscle_scale: f32,
     params_path: Option<&Path>,
 ) -> Result<VrmaAnimation> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("Unity .animファイルの読み込みに失敗: {}", path.display()))?;
+    let file = std::fs::File::open(path).with_context(|| {
+        t!(
+            "error.unity_anim.file_load_failed",
+            path = path.display().to_string()
+        )
+        .to_string()
+    })?;
     let reader = BufReader::new(file);
 
     let parsed = parse_anim_yaml(reader)?;
@@ -116,7 +122,7 @@ fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
         if line_num <= 3 {
             if line_num == 1 && !line.starts_with("%YAML") {
                 return Err(PoponeError::Other(
-                    "Unity YAMLファイルではありません".into(),
+                    t!("error.unity_anim.not_yaml").to_string(),
                 ));
             }
             continue;
@@ -655,10 +661,15 @@ fn parse_f32x3(json: &serde_json::Value, key: &str, default: (f32, f32, f32)) ->
 
 /// DumpHumanoidParams.cs が出力した JSON を読み込む
 pub fn load_humanoid_params(path: &Path) -> Result<HumanoidParams> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("Humanoidパラメータ読み込み失敗: {}", path.display()))?;
-    let json: serde_json::Value =
-        serde_json::from_str(&text).context("Humanoidパラメータ JSON パース失敗")?;
+    let text = std::fs::read_to_string(path).with_context(|| {
+        t!(
+            "error.unity_anim.params_load_failed",
+            path = path.display().to_string()
+        )
+        .to_string()
+    })?;
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| t!("error.unity_anim.params_parse_failed").to_string())?;
 
     let mut bones = HashMap::new();
     let mut muscle_ranges = HashMap::new();

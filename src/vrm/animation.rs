@@ -1,6 +1,7 @@
 use crate::error::{PoponeError, Result, ResultExt};
 use glam::{Quat, Vec3};
 use gltf::buffer::Data;
+use rust_i18n::t;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -10,8 +11,13 @@ use crate::intermediate::animation::*;
 
 /// VRMAファイルを読み込みアニメーションデータを返す
 pub fn load_vrma(path: &Path) -> Result<VrmaAnimation> {
-    let (document, buffers, _images) = gltf::import(path)
-        .with_context(|| format!("VRMAファイルの読み込みに失敗: {}", path.display()))?;
+    let (document, buffers, _images) = gltf::import(path).with_context(|| {
+        t!(
+            "error.vrma.vrma_load_failed",
+            path = path.display().to_string()
+        )
+        .to_string()
+    })?;
 
     let vrma_ext = extract_vrma_extension(&document)?;
     parse_vrma(&document, &buffers, &vrma_ext)
@@ -20,8 +26,13 @@ pub fn load_vrma(path: &Path) -> Result<VrmaAnimation> {
 /// GLB/glTFファイルからアニメーションを読み込む（ノード名ベース）
 /// VRMC_vrm_animation 拡張があればVRMAとして読み込む
 pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
-    let (document, buffers, _images) = gltf::import(path)
-        .with_context(|| format!("glTFファイルの読み込みに失敗: {}", path.display()))?;
+    let (document, buffers, _images) = gltf::import(path).with_context(|| {
+        t!(
+            "error.vrma.gltf_load_failed",
+            path = path.display().to_string()
+        )
+        .to_string()
+    })?;
 
     // VRMC_vrm_animation 拡張があればVRMAとして読み込む
     if let Ok(vrma_ext) = extract_vrma_extension(&document) {
@@ -357,7 +368,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
 
     if animations.is_empty() {
         return Err(PoponeError::Other(
-            "アニメーションが含まれていません".into(),
+            t!("error.vrma.no_animations").to_string(),
         ));
     }
 
@@ -373,7 +384,7 @@ fn extract_vrma_extension(document: &gltf::Document) -> Result<Value> {
         }
     }
     Err(PoponeError::Other(
-        "VRMC_vrm_animation 拡張が見つかりません".into(),
+        t!("error.vrma.extension_missing").to_string(),
     ))
 }
 
@@ -395,7 +406,7 @@ fn parse_vrma(
     let anim = document
         .animations()
         .next()
-        .context("glTF アニメーションが含まれていません")?;
+        .with_context(|| t!("error.vrma.gltf_no_animations").to_string())?;
 
     let name = anim.name().unwrap_or("vrma").to_string();
 

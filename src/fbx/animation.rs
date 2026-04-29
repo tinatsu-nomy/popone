@@ -1,5 +1,6 @@
 use crate::error::{PoponeError, Result, ResultExt};
 use glam::{Mat3, Quat, Vec3};
+use rust_i18n::t;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -24,14 +25,20 @@ struct FbxAxisConfig {
 
 /// FBXファイルからアニメーションを読み込む
 pub fn load_fbx_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
-    let data = std::fs::read(path)
-        .with_context(|| format!("FBXファイルの読み込みに失敗: {}", path.display()))?;
+    let data = std::fs::read(path).with_context(|| {
+        t!(
+            "error.fbx_anim.file_load_failed",
+            path = path.display().to_string()
+        )
+        .to_string()
+    })?;
     load_fbx_animation_from_data(&data)
 }
 
 /// FBXバイナリデータからアニメーションを読み込む
 pub fn load_fbx_animation_from_data(data: &[u8]) -> Result<Vec<VrmaAnimation>> {
-    let doc = super::parser::parse(data).context("FBXパースに失敗")?;
+    let doc = super::parser::parse(data)
+        .with_context(|| t!("error.fbx_anim.parse_failed").to_string())?;
     let scene = FbxScene::from_document(&doc);
     let axis_config = read_axis_config(&doc);
 
@@ -152,7 +159,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
 
     if anim_stacks.is_empty() {
         return Err(PoponeError::FbxParse(
-            "FBXにアニメーションが含まれていません".into(),
+            t!("error.fbx_anim.no_animations").to_string(),
         ));
     }
 
@@ -441,7 +448,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
 
     if animations.is_empty() {
         return Err(PoponeError::FbxParse(
-            "FBXにアニメーションチャネルが含まれていません".into(),
+            t!("error.fbx_anim.no_channels").to_string(),
         ));
     }
 

@@ -132,15 +132,38 @@ error:
       pin_vertex_count: "Pin頂点数"
   pmx_build:
     bone_not_found: "ボーン「%{name}」が見つかりません"
+  fbx_anim:
+    file_load_failed: "FBX ファイルの読み込みに失敗: %{path}"
+    parse_failed: "FBX パースに失敗"
+    no_animations: "FBX にアニメーションが含まれていません"
+    no_channels: "FBX にアニメーションチャネルが含まれていません"
+  unity_anim:
+    file_load_failed: "Unity .anim ファイルの読み込みに失敗: %{path}"
+    not_yaml: "Unity YAML ファイルではありません"
+    params_load_failed: "Humanoid パラメータ読み込み失敗: %{path}"
+    params_parse_failed: "Humanoid パラメータ JSON パース失敗"
+  vrma:
+    vrma_load_failed: "VRMA ファイルの読み込みに失敗: %{path}"
+    gltf_load_failed: "glTF ファイルの読み込みに失敗: %{path}"
+    no_animations: "アニメーションが含まれていません"
+    extension_missing: "VRMC_vrm_animation 拡張が見つかりません"
+    gltf_no_animations: "glTF アニメーションが含まれていません"
   archive:
     unsafe_path: "安全でないアーカイブパス: %{raw}"
     model_index_out_of_range: "モデルインデックスが範囲外: %{index}"
     model_file_extract_failed: "モデルファイルが展開できません: %{path}"
     model_file_extract_failed_simple: "モデルファイルが展開できません"
     model_file_not_found: "モデルファイルが見つかりません: %{path}"
+    filename_decode_failed: "ファイル名のデコードに失敗: %{raw}"
+    size_limit_exceeded: "展開サイズ上限超過: %{total} + %{size} > %{limit} bytes"
+    size_limit_exceeded_actual: "展開サイズ上限超過（実読込）: %{total} + %{actual} > %{limit} bytes"
   pmd:
     material_count_zero: "材質数がゼロ"
     material_face_count_overflow: "材質面数オーバーフロー"
+    invalid_magic: "PMD マジックナンバーが不正: %{magic}"
+    unsupported_version: "未対応の PMD バージョン: %{version}"
+    face_index_count_not_multiple_of_3: "PMD 面インデックス数が 3 の倍数でない: %{count}"
+    no_english_header: "英語ヘッダなし"
   fbx:
     too_many_properties: "プロパティ数 (%{count}) が上限 (%{limit}) を超えています"
     properties_count_overflow: "プロパティ数 (%{count}) が usize に変換できません"
@@ -193,6 +216,10 @@ error:
     pathname_read_failed: "pathname 読み込み失敗"
     asset_read_failed: "asset 読み込み失敗"
     asset_meta_read_failed: "asset.meta 読み込み失敗"
+    size_limit_exceeded: ".unitypackage 展開サイズが上限 (%{limit_mb}MB) を超えました"
+    fbx_index_out_of_range: "FBX インデックスが範囲外: %{index}"
+    vrm_index_out_of_range: "VRM インデックスが範囲外: %{index}"
+    fbx_not_found: "指定された FBX '%{name}' が見つかりません。利用可能: %{candidates}"
   psd:
     too_short: "PSD ファイルが短すぎます (%{size} bytes)"
     invalid_signature: "PSD シグネチャが不正です"

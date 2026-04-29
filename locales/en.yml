@@ -132,15 +132,38 @@ error:
       pin_vertex_count: "Pin vertex count"
   pmx_build:
     bone_not_found: "Bone '%{name}' not found"
+  fbx_anim:
+    file_load_failed: "Failed to read FBX file: %{path}"
+    parse_failed: "Failed to parse FBX"
+    no_animations: "FBX contains no animations"
+    no_channels: "FBX contains no animation channels"
+  unity_anim:
+    file_load_failed: "Failed to read Unity .anim file: %{path}"
+    not_yaml: "Not a Unity YAML file"
+    params_load_failed: "Failed to read Humanoid parameters: %{path}"
+    params_parse_failed: "Failed to parse Humanoid parameters JSON"
+  vrma:
+    vrma_load_failed: "Failed to read VRMA file: %{path}"
+    gltf_load_failed: "Failed to read glTF file: %{path}"
+    no_animations: "No animations found"
+    extension_missing: "VRMC_vrm_animation extension not found"
+    gltf_no_animations: "glTF contains no animations"
   archive:
     unsafe_path: "Unsafe archive path: %{raw}"
     model_index_out_of_range: "Model index out of range: %{index}"
     model_file_extract_failed: "Cannot extract model file: %{path}"
     model_file_extract_failed_simple: "Cannot extract model file"
     model_file_not_found: "Model file not found: %{path}"
+    filename_decode_failed: "Failed to decode filename: %{raw}"
+    size_limit_exceeded: "Extraction size limit exceeded: %{total} + %{size} > %{limit} bytes"
+    size_limit_exceeded_actual: "Extraction size limit exceeded (actual read): %{total} + %{actual} > %{limit} bytes"
   pmd:
     material_count_zero: "Material count is zero"
     material_face_count_overflow: "Material face count overflow"
+    invalid_magic: "Invalid PMD magic number: %{magic}"
+    unsupported_version: "Unsupported PMD version: %{version}"
+    face_index_count_not_multiple_of_3: "PMD face index count is not a multiple of 3: %{count}"
+    no_english_header: "No English header"
   fbx:
     too_many_properties: "Property count (%{count}) exceeds the limit (%{limit})"
     properties_count_overflow: "Property count (%{count}) cannot be converted to usize"
@@ -193,6 +216,10 @@ error:
     pathname_read_failed: "Failed to read pathname"
     asset_read_failed: "Failed to read asset"
     asset_meta_read_failed: "Failed to read asset.meta"
+    size_limit_exceeded: ".unitypackage extraction size exceeded the limit (%{limit_mb}MB)"
+    fbx_index_out_of_range: "FBX index out of range: %{index}"
+    vrm_index_out_of_range: "VRM index out of range: %{index}"
+    fbx_not_found: "Specified FBX '%{name}' not found. Available: %{candidates}"
   psd:
     too_short: "PSD file is too short (%{size} bytes)"
     invalid_signature: "Invalid PSD signature"

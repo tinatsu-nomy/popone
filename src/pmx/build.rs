@@ -1,5 +1,6 @@
 use crate::error::{PoponeError, Result};
 use glam::Vec3;
+use rust_i18n::t;
 use std::collections::HashMap;
 use std::f32::consts::PI;
 
@@ -860,7 +861,11 @@ fn add_waist_cancel_bones(model: &mut PmxModel) -> Result<()> {
             .bones
             .iter()
             .position(|b| b.name == "右足")
-            .ok_or_else(|| PoponeError::Build("ボーン「右足」が見つかりません".into()))?;
+            .ok_or_else(|| {
+                PoponeError::Build(
+                    t!("error.pmx_build.bone_not_found", name = "右足".to_string()).to_string(),
+                )
+            })?;
         move_bone_in_model(model, r_cancel_at, r_leg_at);
 
         log::debug!(
@@ -904,7 +909,11 @@ fn add_waist_cancel_bones(model: &mut PmxModel) -> Result<()> {
             .bones
             .iter()
             .position(|b| b.name == "左足")
-            .ok_or_else(|| PoponeError::Build("ボーン「左足」が見つかりません".into()))?;
+            .ok_or_else(|| {
+                PoponeError::Build(
+                    t!("error.pmx_build.bone_not_found", name = "左足".to_string()).to_string(),
+                )
+            })?;
         move_bone_in_model(model, l_cancel_at, l_leg_at);
     }
     Ok(())
@@ -1525,7 +1534,13 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
             .iter()
             .position(|b| b.name == shoulder_name)
             .ok_or_else(|| {
-                PoponeError::Build(format!("ボーン「{shoulder_name}」が見つかりません"))
+                PoponeError::Build(
+                    t!(
+                        "error.pmx_build.bone_not_found",
+                        name = shoulder_name.to_string()
+                    )
+                    .to_string(),
+                )
             })?;
         move_bone_in_model(model, p_at, shoulder_now);
 
@@ -1542,10 +1557,19 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
         //    肩Cのgrant = 肩P × (-1.0)
         let c_flags = BONE_FLAG_ROTATABLE | BONE_FLAG_ROTATION_GRANT;
         let shoulder_idx_now = find_bone_idx(&model.bones, shoulder_name).ok_or_else(|| {
-            PoponeError::Build(format!("ボーン「{shoulder_name}」が見つかりません"))
+            PoponeError::Build(
+                t!(
+                    "error.pmx_build.bone_not_found",
+                    name = shoulder_name.to_string()
+                )
+                .to_string(),
+            )
         })?;
-        let p_idx_now = find_bone_idx(&model.bones, p_jp)
-            .ok_or_else(|| PoponeError::Build(format!("ボーン「{p_jp}」が見つかりません")))?;
+        let p_idx_now = find_bone_idx(&model.bones, p_jp).ok_or_else(|| {
+            PoponeError::Build(
+                t!("error.pmx_build.bone_not_found", name = p_jp.to_string()).to_string(),
+            )
+        })?;
 
         let c_at = model.bones.len();
         model.bones.push(PmxBone {
@@ -1564,8 +1588,15 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
         });
 
         // 腕の親を肩Cに変更
-        let arm_idx_now = find_bone_idx(&model.bones, arm_name)
-            .ok_or_else(|| PoponeError::Build(format!("ボーン「{arm_name}」が見つかりません")))?;
+        let arm_idx_now = find_bone_idx(&model.bones, arm_name).ok_or_else(|| {
+            PoponeError::Build(
+                t!(
+                    "error.pmx_build.bone_not_found",
+                    name = arm_name.to_string()
+                )
+                .to_string(),
+            )
+        })?;
         model.bones[arm_idx_now as usize].parent_index = c_at as i32;
 
         // 肩Cを腕の直前に移動
@@ -1573,7 +1604,15 @@ fn add_shoulder_cancel_bones(model: &mut PmxModel) -> Result<()> {
             .bones
             .iter()
             .position(|b| b.name == arm_name)
-            .ok_or_else(|| PoponeError::Build(format!("ボーン「{arm_name}」が見つかりません")))?;
+            .ok_or_else(|| {
+                PoponeError::Build(
+                    t!(
+                        "error.pmx_build.bone_not_found",
+                        name = arm_name.to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
         move_bone_in_model(model, c_at, arm_now);
 
         log::debug!(
@@ -2202,9 +2241,13 @@ fn build_rigid_bodies(ir: &IrModel, align_rigid_rotation: bool, scale: f32) -> V
 
         if log::log_enabled!(log::Level::Debug) {
             let shape_name = match &rb.shape {
-                RigidShape::Sphere { radius } => format!("球 r={:.3}", radius),
-                RigidShape::Box { size } => format!("箱 ({:.3},{:.3},{:.3})", size.x, size.y, size.z),
-                RigidShape::Capsule { radius, height } => format!("カプセル r={:.3} h={:.3}", radius, height),
+                RigidShape::Sphere { radius } => format!("Sphere r={:.3}", radius),
+                RigidShape::Box { size } => {
+                    format!("Box ({:.3},{:.3},{:.3})", size.x, size.y, size.z)
+                }
+                RigidShape::Capsule { radius, height } => {
+                    format!("Capsule r={:.3} h={:.3}", radius, height)
+                }
             };
             log::debug!("  [{:2}] \"{}\" {} bone={:?} group={} mode={} mass={:.2} pos=({:.3},{:.3},{:.3})",
                 i, rb.name, shape_name, rb.bone_index, rb.group, mode_name(rb.physics_mode), rb.mass,

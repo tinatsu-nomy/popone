@@ -132,15 +132,38 @@ error:
       pin_vertex_count: "Pin 顶点数"
   pmx_build:
     bone_not_found: "未找到骨骼「%{name}」"
+  fbx_anim:
+    file_load_failed: "读取 FBX 文件失败: %{path}"
+    parse_failed: "解析 FBX 失败"
+    no_animations: "FBX 中未包含动画"
+    no_channels: "FBX 中未包含动画通道"
+  unity_anim:
+    file_load_failed: "读取 Unity .anim 文件失败: %{path}"
+    not_yaml: "不是 Unity YAML 文件"
+    params_load_failed: "读取 Humanoid 参数失败: %{path}"
+    params_parse_failed: "解析 Humanoid 参数 JSON 失败"
+  vrma:
+    vrma_load_failed: "读取 VRMA 文件失败: %{path}"
+    gltf_load_failed: "读取 glTF 文件失败: %{path}"
+    no_animations: "未包含动画"
+    extension_missing: "未找到 VRMC_vrm_animation 扩展"
+    gltf_no_animations: "glTF 中未包含动画"
   archive:
     unsafe_path: "不安全的压缩路径: %{raw}"
     model_index_out_of_range: "模型索引超出范围: %{index}"
     model_file_extract_failed: "无法解压模型文件: %{path}"
     model_file_extract_failed_simple: "无法解压模型文件"
     model_file_not_found: "未找到模型文件: %{path}"
+    filename_decode_failed: "解码文件名失败: %{raw}"
+    size_limit_exceeded: "解压大小超出上限: %{total} + %{size} > %{limit} bytes"
+    size_limit_exceeded_actual: "解压大小超出上限（实际读取）: %{total} + %{actual} > %{limit} bytes"
   pmd:
     material_count_zero: "材质数为零"
     material_face_count_overflow: "材质面数溢出"
+    invalid_magic: "PMD 魔数无效: %{magic}"
+    unsupported_version: "不支持的 PMD 版本: %{version}"
+    face_index_count_not_multiple_of_3: "PMD 面索引数不是 3 的倍数: %{count}"
+    no_english_header: "无英文头部"
   fbx:
     too_many_properties: "属性数 (%{count}) 超过上限 (%{limit})"
     properties_count_overflow: "属性数 (%{count}) 无法转换为 usize"
@@ -193,6 +216,10 @@ error:
     pathname_read_failed: "读取 pathname 失败"
     asset_read_failed: "读取 asset 失败"
     asset_meta_read_failed: "读取 asset.meta 失败"
+    size_limit_exceeded: ".unitypackage 解压大小超出上限 (%{limit_mb}MB)"
+    fbx_index_out_of_range: "FBX 索引超出范围: %{index}"
+    vrm_index_out_of_range: "VRM 索引超出范围: %{index}"
+    fbx_not_found: "未找到指定的 FBX '%{name}'。可用: %{candidates}"
   psd:
     too_short: "PSD 文件过短 (%{size} bytes)"
     invalid_signature: "PSD 签名无效"
