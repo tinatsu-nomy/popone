@@ -10,24 +10,24 @@ use crate::convert::coord::{
 use crate::intermediate::types::*;
 use crate::pmx::types::*;
 
-/// PMX 座標 → glTF 座標（VRM 1.0 変換の逆、PMXは常に is_vrm0=false）
+/// PMX coords -> glTF coords (inverse of the VRM 1.0 transform; PMX is always is_vrm0=false).
 #[inline]
 fn pmx_pos_to_gltf(v: Vec3) -> Vec3 {
     pmx_pos_to_gltf_full(v, false)
 }
 
-/// PMX 法線 → glTF 法線（PMXは常に is_vrm0=false）
+/// PMX normal -> glTF normal (PMX is always is_vrm0=false).
 #[inline]
 fn pmx_normal_to_gltf(n: Vec3) -> Vec3 {
     pmx_normal_to_gltf_full(n, false)
 }
 
-/// PMX モデルから IrModel を構築する
+/// Build an `IrModel` from a PMX model.
 pub fn pmx_to_ir(pmx: &PmxModel, pmx_dir: &Path) -> Result<IrModel> {
     pmx_to_ir_with_aux(pmx, pmx_dir, None)
 }
 
-/// オンメモリ補助ファイル付きで PMX → IrModel 変換
+/// Convert PMX -> `IrModel` with in-memory auxiliary files.
 pub fn pmx_to_ir_with_aux(
     pmx: &PmxModel,
     pmx_dir: &Path,
@@ -37,10 +37,10 @@ pub fn pmx_to_ir_with_aux(
     let textures = extract_textures(pmx, pmx_dir, aux_files);
     let materials = extract_materials(pmx);
     let (meshes, pmx_to_ir_vertex) = extract_meshes(pmx);
-    // UV モーフ取り込み (Phase 3 A-2) のため pmx_to_ir_vertex を渡す。
-    // 1:1 マップのため PMX 頂点が複数の IR 頂点に split されたケースでは最後の
-    // マッピングだけが採用される点に注意（実モデルでは UV モーフは 1 material 内に
-    // 収まることが多く、実害は限定的）。
+    // Pass `pmx_to_ir_vertex` so UV morphs can be ingested (Phase 3 A-2).
+    // The mapping is 1:1, so when a PMX vertex was split across several IR vertices only the
+    // last mapping survives. UV morphs typically stay within a single material in real models,
+    // which keeps the impact small in practice.
     let morphs = extract_morphs(pmx, &meshes, &pmx_to_ir_vertex);
     let physics = extract_physics(pmx);
 
@@ -61,7 +61,7 @@ pub fn pmx_to_ir_with_aux(
     })
 }
 
-/// ボーン抽出: PmxBone → IrBone
+/// Bone extraction: `PmxBone` -> `IrBone`.
 fn extract_bones(pmx: &PmxModel) -> Vec<IrBone> {
     let mut bones: Vec<IrBone> = pmx
         .bones
@@ -77,7 +77,7 @@ fn extract_bones(pmx: &PmxModel) -> Vec<IrBone> {
             let vrm_bone_name =
                 crate::convert::bone_map::pmx_name_to_vrm_bone(&b.name).map(|s| s.to_string());
 
-            // テイル位置とボーンIndexを計算（glTF座標系）
+            // Compute the tail position and bone index (glTF coords)
             let (tail_position, tail_bone_index) = match &b.tail {
                 BoneTail::BoneIndex(idx) => {
                     let ci = *idx as usize;
@@ -109,7 +109,7 @@ fn extract_bones(pmx: &PmxModel) -> Vec<IrBone> {
                 is_physics: b.flags & BONE_FLAG_PHYS_AFTER != 0,
                 tail_position,
                 tail_bone_index,
-                is_ik: false, // 後で IK Target/Link を設定
+                is_ik: false, // IK target/link is filled in later
                 is_ik_bone: b.flags & BONE_FLAG_IK != 0,
                 is_translatable: b.flags & BONE_FLAG_TRANSLATABLE != 0,
                 is_axis_fixed: b.flags & BONE_FLAG_AXIS_FIXED != 0,
@@ -131,7 +131,7 @@ fn extract_bones(pmx: &PmxModel) -> Vec<IrBone> {
         })
         .collect();
 
-    // children を構築
+    // Build the children lists
     let parents: Vec<Option<usize>> = bones.iter().map(|b| b.parent).collect();
     for (i, parent) in parents.iter().enumerate() {
         if let Some(p) = parent {
@@ -141,13 +141,13 @@ fn extract_bones(pmx: &PmxModel) -> Vec<IrBone> {
         }
     }
 
-    // グローバル行列の計算（ルートから順に）
+    // Compute global matrices (root-first)
     for i in 0..bones.len() {
         let pos = bones[i].position;
         let local = Mat4::from_translation(pos);
         if let Some(parent_idx) = bones[i].parent {
             if parent_idx < i {
-                // 親のグローバル行列を元にオフセット計算
+                // Derive the offset from the parent's global matrix
                 let parent_pos = bones[parent_idx].position;
                 let offset = pos - parent_pos;
                 let parent_mat = bones[parent_idx].global_mat;
@@ -160,7 +160,7 @@ fn extract_bones(pmx: &PmxModel) -> Vec<IrBone> {
         }
     }
 
-    // IK影響下ボーン（Linkのみ）をマーク — Targetはブルー表示
+    // Mark bones inside an IK chain (links only) -- targets are drawn blue
     for b in &pmx.bones {
         if let Some(ref ik) = b.ik {
             for link in &ik.links {
@@ -175,7 +175,7 @@ fn extract_bones(pmx: &PmxModel) -> Vec<IrBone> {
     bones
 }
 
-/// テクスチャ抽出: 外部ファイルまたは aux_files から読み込み
+/// Texture extraction: load from disk or `aux_files`.
 fn extract_textures(
     pmx: &PmxModel,
     pmx_dir: &Path,
@@ -184,7 +184,7 @@ fn extract_textures(
     pmx.textures
         .iter()
         .map(|tex_path| {
-            // パス区切りを正規化 — パストラバーサル防止のためサニタイズ
+            // Normalize path separators and sanitize to prevent path traversal
             let normalized = tex_path.replace('\\', "/");
             let sanitized = crate::sanitize_rel_path(&normalized);
             let full_path = pmx_dir.join(&sanitized);
@@ -202,7 +202,7 @@ fn extract_textures(
                 _ => "application/octet-stream",
             };
 
-            // aux_files があればそこから、なければファイルシステムから読む
+            // Read from aux_files when available, otherwise fall back to the filesystem
             let data = if let Some(aux) = aux_files {
                 let key = PathBuf::from(&normalized);
                 if let Some(cached) = aux.get(&key) {
@@ -229,7 +229,7 @@ fn extract_textures(
         .collect()
 }
 
-/// 材質抽出: PmxMaterial → IrMaterial
+/// Material extraction: `PmxMaterial` -> `IrMaterial`.
 fn extract_materials(pmx: &PmxModel) -> Vec<IrMaterial> {
     pmx.materials
         .iter()
@@ -242,7 +242,7 @@ fn extract_materials(pmx: &PmxModel) -> Vec<IrMaterial> {
             };
             let has_edge = m.draw_flags & 0x10 != 0;
 
-            // スフィアモード: 3（サブテクスチャ）は非対応
+            // Sphere mode 3 (sub-texture) is not supported
             let sphere_mode = if m.sphere_mode == 3 {
                 log::warn!(
                     "Material '{}': sphere_mode=3 (sub-texture) not supported, disabling",
@@ -258,7 +258,7 @@ fn extract_materials(pmx: &PmxModel) -> Vec<IrMaterial> {
                 None
             };
 
-            // トゥーン参照 (-1 は未設定 → トゥーンなし)
+            // Toon reference (-1 means unset, i.e. no toon)
             let (toon_texture_index, toon_shared_index) = match &m.toon_ref {
                 PmxToonRef::Texture(i) if *i >= 0 => (Some(*i as usize), None),
                 PmxToonRef::Texture(_) => (None, None),
@@ -296,12 +296,12 @@ fn extract_materials(pmx: &PmxModel) -> Vec<IrMaterial> {
         .collect()
 }
 
-/// メッシュ抽出: 材質の face_count で分割
-/// 戻り値: (meshes, pmx_global_vertex → ir_global_vertex のマッピング)
+/// Mesh extraction: split by each material's `face_count`.
+/// Returns (meshes, mapping from PMX global vertex index to IR global vertex index).
 fn extract_meshes(pmx: &PmxModel) -> (Vec<IrMesh>, HashMap<u32, usize>) {
     let mut meshes = Vec::new();
     let mut face_offset = 0usize;
-    // PMX グローバル頂点Index → IrModel 通し番号（メッシュ0の頂点0=0, 頂点1=1, ..., メッシュ1の頂点0=N, ...）
+    // PMX global vertex index -> IrModel running index (mesh0 vert0=0, vert1=1, ..., mesh1 vert0=N, ...)
     let mut pmx_to_ir_vertex: HashMap<u32, usize> = HashMap::new();
     let mut ir_vertex_offset = 0usize;
 
@@ -321,14 +321,14 @@ fn extract_meshes(pmx: &PmxModel) -> (Vec<IrMesh>, HashMap<u32, usize>) {
             continue;
         }
 
-        // この材質が参照する面から頂点インデックスを収集
+        // Collect vertex indices from faces referenced by this material
         let mut vertex_map: HashMap<u32, u32> = HashMap::new();
         let mut local_vertices = Vec::new();
         let mut local_indices = Vec::new();
 
         for fi in face_offset..face_offset + face_count {
             let face = &pmx.faces[fi];
-            // 面巻き順を反転（PMX → glTF: b↔c swap）
+            // Flip the face winding (PMX -> glTF: swap b and c)
             let reordered = [face[0], face[2], face[1]];
             for &global_idx in &reordered {
                 let local_idx = if let Some(&existing) = vertex_map.get(&global_idx) {
@@ -337,7 +337,7 @@ fn extract_meshes(pmx: &PmxModel) -> (Vec<IrMesh>, HashMap<u32, usize>) {
                     let new_idx = local_vertices.len() as u32;
                     vertex_map.insert(global_idx, new_idx);
 
-                    // PMXグローバル → IrModel通し番号を記録
+                    // Record PMX global -> IrModel running index
                     pmx_to_ir_vertex.insert(global_idx, ir_vertex_offset + new_idx as usize);
 
                     let v = &pmx.vertices[global_idx as usize];
@@ -384,7 +384,7 @@ fn extract_meshes(pmx: &PmxModel) -> (Vec<IrMesh>, HashMap<u32, usize>) {
                         position: pmx_pos_to_gltf(v.position),
                         normal: pmx_normal_to_gltf(v.normal),
                         uv: v.uv,
-                        tangent: Vec4::ZERO, // MikkTSpace で後から生成
+                        tangent: Vec4::ZERO, // Generated later via MikkTSpace
                         weights: w_arr,
                         weight_count: w_cnt,
                         edge_scale: v.edge_scale,
@@ -410,11 +410,11 @@ fn extract_meshes(pmx: &PmxModel) -> (Vec<IrMesh>, HashMap<u32, usize>) {
         face_offset += face_count;
     }
 
-    // 頂点モーフをメッシュに分配（generate_tangents の前に実行）
-    // generate_tangents が頂点分割時に morph_targets を複製できるようにする
+    // Distribute vertex morphs to meshes BEFORE generate_tangents,
+    // so that any vertex split inside generate_tangents can also clone morph_targets.
     distribute_vertex_morphs(pmx, &mut meshes);
 
-    // 接線生成（tangent w 不一致時に頂点を分割 + morph_targets も複製）
+    // Tangent generation (vertices are split when tangent w disagrees, and morph_targets follow)
     for mesh in &mut meshes {
         crate::intermediate::tangent::generate_tangents(mesh, 0);
     }
@@ -422,9 +422,9 @@ fn extract_meshes(pmx: &PmxModel) -> (Vec<IrMesh>, HashMap<u32, usize>) {
     (meshes, pmx_to_ir_vertex)
 }
 
-/// PMXの頂点モーフを各メッシュに分配
+/// Distribute PMX vertex morphs to each mesh.
 fn distribute_vertex_morphs(pmx: &PmxModel, meshes: &mut [IrMesh]) {
-    // グローバル頂点Index → (mesh_idx, local_vertex_idx) のマッピングを構築
+    // Build the mapping global vertex index -> (mesh_idx, local_vertex_idx)
     let mut global_to_local: HashMap<u32, Vec<(usize, u32)>> = HashMap::new();
     let mut face_offset = 0usize;
     for (mesh_idx, mat) in pmx.materials.iter().enumerate() {
@@ -434,8 +434,8 @@ fn distribute_vertex_morphs(pmx: &PmxModel, meshes: &mut [IrMesh]) {
 
         for fi in face_offset..face_offset + face_count {
             let face = &pmx.faces[fi];
-            // extract_meshes と同じ巻き順（b↔c swap）で走査して
-            // ローカル頂点インデックスの割り当て順を一致させる
+            // Walk faces with the same winding (b<->c swap) as extract_meshes
+            // so the local vertex assignment order matches.
             let reordered = [face[0], face[2], face[1]];
             for &global_idx in &reordered {
                 if let std::collections::hash_map::Entry::Vacant(e) = vertex_map.entry(global_idx) {
@@ -455,16 +455,16 @@ fn distribute_vertex_morphs(pmx: &PmxModel, meshes: &mut [IrMesh]) {
         face_offset += face_count;
     }
 
-    // 各頂点モーフをメッシュの morph_targets に分配
+    // Distribute each vertex morph to mesh.morph_targets
     for morph in &pmx.morphs {
         if let PmxMorphOffsets::Vertex(offsets) = &morph.offsets {
-            // 各メッシュに対するモーフターゲットを構築（疎表現）
+            // Build a sparse morph target per mesh
             let mesh_count = meshes.len();
             let mut mesh_offsets: Vec<Vec<(u32, Vec3)>> =
                 (0..mesh_count).map(|_| Vec::new()).collect();
 
             for off in offsets {
-                let gltf_offset = pmx_pos_to_gltf(off.offset); // 変位ベクトル: Z反転 + スケール÷12.5
+                let gltf_offset = pmx_pos_to_gltf(off.offset); // Displacement: flip Z + scale by 1/12.5
                 if let Some(targets) = global_to_local.get(&off.vertex_index) {
                     for &(mesh_idx, local_idx) in targets {
                         mesh_offsets[mesh_idx].push((local_idx, gltf_offset));
@@ -473,7 +473,7 @@ fn distribute_vertex_morphs(pmx: &PmxModel, meshes: &mut [IrMesh]) {
             }
 
             for (mesh_idx, mut offsets) in mesh_offsets.into_iter().enumerate() {
-                // このメッシュに影響がある場合のみ追加
+                // Only push when this mesh is actually affected
                 if !offsets.is_empty() {
                     offsets.sort_by_key(|&(vi, _)| vi);
                     meshes[mesh_idx].morph_targets_mut().push(IrMorphTarget {
@@ -488,17 +488,18 @@ fn distribute_vertex_morphs(pmx: &PmxModel, meshes: &mut [IrMesh]) {
     }
 }
 
-/// モーフ抽出: 頂点モーフ・グループモーフ・UV モーフ → IrMorph
-/// 頂点モーフは mesh.morph_targets から構築（generate_tangents の頂点分割に対応）。
-/// グループモーフは PMX データから直接構築（サブモーフインデックスをリマッピング）。
-/// UV モーフは `pmx_to_ir_vertex` マップ経由で PMX 頂点 index → IR グローバル頂点 index
-/// を解決する (Phase 3 A-2)。ボーン・材質モーフは引き続きスキップ。
+/// Morph extraction: vertex / group / UV morphs -> `IrMorph`.
+/// Vertex morphs are rebuilt from `mesh.morph_targets` (so the splits done in
+/// `generate_tangents` are honored). Group morphs are built directly from PMX data
+/// (with sub-morph indices remapped). UV morphs (Phase 3 A-2) resolve PMX vertex
+/// indices to IR global vertex indices via `pmx_to_ir_vertex`. Bone and material
+/// morphs are still skipped.
 fn extract_morphs(
     pmx: &PmxModel,
     meshes: &[IrMesh],
     pmx_to_ir_vertex: &HashMap<u32, usize>,
 ) -> Vec<IrMorph> {
-    // 各メッシュのグローバル頂点オフセット（分割後の実頂点数ベース）
+    // Global vertex offsets per mesh (after splitting; based on the final vertex count)
     let mesh_global_offsets: Vec<usize> = {
         let mut offsets = Vec::with_capacity(meshes.len());
         let mut cum = 0usize;
@@ -509,8 +510,8 @@ fn extract_morphs(
         offsets
     };
 
-    // Pass 1: PMX インデックス → IrModel インデックスのマッピングを構築
-    // スキップされるモーフ（ボーン・材質）は None になる
+    // Pass 1: build the PMX index -> IrModel index mapping.
+    // Skipped morphs (bone / material) become None.
     let mut pmx_to_ir_morph: Vec<Option<usize>> = Vec::with_capacity(pmx.morphs.len());
     let mut ir_idx = 0usize;
     for m in &pmx.morphs {
@@ -525,13 +526,13 @@ fn extract_morphs(
         }
     }
 
-    // Pass 2: モーフを変換（リマッピング済みインデックスを使用）
+    // Pass 2: convert morphs (using the remapped indices)
     pmx.morphs
         .iter()
         .filter_map(|m| {
             let kind = match &m.offsets {
                 PmxMorphOffsets::Vertex(_) => {
-                    // mesh.morph_targets から構築（generate_tangents の分割頂点を含む）
+                    // Built from mesh.morph_targets (which includes split vertices from generate_tangents)
                     let mut entries: Vec<(usize, Vec3)> = Vec::new();
                     for (mi, mesh) in meshes.iter().enumerate() {
                         let global_offset = mesh_global_offsets[mi];
@@ -567,7 +568,7 @@ fn extract_morphs(
                     IrMorphKind::Group(entries)
                 }
                 PmxMorphOffsets::Uv(offsets) => {
-                    // PMX morph_type: 3=UV0, 4..=7=UV1..UV4 → channel 0..=4
+                    // PMX morph_type: 3=UV0, 4..=7=UV1..UV4 -> channel 0..=4
                     let channel = match m.morph_type {
                         3 => 0u8,
                         4..=7 => m.morph_type - 3,
@@ -586,7 +587,7 @@ fn extract_morphs(
                         offsets: entries,
                     }
                 }
-                _ => return None, // ボーン/材質モーフはスキップ
+                _ => return None, // Bone / material morphs are skipped
             };
 
             Some(IrMorph {
@@ -599,13 +600,13 @@ fn extract_morphs(
         .collect()
 }
 
-/// 物理情報抽出
+/// Physics extraction.
 fn extract_physics(pmx: &PmxModel) -> IrPhysics {
     let rigid_bodies = pmx
         .rigid_bodies
         .iter()
         .map(|r| {
-            // bone_index=-1（関連ボーンなし）の場合はボーン0（センター）に追従
+            // bone_index = -1 (no associated bone) -> follow bone 0 (center) instead
             let bone_index = if r.bone_index >= 0 {
                 Some(r.bone_index as usize)
             } else if !pmx.bones.is_empty() {
@@ -630,7 +631,7 @@ fn extract_physics(pmx: &PmxModel) -> IrPhysics {
                 group: r.group,
                 no_collision_mask: r.no_collision_mask,
                 shape,
-                position: r.position, // PMX座標のまま保持（ビューアがPMX座標で描画するため）
+                position: r.position, // Keep in PMX coords (the viewer renders in PMX coords)
                 rotation: r.rotation,
                 mass: r.mass,
                 linear_damping: r.linear_damping,
@@ -657,7 +658,7 @@ fn extract_physics(pmx: &PmxModel) -> IrPhysics {
             } else {
                 0
             },
-            position: j.position, // PMX座標のまま保持
+            position: j.position, // Keep in PMX coords
             rotation: j.rotation,
             move_limit_lo: j.move_limit_lo,
             move_limit_hi: j.move_limit_hi,
@@ -692,22 +693,22 @@ mod tests {
         assert_eq!(ir.source_format, SourceFormat::Pmx);
         assert_eq!(ir.bones.len(), 179);
         assert_eq!(ir.materials.len(), 17);
-        assert_eq!(ir.meshes.len(), 17); // 材質数と一致
+        assert_eq!(ir.meshes.len(), 17); // Equals the number of materials
         assert!(!ir.name.is_empty());
 
-        // 頂点数の合計確認
+        // Verify the total vertex count
         let total_verts: usize = ir.meshes.iter().map(|m| m.vertices.len()).sum();
         assert!(total_verts > 0, "頂点数が0");
 
-        // 面数の合計確認
+        // Verify the total face count
         let total_faces: usize = ir.meshes.iter().map(|m| m.indices.len() / 3).sum();
         assert_eq!(total_faces, 45058);
 
-        // 物理情報
+        // Physics info
         assert_eq!(ir.physics.rigid_bodies.len(), 36);
         assert_eq!(ir.physics.joints.len(), 19);
 
-        // ボーン親子関係の整合性
+        // Verify bone parent/child consistency
         for (i, bone) in ir.bones.iter().enumerate() {
             if let Some(parent) = bone.parent {
                 assert!(parent < ir.bones.len(), "ボーン{}の親{}が範囲外", i, parent);
@@ -720,7 +721,7 @@ mod tests {
             }
         }
 
-        // テクスチャデータ確認
+        // Verify texture data
         for tex in &ir.textures {
             assert!(
                 !tex.data.is_empty(),

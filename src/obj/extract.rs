@@ -8,14 +8,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// OBJ ファイルをパスから読み込んで IrModel に変換する（デフォルト: cm, Y-Up）
+/// Load an OBJ file from a path and convert it into an `IrModel` (default: cm, Y-Up).
 pub fn load_obj(path: &Path) -> Result<IrModel> {
     load_obj_with_params(path, 0.01, false)
 }
 
-/// OBJ ファイルをパスから読み込んで IrModel に変換する（カスタムパラメータ）
-/// - `scale`: glTF 空間（メートル）へのスケール係数
-/// - `z_up`: true の場合 Z-Up → Y-Up 変換を行う
+/// Load an OBJ file from a path and convert it into an `IrModel` (custom parameters).
+/// - `scale`: scale factor into glTF space (meters).
+/// - `z_up`: when true, apply a Z-Up -> Y-Up conversion.
 pub fn load_obj_with_params(path: &Path, scale: f32, z_up: bool) -> Result<IrModel> {
     let (models, materials_result) = tobj::load_obj(path, &tobj::GPU_LOAD_OPTIONS)
         .map_err(|e| PoponeError::ObjParse(format!("{}", e)))?;
@@ -38,8 +38,8 @@ pub fn load_obj_with_params(path: &Path, scale: f32, z_up: bool) -> Result<IrMod
     build_ir_model(&name, &models, &materials, base_dir, None, scale, z_up)
 }
 
-/// OBJ データをメモリから読み込んで IrModel に変換する
-/// OBJ データをメモリから読み込んで IrModel に変換する（デフォルト: cm, Y-Up）
+/// Load OBJ data from memory and convert it into an `IrModel`.
+/// (Default: cm, Y-Up.)
 pub fn load_obj_from_data(
     data: &[u8],
     name: &str,
@@ -49,7 +49,7 @@ pub fn load_obj_from_data(
     load_obj_from_data_with_params(data, name, base_dir, aux, 0.01, false)
 }
 
-/// OBJ データをメモリから読み込んで IrModel に変換する（カスタムパラメータ）
+/// Load OBJ data from memory and convert it into an `IrModel` (custom parameters).
 pub fn load_obj_from_data_with_params(
     data: &[u8],
     name: &str,
@@ -60,7 +60,7 @@ pub fn load_obj_from_data_with_params(
 ) -> Result<IrModel> {
     let mut reader = std::io::BufReader::new(std::io::Cursor::new(data));
 
-    // MTL ローダー: aux_files から解決、なければ base_dir からディスク読み込み
+    // MTL loader: try aux_files first, fall back to disk reads from base_dir
     let mtl_loader = |mtl_path: &Path| -> tobj::MTLLoadResult {
         let mtl_data = resolve_sidecar(aux, base_dir, mtl_path);
         match mtl_data {
@@ -90,26 +90,26 @@ pub fn load_obj_from_data_with_params(
     build_ir_model(name, &models, &materials, base_dir, aux, scale, z_up)
 }
 
-/// aux_files またはディスクからサイドカーファイルを解決する
-/// aux が Some の場合（archive/snapshot 由来）はディスクフォールバックを行わない
+/// Resolve a sidecar file from `aux_files` or from disk.
+/// When `aux` is Some (archive/snapshot origin), we do not fall back to disk.
 fn resolve_sidecar(
     aux: Option<&HashMap<PathBuf, Arc<[u8]>>>,
     base_dir: &Path,
     rel: &Path,
 ) -> Option<Vec<u8>> {
     if let Some(aux_map) = aux {
-        let rel_raw = PathBuf::from(rel.to_string_lossy().replace('\\', "/")); // ".." 保持
-        let normalized = normalize_rel_path(rel); // ".." 除去
+        let rel_raw = PathBuf::from(rel.to_string_lossy().replace('\\', "/")); // Keep ".."
+        let normalized = normalize_rel_path(rel); // Strip ".."
 
-        // 1. 元パスで完全一致（"../shared/body.png" → "../shared/body.png"）
+        // 1. Exact match against the raw path ("../shared/body.png" -> "../shared/body.png")
         if let Some(bytes) = aux_map.get(&rel_raw) {
             return Some(bytes.to_vec());
         }
-        // 2. 正規化パスで完全一致（"shared/body.png" → "shared/body.png"）
+        // 2. Exact match against the normalized path ("shared/body.png" -> "shared/body.png")
         if let Some(bytes) = aux_map.get(&normalized) {
             return Some(bytes.to_vec());
         }
-        // 3. case-insensitive（元パス・正規化パス両方で検索）
+        // 3. Case-insensitive match (search both raw and normalized paths)
         let raw_lower = rel_raw.to_string_lossy().to_lowercase();
         let norm_lower = normalized.to_string_lossy().to_lowercase();
         if let Some(bytes) = aux_map.iter().find_map(|(k, v)| {
@@ -122,7 +122,7 @@ fn resolve_sidecar(
         }) {
             return Some(bytes.to_vec());
         }
-        // 4. ファイル名のみでも探す（case-insensitive）
+        // 4. As a last resort, match by filename only (case-insensitive)
         if let Some(filename) = normalized.file_name() {
             let fname_lower = filename.to_string_lossy().to_lowercase();
             if let Some(bytes) = aux_map.iter().find_map(|(k, v)| {
@@ -136,16 +136,16 @@ fn resolve_sidecar(
                 return Some(bytes.to_vec());
             }
         }
-        // archive/snapshot 由来: ディスクフォールバックしない
+        // Archive/snapshot origin: do not fall back to disk
         return None;
     }
-    // ディスクから読む — パストラバーサル防止のため正規化
+    // Read from disk -- normalize first to prevent path traversal
     let sanitized = crate::sanitize_rel_path(&rel.to_string_lossy());
     let full_path = base_dir.join(&sanitized);
     std::fs::read(&full_path).ok()
 }
 
-/// 相対パスを正規化（バックスラッシュ→スラッシュ、"./" 除去、".." 解決）
+/// Normalize a relative path (backslash -> slash, drop "./", resolve "..").
 fn normalize_rel_path(rel: &Path) -> PathBuf {
     let s = rel.to_string_lossy().replace('\\', "/");
     let mut out = Vec::new();
@@ -191,18 +191,18 @@ fn build_ir_model(
         grant: None,
     };
 
-    // テクスチャ収集（重複排除）
+    // Collect textures (deduplicated)
     let mut texture_map: HashMap<String, usize> = HashMap::new();
     let mut ir_textures: Vec<IrTexture> = Vec::new();
 
-    // MTL 材質 → IrMaterial 変換
+    // Convert MTL materials -> IrMaterial
     let mut ir_materials: Vec<IrMaterial> = Vec::new();
     for mat in materials {
         let tex_index = mat.diffuse_texture.as_ref().and_then(|tex_name| {
             if let Some(&idx) = texture_map.get(tex_name) {
                 Some(idx)
             } else {
-                // テクスチャをバイト列として読み込み
+                // Load the texture as a byte buffer
                 let tex_path = Path::new(tex_name);
                 let data = resolve_sidecar(aux, base_dir, tex_path)?;
                 let ext_raw = crate::path_ext_lower(tex_path);
@@ -242,7 +242,7 @@ fn build_ir_model(
         });
     }
 
-    // 材質がない場合のデフォルト
+    // Default material when none are defined
     if ir_materials.is_empty() {
         ir_materials.push(IrMaterial {
             name: "default".to_string(),
@@ -251,16 +251,16 @@ fn build_ir_model(
         });
     }
 
-    // 座標変換: ユーザー指定の単位スケールと Z-Up 変換を適用
-    // ビューア描画時に gltf_pos_to_pmx (×12.5) で PMX 単位に変換される。
+    // Coord conversion: apply the user-specified unit scale and Z-Up flag.
+    // The viewer later scales to PMX units via gltf_pos_to_pmx (x12.5).
     let pos_to_gltf = if z_up {
-        // Z-Up → Y-Up: (x, y, z) → (x * scale, z * scale, y * scale)
+        // Z-Up -> Y-Up: (x, y, z) -> (x * scale, z * scale, y * scale)
         |v: Vec3, s: f32| Vec3::new(v.x * s, v.z * s, v.y * s)
     } else {
         |v: Vec3, s: f32| Vec3::new(v.x * s, v.y * s, v.z * s)
     };
 
-    // メッシュ変換
+    // Mesh conversion
     let mut ir_meshes: Vec<IrMesh> = Vec::new();
     for model in models {
         let mesh = &model.mesh;
@@ -281,7 +281,7 @@ fn build_ir_model(
                     mesh.normals[i * 3 + 2],
                 )
             } else {
-                Vec3::ZERO // 後で面法線から再計算
+                Vec3::ZERO // Recomputed from face normals later
             };
 
             let uv = if has_texcoords && i * 2 + 1 < mesh.texcoords.len() {
@@ -301,12 +301,12 @@ fn build_ir_model(
             });
         }
 
-        // 法線が欠落している場合、面法線から再計算（スムーズシェーディング）
+        // Recompute normals from face normals when missing (smooth shading)
         if !has_normals {
             compute_face_normals(&mut vertices, &mesh.indices);
         }
 
-        // 材質インデックス（tobj ではメッシュごとに1つの材質）
+        // Material index (tobj uses one material per mesh)
         let mat_idx = mesh.material_id.unwrap_or(0);
         let mat_idx = if mat_idx < ir_materials.len() {
             mat_idx
@@ -325,7 +325,7 @@ fn build_ir_model(
         });
     }
 
-    // メッシュが空の場合
+    // No meshes -> empty file
     if ir_meshes.is_empty() {
         return Err(PoponeError::ObjParse(
             "メッシュが見つかりません（空の OBJ ファイル）".into(),
@@ -349,9 +349,9 @@ fn build_ir_model(
     })
 }
 
-/// 面法線を計算してスムーズシェーディング用に頂点法線を累積平均する
+/// Compute face normals and accumulate them into per-vertex normals for smooth shading.
 fn compute_face_normals(vertices: &mut [IrVertex], indices: &[u32]) {
-    // 面法線を各頂点に累積加算
+    // Accumulate face normals onto each incident vertex
     for tri in indices.chunks_exact(3) {
         let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
         if i0 >= vertices.len() || i1 >= vertices.len() || i2 >= vertices.len() {
@@ -361,12 +361,12 @@ fn compute_face_normals(vertices: &mut [IrVertex], indices: &[u32]) {
         let p1 = vertices[i1].position;
         let p2 = vertices[i2].position;
         let face_normal = (p1 - p0).cross(p2 - p0);
-        // 面積に比例した重み（正規化せずに加算）
+        // Weight by face area (add without normalizing)
         vertices[i0].normal += face_normal;
         vertices[i1].normal += face_normal;
         vertices[i2].normal += face_normal;
     }
-    // 正規化
+    // Normalize
     for v in vertices.iter_mut() {
         let n = v.normal.normalize_or_zero();
         v.normal = if n == Vec3::ZERO { Vec3::Y } else { n };

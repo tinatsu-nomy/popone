@@ -10,24 +10,24 @@ use crate::convert::coord::{
 };
 use crate::intermediate::types::*;
 
-/// PMD 座標 → glTF 座標（PMXと同じ座標系: 左手系Y-up、is_vrm0=false）
+/// PMD coords -> glTF coords (same coord system as PMX: left-handed Y-Up; is_vrm0 = false).
 #[inline]
 fn pmx_pos_to_gltf(v: Vec3) -> Vec3 {
     pmx_pos_to_gltf_full(v, false)
 }
 
-/// PMD 法線 → glTF 法線（is_vrm0=false）
+/// PMD normal -> glTF normal (is_vrm0 = false).
 #[inline]
 fn pmx_normal_to_gltf(n: Vec3) -> Vec3 {
     pmx_normal_to_gltf_full(n, false)
 }
 
-/// PMDモデルから IrModel を構築
+/// Build an `IrModel` from a PMD model.
 pub fn pmd_to_ir(pmd: &PmdModel, pmd_path: &Path) -> Result<IrModel> {
     pmd_to_ir_with_aux(pmd, pmd_path, None)
 }
 
-/// オンメモリ補助ファイル付きで PMD → IrModel 変換
+/// Convert PMD -> `IrModel` with in-memory auxiliary files.
 pub fn pmd_to_ir_with_aux(
     pmd: &PmdModel,
     pmd_path: &Path,
@@ -38,7 +38,7 @@ pub fn pmd_to_ir_with_aux(
     let textures = extract_textures(pmd, pmd_dir, aux_files);
     let mut materials = extract_materials(pmd, &textures);
 
-    // 材質名テキストファイルの読み込み
+    // Load the material-name text file
     load_material_names(pmd_path, aux_files, &mut materials);
 
     let (meshes, _pmd_to_ir_vertex) = extract_meshes(pmd, &materials);
@@ -62,8 +62,8 @@ pub fn pmd_to_ir_with_aux(
     })
 }
 
-/// PMDファイルと同名の .txt から材質名を読み込む
-/// ファイルが存在し、行数が材質数と一致する場合のみ適用
+/// Load material names from a `.txt` file with the same stem as the PMD.
+/// Applied only when the file exists and its line count matches the material count.
 fn load_material_names(
     pmd_path: &Path,
     aux_files: Option<&HashMap<PathBuf, Arc<[u8]>>>,
@@ -72,12 +72,12 @@ fn load_material_names(
     let txt_path = pmd_path.with_extension("txt");
     let txt_filename = txt_path.file_name().map(PathBuf::from).unwrap_or_default();
 
-    // aux_files があればそこから、なければファイルシステムから読む
+    // Read from aux_files when available; otherwise fall back to the filesystem
     let data = if let Some(aux) = aux_files {
         if let Some(cached) = aux.get(&txt_filename) {
             cached.to_vec()
         } else {
-            return; // aux_files にもなければスキップ
+            return; // Missing in aux_files too -> skip
         }
     } else {
         if !txt_path.exists() {
@@ -88,7 +88,7 @@ fn load_material_names(
             Err(_) => return,
         }
     };
-    // Shift_JIS デコード
+    // Shift_JIS decode
     let (text, _, _) = encoding_rs::SHIFT_JIS.decode(&data);
     let lines: Vec<&str> = text.lines().collect();
     if lines.len() != materials.len() {
@@ -132,7 +132,7 @@ fn extract_bones(pmd: &PmdModel) -> Vec<IrBone> {
             let vrm_bone_name =
                 crate::convert::bone_map::pmx_name_to_vrm_bone(&b.name).map(|s| s.to_string());
 
-            // テイル位置: PMDの child ボーンIndex（0xFFFF/0 = なし）
+            // Tail position: PMD's child bone index (0xFFFF/0 = none)
             let (tail_position, tail_bone_index) =
                 if b.child != 0xFFFF && b.child != 0 && (b.child as usize) < pmd.bones.len() {
                     let ci = b.child as usize;
@@ -154,17 +154,17 @@ fn extract_bones(pmd: &PmdModel) -> Vec<IrBone> {
                 is_physics: false,
                 tail_position,
                 tail_bone_index,
-                is_ik: false, // 後で IK Target/Link を設定
+                is_ik: false, // IK target/link is filled in later
                 is_ik_bone: b.bone_type == 2,
                 is_translatable: b.bone_type == 1,
-                is_axis_fixed: false, // PMDには軸制限フラグなし
+                is_axis_fixed: false, // PMD has no axis-lock flag
                 is_visible: b.bone_type != 7,
-                grant: None, // PMDの付与は未対応
+                grant: None, // Grant (append parent) is not supported in PMD
             }
         })
         .collect();
 
-    // children 構築
+    // Build the children lists
     let parents: Vec<Option<usize>> = bones.iter().map(|b| b.parent).collect();
     for (i, parent) in parents.iter().enumerate() {
         if let Some(p) = parent {
@@ -174,7 +174,7 @@ fn extract_bones(pmd: &PmdModel) -> Vec<IrBone> {
         }
     }
 
-    // グローバル行列計算
+    // Compute global matrices
     for i in 0..bones.len() {
         let pos = bones[i].position;
         let local = Mat4::from_translation(pos);
@@ -192,7 +192,7 @@ fn extract_bones(pmd: &PmdModel) -> Vec<IrBone> {
         }
     }
 
-    // IK影響下ボーン（Chainのみ）をマーク — Targetはブルー表示
+    // Mark bones inside an IK chain (chain only) -- targets are drawn blue
     for ik in &pmd.ik_list {
         for &chain_bone in &ik.chain {
             let ci = chain_bone as usize;
@@ -205,7 +205,7 @@ fn extract_bones(pmd: &PmdModel) -> Vec<IrBone> {
     bones
 }
 
-/// テクスチャファイル名を分類: .sph→乗算(1), .spa→加算(2), それ以外→メインテクスチャ
+/// Classify a texture filename: .sph -> multiply (1), .spa -> add (2), other -> main texture.
 fn classify_tex(s: &str) -> (Option<&str>, Option<(&str, u8)>) {
     let lower = s.to_ascii_lowercase();
     if lower.ends_with(".sph") {
@@ -217,7 +217,7 @@ fn classify_tex(s: &str) -> (Option<&str>, Option<(&str, u8)>) {
     }
 }
 
-/// テクスチャ名を main/sphere に分解し、.sph→乗算, .spa→加算 を判定
+/// Split a texture name into main/sphere and decide multiply (.sph) vs. add (.spa).
 fn parse_pmd_texture_slots(name: &str) -> (Option<&str>, Option<(&str, u8)>) {
     let mut parts = name.split('*').filter(|s| !s.is_empty());
     match (parts.next(), parts.next()) {
@@ -236,7 +236,7 @@ fn extract_textures(
     pmd_dir: &Path,
     aux_files: Option<&HashMap<PathBuf, Arc<[u8]>>>,
 ) -> Vec<IrTexture> {
-    // PMD材質からユニークなテクスチャパスを収集（メイン + スフィア + トゥーン）
+    // Collect unique texture paths from PMD materials (main + sphere + toon)
     let mut tex_paths: Vec<String> = Vec::new();
     for mat in &pmd.materials {
         if mat.texture_name.is_empty() {
@@ -254,13 +254,13 @@ fn extract_textures(
             }
         }
     }
-    // トゥーンテクスチャもテクスチャ表に登録（モデル同梱分のみ）
+    // Register toon textures too (only those bundled with the model)
     for toon_name in &pmd.toon_textures {
         if !toon_name.is_empty() && !tex_paths.contains(toon_name) {
             let normalized = toon_name.replace('\\', "/");
             let sanitized = crate::sanitize_rel_path(&normalized);
             let full_path = pmd_dir.join(&sanitized);
-            // aux_files にあるか、ファイルシステムに存在する場合のみ登録
+            // Register only if it exists in aux_files or on the filesystem
             let exists = if let Some(aux) = aux_files {
                 aux.contains_key(&PathBuf::from(&normalized))
             } else {
@@ -289,11 +289,11 @@ fn extract_textures(
                 "jpg" | "jpeg" => "image/jpeg",
                 "bmp" => "image/bmp",
                 "tga" => "image/tga",
-                "sph" | "spa" => "image/bmp", // スフィアマップは通常 BMP
+                "sph" | "spa" => "image/bmp", // Sphere maps are normally BMP
                 _ => "application/octet-stream",
             };
 
-            // aux_files があればそこから、なければファイルシステムから読む
+            // Read from aux_files when available; otherwise fall back to the filesystem
             let data = if let Some(aux) = aux_files {
                 let key = PathBuf::from(&normalized);
                 if let Some(cached) = aux.get(&key) {
@@ -320,10 +320,10 @@ fn extract_textures(
         .collect()
 }
 
-/// テクスチャ名 → IrTexture インデックスのマッピング
-/// extract_textures の結果から構築し、インデックスの一貫性を保証する
+/// Build a mapping from texture name -> `IrTexture` index.
+/// Constructed from the `extract_textures` result so indices stay consistent.
 fn build_tex_map(pmd: &PmdModel, textures: &[IrTexture]) -> HashMap<String, usize> {
-    // IrTexture の filename からインデックスマップを構築
+    // Build the index map keyed by IrTexture filenames
     let filename_to_idx: HashMap<&str, usize> = textures
         .iter()
         .enumerate()
@@ -331,7 +331,7 @@ fn build_tex_map(pmd: &PmdModel, textures: &[IrTexture]) -> HashMap<String, usiz
         .collect();
 
     let mut map = HashMap::new();
-    // 材質テクスチャ（メイン + スフィア）
+    // Material textures (main + sphere)
     for mat in &pmd.materials {
         if mat.texture_name.is_empty() {
             continue;
@@ -352,7 +352,7 @@ fn build_tex_map(pmd: &PmdModel, textures: &[IrTexture]) -> HashMap<String, usiz
             }
         }
     }
-    // トゥーンテクスチャ
+    // Toon textures
     for toon_name in &pmd.toon_textures {
         if !toon_name.is_empty() && !map.contains_key(toon_name) {
             if let Some(&idx) = filename_to_idx.get(toon_name.as_str()) {
@@ -379,22 +379,22 @@ fn extract_materials(pmd: &PmdModel, textures: &[IrTexture]) -> Vec<IrMaterial> 
                 }
             });
 
-            // スフィアテクスチャ
+            // Sphere texture
             let (sphere_texture_index, sphere_mode) = match sphere {
                 Some((path, mode)) => (tex_map.get(path).copied(), mode),
                 None => (None, 0),
             };
 
-            // トゥーン参照: toon_index が 0..=9 → 共有トゥーン、
-            // pmd.toon_textures にファイル名があればそれを個別トゥーンとして使用
+            // Toon reference: toon_index 0..=9 -> shared toon.
+            // If `pmd.toon_textures` has a filename, use it as a per-material toon instead.
             let (toon_texture_index, toon_shared_index) = if m.toon_index <= 9 {
                 let toon_name = &pmd.toon_textures[m.toon_index as usize];
                 if !toon_name.is_empty() {
-                    // 個別トゥーンテクスチャがテクスチャリストに存在するか確認
+                    // Confirm the per-material toon texture is in the texture list
                     if let Some(&idx) = tex_map.get(toon_name) {
                         (Some(idx), None)
                     } else {
-                        // ファイルが見つからなければ共有トゥーンにフォールバック
+                        // If the file is missing, fall back to the shared toon
                         (None, Some(m.toon_index))
                     }
                 } else {
@@ -409,7 +409,7 @@ fn extract_materials(pmd: &PmdModel, textures: &[IrTexture]) -> Vec<IrMaterial> 
                 (None, None)
             };
 
-            let has_edge = m.edge_flag == 1; // PMD: 1=エッジあり
+            let has_edge = m.edge_flag == 1; // PMD: 1 = edge enabled
 
             IrMaterial {
                 name: format!("材質{}", i + 1),
@@ -446,8 +446,8 @@ fn extract_materials(pmd: &PmdModel, textures: &[IrTexture]) -> Vec<IrMaterial> 
         .collect()
 }
 
-/// メッシュ抽出: 材質の face_count で分割
-/// 戻り値: (meshes, PMDグローバル頂点Index → IrModel通し番号)
+/// Mesh extraction: split by each material's `face_count`.
+/// Returns (meshes, mapping from PMD global vertex index to IrModel running index).
 fn extract_meshes(pmd: &PmdModel, _materials: &[IrMaterial]) -> (Vec<IrMesh>, HashMap<u32, usize>) {
     let mut meshes = Vec::new();
     let mut face_offset = 0usize;
@@ -463,7 +463,7 @@ fn extract_meshes(pmd: &PmdModel, _materials: &[IrMaterial]) -> (Vec<IrMesh>, Ha
 
         for fi in face_offset..face_offset + face_count {
             let face = &pmd.faces[fi];
-            // 面巻き順反転（PMD → glTF: b↔c swap）
+            // Flip face winding (PMD -> glTF: swap b and c)
             let reordered = [face[0], face[2], face[1]];
             for &global_idx in &reordered {
                 let local_idx = if let Some(&existing) = vertex_map.get(&global_idx) {
@@ -472,7 +472,7 @@ fn extract_meshes(pmd: &PmdModel, _materials: &[IrMaterial]) -> (Vec<IrMesh>, Ha
                     let new_idx = local_vertices.len() as u32;
                     vertex_map.insert(global_idx, new_idx);
 
-                    // PMDグローバル → IrModel通し番号を記録
+                    // Record PMD global -> IrModel running index
                     pmd_to_ir_vertex.insert(global_idx as u32, ir_vertex_offset + new_idx as usize);
 
                     let v = &pmd.vertices[global_idx as usize];
@@ -495,10 +495,10 @@ fn extract_meshes(pmd: &PmdModel, _materials: &[IrMaterial]) -> (Vec<IrMesh>, Ha
                         position: pmx_pos_to_gltf(v.position),
                         normal: pmx_normal_to_gltf(v.normal),
                         uv: v.uv,
-                        tangent: Vec4::ZERO, // MikkTSpace で後から生成
+                        tangent: Vec4::ZERO, // Generated later via MikkTSpace
                         weights: w_arr,
                         weight_count: w_cnt,
-                        // PMD 頂点: edge_flag=0 はエッジ有効、1 はエッジ無効（材質の edge_flag とは逆）
+                        // PMD vertex: edge_flag = 0 -> edge enabled, 1 -> edge disabled (opposite to the material edge_flag)
                         edge_scale: if v.edge_flag == 0 { 1.0 } else { 0.0 },
                     });
                     new_idx
@@ -524,10 +524,10 @@ fn extract_meshes(pmd: &PmdModel, _materials: &[IrMaterial]) -> (Vec<IrMesh>, Ha
         face_offset += face_count;
     }
 
-    // PMD 頂点モーフをメッシュの morph_targets に分配（generate_tangents の前に実行）
+    // Distribute PMD vertex morphs to mesh.morph_targets BEFORE generate_tangents.
     distribute_pmd_vertex_morphs(pmd, &mut meshes);
 
-    // 接線生成（tangent w 不一致時に頂点を分割 + morph_targets も複製）
+    // Tangent generation (vertices are split when tangent w disagrees, and morph_targets follow)
     for mesh in &mut meshes {
         crate::intermediate::tangent::generate_tangents(mesh, 0);
     }
@@ -535,14 +535,14 @@ fn extract_meshes(pmd: &PmdModel, _materials: &[IrMaterial]) -> (Vec<IrMesh>, Ha
     (meshes, pmd_to_ir_vertex)
 }
 
-/// PMD 頂点モーフをメッシュの morph_targets に分配（generate_tangents の前に実行）
+/// Distribute PMD vertex morphs to mesh.morph_targets (must run before generate_tangents).
 fn distribute_pmd_vertex_morphs(pmd: &PmdModel, meshes: &mut [IrMesh]) {
     let base = match pmd.morphs.iter().find(|m| m.morph_type == 0) {
         Some(b) => b,
         None => return,
     };
 
-    // PMDグローバル頂点Index → (mesh_idx, local_vertex_idx) のマッピング
+    // Mapping PMD global vertex index -> (mesh_idx, local_vertex_idx)
     let mut global_to_local: HashMap<u16, Vec<(usize, u32)>> = HashMap::new();
     let mut face_offset = 0usize;
     for (mesh_idx, pmd_mat) in pmd.materials.iter().enumerate() {
@@ -551,8 +551,8 @@ fn distribute_pmd_vertex_morphs(pmd: &PmdModel, meshes: &mut [IrMesh]) {
         let mut next_local = 0u32;
         for fi in face_offset..face_offset + face_count {
             let face = &pmd.faces[fi];
-            // extract_meshes と同じ巻き順（b↔c swap）で走査して
-            // ローカル頂点インデックスの割り当て順を一致させる
+            // Walk faces with the same winding (b<->c swap) as extract_meshes
+            // so the local vertex assignment order matches.
             let reordered = [face[0], face[2], face[1]];
             for &global_idx in &reordered {
                 if let std::collections::hash_map::Entry::Vacant(e) = vertex_map.entry(global_idx) {
@@ -570,7 +570,7 @@ fn distribute_pmd_vertex_morphs(pmd: &PmdModel, meshes: &mut [IrMesh]) {
         face_offset += face_count;
     }
 
-    // 各表情モーフをメッシュの morph_targets に分配
+    // Distribute each expression morph into mesh.morph_targets
     for m in pmd.morphs.iter().filter(|m| m.morph_type != 0) {
         let mesh_count = meshes.len();
         let mut mesh_offsets: Vec<Vec<(u32, Vec3)>> = (0..mesh_count).map(|_| Vec::new()).collect();
@@ -602,9 +602,9 @@ fn distribute_pmd_vertex_morphs(pmd: &PmdModel, meshes: &mut [IrMesh]) {
     }
 }
 
-/// モーフ抽出: mesh.morph_targets から構築（generate_tangents の頂点分割に対応）
+/// Morph extraction: built from `mesh.morph_targets` (handles vertex splits from generate_tangents).
 fn extract_morphs(pmd: &PmdModel, meshes: &[IrMesh]) -> Vec<IrMorph> {
-    // 各メッシュのグローバル頂点オフセット
+    // Global vertex offset per mesh
     let mesh_global_offsets: Vec<usize> = {
         let mut offsets = Vec::with_capacity(meshes.len());
         let mut cum = 0usize;
@@ -617,10 +617,10 @@ fn extract_morphs(pmd: &PmdModel, meshes: &[IrMesh]) -> Vec<IrMorph> {
 
     pmd.morphs
         .iter()
-        .filter(|m| m.morph_type != 0) // base 以外
+        .filter(|m| m.morph_type != 0) // Skip the base morph
         .enumerate()
         .map(|(i, m)| {
-            // mesh.morph_targets から構築（generate_tangents の分割頂点を含む）
+            // Build from mesh.morph_targets (which includes split vertices from generate_tangents)
             let mut entries: Vec<(usize, Vec3)> = Vec::new();
             for (mi, mesh) in meshes.iter().enumerate() {
                 let global_offset = mesh_global_offsets[mi];
@@ -632,10 +632,10 @@ fn extract_morphs(pmd: &PmdModel, meshes: &[IrMesh]) -> Vec<IrMorph> {
             }
 
             let panel = match m.morph_type {
-                1 => 1, // 眉
-                2 => 2, // 目
-                3 => 3, // 口
-                _ => 4, // その他
+                1 => 1, // Eyebrow
+                2 => 2, // Eye
+                3 => 3, // Mouth
+                _ => 4, // Other
             };
 
             let name_en = pmd
@@ -664,7 +664,7 @@ fn extract_physics(pmd: &PmdModel) -> IrPhysics {
         .rigid_bodies
         .iter()
         .map(|r| {
-            // bone_index=0xFFFF（関連ボーンなし）の場合はボーン0（センター）に追従
+            // bone_index = 0xFFFF (no associated bone) -> follow bone 0 (center) instead
             let bone_index = if (r.bone_index as usize) < pmd.bones.len() {
                 Some(r.bone_index as usize)
             } else if !pmd.bones.is_empty() {
@@ -683,8 +683,8 @@ fn extract_physics(pmd: &PmdModel) -> IrPhysics {
                 _ => RigidShape::Sphere { radius: r.size.x },
             };
 
-            // PMDの剛体位置はボーンからの相対オフセット → 絶対座標に変換
-            // 回転は絶対値（ワールド座標）
+            // PMD rigid-body position is a bone-relative offset -> convert to absolute coords.
+            // Rotation is already absolute (world coords).
             let abs_position = if let Some(bi) = bone_index {
                 pmd.bones[bi].position + r.position
             } else {
@@ -716,7 +716,7 @@ fn extract_physics(pmd: &PmdModel) -> IrPhysics {
             name: j.name.clone(),
             rigid_a: j.rigid_a as usize,
             rigid_b: j.rigid_b as usize,
-            position: j.position, // PMX座標のまま保持
+            position: j.position, // Keep in PMX coords
             rotation: j.rotation,
             move_limit_lo: j.move_limit_lo,
             move_limit_hi: j.move_limit_hi,

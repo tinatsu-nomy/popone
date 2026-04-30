@@ -4,16 +4,16 @@ use glam::{Mat4, Vec3};
 
 use super::types::{AStanceResult, IrBone, IrMesh, IrMorph, IrMorphKind};
 
-/// Tポーズ→Aスタンス変換（ボーンのみ）
-/// VRM用: メッシュはスキニング経由で global_mats から変形される
+/// T-pose -> A-stance conversion (bones only).
+/// For VRM: meshes are deformed through skinning from `global_mats`.
 pub fn normalize_pose_to_astance(bones: &mut [IrBone], global_mats: &mut [Mat4]) -> AStanceResult {
     let (corrections, result) = compute_astance_corrections(bones, global_mats);
     apply_bone_corrections(bones, global_mats, &corrections);
     result
 }
 
-/// Tポーズ→Aスタンス変換（ボーン＋メッシュ頂点＋モーフオフセット）
-/// FBX用: メッシュ頂点がワールド空間に展開済みなので、スキンウェイトで直接変形する
+/// T-pose -> A-stance conversion (bones + mesh vertices + morph offsets).
+/// For FBX: mesh vertices are already baked in world space, so skin weights deform them directly.
 pub fn normalize_pose_to_astance_with_meshes(
     bones: &mut [IrBone],
     global_mats: &mut [Mat4],
@@ -36,7 +36,7 @@ struct AStanceCorrection {
     rotation: glam::Quat,
 }
 
-/// 戻り値: (補正リスト, 結果ステータス)
+/// Returns (correction list, result status).
 fn compute_astance_corrections(
     bones: &[IrBone],
     global_mats: &[Mat4],
@@ -54,7 +54,7 @@ fn compute_astance_corrections(
         ("rightUpperArm", "rightLowerArm"),
     ];
 
-    // 腕ボーンが存在するかチェック
+    // Check whether arm bones exist
     let has_arms = arm_pairs
         .iter()
         .any(|(upper, lower)| find_bone(upper).is_some() && find_bone(lower).is_some());
@@ -77,7 +77,7 @@ fn compute_astance_corrections(
 
             let horizontal = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
             if horizontal.length_squared() < 0.001 {
-                // 退化ケース（腕が真上/真下）— 補正不要だが「既にAスタンス」ではない
+                // Degenerate case (arm pointing straight up/down): no correction, but not "already A-stance" either.
                 return None;
             }
 
@@ -94,7 +94,7 @@ fn compute_astance_corrections(
 
             let axis = Vec3::Y.cross(dir).normalize_or_zero();
             if axis.length_squared() < 0.001 {
-                // 退化ケース（回転軸計算不能）— 補正不要だが「既にAスタンス」ではない
+                // Degenerate case (rotation axis cannot be computed): no correction, but not "already A-stance" either.
                 return None;
             }
             let correction = glam::Quat::from_axis_angle(axis, A_STANCE_ANGLE_DEG.to_radians());
@@ -143,14 +143,14 @@ fn apply_bone_corrections(
     }
 }
 
-/// メッシュ頂点をスキンウェイトに基づいて回転
-/// 戻り値: グローバル頂点インデックスごとの回転行列（モーフオフセット変換用）
+/// Rotate mesh vertices based on skin weights.
+/// Returns a rotation matrix per global vertex index (used to transform morph offsets).
 fn apply_mesh_corrections(
     bones: &[IrBone],
     meshes: &mut [IrMesh],
     corrections: &[AStanceCorrection],
 ) -> Vec<glam::Mat3> {
-    // 各補正の影響ボーン集合・位置変換行列・回転行列を事前計算
+    // Precompute the affected bone set, position transform, and rotation for each correction
     let corr_data: Vec<(HashSet<usize>, Mat4, glam::Mat3)> = corrections
         .iter()
         .map(|corr| {
@@ -160,7 +160,7 @@ fn apply_mesh_corrections(
             let rot_mat = Mat4::from_translation(corr.pivot)
                 * Mat4::from_quat(corr.rotation)
                 * Mat4::from_translation(-corr.pivot);
-            // モーフオフセット（方向ベクトル）用の純粋な回転行列
+            // Pure rotation matrix for morph offsets (direction vectors)
             let rot3 = glam::Mat3::from_quat(corr.rotation);
             (descendants, rot_mat, rot3)
         })
@@ -172,7 +172,7 @@ fn apply_mesh_corrections(
 
     for mesh in meshes.iter_mut() {
         for (local_vi, vert) in mesh.vertices_mut().iter_mut().enumerate() {
-            // この頂点に影響する補正の加重平均を計算
+            // Compute the weighted average of corrections affecting this vertex
             let mut total_weight = 0.0f32;
             let mut blended_pos = Vec3::ZERO;
             let mut blended_norm = Vec3::ZERO;
@@ -200,8 +200,8 @@ fn apply_mesh_corrections(
                 vert.position = blended_pos + vert.position * remaining;
                 vert.normal = (blended_norm + vert.normal * remaining).normalize_or_zero();
 
-                // モーフオフセット用: 加重ブレンドされた回転行列を記録
-                // R_blend = Σ(R_i * w_i) + I * (1 - Σw_i)
+                // For morph offsets: record the weight-blended rotation matrix
+                // R_blend = sum(R_i * w_i) + I * (1 - sum(w_i))
                 let global_vi = global_offset + local_vi;
                 let mut blended_rot = glam::Mat3::IDENTITY * remaining;
                 for (affected_bones, _rot_mat, rot3) in &corr_data {
@@ -228,7 +228,7 @@ fn apply_mesh_corrections(
     vertex_rot3s
 }
 
-/// モーフオフセットにAスタンス回転を適用
+/// Apply the A-stance rotation to morph offsets.
 fn apply_morph_corrections(morphs: &mut [IrMorph], vertex_rot3s: &[glam::Mat3]) {
     for morph in morphs.iter_mut() {
         if let IrMorphKind::Vertex {
@@ -262,8 +262,8 @@ fn apply_morph_corrections(morphs: &mut [IrMorph], vertex_rot3s: &[glam::Mat3]) 
     }
 }
 
-/// Aスタンス→Tスタンス変換（ボーン＋メッシュ頂点＋モーフオフセット＋物理）
-/// PMX/PMD用: Aスタンスモデルを水平（T字）に変換
+/// A-stance -> T-stance conversion (bones + mesh vertices + morph offsets + physics).
+/// For PMX/PMD: convert an A-stance model to horizontal (T) arms.
 #[must_use]
 pub fn normalize_pose_to_tstance_with_meshes(
     bones: &mut [IrBone],
@@ -281,7 +281,7 @@ pub fn normalize_pose_to_tstance_with_meshes(
     result
 }
 
-/// Aスタンス→Tスタンス変換（物理含む全データ）
+/// A-stance -> T-stance conversion (full data, including physics).
 #[must_use]
 pub fn normalize_pose_to_tstance_full(
     bones: &mut [IrBone],
@@ -302,8 +302,9 @@ pub fn normalize_pose_to_tstance_full(
     result
 }
 
-/// 物理データ（剛体・ジョイント）にスタンス補正を適用
-/// 剛体・ジョイントの位置はPMX座標系なので、pos_fn で変換してから回転し、逆変換する
+/// Apply stance corrections to physics data (rigid bodies + joints).
+/// Rigid body / joint positions are in the PMX coordinate system, so transform via `pos_fn`,
+/// rotate, then transform back.
 fn apply_physics_corrections(
     bones: &[IrBone],
     physics: &mut super::types::IrPhysics,
@@ -319,12 +320,12 @@ fn apply_physics_corrections(
             * Mat4::from_quat(corr.rotation)
             * Mat4::from_translation(-pivot_pmx);
 
-        // 剛体
+        // Rigid bodies
         for rb in &mut physics.rigid_bodies {
             if let Some(bi) = rb.bone_index {
                 if descendants.contains(&bi) {
                     rb.position = rot_mat.transform_point3(rb.position);
-                    // 回転も補正（Euler ZXY → Quat → 回転 → Euler ZXY）
+                    // Also correct the rotation (Euler ZXY -> Quat -> rotate -> Euler ZXY)
                     let rb_quat = glam::Quat::from_euler(
                         glam::EulerRot::ZXY,
                         rb.rotation.z,
@@ -338,7 +339,7 @@ fn apply_physics_corrections(
             }
         }
 
-        // ジョイント（rigid_a のボーンで判定）
+        // Joints (decided by the bone attached to rigid_a)
         for joint in &mut physics.joints {
             let should_transform = if joint.rigid_a < physics.rigid_bodies.len() {
                 physics.rigid_bodies[joint.rigid_a]
@@ -363,12 +364,12 @@ fn apply_physics_corrections(
     }
 }
 
-/// Aスタンス→Tスタンスの補正を計算
-/// vrm_bone_name がない場合はPMXボーン名（日本語）で検索
+/// Compute the A-stance -> T-stance correction.
+/// Falls back to looking up bones by their PMX (Japanese) name when `vrm_bone_name` is missing.
 fn compute_tstance_corrections(bones: &[IrBone]) -> (Vec<AStanceCorrection>, AStanceResult) {
     let find_bone = |names: &[&str]| -> Option<usize> {
         for name in names {
-            // vrm_bone_name で検索
+            // Look up by vrm_bone_name
             if let Some(idx) = bones
                 .iter()
                 .position(|b| b.vrm_bone_name.as_deref() == Some(name))
@@ -376,7 +377,7 @@ fn compute_tstance_corrections(bones: &[IrBone]) -> (Vec<AStanceCorrection>, ASt
                 return Some(idx);
             }
         }
-        // PMXボーン名で検索
+        // Look up by PMX bone name
         for name in names {
             if let Some(idx) = bones.iter().position(|b| b.name == *name) {
                 return Some(idx);
@@ -385,7 +386,7 @@ fn compute_tstance_corrections(bones: &[IrBone]) -> (Vec<AStanceCorrection>, ASt
         None
     };
 
-    // (上腕名候補, 前腕名候補) のペア
+    // (upper-arm name candidates, lower-arm name candidates) pairs
     let arm_pairs = [
         (
             &["leftUpperArm", "左腕"][..],
@@ -397,7 +398,7 @@ fn compute_tstance_corrections(bones: &[IrBone]) -> (Vec<AStanceCorrection>, ASt
         ),
     ];
 
-    // 腕ボーンが存在するかチェック
+    // Check whether arm bones exist
     let has_arms = arm_pairs.iter().any(|(upper_names, lower_names)| {
         find_bone(upper_names).is_some() && find_bone(lower_names).is_some()
     });
@@ -416,14 +417,14 @@ fn compute_tstance_corrections(bones: &[IrBone]) -> (Vec<AStanceCorrection>, ASt
             let la_pos = bones[la_idx].position;
             let dir = (la_pos - ua_pos).normalize_or_zero();
 
-            // 水平方向の成分
+            // Horizontal component
             let horizontal = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
             if horizontal.length_squared() < 0.001 {
-                // 退化ケース（腕が真上/真下）— 補正不要だが「既にTスタンス」ではない
+                // Degenerate case (arm pointing straight up/down): no correction, but not "already T-stance" either.
                 return None;
             }
 
-            // 現在の腕の角度（水平からの下がり角度）
+            // Current arm angle (drop angle from horizontal)
             let current_angle = dir.dot(horizontal).clamp(-1.0, 1.0).acos();
             if current_angle < 5.0f32.to_radians() {
                 log::info!(
@@ -435,13 +436,13 @@ fn compute_tstance_corrections(bones: &[IrBone]) -> (Vec<AStanceCorrection>, ASt
                 return None;
             }
 
-            // 腕を上に持ち上げて水平にする → 逆方向に回転
+            // Lift the arms back to horizontal -> rotate in the opposite direction
             let axis = Vec3::Y.cross(dir).normalize_or_zero();
             if axis.length_squared() < 0.001 {
-                // 退化ケース（回転軸計算不能）— 補正不要だが「既にTスタンス」ではない
+                // Degenerate case (rotation axis cannot be computed): no correction, but not "already T-stance" either.
                 return None;
             }
-            // T→A では正の角度で下に曲げた。A→T では負の角度で持ち上げる
+            // T->A bends down with a positive angle; A->T lifts up with a negative angle.
             let correction = glam::Quat::from_axis_angle(axis, -current_angle);
 
             log::info!(

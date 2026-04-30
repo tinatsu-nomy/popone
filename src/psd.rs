@@ -1,22 +1,22 @@
-//! PSD (Photoshop) ファイルのデコード処理
+//! PSD (Photoshop) file decoding.
 //!
-//! feature gate なしで常にコンパイル可能。
-//! convert/texture.rs (CLI) と viewer/texture.rs (ビューア) の両方から利用される。
+//! Always compiled (no feature gate).
+//! Used by both convert/texture.rs (CLI) and viewer/texture.rs (viewer).
 
 use anyhow::Result;
 use rust_i18n::t;
 
-/// ファイル名が PSD かどうか判定
+/// Returns true if the filename has a `.psd` extension.
 #[inline]
 pub fn is_psd_filename(name: &str) -> bool {
     name.len() >= 4 && name.as_bytes()[name.len() - 4..].eq_ignore_ascii_case(b".psd")
 }
 
-/// PSD ファイルを RGBA バイト列にデコード
+/// Decode a PSD file to an RGBA byte buffer.
 ///
-/// 戻り値: (rgba, width, height)
+/// Returns (rgba, width, height).
 pub fn decode_psd(data: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
-    // --- ファイルヘッダ (26 bytes) ---
+    // --- File header (26 bytes) ---
     if data.len() < 26 {
         anyhow::bail!(
             "{}",
@@ -40,7 +40,7 @@ pub fn decode_psd(data: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
     let height = u32::from_be_bytes([data[14], data[15], data[16], data[17]]);
     let width = u32::from_be_bytes([data[18], data[19], data[20], data[21]]);
     let depth = u16::from_be_bytes([data[22], data[23]]);
-    // color_mode: data[24..26] (未使用)
+    // color_mode: data[24..26] (unused)
 
     if depth != 8 && depth != 16 {
         anyhow::bail!(
@@ -49,7 +49,7 @@ pub fn decode_psd(data: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
         );
     }
 
-    // --- 可変長セクションをスキップしてイメージデータセクションへ ---
+    // --- Skip variable-length sections to reach the image data section ---
     let mut pos: usize = 26;
 
     // Color Mode Data section (4 bytes length + data)
@@ -86,7 +86,7 @@ pub fn decode_psd(data: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
     let image_bytes = &data[pos..];
     let pixel_count = (width * height) as usize;
 
-    // チャンネル別バイト列をデコード
+    // Decode per-channel byte data
     let channels = decode_psd_image_channels(
         image_bytes,
         compression,
@@ -96,7 +96,7 @@ pub fn decode_psd(data: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
         depth,
     )?;
 
-    // RGBA に組み立て
+    // Assemble into RGBA
     let mut rgba = vec![0u8; pixel_count * 4];
     let ch_count = channels.len().min(4);
     for (ch, ch_data) in channels.iter().enumerate().take(ch_count) {
@@ -107,14 +107,14 @@ pub fn decode_psd(data: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
             }
         }
     }
-    // グレースケール: R のみの場合 G,B にコピー
+    // Grayscale: when only R is present, copy to G and B
     if ch_count == 1 {
         for i in 0..pixel_count {
             rgba[i * 4 + 1] = rgba[i * 4];
             rgba[i * 4 + 2] = rgba[i * 4];
         }
     }
-    // アルファチャンネルがない場合は不透明
+    // Treat missing alpha channel as opaque
     if ch_count <= 3 {
         for i in 0..pixel_count {
             rgba[i * 4 + 3] = 255;
@@ -124,7 +124,7 @@ pub fn decode_psd(data: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
     Ok((rgba, width, height))
 }
 
-/// PSD データを PNG バイト列に変換
+/// Convert PSD data to a PNG byte buffer.
 pub fn psd_to_png(psd_data: &[u8]) -> Result<Vec<u8>> {
     let (rgba, width, height) = decode_psd(psd_data)?;
 
@@ -144,7 +144,7 @@ pub fn psd_to_png(psd_data: &[u8]) -> Result<Vec<u8>> {
     Ok(png_data)
 }
 
-/// PSD 画像データセクションのチャンネルをデコード
+/// Decode the channels of the PSD image data section.
 fn decode_psd_image_channels(
     data: &[u8],
     compression: u16,
@@ -155,7 +155,7 @@ fn decode_psd_image_channels(
 ) -> Result<Vec<Vec<u8>>> {
     match compression {
         0 => {
-            // Raw データ
+            // Raw data
             let bytes_per_pixel = if depth == 16 { 2 } else { 1 };
             let channel_byte_count = pixel_count * bytes_per_pixel;
             let mut channels = Vec::with_capacity(channel_count);
@@ -169,7 +169,7 @@ fn decode_psd_image_channels(
                     );
                 }
                 let ch_data = if depth == 16 {
-                    // 16bit → 8bit に変換
+                    // Convert 16-bit -> 8-bit
                     data[start..end]
                         .chunks(2)
                         .map(|pair| (u16::from_be_bytes([pair[0], pair[1]]) / 256) as u8)
@@ -182,14 +182,14 @@ fn decode_psd_image_channels(
             Ok(channels)
         }
         1 => {
-            // RLE 圧縮: 各スキャンライン長が先頭に格納
+            // RLE compression: per-scanline lengths are stored at the head
             let scanline_counts = channel_count * height;
             let header_bytes = scanline_counts * 2;
             if data.len() < header_bytes {
                 anyhow::bail!("{}", t!("error.psd.rle_scanline_header_short"));
             }
 
-            // 各チャンネルのバイト数を集計
+            // Sum byte counts per channel
             let mut ch_byte_counts = vec![0usize; channel_count];
             for (ch, count) in ch_byte_counts.iter_mut().enumerate() {
                 for row in 0..height {
@@ -198,7 +198,7 @@ fn decode_psd_image_channels(
                 }
             }
 
-            // チャンネルデータをデコード
+            // Decode channel data
             let mut offset = header_bytes;
             let mut channels = Vec::with_capacity(channel_count);
             for (ch, &ch_bytes) in ch_byte_counts.iter().enumerate() {
@@ -239,7 +239,7 @@ fn decode_psd_image_channels(
     }
 }
 
-/// PackBits (RLE) デコード
+/// PackBits (RLE) decompression.
 fn packbits_decompress(data: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
     let mut i = 0;

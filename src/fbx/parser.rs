@@ -6,11 +6,11 @@ use std::io::{Cursor, Read, Seek, SeekFrom};
 
 const MAGIC: &[u8; 23] = b"Kaydara FBX Binary  \x00\x1a\x00";
 
-/// プロパティ数の上限（DoS防止）
+/// Maximum number of properties (DoS guard).
 const MAX_NUM_PROPERTIES: u64 = 1_000_000;
-/// ノード再帰深さの上限
+/// Maximum node recursion depth.
 const MAX_NODE_DEPTH: u32 = 64;
-/// 配列データサイズの上限（512MB）
+/// Maximum array data size (512 MB).
 const MAX_ARRAY_SIZE: usize = 512 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -113,16 +113,16 @@ impl FbxProperty {
 }
 
 pub fn parse(data: &[u8]) -> Result<FbxDocument> {
-    // UTF-8 BOM をスキップ
+    // Skip UTF-8 BOM
     let data = data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data);
-    // ASCII FBX 自動検出
+    // Auto-detect ASCII FBX
     if data.len() >= 5 && &data[..5] == b"; FBX" {
         return parse_ascii(data);
     }
 
     let mut cursor = Cursor::new(data);
 
-    // ヘッダ検証
+    // Verify the header
     let mut magic = [0u8; 23];
     cursor.read_exact(&mut magic)?;
     if &magic != MAGIC {
@@ -134,14 +134,14 @@ pub fn parse(data: &[u8]) -> Result<FbxDocument> {
     let version = cursor.read_u32::<LittleEndian>()?;
     log::info!("FBX version: {}", version);
 
-    // トップレベルノードを読み取り
+    // Read top-level nodes
     let data_len = data.len() as u64;
     let mut nodes = Vec::new();
     loop {
         let node = parse_node(&mut cursor, version, data_len, 0)?;
         match node {
             Some(n) => nodes.push(n),
-            None => break, // 終端マーカー
+            None => break, // End-of-stream marker
         }
     }
 
@@ -179,7 +179,7 @@ fn parse_node(
         )
     };
 
-    // 終端マーカー判定
+    // End-of-stream marker
     if end_offset == 0 {
         return Ok(None);
     }
@@ -234,14 +234,14 @@ fn parse_node(
     cursor.read_exact(&mut name_buf)?;
     let name = String::from_utf8_lossy(&name_buf).to_string();
 
-    // 属性読み取り
+    // Read properties
     let mut properties = Vec::with_capacity(num_properties_usize);
     let _prop_start = cursor.position();
     for _ in 0..num_properties {
         properties.push(parse_property(cursor)?);
     }
 
-    // 子ノード読み取り
+    // Read child nodes
     let mut children = Vec::new();
     while cursor.position() < end_offset {
         match parse_node(cursor, version, end_offset, depth + 1)? {
@@ -250,7 +250,7 @@ fn parse_node(
         }
     }
 
-    // end_offsetまでシーク（安全策）
+    // Seek to end_offset (safety net)
     cursor.seek(SeekFrom::Start(end_offset))?;
 
     Ok(Some(FbxNode {
@@ -263,10 +263,10 @@ fn parse_node(
 fn parse_property(cursor: &mut Cursor<&[u8]>) -> Result<FbxProperty> {
     let type_code = cursor.read_u8()?;
     match type_code {
-        // プリミティブ型
+        // Primitive types
         b'C' => {
             let v = cursor.read_u8()?;
-            // 0x59='Y'=true, 0x54='T'=false, Blenderバグ対応で奇偶判定
+            // 0x59 = 'Y' = true, 0x54 = 'T' = false; parity check added for Blender bugs
             Ok(FbxProperty::Bool(
                 v == 0x59 || v == 0x01 || (v != 0x54 && v != 0x00 && v % 2 == 1),
             ))
@@ -277,7 +277,7 @@ fn parse_property(cursor: &mut Cursor<&[u8]>) -> Result<FbxProperty> {
         b'F' => Ok(FbxProperty::F32(cursor.read_f32::<LittleEndian>()?)),
         b'D' => Ok(FbxProperty::F64(cursor.read_f64::<LittleEndian>()?)),
 
-        // 配列型
+        // Array types
         b'b' => {
             let raw = read_array_raw(cursor, 1)?;
             Ok(FbxProperty::BoolArray(
@@ -325,7 +325,7 @@ fn parse_property(cursor: &mut Cursor<&[u8]>) -> Result<FbxProperty> {
             Ok(FbxProperty::F64Array(values))
         }
 
-        // 特殊型
+        // Special types
         b'S' => {
             let len = cursor.read_u32::<LittleEndian>()? as usize;
             let mut buf = vec![0u8; len];
@@ -432,7 +432,7 @@ fn read_array_raw(cursor: &mut Cursor<&[u8]>, element_size: usize) -> Result<Vec
 }
 
 // ============================================================
-// ASCII FBX パーサー
+// ASCII FBX parser
 // ============================================================
 
 fn parse_ascii(data: &[u8]) -> Result<FbxDocument> {
@@ -450,7 +450,7 @@ fn parse_ascii(data: &[u8]) -> Result<FbxDocument> {
         }
     }
 
-    // FBXHeaderExtension > FBXVersion からバージョン取得
+    // Read the version from FBXHeaderExtension > FBXVersion
     let version = nodes
         .iter()
         .find(|n| n.name == "FBXHeaderExtension")
@@ -491,10 +491,10 @@ impl<'a> AsciiParser<'a> {
         }
         self.pos += 1;
 
-        // インラインコメント除去
+        // Strip inline comments
         let line = ascii_strip_inline_comment(line);
 
-        // ノード名と値部分を分離（引用符外の最初の `:` で分割）
+        // Split the node name from the value section (split at the first `:` outside quotes)
         let colon_pos = ascii_find_colon(line).ok_or_else(|| {
             PoponeError::FbxParse(
                 t!(
@@ -507,11 +507,11 @@ impl<'a> AsciiParser<'a> {
         let name = line[..colon_pos].trim().to_string();
         let after_colon = line[colon_pos + 1..].trim();
 
-        // 末尾の `{` を検出（同一行、または次行に `{` のみの場合）
+        // Detect a trailing `{` (on the same line or as the next line on its own)
         let (value_part, has_block) = if let Some(stripped) = after_colon.strip_suffix('{') {
             (stripped.trim(), true)
         } else {
-            // 次行が `{` のみの場合
+            // The next line is just `{`
             let next_is_brace = self.pos < self.lines.len() && self.lines[self.pos].trim() == "{";
             if next_is_brace {
                 self.pos += 1;
@@ -521,7 +521,7 @@ impl<'a> AsciiParser<'a> {
             }
         };
 
-        // 配列ノード: *N
+        // Array node: *N
         if value_part.starts_with('*') {
             let prop = self.parse_array_data(&name)?;
             return Ok(Some(FbxNode {
@@ -531,24 +531,24 @@ impl<'a> AsciiParser<'a> {
             }));
         }
 
-        // インラインプロパティ解析
+        // Parse inline properties
         let mut properties = if !value_part.is_empty() {
             ascii_parse_inline_values(value_part)
         } else {
             Vec::new()
         };
 
-        // P ノードは型ヒントに基づいて properties[4+] の型を修正
+        // For P nodes, retype properties[4+] based on the type hint
         if name == "P" {
             ascii_fixup_p_node(&mut properties);
         }
 
-        // 子ノード解析
+        // Parse children
         let mut children = Vec::new();
         if has_block {
-            // Content ノード: ASCII FBX の埋め込みデータ（base64等）を特別処理
-            // 行指向パーサーでは通常の子ノードとして解析できないため、`}` まで生データとして収集し
-            // FbxProperty::String として保持する（上位層がデコード方法を決定できるよう）
+            // Content node: ASCII FBX embeds raw data (e.g. base64) here.
+            // The line-oriented parser cannot treat them as ordinary children, so we collect raw lines
+            // up to the closing `}` and store them as FbxProperty::String (the caller decides how to decode).
             if name == "Content" {
                 let mut raw_lines: Vec<&str> = Vec::new();
                 while self.pos < self.lines.len() {
@@ -581,7 +581,7 @@ impl<'a> AsciiParser<'a> {
                     match self.parse_node()? {
                         Some(child) => children.push(child),
                         None => {
-                            // parse_node が None を返した = `}` を検出
+                            // parse_node returned None -> `}` was reached
                             if self.pos < self.lines.len() && self.lines[self.pos].trim() == "}" {
                                 self.pos += 1;
                             }
@@ -599,7 +599,7 @@ impl<'a> AsciiParser<'a> {
         }))
     }
 
-    /// 配列データ解析: `*N {` の後の `a: v1, v2, ...` 行を `}` まで読み取る
+    /// Parse array data: read `a: v1, v2, ...` lines up to `}` after a `*N {` header.
     fn parse_array_data(&mut self, node_name: &str) -> Result<FbxProperty> {
         let mut data_str = String::new();
         while self.pos < self.lines.len() {
@@ -679,7 +679,7 @@ impl<'a> AsciiParser<'a> {
     }
 }
 
-// --- ASCII FBX ヘルパー関数 ---
+// --- ASCII FBX helpers ---
 
 enum AsciiArrayType {
     F64,
@@ -687,8 +687,9 @@ enum AsciiArrayType {
     I64,
 }
 
-/// ノード名と配列データから要素の型を推定
-/// 既知ノード名 → 明確な型。不明ノード → データ内容から推定（小数点/指数表記→F64、それ以外→I32）
+/// Infer the element type of an array from the node name and the values.
+/// Known node names map to concrete types. Unknown nodes are inferred from the values
+/// (presence of a decimal point or exponent -> F64, otherwise I32).
 fn ascii_array_type(name: &str, values: &[&str]) -> AsciiArrayType {
     match name {
         "PolygonVertexIndex" | "Indexes" | "Materials" | "NormalsIndex" | "UVIndex"
@@ -698,7 +699,7 @@ fn ascii_array_type(name: &str, values: &[&str]) -> AsciiArrayType {
         | "KeyValueFloat" | "FullWeights" | "Binormals" | "BinormalsW" | "Tangents"
         | "TangentsW" | "NormalsW" => AsciiArrayType::F64,
         _ => {
-            // 不明ノード: データ内容から推定
+            // Unknown node: infer from the values
             let has_float = values
                 .iter()
                 .any(|s| s.contains('.') || s.contains('e') || s.contains('E'));
@@ -711,7 +712,7 @@ fn ascii_array_type(name: &str, values: &[&str]) -> AsciiArrayType {
     }
 }
 
-/// 引用符外のインラインコメント（`;`以降）を除去
+/// Strip inline comments (text after `;`) outside of quotes.
 fn ascii_strip_inline_comment(s: &str) -> &str {
     let mut in_quotes = false;
     for (i, c) in s.char_indices() {
@@ -724,7 +725,7 @@ fn ascii_strip_inline_comment(s: &str) -> &str {
     s
 }
 
-/// 引用符の外にある最初の `:` の位置を返す
+/// Return the position of the first `:` outside of quotes.
 fn ascii_find_colon(s: &str) -> Option<usize> {
     let mut in_quotes = false;
     for (i, c) in s.char_indices() {
@@ -737,7 +738,7 @@ fn ascii_find_colon(s: &str) -> Option<usize> {
     None
 }
 
-/// カンマ区切りのプロパティ値を引用符を尊重して分割・解析
+/// Split a comma-separated property-value string, respecting quotes, then parse each value.
 fn ascii_parse_inline_values(s: &str) -> Vec<FbxProperty> {
     ascii_split_csv(s)
         .into_iter()
@@ -745,7 +746,7 @@ fn ascii_parse_inline_values(s: &str) -> Vec<FbxProperty> {
         .collect()
 }
 
-/// 引用符を尊重してカンマで分割
+/// Split on commas while respecting quotes.
 fn ascii_split_csv(s: &str) -> Vec<&str> {
     let mut result = Vec::new();
     let mut start = 0;
@@ -769,31 +770,31 @@ fn ascii_split_csv(s: &str) -> Vec<&str> {
     result
 }
 
-/// スカラー値をテキスト表現から FbxProperty に変換
+/// Convert a textual scalar into an `FbxProperty`.
 fn ascii_parse_scalar(s: &str) -> FbxProperty {
     let s = s.trim();
     if s.is_empty() {
         return FbxProperty::String(String::new());
     }
-    // 引用符付き文字列
+    // Quoted string
     if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
         return FbxProperty::String(s[1..s.len() - 1].to_string());
     }
-    // 浮動小数点数（小数点または指数表記）
+    // Floating-point (decimal point or exponent)
     if s.contains('.') || s.contains('e') || s.contains('E') {
         if let Ok(v) = s.parse::<f64>() {
             return FbxProperty::F64(v);
         }
     }
-    // 整数
+    // Integer
     if let Ok(v) = s.parse::<i64>() {
         return FbxProperty::I64(v);
     }
-    // フォールバック: 文字列
+    // Fallback: string
     FbxProperty::String(s.to_string())
 }
 
-/// P ノードの properties[4+] を型ヒント (properties[1]) に基づいて修正
+/// Retype `properties[4..]` of a P node based on the type hint at `properties[1]`.
 fn ascii_fixup_p_node(properties: &mut [FbxProperty]) {
     if properties.len() < 5 {
         return;

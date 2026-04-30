@@ -1,7 +1,7 @@
 use glam::{Quat, Vec3};
 use std::collections::HashMap;
 
-/// glTF アニメーション補間方法
+/// glTF animation interpolation method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interpolation {
     Linear,
@@ -9,96 +9,96 @@ pub enum Interpolation {
     CubicSpline,
 }
 
-/// 回転キーフレーム
+/// Rotation keyframe.
 #[derive(Debug, Clone)]
 pub struct RotationKeyframe {
     pub time: f32,
     pub value: Quat,
 }
 
-/// 平行移動キーフレーム
+/// Translation keyframe.
 #[derive(Debug, Clone)]
 pub struct TranslationKeyframe {
     pub time: f32,
     pub value: Vec3,
 }
 
-/// スカラーキーフレーム（表情ウェイト用）
+/// Scalar keyframe (used for expression weights).
 #[derive(Debug, Clone)]
 pub struct ScalarKeyframe {
     pub time: f32,
     pub value: f32,
 }
 
-/// ボーンのアニメーションチャネル
+/// Animation channel for a bone.
 #[derive(Debug, Clone)]
 pub struct BoneChannel {
     pub rotation: Vec<RotationKeyframe>,
     pub rotation_interp: Interpolation,
-    /// Hips のみ平行移動あり
+    /// Translation is only present for Hips.
     pub translation: Option<Vec<TranslationKeyframe>>,
     pub translation_interp: Option<Interpolation>,
 }
 
-/// 表情のアニメーションチャネル
+/// Animation channel for an expression.
 #[derive(Debug, Clone)]
 pub struct ExpressionChannel {
     pub keyframes: Vec<ScalarKeyframe>,
     pub interp: Interpolation,
 }
 
-/// VRMAボーンのレストデータ（リターゲティング用）
+/// Rest data for a VRMA bone (used for retargeting).
 #[derive(Debug, Clone)]
 pub struct VrmaBoneRest {
-    /// ローカルレスト回転（T-Pose時のノードローカル回転）
+    /// Local rest rotation (node-local rotation at T-pose).
     pub local_rotation: Quat,
-    /// ワールドレスト回転（T-Pose時のグローバル回転）
+    /// World rest rotation (global rotation at T-pose).
     pub global_rotation: Quat,
-    /// ローカルレスト平行移動（T-Pose時のノードローカル位置）
+    /// Local rest translation (node-local position at T-pose).
     pub local_translation: Vec3,
 }
 
-/// ボーンマッチングモード
+/// Bone matching mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BoneMatchMode {
-    /// VRMA: ヒューマノイドボーン名でマッチ（リターゲティングあり）
+    /// VRMA: match by humanoid bone name (with retargeting).
     Humanoid,
-    /// GLB/glTF/FBX: ノード名で直接マッチ（リターゲティングなし）
+    /// GLB/glTF/FBX: match by node name directly (no retargeting).
     NodeName,
 }
 
-/// アニメーションデータ（VRMA / GLB / glTF / FBX 共通）
+/// Animation data shared by VRMA / GLB / glTF / FBX.
 #[derive(Debug, Clone)]
 pub struct VrmaAnimation {
-    /// アニメーション名
+    /// Animation name.
     pub name: String,
-    /// 総再生時間（秒）
+    /// Total duration in seconds.
     pub duration: f32,
-    /// ボーン名 → ボーンチャネル（キーはマッチモードに依存）
+    /// Bone name -> bone channel (key meaning depends on `match_mode`).
     pub bone_channels: HashMap<String, BoneChannel>,
-    /// 表情名 → 表情チャネル
+    /// Expression name -> expression channel.
     pub expression_channels: HashMap<String, ExpressionChannel>,
-    /// VRMAボーンのレスト回転（リターゲティング用、Humanoidモードのみ使用）
+    /// Rest rotation for VRMA bones (used for retargeting; Humanoid mode only).
     pub bone_rests: HashMap<String, VrmaBoneRest>,
-    /// ボーンマッチングモード
+    /// Bone matching mode.
     pub match_mode: BoneMatchMode,
-    /// ソースモデルがY軸180°反転しているか（+Z向き vs VRMの-Z向き）
+    /// Whether the source model is rotated 180 degrees about Y (+Z forward vs. VRM's -Z forward).
     pub facing_flip_y: bool,
-    /// 回転がレストポーズからのデルタか（Unity Muscle等）
+    /// Whether rotations are deltas relative to the rest pose (e.g. Unity Muscle).
     pub is_additive: bool,
-    /// ボーンローカル空間でのデルタか（true: parent共役変換省略）
-    /// Unity Muscle の場合 true（回転は既にボーンローカル空間）
+    /// Whether deltas are expressed in bone-local space (true: skip parent-conjugate transform).
+    /// True for Unity Muscle (rotations are already in bone-local space).
     pub is_bone_local_delta: bool,
 }
 
 impl VrmaAnimation {
-    /// 指定時刻のボーン回転を補間して取得
+    /// Interpolate the bone rotation at the given time.
     pub fn sample_bone_rotation(&self, bone_name: &str, time: f32) -> Option<Quat> {
         let ch = self.bone_channels.get(bone_name)?;
         Some(sample_rotation(&ch.rotation, ch.rotation_interp, time))
     }
 
-    /// 指定時刻のボーン平行移動を補間して取得（Hipsのみ）
+    /// Interpolate the bone translation at the given time (Hips only).
     pub fn sample_bone_translation(&self, bone_name: &str, time: f32) -> Option<Vec3> {
         let ch = self.bone_channels.get(bone_name)?;
         let kfs = ch.translation.as_ref()?;
@@ -106,14 +106,14 @@ impl VrmaAnimation {
         Some(sample_translation(kfs, interp, time))
     }
 
-    /// 指定時刻の表情ウェイトを補間して取得
+    /// Interpolate the expression weight at the given time.
     pub fn sample_expression(&self, expr_name: &str, time: f32) -> Option<f32> {
         let ch = self.expression_channels.get(expr_name)?;
         Some(sample_scalar(&ch.keyframes, ch.interp, time).clamp(0.0, 1.0))
     }
 }
 
-/// 回転キーフレーム補間
+/// Rotation keyframe interpolation.
 fn sample_rotation(keyframes: &[RotationKeyframe], interp: Interpolation, time: f32) -> Quat {
     if keyframes.is_empty() {
         return Quat::IDENTITY;
@@ -126,7 +126,7 @@ fn sample_rotation(keyframes: &[RotationKeyframe], interp: Interpolation, time: 
         return last.value;
     }
 
-    // 二分探索で区間を見つける
+    // Binary search to locate the segment
     let idx = keyframes.partition_point(|kf| kf.time <= time);
     let idx = idx.min(keyframes.len() - 1).max(1);
     let a = &keyframes[idx - 1];
@@ -145,7 +145,7 @@ fn sample_rotation(keyframes: &[RotationKeyframe], interp: Interpolation, time: 
     }
 }
 
-/// 平行移動キーフレーム補間
+/// Translation keyframe interpolation.
 fn sample_translation(keyframes: &[TranslationKeyframe], interp: Interpolation, time: f32) -> Vec3 {
     if keyframes.is_empty() {
         return Vec3::ZERO;
@@ -176,7 +176,7 @@ fn sample_translation(keyframes: &[TranslationKeyframe], interp: Interpolation, 
     }
 }
 
-/// スカラーキーフレーム補間
+/// Scalar keyframe interpolation.
 fn sample_scalar(keyframes: &[ScalarKeyframe], interp: Interpolation, time: f32) -> f32 {
     if keyframes.is_empty() {
         return 0.0;
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn test_scalar_step_interpolation() {
         let kfs = make_scalar_keyframes(vec![(0.0, 0.0), (1.0, 10.0)]);
-        // Step補間では前のキーフレームの値を保持
+        // Step interpolation holds the previous keyframe's value
         assert!((sample_scalar(&kfs, Interpolation::Step, 0.5) - 0.0).abs() < 1e-6);
         assert!((sample_scalar(&kfs, Interpolation::Step, 0.99) - 0.0).abs() < 1e-6);
     }

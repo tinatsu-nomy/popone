@@ -6,8 +6,8 @@ use glam::Vec3;
 use crate::intermediate::types::{IrMaterial, IrTexture, ShaderFamily, TextureData};
 use crate::pmx::types::{PmxMaterial, PmxToonRef};
 
-/// shade→diffuse のグラデーション画像（256×16）を PNG バイト列で返す。
-/// 左端が shade_color、右端が diffuse_color。
+/// Return a 256x16 shade-to-diffuse gradient image as a PNG byte buffer.
+/// Left edge is `shade_color`, right edge is `diffuse_color`.
 fn generate_toon_gradient(shade: Vec3, diffuse: Vec3) -> Vec<u8> {
     const W: u32 = 256;
     const H: u32 = 16;
@@ -24,7 +24,7 @@ fn generate_toon_gradient(shade: Vec3, diffuse: Vec3) -> Vec<u8> {
             pixels.push(255u8);
         }
     }
-    // PNG エンコード
+    // PNG encode
     let mut png_buf = Vec::new();
     {
         let encoder = image::codecs::png::PngEncoder::new(&mut png_buf);
@@ -34,17 +34,17 @@ fn generate_toon_gradient(shade: Vec3, diffuse: Vec3) -> Vec<u8> {
     png_buf
 }
 
-/// MToon 材質のトゥーンテクスチャを生成する。
-/// `toon_textures` に生成テクスチャを追加し、`PmxToonRef::Texture(index)` を返す。
-/// `base_tex_count` は元のテクスチャ数（オフセット計算用）。
-/// `used_names` には既存テクスチャ名 + 既に生成済みトゥーン名が含まれる（衝突回避用）。
-/// 非 MToon / shade_color 無しは `PmxToonRef::Shared` を返す。
+/// Generate a toon texture for an MToon material.
+/// Pushes the generated texture into `toon_textures` and returns `PmxToonRef::Texture(index)`.
+/// `base_tex_count` is the number of pre-existing textures (used for offset computation).
+/// `used_names` contains existing texture names plus already-generated toon names (collision avoidance).
+/// Non-MToon materials and materials without `shade_color` return `PmxToonRef::Shared` instead.
 ///
-/// §G (Step 2-9): 判定主軸を `shader_family` に変更。`ir.is_mtoon()`（= `mtoon.is_some()`）
-/// は、材質編集ドロワーの `mat.mtoon_mut()` 経由で `MtoonParams::default()` が副作用的に
-/// 挿入されたケース（例: Shade セクションを開いただけ）でも true になってしまうため、
-/// PMX 変換の分岐指標としては不安定。`shader_family` を主軸にすることで、ユーザーが
-/// 「MToon 有効化」チェックで明示的に切替えるまで PMX export の挙動は変わらない。
+/// Section G (Step 2-9): The decision axis is now `shader_family`. `ir.is_mtoon()`
+/// (= `mtoon.is_some()`) becomes true as a side effect when the material editor drawer
+/// touches `mat.mtoon_mut()` (e.g. simply expanding the Shade section), so it is unstable
+/// as a branch criterion for PMX conversion. By keying on `shader_family` instead, PMX
+/// export behavior stays the same until the user explicitly toggles "Enable MToon".
 pub fn generate_toon(
     ir: &IrMaterial,
     toon_textures: &mut Vec<IrTexture>,
@@ -63,11 +63,11 @@ pub fn generate_toon(
     };
     let diffuse = ir.diffuse.truncate();
 
-    // グラデーション PNG 生成
+    // Generate the gradient PNG
     let png_data = generate_toon_gradient(shade, diffuse);
 
-    // ファイル名: toon_{材質名}_{連番}.png（非ASCII安全のため連番付き）
-    // 既存テクスチャ名との衝突を回避
+    // Filename: toon_{material_name}_{serial}.png (the serial keeps it ASCII-safe)
+    // Avoid collision with existing texture names
     let idx = toon_textures.len();
     let safe_name = ir
         .name
@@ -117,22 +117,23 @@ pub fn ir_material_to_pmx(
     let draw_flags: u8 = {
         let mut f = 0u8;
         if ir.cull_mode != crate::intermediate::types::CullMode::Back {
-            f |= 0x01; // 両面描画（None, Front ともに PMX では両面扱い）
+            f |= 0x01; // Double-sided (PMX treats both None and Front as double-sided)
         }
-        f |= 0x02; // 地面影
-        f |= 0x04; // セルフシャドウマップへの描画
-        f |= 0x08; // セルフシャドウの描画
+        f |= 0x02; // Ground shadow
+        f |= 0x04; // Render to self-shadow map
+        f |= 0x08; // Receive self-shadow
         if ir.edge_size > 0.0 {
             f |= 0x10;
-        } // エッジ描画
+        } // Edge drawing
         f
     };
 
-    // トゥーンシェーダーの場合: ambient/specular の補正
+    // For toon shaders: adjust ambient / specular.
     //
-    // §G (Step 2-9): 判定主軸を `shader_family` に変更。`ir.is_mtoon()` だけでは、
-    // 材質編集ドロワーで `mat.mtoon_mut()` が触れられた副作用で非 MToon 材質が
-    // MToon 扱いになってしまうので、`shader_family` を明示的に見る。
+    // Section G (Step 2-9): The decision axis is now `shader_family`. Relying on
+    // `ir.is_mtoon()` alone would incorrectly classify non-MToon materials as MToon
+    // when the material editor drawer triggers `mat.mtoon_mut()` as a side effect, so
+    // `shader_family` is checked explicitly.
     let is_mtoon_like = matches!(
         ir.shader_family,
         ShaderFamily::Mtoon | ShaderFamily::Uts2 | ShaderFamily::LilToon | ShaderFamily::Poiyomi
@@ -140,11 +141,11 @@ pub fn ir_material_to_pmx(
     let (ambient, specular, specular_power) = if is_mtoon_like {
         match ir.shader_family {
             ShaderFamily::Uts2 | ShaderFamily::LilToon | ShaderFamily::Poiyomi => {
-                // UTS2/lilToon/Poiyomi: 抽出時に ambient/specular を設定済み
+                // UTS2 / lilToon / Poiyomi: ambient and specular are already set during extraction
                 (ir.ambient, ir.specular, ir.specular_power)
             }
             _ => {
-                // MToon: shade_color → ambient、ライト反応用に軽いスペキュラーを付与
+                // MToon: derive ambient from shade_color and add a light specular highlight for lighting response
                 let amb = if let Some(sc) = ir.mtoon().shade_color {
                     sc * 0.5
                 } else {
@@ -173,7 +174,7 @@ pub fn ir_material_to_pmx(
         sphere_mode: 0,
         toon_ref: generate_toon(ir, toon_textures, base_tex_count, used_names),
         memo: String::new(),
-        face_count: 0, // build.rsで設定
+        face_count: 0, // Set later in build.rs
     }
 }
 
@@ -183,10 +184,10 @@ mod tests {
     use glam::Vec4;
 
     fn make_test_material() -> IrMaterial {
-        // Step 2-9 (§G) 対応: `shader_family = Mtoon` を明示的に設定する。
-        // 以前は `mtoon: Some(_)` + `shader_family: Other`（Default）で PMX 変換側が
-        // `is_mtoon()` により MToon 扱いに分岐していたが、`shader_family` 主軸判定に
-        // 切替えた今は、MToon 扱いのテスト材質を作るときに `shader_family` を明示する必要がある。
+        // Step 2-9 (Section G): explicitly set `shader_family = Mtoon`.
+        // Previously `mtoon: Some(_)` + `shader_family: Other` (default) was enough because the PMX
+        // converter branched via `is_mtoon()`. Now that the decision axis is `shader_family`, test
+        // materials that should be treated as MToon must declare `shader_family` explicitly.
         IrMaterial {
             name: "test_mat".to_string(),
             diffuse: Vec4::new(1.0, 0.8, 0.6, 1.0),
@@ -204,7 +205,7 @@ mod tests {
         }
     }
 
-    /// テスト用ヘルパー: ir_material_to_pmx をテスト向けデフォルト引数で呼ぶ
+    /// Test helper: call `ir_material_to_pmx` with default test arguments.
     fn to_pmx(ir: &IrMaterial, tex_idx: Option<i32>) -> PmxMaterial {
         let mut toon_textures = Vec::new();
         let mut used_names = HashSet::new();
@@ -286,12 +287,12 @@ mod tests {
         let mut used_names = HashSet::new();
         let toon_ref = generate_toon(&mat, &mut toon_textures, 10, &mut used_names);
 
-        // MToon + shade_color あり → Texture 参照
+        // MToon + shade_color present -> Texture reference
         assert!(matches!(toon_ref, PmxToonRef::Texture(10)));
         assert_eq!(toon_textures.len(), 1);
         assert!(toon_textures[0].filename.starts_with("toon_"));
         assert!(toon_textures[0].filename.ends_with(".png"));
-        // PNG データが生成されていること
+        // PNG data must be generated
         assert!(!toon_textures[0].data.is_empty());
     }
 
@@ -299,8 +300,8 @@ mod tests {
     fn test_generate_toon_non_mtoon_shared() {
         let mut mat = make_test_material();
         mat.mtoon = None;
-        // Step 2-9: `make_test_material()` は shader_family = Mtoon なので、
-        // 「非 MToon 材質 → Shared(0)」を確認するテストでは明示的に Other に戻す。
+        // Step 2-9: `make_test_material()` returns shader_family = Mtoon, so when the test wants to
+        // assert "non-MToon material -> Shared(0)" we must reset it to Other explicitly.
         mat.shader_family = ShaderFamily::Other;
 
         let mut toon_textures = Vec::new();
@@ -353,14 +354,14 @@ mod tests {
         mat.mtoon_mut().shade_color = Some(glam::Vec3::new(0.2, 0.2, 0.2));
 
         let mut toon_textures = Vec::new();
-        // 既存テクスチャに同名ファイルがある場合、サフィックス付きで回避
+        // When an existing texture has the same name, avoid the collision with a suffix
         let mut used_names: HashSet<String> =
             ["toon_test_mat_000.png".to_string()].into_iter().collect();
         let toon_ref = generate_toon(&mat, &mut toon_textures, 5, &mut used_names);
 
         assert!(matches!(toon_ref, PmxToonRef::Texture(5)));
         assert_eq!(toon_textures.len(), 1);
-        // 衝突回避で _1 サフィックスが付くこと
+        // Confirm the collision avoidance appended a `_1` suffix
         assert_eq!(toon_textures[0].filename, "toon_test_mat_000_1.png");
     }
 
@@ -370,11 +371,11 @@ mod tests {
         let diffuse = Vec3::new(0.9, 0.8, 0.7);
         let png_data = generate_toon_gradient(shade, diffuse);
 
-        // PNG ヘッダチェック
+        // Check the PNG header
         assert!(png_data.len() > 8);
         assert_eq!(&png_data[0..4], &[0x89, b'P', b'N', b'G']);
 
-        // デコード可能であること
+        // Confirm the data decodes correctly
         let img = image::load_from_memory(&png_data).expect("PNG decode");
         assert_eq!(img.width(), 256);
         assert_eq!(img.height(), 16);
@@ -395,8 +396,8 @@ mod tests {
     fn test_non_mtoon_unchanged() {
         let mut mat = make_test_material();
         mat.mtoon = None;
-        // Step 2-9: `make_test_material()` は shader_family = Mtoon なので
-        // 非 MToon テストでは明示的に Other に戻す必要がある。
+        // Step 2-9: `make_test_material()` returns shader_family = Mtoon, so when a test exercises
+        // non-MToon paths we must reset it to Other explicitly.
         mat.shader_family = ShaderFamily::Other;
         mat.specular = glam::Vec3::new(0.5, 0.5, 0.5);
         mat.specular_power = 25.0;
@@ -408,17 +409,17 @@ mod tests {
         assert_eq!(pmx.toon_ref, PmxToonRef::Shared(0));
     }
 
-    /// review_005 [P1] 対応の境界ケース: `mtoon = Some(_)` でも `shader_family` が
-    /// `Mtoon` でない材質は PMX 変換で非 MToon 扱いになること（§G 主軸判定）。
+    /// Edge case for review_005 [P1]: a material with `mtoon = Some(_)` but `shader_family`
+    /// other than `Mtoon` must take the non-MToon path through PMX conversion (Section G axis).
     ///
-    /// 材質編集ドロワーで「Shade セクションを展開しただけ」で `mtoon_mut()` の副作用で
-    /// `MtoonParams::default()` が挿入されるケースを模したテスト。`shader_family` が
-    /// `Other` のままなら、ユーザーが明示的に「MToon 有効化」するまで PMX export の
-    /// ambient / specular / toon 補正は従来通り非 MToon 挙動で動くことを保証する。
+    /// Mimics the case where the material editor drawer "merely expanded the Shade section"
+    /// and `mtoon_mut()` injected `MtoonParams::default()` as a side effect. When `shader_family`
+    /// stays `Other`, the PMX export must continue to use the non-MToon ambient / specular / toon
+    /// adjustments until the user explicitly toggles "Enable MToon".
     #[test]
     fn test_mtoon_some_but_shader_family_other_behaves_non_mtoon() {
         let mut mat = make_test_material();
-        // mtoon = Some(default) のまま、shader_family だけ Other に落とす
+        // Keep mtoon = Some(default) but lower shader_family to Other
         mat.shader_family = ShaderFamily::Other;
         mat.specular = glam::Vec3::new(0.5, 0.5, 0.5);
         mat.specular_power = 25.0;
@@ -428,7 +429,7 @@ mod tests {
             "この境界ケースでは mtoon は Some のまま"
         );
         let pmx = to_pmx(&mat, None);
-        // shader_family 主軸判定により、非 MToon と同じ経路を通る
+        // shader_family-based dispatch routes this through the non-MToon code path
         assert_eq!(pmx.specular, mat.specular, "specular が変更されないこと");
         assert_eq!(
             pmx.specular_power, mat.specular_power,

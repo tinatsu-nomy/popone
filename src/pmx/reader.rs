@@ -53,7 +53,7 @@ impl<R: Read> PmxReader<R> {
         let rigid_bodies = self.read_rigid_bodies()?;
         let joints = self.read_joints()?;
 
-        // PMX 2.1: SoftBody は読み飛ばし（EOFなら無視）
+        // PMX 2.1: skip the SoftBody section (ignore on EOF)
         if header.version >= 2.1 {
             let _ = self.skip_soft_bodies();
         }
@@ -168,7 +168,7 @@ impl<R: Read> PmxReader<R> {
         })
     }
 
-    /// 頂点インデックス読み込み（符号なし）
+    /// Read an unsigned vertex index.
     fn read_vertex_index(&mut self) -> Result<u32> {
         Ok(match self.header.vertex_index_size {
             1 => self.reader.read_u8()? as u32,
@@ -177,7 +177,7 @@ impl<R: Read> PmxReader<R> {
         })
     }
 
-    /// ボーンインデックス読み込み（符号あり）
+    /// Read a signed bone index.
     fn read_bone_index(&mut self) -> Result<i32> {
         Ok(match self.header.bone_index_size {
             1 => self.reader.read_i8()? as i32,
@@ -251,7 +251,7 @@ impl<R: Read> PmxReader<R> {
             let normal = self.read_vec3()?;
             let uv = self.read_vec2()?;
 
-            // 追加UV（読み飛ばし）
+            // Skip additional UVs
             for _ in 0..self.header.additional_uvs {
                 let _ = self.read_vec4()?;
             }
@@ -275,7 +275,7 @@ impl<R: Read> PmxReader<R> {
                     }
                 }
                 2 | 4 => {
-                    // BDEF4 / QDEF (QDEF→BDEF4扱い)
+                    // BDEF4 / QDEF (QDEF is treated as BDEF4)
                     let mut bones = [0i32; 4];
                     let mut weights = [0f32; 4];
                     for b in &mut bones {
@@ -287,11 +287,11 @@ impl<R: Read> PmxReader<R> {
                     PmxWeightType::Bdef4 { bones, weights }
                 }
                 3 => {
-                    // SDEF → BDEF2 フォールバック
+                    // SDEF -> BDEF2 fallback
                     let bone1 = self.read_bone_index()?;
                     let bone2 = self.read_bone_index()?;
                     let weight1 = self.reader.read_f32::<LittleEndian>()?;
-                    // SDEF-C, R0, R1 を読み飛ばし
+                    // Skip SDEF-C, R0, R1
                     let _ = self.read_vec3()?;
                     let _ = self.read_vec3()?;
                     let _ = self.read_vec3()?;
@@ -436,14 +436,14 @@ impl<R: Read> PmxReader<R> {
             let deform_layer = self.reader.read_i32::<LittleEndian>()?;
             let flags = self.reader.read_u16::<LittleEndian>()?;
 
-            // 接続先
+            // Tail link
             let tail = if flags & BONE_FLAG_TAIL_IS_BONE != 0 {
                 BoneTail::BoneIndex(self.read_bone_index()?)
             } else {
                 BoneTail::Offset(self.read_vec3()?)
             };
 
-            // 付与
+            // Grant (append parent)
             let grant = if flags & (BONE_FLAG_ROTATION_GRANT | BONE_FLAG_MOVE_GRANT) != 0 {
                 let parent = self.read_bone_index()?;
                 let ratio = self.reader.read_f32::<LittleEndian>()?;
@@ -455,20 +455,20 @@ impl<R: Read> PmxReader<R> {
                 None
             };
 
-            // 軸固定
+            // Axis-fixed
             if flags & BONE_FLAG_AXIS_FIXED != 0 {
-                let _ = self.read_vec3()?; // 軸方向ベクトル
+                let _ = self.read_vec3()?; // Axis direction vector
             }
 
-            // ローカル軸
+            // Local axes
             if flags & BONE_FLAG_LOCAL_AXIS != 0 {
-                let _ = self.read_vec3()?; // X軸
-                let _ = self.read_vec3()?; // Z軸
+                let _ = self.read_vec3()?; // X axis
+                let _ = self.read_vec3()?; // Z axis
             }
 
-            // 外部親変形
+            // External parent deform
             if flags & BONE_FLAG_EXT_PARENT != 0 {
-                let _ = self.reader.read_i32::<LittleEndian>()?; // Key値
+                let _ = self.reader.read_i32::<LittleEndian>()?; // Key value
             }
 
             // IK
@@ -539,7 +539,7 @@ impl<R: Read> PmxReader<R> {
 
             let offsets = match morph_type {
                 0 | 9 => {
-                    // グループ / フリップ（フリップ→グループ扱い）
+                    // Group / Flip (Flip is treated as Group)
                     let mut v = Vec::with_capacity(offset_count);
                     for _ in 0..offset_count {
                         let morph_index = self.read_morph_index()?;
@@ -552,7 +552,7 @@ impl<R: Read> PmxReader<R> {
                     PmxMorphOffsets::Group(v)
                 }
                 1 => {
-                    // 頂点
+                    // Vertex
                     let mut v = Vec::with_capacity(offset_count);
                     for _ in 0..offset_count {
                         let vertex_index = self.read_vertex_index()?;
@@ -565,7 +565,7 @@ impl<R: Read> PmxReader<R> {
                     PmxMorphOffsets::Vertex(v)
                 }
                 2 => {
-                    // ボーン
+                    // Bone
                     let mut v = Vec::with_capacity(offset_count);
                     for _ in 0..offset_count {
                         let bone_index = self.read_bone_index()?;
@@ -584,7 +584,7 @@ impl<R: Read> PmxReader<R> {
                     PmxMorphOffsets::Bone(v)
                 }
                 3..=7 => {
-                    // UV / 追加UV1〜4
+                    // UV / additional UV1..UV4
                     let mut v = Vec::with_capacity(offset_count);
                     for _ in 0..offset_count {
                         let vertex_index = self.read_vertex_index()?;
@@ -597,7 +597,7 @@ impl<R: Read> PmxReader<R> {
                     PmxMorphOffsets::Uv(v)
                 }
                 8 => {
-                    // 材質
+                    // Material
                     let mut v = Vec::with_capacity(offset_count);
                     for _ in 0..offset_count {
                         let material_index = self.read_material_index()?;
@@ -628,12 +628,12 @@ impl<R: Read> PmxReader<R> {
                     PmxMorphOffsets::Material(v)
                 }
                 10 => {
-                    // インパルス（2.1）→ 読み飛ばし、空グループとして格納
+                    // Impulse (PMX 2.1): skip, store as an empty group
                     for _ in 0..offset_count {
-                        let _ = self.read_rigid_index()?; // 剛体Index
-                        let _ = self.reader.read_u8()?; // ローカルフラグ
-                        let _ = self.read_vec3()?; // 移動速度
-                        let _ = self.read_vec3()?; // 回転トルク
+                        let _ = self.read_rigid_index()?; // Rigid body index
+                        let _ = self.reader.read_u8()?; // Local flag
+                        let _ = self.read_vec3()?; // Linear velocity
+                        let _ = self.read_vec3()?; // Angular torque
                     }
                     PmxMorphOffsets::Group(Vec::new())
                 }
@@ -775,21 +775,21 @@ impl<R: Read> PmxReader<R> {
         Ok(joints)
     }
 
-    /// PMX 2.1 SoftBody セクションを読み飛ばし
+    /// Skip the PMX 2.1 SoftBody section.
     fn skip_soft_bodies(&mut self) -> Result<()> {
         let count = self.reader.read_i32::<LittleEndian>()?;
         for _ in 0..count {
-            let _ = self.read_text()?; // 名前
-            let _ = self.read_text()?; // 名前英
-            let _ = self.reader.read_u8()?; // 形状
-            let _ = self.read_material_index()?; // 材質Index
-            let _ = self.reader.read_u8()?; // グループ
-            let _ = self.reader.read_u16::<LittleEndian>()?; // 非衝突グループ
-            let _ = self.reader.read_u8()?; // フラグ
-            let _ = self.reader.read_i32::<LittleEndian>()?; // B-Link距離
-            let _ = self.reader.read_i32::<LittleEndian>()?; // クラスタ数
-            let _ = self.reader.read_f32::<LittleEndian>()?; // 総質量
-            let _ = self.reader.read_f32::<LittleEndian>()?; // マージン
+            let _ = self.read_text()?; // Name (JP)
+            let _ = self.read_text()?; // Name (EN)
+            let _ = self.reader.read_u8()?; // Shape
+            let _ = self.read_material_index()?; // Material index
+            let _ = self.reader.read_u8()?; // Group
+            let _ = self.reader.read_u16::<LittleEndian>()?; // No-collision group
+            let _ = self.reader.read_u8()?; // Flags
+            let _ = self.reader.read_i32::<LittleEndian>()?; // B-Link distance
+            let _ = self.reader.read_i32::<LittleEndian>()?; // Cluster count
+            let _ = self.reader.read_f32::<LittleEndian>()?; // Total mass
+            let _ = self.reader.read_f32::<LittleEndian>()?; // Margin
             let _ = self.reader.read_i32::<LittleEndian>()?; // AeroModel
                                                              // Config: 12 floats
             for _ in 0..12 {
@@ -807,7 +807,7 @@ impl<R: Read> PmxReader<R> {
             for _ in 0..3 {
                 let _ = self.reader.read_f32::<LittleEndian>()?;
             }
-            // アンカー剛体
+            // Anchor rigid bodies
             let anchor_count = checked_count(
                 self.reader.read_i32::<LittleEndian>()?,
                 "error.pmx.field.anchor_count",
@@ -817,7 +817,7 @@ impl<R: Read> PmxReader<R> {
                 let _ = self.read_vertex_index()?;
                 let _ = self.reader.read_u8()?;
             }
-            // Pin頂点
+            // Pin vertices
             let pin_count = checked_count(
                 self.reader.read_i32::<LittleEndian>()?,
                 "error.pmx.field.pin_vertex_count",
@@ -830,7 +830,7 @@ impl<R: Read> PmxReader<R> {
     }
 }
 
-/// PMXファイルを読み込んで PmxModel を返す
+/// Read a PMX file and return a `PmxModel`.
 pub fn read_pmx(path: &std::path::Path) -> Result<PmxModel> {
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
@@ -838,7 +838,7 @@ pub fn read_pmx(path: &std::path::Path) -> Result<PmxModel> {
     pmx_reader.read_model()
 }
 
-/// バイト列から PMX を読み込む（オンメモリキャッシュ用）
+/// Read a PMX from a byte slice (used by the in-memory cache).
 pub fn read_pmx_from_data(data: &[u8]) -> Result<PmxModel> {
     let cursor = std::io::Cursor::new(data);
     let mut pmx_reader = PmxReader::new(cursor);
@@ -857,7 +857,7 @@ mod tests {
 
         let model = read_pmx(&path).expect("PMX読み込みに失敗");
 
-        // Seed-san の既知の値と照合
+        // Compare against known values for Seed-san
         assert_eq!(model.header.version, 2.0);
         assert_eq!(model.header.encoding, 0); // UTF-16LE
         assert_eq!(model.vertices.len(), 34261);
@@ -870,14 +870,14 @@ mod tests {
         assert_eq!(model.rigid_bodies.len(), 36);
         assert_eq!(model.joints.len(), 19);
 
-        // モデル名
+        // Model name
         assert!(!model.model_info.name.is_empty(), "モデル名が空");
 
-        // ボーン: 先頭は「全ての親」
+        // Bones: the first bone must be "全ての親" (root parent)
         assert_eq!(model.bones[0].name, "全ての親");
         assert_eq!(model.bones[0].parent_index, -1);
 
-        // 材質の面数合計 = 面数×3
+        // Total material face-vertex count = face count * 3
         let total_face_verts: u32 = model.materials.iter().map(|m| m.face_count).sum();
         assert_eq!(total_face_verts as usize, model.faces.len() * 3);
 

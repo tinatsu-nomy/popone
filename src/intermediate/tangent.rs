@@ -1,22 +1,22 @@
-//! MikkTSpace アルゴリズムによる接線ベクトル生成
+//! Tangent vector generation via the MikkTSpace algorithm.
 //!
-//! VRM 1.0 仕様: 「TANGENT はエクスポートせず、インポート時に MikkTSpace アルゴリズムで計算」
-//! UniVRM 参照実装: vrmc_materials_mtoon_utility.hlsl の MToon_GetTangentToWorld()
+//! VRM 1.0 spec: "TANGENT is not exported; recompute with MikkTSpace on import."
+//! UniVRM reference: MToon_GetTangentToWorld() in vrmc_materials_mtoon_utility.hlsl.
 
 use glam::Vec4;
 
 use super::types::IrMesh;
 
-/// tangent の xyz 成分が有効（非退化）かどうかを判定する閾値
+/// Threshold used to decide whether the xyz components of a tangent are valid (non-degenerate).
 const TANGENT_VALID_THRESHOLD: f32 = 1e-8;
 
-/// MikkTSpace の Geometry トレイト実装用ラッパー
+/// Wrapper that implements the MikkTSpace `Geometry` trait.
 struct MikkGeometry<'a> {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
     indices: &'a [u32],
-    /// コーナー単位の接線ベクトル（corner = face * 3 + vert）
+    /// Tangent vectors per corner (corner = face * 3 + vert).
     corner_tangents: Vec<[f32; 4]>,
 }
 
@@ -46,22 +46,22 @@ impl<'a> mikktspace::Geometry for MikkGeometry<'a> {
     }
 }
 
-/// tangent の xyz が有効かどうかを判定する
+/// Whether the xyz components of a tangent are valid.
 #[inline]
 fn has_valid_tangent(tangent: Vec4) -> bool {
     tangent.truncate().length_squared() > TANGENT_VALID_THRESHOLD
 }
 
-/// IrMesh の全頂点に対して MikkTSpace 接線を生成する。
+/// Generate MikkTSpace tangents for every vertex of an `IrMesh`.
 ///
-/// `normal_tex_coord` は normalTexture が参照する TEXCOORD セット番号。
-/// texCoord=1 かつ UV1 が存在する場合は UV1 を使って接線を生成する。
-/// 既に有効な接線を持つ頂点（tangent.xyz の長さが閾値以上）はスキップされる。
-/// MikkTSpace 生成に失敗した場合はデフォルト接線 (1,0,0,1) を設定する。
+/// `normal_tex_coord` is the TEXCOORD set index referenced by `normalTexture`.
+/// When texCoord=1 and UV1 exists, UV1 is used for tangent generation.
+/// Vertices that already have a valid tangent (|tangent.xyz| above the threshold) are skipped.
+/// If MikkTSpace generation fails, a default tangent (1, 0, 0, 1) is assigned.
 ///
-/// handedness (w) が異なるコーナーを共有する頂点は自動的に分割される。
+/// Vertices that share corners with conflicting handedness (w) are automatically split.
 pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
-    // 全頂点が既に有効な接線を持っているならスキップ
+    // Skip if every vertex already has a valid tangent
     let needs_generation = mesh.vertices.iter().any(|v| !has_valid_tangent(v.tangent));
     if !needs_generation {
         return;
@@ -74,9 +74,9 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
         .map(|v| v.position.to_array())
         .collect();
     let normals: Vec<[f32; 3]> = mesh.vertices.iter().map(|v| v.normal.to_array()).collect();
-    // normalTexture.texCoord に対応する UV セットで接線を生成
-    // UV1 不在時は zero UV を使用（描画側 mesh.rs と同一のフォールバック、UniVRM MeshData.cs 準拠）
-    // 材質の texCoord はメッシュ間で共有されるため、材質側の書き換えは行わない
+    // Generate tangents using the UV set referenced by normalTexture.texCoord.
+    // When UV1 is absent, fall back to zero UV (matches the renderer in mesh.rs and UniVRM MeshData.cs).
+    // texCoord values on materials are shared across meshes, so we never rewrite the material side.
     let uvs: Vec<[f32; 2]> = if normal_tex_coord == 1 {
         if mesh.uvs1.len() == vertex_count {
             mesh.uvs1.clone()
@@ -90,7 +90,7 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
 
     let corner_count = mesh.indices.len();
 
-    // MikkTSpace 生成（ブロックスコープで indices の借用を限定）
+    // MikkTSpace generation (block scope keeps the indices borrow tight)
     let corner_tangents_opt = {
         let mut geom = MikkGeometry {
             positions,
@@ -106,18 +106,18 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
             None
         }
     };
-    // geom がドロップされ mesh.indices の借用が解放される
+    // geom is dropped here, releasing the borrow on mesh.indices
 
     if let Some(corner_tangents) = corner_tangents_opt {
-        // --- w 不一致による頂点分割 ---
-        // 各頂点のコーナーを正 w / 負 w にグループ分け
+        // --- Vertex splitting due to w mismatches ---
+        // Group each vertex's corners into positive-w and negative-w buckets
         let mut split_count = 0usize;
         let mut vert_neg_corners: Vec<Vec<usize>> = vec![Vec::new(); vertex_count];
         let mut vert_pos_corners: Vec<Vec<usize>> = vec![Vec::new(); vertex_count];
 
         for (corner, &vi) in mesh.indices.iter().enumerate() {
             let vi = vi as usize;
-            // glTF 由来の有効な tangent を持つ頂点は分割不要
+            // Vertices that already carry a valid glTF-supplied tangent never need splitting
             if has_valid_tangent(mesh.vertices[vi].tangent) {
                 continue;
             }
@@ -130,9 +130,9 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
 
         for vi in 0..vertex_count {
             if vert_pos_corners[vi].is_empty() || vert_neg_corners[vi].is_empty() {
-                continue; // 全コーナーが同一 w → 分割不要
+                continue; // All corners agree on w -> no split needed
             }
-            // 少数派のコーナーを新頂点にリマップ
+            // Remap the minority corners to a freshly cloned vertex
             let (minority_corners, minority_w) =
                 if vert_pos_corners[vi].len() <= vert_neg_corners[vi].len() {
                     (&vert_pos_corners[vi], 1.0f32)
@@ -151,7 +151,7 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
                 };
                 mesh.uvs1.push(uv1);
             }
-            // モーフターゲットの頂点インデックスも複製
+            // Duplicate morph-target offsets for the new vertex index
             for mt in mesh.morph_targets_mut() {
                 if let Some(&(_, offset)) = mt
                     .position_offsets
@@ -171,7 +171,7 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
                     mt.tangent_offsets.push((new_vi, offset));
                 }
             }
-            // 少数派コーナーのインデックスを新頂点に張り替え
+            // Rewrite the minority corner indices to point at the new vertex
             for &corner in minority_corners {
                 mesh.indices_mut()[corner] = new_vi;
             }
@@ -195,27 +195,27 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
             );
         }
 
-        // --- コーナー tangent を頂点単位に集約 ---
+        // --- Aggregate corner tangents into per-vertex tangents ---
         let new_vertex_count = mesh.vertices.len();
         let mut tangent_acc: Vec<([f32; 3], f32, u32)> = vec![([0.0; 3], 1.0, 0); new_vertex_count];
 
         for (corner, &vi) in mesh.indices.iter().enumerate() {
             let vi = vi as usize;
             if has_valid_tangent(mesh.vertices[vi].tangent) {
-                continue; // glTF 由来 tangent を保持
+                continue; // Preserve glTF-supplied tangent
             }
             let ct = &corner_tangents[corner];
             let acc = &mut tangent_acc[vi];
             acc.0[0] += ct[0];
             acc.0[1] += ct[1];
             acc.0[2] += ct[2];
-            acc.1 = ct[3]; // w（分割済みなので頂点内で一貫）
+            acc.1 = ct[3]; // w (consistent per vertex after splitting)
             acc.2 += 1;
         }
 
         for (i, v) in mesh.vertices_mut().iter_mut().enumerate() {
             if has_valid_tangent(v.tangent) {
-                continue; // glTF から読み込み済み
+                continue; // Already populated from glTF
             }
             let (xyz, w, count) = &tangent_acc[i];
             if *count > 0 {
@@ -230,7 +230,7 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
                     v.tangent = Vec4::new(1.0, 0.0, 0.0, 1.0);
                 }
             } else {
-                // MikkTSpace が生成しなかった頂点（孤立頂点等）
+                // Vertex MikkTSpace did not produce (e.g. isolated vertex)
                 v.tangent = Vec4::new(1.0, 0.0, 0.0, 1.0);
             }
         }

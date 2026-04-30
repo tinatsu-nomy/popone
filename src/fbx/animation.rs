@@ -10,20 +10,20 @@ use super::parser::FbxDocument;
 use super::scene::{ConnectionType, FbxScene};
 use crate::intermediate::animation::*;
 
-/// FBX time unit: 1秒 = 46186158000 units
+/// FBX time unit: 1 second = 46186158000 units.
 const FBX_TIME_UNIT: f64 = 46186158000.0;
 
-/// FBX座標系情報
+/// FBX coord-system configuration.
 struct FbxAxisConfig {
-    /// 軸変換行列（3x3、スケールなし）
+    /// Axis-conversion matrix (3x3, no scale).
     axis_mat: Mat3,
-    /// 軸変換がidentityかどうか（Y-Up標準の場合true、mat3往復を省略）
+    /// Whether the axis transform is identity (true for the Y-Up standard, lets us skip the mat3 round-trip).
     is_identity: bool,
-    /// メートルへの変換スケール
+    /// Scale factor to meters.
     to_meters: f32,
 }
 
-/// FBXファイルからアニメーションを読み込む
+/// Load animations from an FBX file.
 pub fn load_fbx_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
     let data = std::fs::read(path).with_context(|| {
         t!(
@@ -35,7 +35,7 @@ pub fn load_fbx_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
     load_fbx_animation_from_data(&data)
 }
 
-/// FBXバイナリデータからアニメーションを読み込む
+/// Load animations from FBX binary data.
 pub fn load_fbx_animation_from_data(data: &[u8]) -> Result<Vec<VrmaAnimation>> {
     let doc = super::parser::parse(data)
         .with_context(|| t!("error.fbx_anim.parse_failed").to_string())?;
@@ -45,7 +45,7 @@ pub fn load_fbx_animation_from_data(data: &[u8]) -> Result<Vec<VrmaAnimation>> {
     extract_animations(&scene, &axis_config)
 }
 
-/// FBX GlobalSettings から座標系情報を読み取る
+/// Read the coord-system info from FBX `GlobalSettings`.
 fn read_axis_config(doc: &FbxDocument) -> FbxAxisConfig {
     let mut up_axis = 1i32;
     let mut up_sign = 1i32;
@@ -103,7 +103,7 @@ fn read_axis_config(doc: &FbxDocument) -> FbxAxisConfig {
         unit_scale_factor, to_meters
     );
 
-    // 軸変換行列を構築（FBX空間 → glTF Y-Up空間）
+    // Build the axis-transform matrix (FBX space -> glTF Y-Up space)
     let mut m = [[0.0f32; 3]; 3];
     m[0][coord_axis as usize] = coord_sign as f32;
     m[1][up_axis as usize] = up_sign as f32;
@@ -126,8 +126,8 @@ fn read_axis_config(doc: &FbxDocument) -> FbxAxisConfig {
     }
 }
 
-/// 軸変換行列でクォータニオンを変換
-/// R_gltf = M * R_fbx * M^T（identityの場合はそのまま返す）
+/// Transform a quaternion through the axis-transform matrix.
+/// R_gltf = M * R_fbx * M^T (returned as-is when the matrix is identity).
 fn transform_quat(q: Quat, config: &FbxAxisConfig) -> Quat {
     if config.is_identity {
         return q;
@@ -137,7 +137,7 @@ fn transform_quat(q: Quat, config: &FbxAxisConfig) -> Quat {
     Quat::from_mat3(&r_new).normalize()
 }
 
-/// 軸変換行列で位置を変換（スケール付き）
+/// Transform a position through the axis-transform matrix (with scale).
 fn transform_pos(v: Vec3, config: &FbxAxisConfig) -> Vec3 {
     if config.is_identity {
         return v * config.to_meters;
@@ -145,11 +145,11 @@ fn transform_pos(v: Vec3, config: &FbxAxisConfig) -> Vec3 {
     config.axis_mat * v * config.to_meters
 }
 
-/// FBXシーンからアニメーションデータを抽出
+/// Extract animation data from the FBX scene.
 fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<Vec<VrmaAnimation>> {
     let mut animations = Vec::new();
 
-    // AnimationStack を列挙
+    // Enumerate AnimationStack objects
     let anim_stacks: Vec<i64> = scene
         .objects
         .iter()
@@ -163,13 +163,13 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
         ));
     }
 
-    // 各ボーンの PreRotation を収集（アニメーション回転にPreRotationを適用するため）
+    // Collect each bone's PreRotation (applied to animation rotations to align with rest)
     let bone_pre_rotations = collect_bone_pre_rotations(scene);
 
-    // ボーン（Model）のレストポーズを収集（座標変換済み）
+    // Collect bone (Model) rest poses (already coord-converted)
     let (bone_rests, global_positions) = collect_bone_rests(scene, axis_config);
 
-    // 向き検出用: Leftボーンのグローバル位置X平均
+    // Used for facing detection: average X coord of "Left*" bones
     let facing_flip_y = detect_facing(&global_positions);
 
     for &stack_id in &anim_stacks {
@@ -179,7 +179,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
             .map(|o| o.name.clone())
             .unwrap_or_else(|| "animation".to_string());
 
-        // AnimationStack → AnimationLayer
+        // AnimationStack -> AnimationLayer
         let layer_ids: Vec<i64> = scene
             .children_of(stack_id)
             .iter()
@@ -197,7 +197,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
         let mut duration: f32 = 0.0;
 
         for &layer_id in &layer_ids {
-            // AnimationLayer → AnimationCurveNode
+            // AnimationLayer -> AnimationCurveNode
             let curve_node_ids: Vec<i64> = scene
                 .children_of(layer_id)
                 .iter()
@@ -216,7 +216,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
                     None => continue,
                 };
 
-                // CurveNodeの接続先（OP接続）からターゲットのModel IDとプロパティを取得
+                // From the CurveNode's destination (OP connection) get the target Model ID and property
                 let mut target_model_id: Option<i64> = None;
                 let mut target_property: Option<String> = None;
 
@@ -233,7 +233,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
                     }
                 }
 
-                // CurveNode名からプロパティ判定（OO接続の場合）
+                // For OO connections, infer the property from the CurveNode's name
                 let prop_type = target_property.as_deref().or_else(|| {
                     let name = &cn_obj.name;
                     if name.contains("Rotation") || name.contains("R") {
@@ -245,7 +245,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
                     }
                 });
 
-                // OP接続がない場合、OO接続でターゲットModelを探す
+                // When there is no OP connection, find the target Model via OO connections
                 if target_model_id.is_none() {
                     for &parent_id in scene.parents_of(cn_id) {
                         if let Some(obj) = scene.objects.get(&parent_id) {
@@ -267,7 +267,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
                     None => continue,
                 };
 
-                // AnimationCurveNode → AnimationCurve（X, Y, Z の3カーブ）
+                // AnimationCurveNode -> AnimationCurve (three curves: X, Y, Z)
                 let curve_ids: Vec<i64> = scene
                     .children_of(cn_id)
                     .iter()
@@ -280,10 +280,10 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
                     .copied()
                     .collect();
 
-                // 各カーブからキーフレームデータを読み出し
+                // Read keyframe data from each curve
                 let mut axis_curves: Vec<(Vec<f32>, Vec<f32>)> = Vec::new();
 
-                // OP接続の順序でカーブを並べる（d|X, d|Y, d|Z）
+                // Order curves by OP connection (d|X, d|Y, d|Z)
                 let mut ordered_curve_ids = Vec::new();
                 for axis in &["d|X", "d|Y", "d|Z"] {
                     for conn in &scene.connections {
@@ -295,7 +295,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
                         }
                     }
                 }
-                // OP接続がない場合はOO接続順
+                // Fall back to OO connection order when there are no OP connections
                 if ordered_curve_ids.is_empty() {
                     ordered_curve_ids = curve_ids;
                 }
@@ -313,8 +313,8 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
 
                 match prop_type {
                     Some(p) if p.starts_with("Lcl Rotation") => {
-                        // ボーンの PreRotation を取得（アニメーションは Lcl Rotation のみなので
-                        // PreRotation を掛けてレストと同じ空間にする必要がある）
+                        // Pull this bone's PreRotation. The animation only stores Lcl Rotation,
+                        // so we multiply PreRotation in to bring it into the same space as the rest pose.
                         let pre_rot = bone_pre_rotations
                             .get(&bone_name)
                             .copied()
@@ -361,7 +361,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
         }
 
         if !bone_channels.is_empty() || !expression_channels.is_empty() {
-            // FBXボーン名 → VRMヒューマノイド名へのマッピングを試行
+            // Try to map FBX bone names -> VRM humanoid names
             let fbx_names: Vec<(usize, &str)> = bone_channels
                 .keys()
                 .enumerate()
@@ -370,7 +370,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
             let humanoid = detect_humanoid(&fbx_names);
 
             let (final_channels, match_mode) = if humanoid.mapping.len() >= 5 {
-                // 十分なマッピングがあればヒューマノイドモードに切り替え
+                // With enough mappings, switch to humanoid mode
                 let fbx_name_list: Vec<String> = bone_channels.keys().cloned().collect();
                 let mut renamed: HashMap<String, BoneChannel> = HashMap::new();
                 let mut mapped_count = 0;
@@ -395,10 +395,10 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
                 (bone_channels, BoneMatchMode::NodeName)
             };
 
-            // bone_rests もマッチモードに合わせてマッピング
+            // Map `bone_rests` to match the chosen mode as well
             let matched_rests: HashMap<String, VrmaBoneRest> =
                 if match_mode == BoneMatchMode::Humanoid {
-                    // FBXボーン名 → VRMヒューマノイド名にマッピングしたレスト
+                    // Rest poses keyed by VRM humanoid names (mapped from FBX bone names)
                     let all_fbx_names: Vec<(usize, &str)> = bone_rests
                         .keys()
                         .enumerate()
@@ -455,7 +455,7 @@ fn extract_animations(scene: &FbxScene, axis_config: &FbxAxisConfig) -> Result<V
     Ok(animations)
 }
 
-/// 各ボーンの PreRotation クォータニオンを収集
+/// Collect each bone's PreRotation quaternion.
 fn collect_bone_pre_rotations(scene: &FbxScene) -> HashMap<String, Quat> {
     use super::bone::extract_transform;
 
@@ -467,7 +467,7 @@ fn collect_bone_pre_rotations(scene: &FbxScene) -> HashMap<String, Quat> {
         {
             let (_, _, pre_rot_deg, _) = extract_transform(obj.node);
             let pre_rot = euler_deg_to_quat(pre_rot_deg);
-            // すべてのボーンの PreRotation を登録（レストとの整合性のため）
+            // Register PreRotation for every bone (so it stays consistent with rest poses)
             pre_rots.insert(obj.name.clone(), pre_rot);
         }
     }
@@ -485,7 +485,7 @@ fn collect_bone_pre_rotations(scene: &FbxScene) -> HashMap<String, Quat> {
     pre_rots
 }
 
-/// AnimationCurve ノードからキータイム・キー値を読み出す
+/// Read key times and key values from an `AnimationCurve` node.
 fn read_animation_curve(node: &super::parser::FbxNode) -> (Vec<f32>, Vec<f32>) {
     let times: Vec<f32> = node
         .child("KeyTime")
@@ -502,7 +502,7 @@ fn read_animation_curve(node: &super::parser::FbxNode) -> (Vec<f32>, Vec<f32>) {
         .child("KeyValueFloat")
         .and_then(|n| n.properties.first())
         .and_then(|p| {
-            // KeyValueFloat は f32 配列か f64 配列
+            // KeyValueFloat is either an f32 array or an f64 array
             p.as_f32_array().map(|a| a.to_vec()).or_else(|| {
                 p.as_f64_array()
                     .map(|a| a.iter().map(|&v| v as f32).collect())
@@ -513,7 +513,7 @@ fn read_animation_curve(node: &super::parser::FbxNode) -> (Vec<f32>, Vec<f32>) {
     (times, values)
 }
 
-/// X, Y, Z の3カーブから回転キーフレームを構築（PreRotation・座標変換付き）
+/// Build rotation keyframes from the X, Y, Z curves (applies PreRotation and coord conversion).
 fn build_rotation_keyframes(
     axis_curves: &[(Vec<f32>, Vec<f32>)],
     duration: &mut f32,
@@ -533,11 +533,11 @@ fn build_rotation_keyframes(
             let x = sample_curve(&axis_curves[0], t);
             let y = sample_curve(&axis_curves[1], t);
             let z = sample_curve(&axis_curves[2], t);
-            // FBX Euler角（度） → Quaternion（Lcl Rotation のみ）
+            // FBX Euler angles (degrees) -> Quaternion (Lcl Rotation only)
             let lcl_rot = euler_deg_to_quat(Vec3::new(x, y, z));
-            // PreRotation を適用してレストと同じ空間にする
+            // Apply PreRotation so we land in the same space as the rest pose
             let rot_fbx = pre_rotation * lcl_rot;
-            // FBX空間 → glTF空間に変換
+            // FBX space -> glTF space
             let rot = transform_quat(rot_fbx, axis_config);
             RotationKeyframe {
                 time: t,
@@ -547,7 +547,7 @@ fn build_rotation_keyframes(
         .collect()
 }
 
-/// X, Y, Z の3カーブから平行移動キーフレームを構築（座標変換付き）
+/// Build translation keyframes from the X, Y, Z curves (applies coord conversion).
 fn build_translation_keyframes(
     axis_curves: &[(Vec<f32>, Vec<f32>)],
     duration: &mut f32,
@@ -566,7 +566,7 @@ fn build_translation_keyframes(
             let x = sample_curve(&axis_curves[0], t);
             let y = sample_curve(&axis_curves[1], t);
             let z = sample_curve(&axis_curves[2], t);
-            // FBX空間 → glTF空間（メートル単位に変換）
+            // FBX space -> glTF space (also converts to meters)
             let pos = transform_pos(Vec3::new(x, y, z), axis_config);
             TranslationKeyframe {
                 time: t,
@@ -576,7 +576,7 @@ fn build_translation_keyframes(
         .collect()
 }
 
-/// 複数カーブのタイムスタンプを統合・ソート・重複除去
+/// Merge timestamps from multiple curves (sorts and removes duplicates).
 fn merge_times(curves: &[(Vec<f32>, Vec<f32>)]) -> Vec<f32> {
     let mut times: Vec<f32> = curves.iter().flat_map(|(t, _)| t.iter().copied()).collect();
     times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -584,7 +584,7 @@ fn merge_times(curves: &[(Vec<f32>, Vec<f32>)]) -> Vec<f32> {
     times
 }
 
-/// 指定時刻での値を線形補間
+/// Linearly interpolate the value at the given time.
 fn sample_curve(curve: &(Vec<f32>, Vec<f32>), time: f32) -> f32 {
     let (times, values) = curve;
     if times.is_empty() || values.is_empty() {
@@ -610,8 +610,8 @@ fn sample_curve(curve: &(Vec<f32>, Vec<f32>), time: f32) -> f32 {
     v0 + (v1 - v0) * frac
 }
 
-/// ボーンのレストポーズを収集（座標変換済み、リターゲティング用）
-/// グローバル位置も返す（facing検出用）
+/// Collect bone rest poses (already coord-converted; used for retargeting).
+/// Also returns global positions (used for facing detection).
 fn collect_bone_rests(
     scene: &FbxScene,
     axis_config: &FbxAxisConfig,
@@ -623,7 +623,7 @@ fn collect_bone_rests(
     let mut global_positions: HashMap<String, Vec3> = HashMap::new();
     let mut bone_globals: HashMap<i64, Mat4> = HashMap::new();
 
-    // Model ノード（LimbNode, Root, Null）を収集
+    // Collect Model nodes (LimbNode, Root, Null)
     let bone_ids: Vec<i64> = scene
         .objects
         .iter()
@@ -634,7 +634,7 @@ fn collect_bone_rests(
         .map(|(&id, _)| id)
         .collect();
 
-    // 親子関係から順序を決定してグローバル変換を計算（FBX空間）
+    // Compute global transforms in parent-first order (FBX space)
     fn compute_global(id: i64, scene: &FbxScene, globals: &mut HashMap<i64, Mat4>) -> Mat4 {
         if let Some(&g) = globals.get(&id) {
             return g;
@@ -653,7 +653,7 @@ fn collect_bone_rests(
         let rot = euler_deg_to_quat(rot_deg);
         let local_mat = Mat4::from_rotation_translation(pre_rot * rot, trans);
 
-        // 親を探す
+        // Locate the parent
         let parent_global = scene
             .parents_of(id)
             .iter()
@@ -676,12 +676,12 @@ fn collect_bone_rests(
             let local_rot_fbx = pre_rot * rot;
             let (_, global_rot_fbx, _) = global_fbx.to_scale_rotation_translation();
 
-            // FBX空間 → glTF空間に変換
+            // FBX space -> glTF space
             let local_rot = transform_quat(local_rot_fbx, axis_config);
             let global_rot = transform_quat(global_rot_fbx, axis_config);
             let local_trans = transform_pos(trans, axis_config);
 
-            // グローバル位置（facing検出用）
+            // Global position (used for facing detection)
             let global_pos_fbx = global_fbx.col(3).truncate();
             let global_pos = transform_pos(global_pos_fbx, axis_config);
 
@@ -700,7 +700,7 @@ fn collect_bone_rests(
     (rests, global_positions)
 }
 
-/// ソースモデルの向きを検出（Leftボーンのグローバル位置Xで判定）
+/// Detect the source model's facing using the X coord of "Left*" bones.
 fn detect_facing(global_positions: &HashMap<String, Vec3>) -> bool {
     let mut left_x_sum = 0.0f32;
     let mut count = 0;

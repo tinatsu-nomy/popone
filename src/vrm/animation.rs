@@ -9,7 +9,7 @@ use std::path::Path;
 use crate::fbx::humanoid::detect_humanoid;
 use crate::intermediate::animation::*;
 
-/// VRMAファイルを読み込みアニメーションデータを返す
+/// Load a VRMA file and return its animation data.
 pub fn load_vrma(path: &Path) -> Result<VrmaAnimation> {
     let (document, buffers, _images) = gltf::import(path).with_context(|| {
         t!(
@@ -23,8 +23,8 @@ pub fn load_vrma(path: &Path) -> Result<VrmaAnimation> {
     parse_vrma(&document, &buffers, &vrma_ext)
 }
 
-/// GLB/glTFファイルからアニメーションを読み込む（ノード名ベース）
-/// VRMC_vrm_animation 拡張があればVRMAとして読み込む
+/// Load animations from a GLB/glTF file (node-name based).
+/// If the VRMC_vrm_animation extension is present, load it as VRMA instead.
 pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
     let (document, buffers, _images) = gltf::import(path).with_context(|| {
         t!(
@@ -34,13 +34,13 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
         .to_string()
     })?;
 
-    // VRMC_vrm_animation 拡張があればVRMAとして読み込む
+    // If the VRMC_vrm_animation extension is present, load as VRMA
     if let Ok(vrma_ext) = extract_vrma_extension(&document) {
         let anim = parse_vrma(&document, &buffers, &vrma_ext)?;
         return Ok(vec![anim]);
     }
 
-    // 汎用 glTF アニメーション: ノード名ベースで読み込む
+    // Generic glTF animation: load using node names as channel keys
     let mut animations = Vec::new();
     let nodes: Vec<gltf::Node> = document.nodes().collect();
 
@@ -73,7 +73,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                 gltf::animation::Interpolation::CubicSpline => Interpolation::CubicSpline,
             };
 
-            // ノード名をキーとして使用
+            // Use the node name as the channel key
             let node_name = nodes
                 .get(node_idx)
                 .and_then(|n| n.name())
@@ -144,7 +144,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                     entry.translation_interp = Some(interp);
                 }
                 gltf::animation::Property::MorphTargetWeights => {
-                    // モーフターゲットウェイト: メッシュのモーフターゲット名と対応
+                    // Morph target weights: pair them with the mesh's morph target names
                     let weights: Vec<f32> = reader
                         .read_outputs()
                         .map(|out| {
@@ -156,7 +156,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                         })
                         .unwrap_or_default();
 
-                    // ターゲットノードのメッシュからモーフターゲット名を取得
+                    // Pull the morph target names from the target node's mesh
                     let morph_names: Vec<String> = nodes
                         .get(node_idx)
                         .and_then(|n| n.mesh())
@@ -167,7 +167,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                                     prim.morph_targets()
                                         .enumerate()
                                         .map(|(i, _)| {
-                                            // glTF の morph target 名は mesh.extras か target_names から
+                                            // glTF morph target names live in mesh.extras or target_names
                                             format!("morph_{}", i)
                                         })
                                         .collect::<Vec<_>>()
@@ -176,7 +176,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                         })
                         .unwrap_or_default();
 
-                    // メッシュの target_names を取得（もしあれば）
+                    // Pull the mesh's `targetNames` if available
                     let target_names: Vec<String> = nodes
                         .get(node_idx)
                         .and_then(|n| n.mesh())
@@ -202,7 +202,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
 
                     let morph_count = target_names.len();
                     if morph_count > 0 {
-                        // weights は [frame0_target0, frame0_target1, ..., frame1_target0, ...] の順
+                        // weights is ordered as [frame0_target0, frame0_target1, ..., frame1_target0, ...]
                         for (mi, morph_name) in target_names.iter().enumerate() {
                             let keyframes: Vec<ScalarKeyframe> = times
                                 .iter()
@@ -223,16 +223,16 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                         }
                     }
                 }
-                _ => {} // Scale は無視
+                _ => {} // Scale is ignored
             }
         }
 
         if !bone_channels.is_empty() || !expression_channels.is_empty() {
-            // GLBノードのレストポーズを収集（リターゲティング用）
+            // Collect rest poses of GLB nodes (used for retargeting)
             let mut bone_rests: HashMap<String, VrmaBoneRest> = HashMap::new();
-            // ノードのグローバル変換を計算
+            // Compute global transforms per node
             let mut node_globals: Vec<glam::Mat4> = vec![glam::Mat4::IDENTITY; nodes.len()];
-            // ルートから再帰的にグローバル変換を計算
+            // Recursive global-transform propagation from roots
             fn compute_node_globals(
                 nodes: &[gltf::Node],
                 node_globals: &mut [glam::Mat4],
@@ -263,9 +263,9 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                     );
                 }
             }
-            // 各ボーンチャネルのレストポーズを保存
+            // Store the rest pose for every bone channel
             for name in bone_channels.keys() {
-                // ノード名からノードインデックスを検索
+                // Resolve the node index from the node name
                 if let Some(node) = nodes.iter().find(|n| n.name() == Some(name.as_str())) {
                     let (t, r, _s) = node.transform().decomposed();
                     let local_rot = Quat::from_array(r);
@@ -283,8 +283,8 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                 }
             }
 
-            // ソースモデルの向きを検出:
-            // "Left"を含むボーンのグローバルX位置で判定（+X=Left なら +Z向き = VRMと逆）
+            // Detect the source model's facing:
+            // use the global X coordinate of bones whose name contains "Left" (+X = Left implies +Z forward, opposite to VRM).
             let facing_flip_y = {
                 let mut left_x_sum = 0.0f32;
                 let mut count = 0;
@@ -306,7 +306,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
                 count > 0 && left_x_sum / count as f32 > 0.01
             };
 
-            // ボーン名からヒューマノイドマッピングを試行
+            // Try to derive a humanoid mapping from bone names
             let glb_names: Vec<(usize, &str)> = bone_channels
                 .keys()
                 .enumerate()
@@ -375,7 +375,7 @@ pub fn load_gltf_animation(path: &Path) -> Result<Vec<VrmaAnimation>> {
     Ok(animations)
 }
 
-/// VRMC_vrm_animation 拡張を取得
+/// Fetch the VRMC_vrm_animation extension.
 fn extract_vrma_extension(document: &gltf::Document) -> Result<Value> {
     let json = document.as_json();
     if let Some(exts) = &json.extensions {
@@ -388,21 +388,21 @@ fn extract_vrma_extension(document: &gltf::Document) -> Result<Value> {
     ))
 }
 
-/// VRMA拡張 + glTFアニメーションをパース
+/// Parse the VRMA extension + glTF animation.
 fn parse_vrma(
     document: &gltf::Document,
     buffers: &[Data],
     vrma_ext: &Value,
 ) -> Result<VrmaAnimation> {
-    // ノード→ヒューマノイドボーン名のマッピング
+    // Node -> humanoid bone-name mapping
     let bone_node_map = parse_humanoid_mapping(vrma_ext);
-    // ノード→表情名のマッピング
+    // Node -> expression-name mapping
     let expr_node_map = parse_expression_mapping(vrma_ext);
 
-    // VRMAノードのレスト回転を抽出（リターゲティング用）
+    // Extract rest rotations of VRMA nodes (used for retargeting)
     let bone_rests = extract_vrma_bone_rests(document, &bone_node_map);
 
-    // 最初のアニメーションを読み込む（仕様: animations の最初を使用）
+    // Load the first animation (spec: use the first entry in `animations`)
     let anim = document
         .animations()
         .next()
@@ -421,7 +421,7 @@ fn parse_vrma(
 
         let reader = channel.reader(|buf| Some(&buffers[buf.index()]));
 
-        // キーフレームの時間を読み込み
+        // Read keyframe times
         let times: Vec<f32> = reader
             .read_inputs()
             .map(|iter| iter.collect())
@@ -437,7 +437,7 @@ fn parse_vrma(
             gltf::animation::Interpolation::CubicSpline => Interpolation::CubicSpline,
         };
 
-        // ヒューマノイドボーンチャネル
+        // Humanoid bone channels
         if let Some(bone_name) = bone_node_map.get(&node_idx) {
             match target.property() {
                 gltf::animation::Property::Rotation => {
@@ -500,11 +500,11 @@ fn parse_vrma(
                     entry.translation = Some(keyframes);
                     entry.translation_interp = Some(interp);
                 }
-                _ => {} // Scale は無視（仕様）
+                _ => {} // Scale is ignored (per spec)
             }
         }
 
-        // 表情チャネル: translation.x をウェイトとして解釈
+        // Expression channel: interpret translation.x as the weight
         if let Some(expr_name) = expr_node_map.get(&node_idx) {
             if matches!(target.property(), gltf::animation::Property::Translation) {
                 let translations: Vec<Vec3> = reader
@@ -553,7 +553,7 @@ fn parse_vrma(
     })
 }
 
-/// VRMAノード階層からヒューマノイドボーンのレスト回転を抽出
+/// Extract rest rotations of humanoid bones from the VRMA node hierarchy.
 fn extract_vrma_bone_rests(
     document: &gltf::Document,
     bone_node_map: &HashMap<usize, String>,
@@ -561,7 +561,7 @@ fn extract_vrma_bone_rests(
     let nodes: Vec<gltf::Node> = document.nodes().collect();
     let n = nodes.len();
 
-    // 全ノードのローカル回転・平行移動とグローバル回転を計算
+    // Compute local rotation/translation and global rotation for every node
     let mut local_rotations = vec![Quat::IDENTITY; n];
     let mut local_translations = vec![Vec3::ZERO; n];
     let mut global_rotations = vec![Quat::IDENTITY; n];
@@ -578,7 +578,7 @@ fn extract_vrma_bone_rests(
         }
     }
 
-    // グローバル回転を伝搬（ルートから）
+    // Propagate global rotations starting from roots
     let mut computed = vec![false; n];
     let mut stack: Vec<(usize, Quat)> = nodes
         .iter()
@@ -598,7 +598,7 @@ fn extract_vrma_bone_rests(
         }
     }
 
-    // ヒューマノイドボーンのレスト回転を収集
+    // Collect rest rotations for humanoid bones
     let mut rests = HashMap::new();
     for (&node_idx, bone_name) in bone_node_map {
         if node_idx < n {
@@ -616,7 +616,7 @@ fn extract_vrma_bone_rests(
     rests
 }
 
-/// humanoid.humanBones のノードマッピングをパース
+/// Parse the node mapping in `humanoid.humanBones`.
 fn parse_humanoid_mapping(vrma_ext: &Value) -> HashMap<usize, String> {
     let mut map = HashMap::new();
     if let Some(bones) = vrma_ext
@@ -632,11 +632,11 @@ fn parse_humanoid_mapping(vrma_ext: &Value) -> HashMap<usize, String> {
     map
 }
 
-/// expressions のノードマッピングをパース（preset + custom）
+/// Parse the node mapping in `expressions` (preset + custom).
 fn parse_expression_mapping(vrma_ext: &Value) -> HashMap<usize, String> {
     let mut map = HashMap::new();
 
-    // プリセット表情
+    // Preset expressions
     if let Some(preset) = vrma_ext
         .pointer("/expressions/preset")
         .and_then(|v| v.as_object())
@@ -648,7 +648,7 @@ fn parse_expression_mapping(vrma_ext: &Value) -> HashMap<usize, String> {
         }
     }
 
-    // カスタム表情
+    // Custom expressions
     if let Some(custom) = vrma_ext
         .pointer("/expressions/custom")
         .and_then(|v| v.as_object())
@@ -685,10 +685,10 @@ mod tests {
             anim.expression_channels.len(),
         );
 
-        // Hips チャネルの存在確認
+        // Verify the hips channel exists
         assert!(anim.bone_channels.contains_key("hips"), "hips チャネルなし");
 
-        // サンプリングテスト
+        // Sampling smoke test
         let rot = anim.sample_bone_rotation("hips", 0.0);
         assert!(rot.is_some(), "hips rotation サンプリング失敗");
     }

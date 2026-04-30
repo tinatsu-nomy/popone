@@ -10,14 +10,14 @@ use std::sync::Arc;
 
 use super::parser;
 
-/// DirectX .x ファイルを読み込んで IrModel に変換する
+/// Load a DirectX `.x` file and convert it into an `IrModel`.
 pub fn load_x(path: &Path) -> Result<IrModel> {
     let model = parser::read_x(path)?;
     let base_dir = path.parent().unwrap_or(Path::new("."));
     x_to_ir(&model, base_dir, None)
 }
 
-/// DirectX .x データをメモリから読み込んで IrModel に変換する
+/// Load DirectX `.x` data from memory and convert it into an `IrModel`.
 pub fn load_x_from_data(
     data: &[u8],
     name: &str,
@@ -28,7 +28,7 @@ pub fn load_x_from_data(
     x_to_ir(&model, base_dir, aux)
 }
 
-/// 相対パスを正規化（バックスラッシュ→スラッシュ、"./" 除去、".." 解決）
+/// Normalize a relative path (backslash -> slash, drop "./", resolve "..").
 fn normalize_rel_path(rel: &Path) -> PathBuf {
     let s = rel.to_string_lossy().replace('\\', "/");
     let mut out = Vec::new();
@@ -44,28 +44,28 @@ fn normalize_rel_path(rel: &Path) -> PathBuf {
     PathBuf::from(out.join("/"))
 }
 
-/// テクスチャファイルを解決して読み込む
+/// Resolve and load a texture file.
 fn resolve_texture(
     aux: Option<&HashMap<PathBuf, Arc<[u8]>>>,
     base_dir: &Path,
     tex_path: &str,
 ) -> Option<Vec<u8>> {
-    // バックスラッシュをスラッシュに正規化
+    // Normalize backslashes to slashes
     let normalized = tex_path.replace('\\', "/");
 
     if let Some(aux_map) = aux {
-        let rel_raw = PathBuf::from(&normalized); // ".." 保持
-        let rel = normalize_rel_path(&rel_raw); // ".." 除去
+        let rel_raw = PathBuf::from(&normalized); // Keep ".."
+        let rel = normalize_rel_path(&rel_raw); // Strip ".."
 
-        // 1. 元パスで完全一致（"../shared/body.png" → "../shared/body.png"）
+        // 1. Exact match against the raw path ("../shared/body.png" -> "../shared/body.png")
         if let Some(bytes) = aux_map.get(&rel_raw) {
             return Some(bytes.to_vec());
         }
-        // 2. 正規化パスで完全一致（"shared/body.png" → "shared/body.png"）
+        // 2. Exact match against the normalized path ("shared/body.png" -> "shared/body.png")
         if let Some(bytes) = aux_map.get(&rel) {
             return Some(bytes.to_vec());
         }
-        // 3. case-insensitive（元パス・正規化パス両方で検索）
+        // 3. Case-insensitive match (search both raw and normalized paths)
         let raw_lower = rel_raw.to_string_lossy().to_lowercase();
         let norm_lower = rel.to_string_lossy().to_lowercase();
         if let Some(bytes) = aux_map.iter().find_map(|(k, v)| {
@@ -78,17 +78,17 @@ fn resolve_texture(
         }) {
             return Some(bytes);
         }
-        // archive/snapshot 由来: ディスクフォールバックしない（ローカルファイル漏洩防止）
+        // Archive/snapshot origin: do not fall back to disk (prevents local-file leakage).
         return None;
     }
 
-    // ディスクから読む — パストラバーサル防止のため正規化
+    // Read from disk -- normalize first to prevent path traversal
     let rel = crate::sanitize_rel_path(&normalized);
     let full_path = base_dir.join(&rel);
     std::fs::read(&full_path).ok()
 }
 
-/// Frame の親チェーンを辿ってワールド変換行列を計算する
+/// Walk the Frame parent chain and compute the world transform.
 fn compute_world_transform(frames: &[parser::XFrame], frame_index: usize) -> glam::Mat4 {
     let mut chain = Vec::new();
     let mut idx = Some(frame_index);
@@ -99,7 +99,7 @@ fn compute_world_transform(frames: &[parser::XFrame], frame_index: usize) -> gla
         chain.push(i);
         idx = frames[i].parent;
     }
-    // ルートから順に積算
+    // Multiply from the root downwards
     let mut world = glam::Mat4::IDENTITY;
     for &i in chain.iter().rev() {
         world *= frames[i].transform;
@@ -112,7 +112,7 @@ fn x_to_ir(
     base_dir: &Path,
     aux: Option<&HashMap<PathBuf, Arc<[u8]>>>,
 ) -> Result<IrModel> {
-    // ダミールートボーン（merge 時のボーンインデックス参照パニック防止）
+    // Dummy root bone (prevents panics from out-of-range bone indices on merge)
     let root_bone = IrBone {
         name: "ルート".to_string(),
         name_en: "Root".to_string(),
@@ -134,7 +134,7 @@ fn x_to_ir(
         grant: None,
     };
 
-    // スキニング情報を含む .x ファイルはエラーとする
+    // Reject .x files containing skinning data
     if model.meshes.iter().any(|m| m.has_skin_weights) {
         return Err(PoponeError::DirectXParse(
             "SkinWeights（スキニング情報）を含む .x ファイルは未対応です。\
@@ -143,19 +143,19 @@ fn x_to_ir(
         ));
     }
 
-    // DirectX 左手系 Y-Up → glTF 右手系 Y-Up: Z 反転
-    // PMX 出力で元座標の 10 倍になるようスケーリング（10 / PMX_SCALE(12.5) = 0.8）
+    // DirectX left-handed Y-Up -> glTF right-handed Y-Up: flip Z.
+    // Scale so PMX export ends up 10x the original coords (10 / PMX_SCALE(12.5) = 0.8).
     const DX_SCALE: f32 = 0.8;
     let pos_to_gltf = |v: Vec3| Vec3::new(v.x * DX_SCALE, v.y * DX_SCALE, -v.z * DX_SCALE);
     let norm_to_gltf = |v: Vec3| Vec3::new(v.x, v.y, -v.z);
 
-    // テクスチャ収集（重複排除）
+    // Collect textures (deduplicated)
     let mut texture_map: HashMap<String, usize> = HashMap::new();
     let mut ir_textures: Vec<IrTexture> = Vec::new();
 
-    // 全メッシュの材質を先に収集（グローバル材質リスト構築）
+    // Collect every mesh's materials up front (build a global material list)
     let mut ir_materials: Vec<IrMaterial> = Vec::new();
-    // メッシュごとの材質オフセット
+    // Material offset per mesh
     let mut mesh_mat_offsets: Vec<usize> = Vec::new();
 
     for mesh in &model.meshes {
@@ -177,8 +177,8 @@ fn x_to_ir(
                         };
                         let mime = crate::intermediate::types::mime_for_ext(&ext);
                         let idx = ir_textures.len();
-                        // ファイル名のみ保持（"../shared/body.png" → "body.png"）
-                        // PMX テクスチャ書き出しでパス逸脱を防止
+                        // Keep only the filename ("../shared/body.png" -> "body.png").
+                        // Prevents path escapes when writing PMX textures.
                         let safe_filename = Path::new(tex_name)
                             .file_name()
                             .and_then(|f| f.to_str())
@@ -226,20 +226,20 @@ fn x_to_ir(
         }
     }
 
-    // 材質なしメッシュ用のデフォルト材質インデックス（遅延初期化）
+    // Lazily-initialized default material index for meshes without materials
     let mut default_mat_idx: Option<usize> = None;
 
-    // メッシュ変換
+    // Mesh conversion
     let mut ir_meshes: Vec<IrMesh> = Vec::new();
 
     for (mi, mesh) in model.meshes.iter().enumerate() {
-        // Frame 階層のワールド変換を計算
+        // Compute the world transform from the Frame hierarchy
         let world_transform = mesh
             .frame_index
             .map(|fi| compute_world_transform(&model.frames, fi))
             .unwrap_or(glam::Mat4::IDENTITY);
         let has_frame_transform = world_transform != glam::Mat4::IDENTITY;
-        // 法線用の変換行列（逆転置、スケール除去）
+        // Transform matrix for normals (inverse transpose, no scale)
         let normal_transform = if has_frame_transform {
             world_transform.inverse().transpose()
         } else {
@@ -258,7 +258,7 @@ fn x_to_ir(
         );
         let has_texcoords = mesh.texcoords.is_some();
 
-        // 材質ごとにメッシュを分割
+        // Split the mesh per material
         let mat_count = mesh
             .materials
             .as_ref()
@@ -266,11 +266,11 @@ fn x_to_ir(
             .unwrap_or(0);
 
         if mat_count <= 1 {
-            // 単一材質: 面頂点単位で頂点を生成（ハードエッジ対応）
+            // Single material: generate vertices per face-corner (supports hard edges)
             let mat_idx = if mat_count == 1 {
                 mat_offset
             } else {
-                // 材質なしメッシュ用のデフォルト材質（初回のみ追加、以降は共用）
+                // Default material for meshes without materials (added once and reused)
                 *default_mat_idx.get_or_insert_with(|| {
                     let idx = ir_materials.len();
                     ir_materials.push(IrMaterial {
@@ -282,7 +282,7 @@ fn x_to_ir(
                 })
             };
 
-            // (position_index, normal_index) → 新頂点インデックス の重複排除マップ
+            // Dedup map: (position_index, normal_index) -> new vertex index
             let mut vert_map: HashMap<(u32, u32), u32> = HashMap::new();
             let mut vertices: Vec<IrVertex> = Vec::new();
             let mut new_indices: Vec<u32> = Vec::new();
@@ -291,7 +291,7 @@ fn x_to_ir(
 
             for (tri_idx, tri) in mesh.indices.chunks_exact(3).enumerate() {
                 for (k, &pos_idx) in tri.iter().enumerate() {
-                    // 法線インデックスの取得
+                    // Resolve the normal index
                     let norm_idx = if let Some(nd) = normals_data {
                         let fn_idx = tri_idx * 3 + k;
                         if fn_idx < nd.face_normals.len() {
@@ -300,7 +300,7 @@ fn x_to_ir(
                             0
                         }
                     } else {
-                        // 法線なしの場合は position_index をキーに使う
+                        // No normals: use the position index as the key
                         pos_idx
                     };
 
@@ -314,7 +314,7 @@ fn x_to_ir(
                         } else {
                             Vec3::ZERO
                         };
-                        // Frame 変換を適用（pos_to_gltf の前）
+                        // Apply the Frame transform (before pos_to_gltf)
                         if has_frame_transform {
                             pos = world_transform.transform_point3(pos);
                         }
@@ -337,8 +337,8 @@ fn x_to_ir(
                         let uv = if has_texcoords {
                             let tc = mesh.texcoords.as_ref().expect("has_texcoords チェック済み");
                             if vi < tc.len() {
-                                // DirectX .x の UV は D3D 慣習で左上原点（PMX/FBX と同じ）。
-                                // Y 反転は不要。
+                                // DirectX .x UVs use the D3D convention with the origin at the top-left
+                                // (same as PMX/FBX). No Y flip needed.
                                 Vec2::new(tc[vi].x, tc[vi].y)
                             } else {
                                 Vec2::ZERO
@@ -364,10 +364,10 @@ fn x_to_ir(
                 }
             }
 
-            // Z反転(det=-1) × ワールド変換の行列式 で最終的な巻き順を決定
+            // Final winding = Z-flip (det = -1) * world-transform determinant
             let need_swap = world_transform.determinant() >= 0.0;
             let final_indices = if need_swap {
-                // Z 反転で行列式 -1 → 面の巻き順を反転 (b↔c swap)
+                // Z-flip yields det = -1, so reverse the winding (swap b<->c)
                 let mut swapped = Vec::with_capacity(new_indices.len());
                 for tri in new_indices.chunks_exact(3) {
                     swapped.push(tri[0]);
@@ -376,11 +376,11 @@ fn x_to_ir(
                 }
                 swapped
             } else {
-                // ワールド変換の負スケールで行列式が反転 → swap 不要
+                // World transform's negative scale already flipped the determinant -> no swap needed
                 new_indices
             };
 
-            // 法線が欠落している場合、最終インデックスで面法線を再計算
+            // Recompute face normals on the final indices when normals are missing
             if !has_normals {
                 compute_face_normals(&mut vertices, &final_indices);
             }
@@ -399,7 +399,7 @@ fn x_to_ir(
                 uvs1: vec![],
             });
         } else {
-            // 複数材質: 三角形を材質ごとにグループ分け
+            // Multiple materials: group triangles by material
             let mat_list = mesh
                 .materials
                 .as_ref()
@@ -408,7 +408,7 @@ fn x_to_ir(
             for local_mat_idx in 0..mat_count {
                 let global_mat_idx = mat_offset + local_mat_idx;
 
-                // この材質に属する三角形を収集
+                // Collect triangles belonging to this material
                 let mut tri_indices: Vec<usize> = Vec::new();
                 for (ti, &face_mat) in mat_list.face_material_indices.iter().enumerate() {
                     if face_mat == local_mat_idx {
@@ -419,7 +419,7 @@ fn x_to_ir(
                     continue;
                 }
 
-                // 頂点の再インデックス（(position_index, normal_index) をキーに重複排除）
+                // Re-index vertices (dedup keyed by (position_index, normal_index))
                 let mut vert_map: HashMap<(u32, u32), u32> = HashMap::new();
                 let mut vertices: Vec<IrVertex> = Vec::new();
                 let mut indices: Vec<u32> = Vec::new();
@@ -431,7 +431,7 @@ fn x_to_ir(
                     }
                     for k in 0..3 {
                         let orig_vi = mesh.indices[base + k];
-                        // 法線インデックスの取得
+                        // Resolve the normal index
                         let norm_idx = if let Some(nd) = &mesh.normals {
                             let fn_idx = base + k;
                             if fn_idx < nd.face_normals.len() {
@@ -453,7 +453,7 @@ fn x_to_ir(
                             } else {
                                 Vec3::ZERO
                             };
-                            // Frame 変換を適用（pos_to_gltf の前）
+                            // Apply the Frame transform (before pos_to_gltf)
                             if has_frame_transform {
                                 pos = world_transform.transform_point3(pos);
                             }
@@ -462,8 +462,8 @@ fn x_to_ir(
                                 let tc =
                                     mesh.texcoords.as_ref().expect("has_texcoords チェック済み");
                                 if vi < tc.len() {
-                                    // DirectX .x の UV は D3D 慣習で左上原点（PMX/FBX と同じ）。
-                                    // Y 反転は不要。
+                                    // DirectX .x UVs use the D3D convention with the origin at the top-left
+                                    // (same as PMX/FBX). No Y flip needed.
                                     Vec2::new(tc[vi].x, tc[vi].y)
                                 } else {
                                     Vec2::ZERO
@@ -503,10 +503,10 @@ fn x_to_ir(
                     }
                 }
 
-                // Z反転(det=-1) × ワールド変換の行列式 で最終的な巻き順を決定
+                // Final winding = Z-flip (det = -1) * world-transform determinant
                 let need_swap = world_transform.determinant() >= 0.0;
                 let final_indices = if need_swap {
-                    // Z 反転で行列式 -1 → 面の巻き順を反転 (b↔c swap)
+                    // Z-flip yields det = -1, so reverse the winding (swap b<->c)
                     let mut swapped = Vec::with_capacity(indices.len());
                     for tri in indices.chunks_exact(3) {
                         swapped.push(tri[0]);
@@ -515,11 +515,11 @@ fn x_to_ir(
                     }
                     swapped
                 } else {
-                    // ワールド変換の負スケールで行列式が反転 → swap 不要
+                    // World transform's negative scale already flipped the determinant -> no swap needed
                     indices
                 };
 
-                // 最終インデックスで面法線を再計算
+                // Recompute face normals on the final indices
                 if !has_normals {
                     compute_face_normals(&mut vertices, &final_indices);
                 }
@@ -568,7 +568,7 @@ fn x_to_ir(
     })
 }
 
-/// 面法線を計算してスムーズシェーディング用に頂点法線を累積平均する
+/// Compute face normals and accumulate them into per-vertex normals for smooth shading.
 fn compute_face_normals(vertices: &mut [IrVertex], indices: &[u32]) {
     for tri in indices.chunks_exact(3) {
         let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);

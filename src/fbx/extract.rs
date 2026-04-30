@@ -16,7 +16,7 @@ use super::scene::FbxScene;
 use super::skin;
 use super::texture;
 
-/// FBX バイナリデータにメッシュ（Geometry）が含まれるかを高速チェック
+/// Quick check that an FBX binary contains a mesh (Geometry).
 pub fn fbx_has_mesh(data: &[u8]) -> bool {
     let Ok(doc) = parser::parse(data) else {
         return false;
@@ -25,12 +25,12 @@ pub fn fbx_has_mesh(data: &[u8]) -> bool {
     !scene.geometries().is_empty()
 }
 
-/// FBX バイナリデータから IrModel を構築
+/// Build an `IrModel` from FBX binary data.
 pub fn extract_ir_model_from_fbx(data: &[u8], fbx_path: Option<&Path>) -> Result<IrModel> {
     extract_ir_model_from_fbx_with_options(data, fbx_path, false, false)
 }
 
-/// FBX バイナリデータから IrModel を構築（オプション付き）
+/// Build an `IrModel` from FBX binary data (with options).
 pub fn extract_ir_model_from_fbx_with_options(
     data: &[u8],
     fbx_path: Option<&Path>,
@@ -40,10 +40,10 @@ pub fn extract_ir_model_from_fbx_with_options(
     let doc = parser::parse(data)?;
     let scene = FbxScene::from_document(&doc);
 
-    // 座標系変換関数（FBX → glTF Y-Up 右手系）
+    // Coord-system conversion (FBX -> glTF Y-Up right-handed)
     let coord_fn = build_coord_transform(&doc);
 
-    // ボーン抽出
+    // Bone extraction
     let hierarchy = BoneHierarchy::from_scene(&scene);
     let bone_names: Vec<(usize, &str)> = hierarchy
         .bones
@@ -59,10 +59,10 @@ pub fn extract_ir_model_from_fbx_with_options(
         humanoid_mapping.rig_type.label()
     );
 
-    // ボーン → IrBone
+    // Bones -> IrBone
     let (mut ir_bones, bone_id_to_ir) = convert_bones(&hierarchy, &humanoid_mapping, &coord_fn);
 
-    // メッシュ・材質・テクスチャ抽出
+    // Mesh / material / texture extraction
     let mut ir_textures: Vec<IrTexture> = Vec::new();
     let mut ir_materials: Vec<IrMaterial> = Vec::new();
     let mut ir_meshes: Vec<IrMesh> = Vec::new();
@@ -83,17 +83,17 @@ pub fn extract_ir_model_from_fbx_with_options(
         let mat_per_polygon = mesh::extract_material_indices(geom);
         let (uvs, uv_indices, uv_mapping) = mesh::extract_uvs(geom);
 
-        // 親 Model のワールド変換（GeometryInstance から取得）
+        // World transform of the parent Model (taken from GeometryInstance)
         let model_transform = inst.world_transform;
         let has_model_transform = model_transform != Mat4::IDENTITY;
-        // 法線用: 逆転置行列（上位3x3）
+        // For normals: inverse-transpose of the upper-left 3x3
         let normal_matrix = if has_model_transform {
             Mat4::from_mat3(glam::Mat3::from_mat4(model_transform).inverse().transpose())
         } else {
             Mat4::IDENTITY
         };
 
-        // 材質（GeometryInstance のスロット順で取得 — Prefab renderer path と整合）
+        // Materials (in GeometryInstance slot order, aligned with the Prefab renderer path)
         let renderer_path: std::sync::Arc<str> = scene.model_hierarchy_path(inst.model.id).into();
         let mat_base = ir_materials.len();
 
@@ -111,9 +111,9 @@ pub fn extract_ir_model_from_fbx_with_options(
             .and_then(|tex| texture_to_ir(&tex, &mut ir_textures));
             let source_tex_name = texture::extract_texture_name_for_material(&scene, mat_obj.id);
 
-            // PMX 材質パラメータ
-            // Opacity=0 + TransparencyFactor=1 の冗長指定は Unity/Blender FBX Exporter の既知パターン。
-            // テクスチャ有無に関係なく全材質にデフォルト値として出力されるため、無条件でフォールバック
+            // PMX material parameters.
+            // Opacity=0 + TransparencyFactor=1 is a known redundant pattern from the Unity/Blender FBX exporter:
+            // it appears as default values on every material regardless of textures, so we fall back unconditionally.
             let opacity = if props.opacity_both_zero {
                 log::debug!(
                     "Material '{}': Opacity=0+TransparencyFactor=1 -> fallback to 1.0",
@@ -142,7 +142,7 @@ pub fn extract_ir_model_from_fbx_with_options(
             ir_materials.push(mat);
         }
 
-        // デフォルト材質
+        // Default material when none are present
         if inst.material_slots.is_empty() {
             ir_materials.push(IrMaterial {
                 name: "Default".to_string(),
@@ -150,7 +150,7 @@ pub fn extract_ir_model_from_fbx_with_options(
             });
         }
 
-        // 頂点展開
+        // Vertex expansion
         let mut vert_positions: Vec<[f32; 3]> = Vec::with_capacity(poly_indices.len());
         let mut vert_normals: Vec<[f32; 3]> = Vec::with_capacity(poly_indices.len());
         let mut vert_uvs: Vec<[f32; 2]> = Vec::with_capacity(poly_indices.len());
@@ -198,7 +198,7 @@ pub fn extract_ir_model_from_fbx_with_options(
             vert_uvs.push(uv);
         }
 
-        // 三角化（材質ごと）
+        // Triangulation (per material)
         let num_geom_mats = inst.material_slots.len().max(1);
         let mut mat_triangles: Vec<Vec<[u32; 3]>> = vec![Vec::new(); num_geom_mats];
 
@@ -210,8 +210,8 @@ pub fn extract_ir_model_from_fbx_with_options(
                 let mat_local = mat_local.min(num_geom_mats - 1);
                 let polygon_len = i - polygon_start + 1;
                 for j in 1..polygon_len - 1 {
-                    // coord_fn det=+1 なので面巻き順は通常の fan 順序
-                    // gltf_pos_to_pmx (det=-1) 用の反転は mesh.rs の flip_face_winding で処理
+                    // coord_fn has det=+1, so the face winding follows the regular fan order.
+                    // The flip needed for gltf_pos_to_pmx (det=-1) is handled by flip_face_winding in mesh.rs.
                     let tri = [
                         polygon_start as u32,
                         (polygon_start + j) as u32,
@@ -224,7 +224,7 @@ pub fn extract_ir_model_from_fbx_with_options(
             }
         }
 
-        // フラットシェーディングフォールバック（ゼロ法線がある面をフラット法線で補完）
+        // Flat-shading fallback: fill any zero normals with the face normal
         if vert_normals.contains(&[0.0f32; 3]) {
             let all_indices: Vec<u32> = mat_triangles
                 .iter()
@@ -234,7 +234,7 @@ pub fn extract_ir_model_from_fbx_with_options(
             mesh::fill_missing_normals(&vert_positions, &mut vert_normals, &all_indices);
         }
 
-        // スキンウェイト
+        // Skin weights
         let skin_weights = skin::extract_skin(&scene, geom_id).map(|skin_data| {
             mesh::build_vertex_weights(
                 &skin_data,
@@ -244,8 +244,8 @@ pub fn extract_ir_model_from_fbx_with_options(
             )
         });
 
-        // IrMesh を材質ごとに生成
-        // ジオメトリローカル展開インデックス → グローバル IrMesh 頂点インデックスのマッピング
+        // Build one IrMesh per material.
+        // Mapping from geometry-local expanded index -> global IrMesh vertex index
         let mut geom_local_to_global: HashMap<u32, usize> = HashMap::new();
         let mut global_vertex_offset: usize = ir_meshes.iter().map(|m| m.vertices.len()).sum();
 
@@ -254,7 +254,7 @@ pub fn extract_ir_model_from_fbx_with_options(
                 continue;
             }
 
-            // この材質で使われる頂点を収集
+            // Gather the vertices used by this material
             let mut used_verts: Vec<u32> =
                 triangles.iter().flat_map(|t| t.iter().copied()).collect();
             used_verts.sort_unstable();
@@ -264,7 +264,7 @@ pub fn extract_ir_model_from_fbx_with_options(
             for &old_idx in &used_verts {
                 let new_idx = ir_vertices.len() as u32;
                 old_to_new.insert(old_idx, new_idx);
-                // グローバルマッピングを記録
+                // Record the global mapping
                 geom_local_to_global.insert(old_idx, global_vertex_offset + new_idx as usize);
                 let i = old_idx as usize;
                 let (w_arr, w_cnt) = skin_weights
@@ -281,7 +281,7 @@ pub fn extract_ir_model_from_fbx_with_options(
                     position: Vec3::from(vert_positions[i]),
                     normal: Vec3::from(vert_normals[i]),
                     uv: Vec2::from(vert_uvs[i]),
-                    tangent: Vec4::ZERO, // MikkTSpace で後から生成
+                    tangent: Vec4::ZERO, // Generated later via MikkTSpace
                     weights: w_arr,
                     weight_count: w_cnt,
                     edge_scale: 1.0,
@@ -309,7 +309,7 @@ pub fn extract_ir_model_from_fbx_with_options(
             ir_meshes.push(ir_mesh);
         }
 
-        // ブレンドシェイプ
+        // Blend shapes
         let raw_shapes = blendshape::extract_blend_shapes_raw(&scene, geom_id);
         let model_xform = model_transform; // capture for closure
         for shape in blendshape::expand_blend_shapes(raw_shapes, &cp_to_verts, |v| {
@@ -324,7 +324,7 @@ pub fn extract_ir_model_from_fbx_with_options(
                 .deltas
                 .iter()
                 .filter_map(|&(vi, offset)| {
-                    // ジオメトリローカルインデックス → グローバル IrMesh 頂点インデックスに変換
+                    // Convert geometry-local index -> global IrMesh vertex index
                     geom_local_to_global
                         .get(&vi)
                         .map(|&global_vi| (global_vi, Vec3::from(offset)))
@@ -345,7 +345,7 @@ pub fn extract_ir_model_from_fbx_with_options(
         }
     }
 
-    // スタンス変換（オプション、T→AとA→Tは排他）
+    // Optional stance conversion (T->A and A->T are mutually exclusive)
     let astance_result = if normalize_pose {
         let mut global_mats: Vec<Mat4> = ir_bones.iter().map(|b| b.global_mat).collect();
         crate::intermediate::pose::normalize_pose_to_astance_with_meshes(
@@ -364,7 +364,7 @@ pub fn extract_ir_model_from_fbx_with_options(
         AStanceResult::NotRequested
     };
 
-    // モデル名
+    // Model name
     let model_name = fbx_path
         .and_then(|p| p.file_stem())
         .and_then(|s| s.to_str())
@@ -397,16 +397,16 @@ pub fn extract_ir_model_from_fbx_with_options(
     })
 }
 
-/// FBX GlobalSettings から座標系変換関数を構築
-/// UnitScaleFactor も読み取りメートル単位に正規化
+/// Build a coord-system conversion function from FBX `GlobalSettings`.
+/// Also reads `UnitScaleFactor` and normalizes to meters.
 fn build_coord_transform(doc: &parser::FbxDocument) -> impl Fn([f32; 3]) -> [f32; 3] {
-    let mut up_axis = 1i32; // デフォルト Y-Up
+    let mut up_axis = 1i32; // default: Y-Up
     let mut up_sign = 1i32;
-    let mut front_axis = 2i32; // デフォルト Z
+    let mut front_axis = 2i32; // default: Z
     let mut front_sign = 1i32;
-    let mut coord_axis = 0i32; // デフォルト X
+    let mut coord_axis = 0i32; // default: X
     let mut coord_sign = 1i32;
-    let mut unit_scale_factor = 1.0f64; // デフォルト cm
+    let mut unit_scale_factor = 1.0f64; // default: cm
 
     if let Some(settings) = doc.nodes.iter().find(|n| n.name == "GlobalSettings") {
         if let Some(props) = settings.child("Properties70") {
@@ -448,9 +448,9 @@ fn build_coord_transform(doc: &parser::FbxDocument) -> impl Fn([f32; 3]) -> [f32
         }
     }
 
-    // UnitScaleFactor → メートル変換
-    // FBX の UnitScaleFactor: 1.0 = 1cm, 100.0 = 1m
-    // glTF/IrModel はメートル単位
+    // UnitScaleFactor -> meters.
+    // FBX's UnitScaleFactor: 1.0 = 1 cm, 100.0 = 1 m.
+    // glTF / IrModel use meters.
     let to_meters = (unit_scale_factor / 100.0) as f32;
 
     log::info!(
@@ -459,10 +459,9 @@ fn build_coord_transform(doc: &parser::FbxDocument) -> impl Fn([f32; 3]) -> [f32
         unit_scale_factor, to_meters
     );
 
-    // FBX FrontAxis はシーンの奥行き軸を定義するが、
-    // キャラクターは通常その逆（カメラ側）を向く。
-    // Z 反転なしで軸を再マッピングすると、キャラクターは
-    // glTF の -Z forward 方向を自然に向く。
+    // FBX `FrontAxis` defines the scene's depth axis, but characters typically
+    // face the opposite direction (toward the camera). Remapping the axes without
+    // flipping Z makes the character naturally face glTF's -Z forward.
     move |v: [f32; 3]| -> [f32; 3] {
         [
             v[coord_axis as usize] * coord_sign as f32 * to_meters,
@@ -472,7 +471,7 @@ fn build_coord_transform(doc: &parser::FbxDocument) -> impl Fn([f32; 3]) -> [f32
     }
 }
 
-/// BoneHierarchy → IrBone 配列
+/// `BoneHierarchy` -> array of `IrBone`.
 fn convert_bones(
     hierarchy: &BoneHierarchy,
     humanoid_mapping: &humanoid::HumanoidMapping,
@@ -490,7 +489,7 @@ fn convert_bones(
             .get(&i)
             .map(|hb| hb.as_vrm_name().to_string());
 
-        // ボーン名: humanoid 検出済みなら bone_map で PMX 名取得
+        // Bone name: when humanoid detection succeeded, look up the PMX name through bone_map
         let (name, name_en) = if let Some(ref vrm) = vrm_name {
             if let Some((jp, en)) = crate::convert::bone_map::vrm_bone_to_pmx_name(vrm) {
                 (jp.to_string(), en.to_string())
@@ -528,7 +527,7 @@ fn convert_bones(
     (ir_bones, bone_id_to_ir)
 }
 
-/// Mat4 の座標系変換（位置列のみ変換、回転は近似的に処理）
+/// Coord-system conversion for a `Mat4` (only the translation column is transformed; rotation is approximate).
 fn convert_mat4(m: Mat4, coord_fn: &impl Fn([f32; 3]) -> [f32; 3]) -> Mat4 {
     let pos = m.col(3);
     let new_pos = coord_fn([pos.x, pos.y, pos.z]);
@@ -540,9 +539,9 @@ fn convert_mat4(m: Mat4, coord_fn: &impl Fn([f32; 3]) -> [f32; 3]) -> Mat4 {
     )
 }
 
-/// FBX TextureData → IrTexture（PNG エンコード）
+/// FBX `TextureData` -> `IrTexture` (PNG-encoded).
 fn texture_to_ir(tex: &texture::TextureData, ir_textures: &mut Vec<IrTexture>) -> Option<usize> {
-    // RGBA → PNG エンコード
+    // RGBA -> PNG encode
     let mut png_data = Vec::new();
     {
         let encoder = image::codecs::png::PngEncoder::new(&mut png_data);

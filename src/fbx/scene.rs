@@ -421,7 +421,7 @@ impl<'a> FbxScene<'a> {
         world
     }
 
-    /// Model ノードのローカル変換行列（T * PreRotation * Rotation * S）
+    /// Local transform of a Model node (T * PreRotation * Rotation * S).
     fn compute_model_local_transform(node: &FbxNode) -> Mat4 {
         let (translation, rotation_euler, pre_rotation_euler, scale) =
             bone::extract_transform(node);
