@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::convert::coord::PMX_SCALE;
 use crate::intermediate::types::*;
 
-/// sRGB ガンマ空間の単一チャンネル値をリニア空間に変換する
+/// Convert a single sRGB gamma-space channel value to linear space
 fn srgb_to_linear_channel(x: f32) -> f32 {
     if x <= 0.04045 {
         x / 12.92
@@ -17,7 +17,7 @@ fn srgb_to_linear_channel(x: f32) -> f32 {
     }
 }
 
-/// sRGB Vec3 (RGB) をリニア空間に変換する
+/// Convert an sRGB Vec3 (RGB) to linear space
 fn srgb_vec3_to_linear(v: Vec3) -> Vec3 {
     Vec3::new(
         srgb_to_linear_channel(v.x),
@@ -26,7 +26,7 @@ fn srgb_vec3_to_linear(v: Vec3) -> Vec3 {
     )
 }
 
-/// sRGB Vec4 の RGB 成分のみリニア空間に変換する（アルファはそのまま）
+/// Convert only the RGB components of an sRGB Vec4 to linear space (alpha unchanged)
 fn srgb_vec4_rgb_to_linear(v: Vec4) -> Vec4 {
     Vec4::new(
         srgb_to_linear_channel(v.x),
@@ -36,7 +36,7 @@ fn srgb_vec4_rgb_to_linear(v: Vec4) -> Vec4 {
     )
 }
 
-/// ボーン抽出結果: (ボーン配列, ノード→ボーンindex マップ, グローバル行列配列)
+/// Bone extraction result: (bone array, node-to-bone-index map, global matrix array)
 type BoneExtractResult = (Vec<IrBone>, HashMap<usize, usize>, Vec<Mat4>);
 use crate::vrm::{
     detect::VrmVersion,
@@ -44,26 +44,26 @@ use crate::vrm::{
     types_v1::{SpringBoneV1, VrmV1},
 };
 
-/// VRM拡張JSONを1回だけデシリアライズした結果を保持する列挙型
+/// Enum holding the result of deserializing the VRM extension JSON only once
 enum VrmTyped {
     V0(Box<VrmV0>),
     V1(Box<VrmV1>),
-    /// VRM 拡張なしの plain GLB
+    /// Plain GLB without VRM extension
     Unknown,
 }
 
-/// MToon テクスチャ情報を JSON オブジェクトから読み取る（texCoord + KHR_texture_transform 対応）
-/// glTF の texture index を image index に正規化して格納する
+/// Read MToon texture info from a JSON object (supports texCoord + KHR_texture_transform)
+/// Normalizes the glTF texture index into an image index for storage
 fn read_texture_info(obj: &Value, document: &gltf::Document) -> Option<IrTextureInfo> {
     let texture_index = obj.get("index")?.as_u64()? as usize;
-    // glTF texture index → image index に解決
+    // Resolve glTF texture index -> image index
     let image_index = document.textures().nth(texture_index)?.source().index();
     let base_tex_coord = obj.get("texCoord").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let (tex_coord, offset, scale, rotation) = if let Some(ext) = obj
         .get("extensions")
         .and_then(|e| e.get("KHR_texture_transform"))
     {
-        // KHR_texture_transform.texCoord は TextureInfo 本体の texCoord を override する
+        // KHR_texture_transform.texCoord overrides the texCoord on the TextureInfo itself
         let tex_coord = ext
             .get("texCoord")
             .and_then(|v| v.as_u64())
@@ -94,12 +94,12 @@ fn read_texture_info(obj: &Value, document: &gltf::Document) -> Option<IrTexture
     } else {
         (base_tex_coord, Vec2::ZERO, Vec2::ONE, 0.0)
     };
-    // texCoord >= 2 は非対応 → texCoord=0 にフォールバック（graceful degradation）:
-    // - VRM 1.0 / MToon 仕様で使用する UV セットは TEXCOORD_0 と TEXCOORD_1 の2系統のみ
-    // - UniVRM の MToon 実装（vrmc_materials_mtoon_geometry_uv.hlsl）でも UV0/UV1 しか使わない
-    // - glTF 仕様では任意数の UV セットを許容するが、VRM モデルで TEXCOORD_2+ を使うケースは
-    //   実質存在しない
-    // - テクスチャを消失させるよりも texCoord=0 で描画を維持する方が被害が小さい
+    // texCoord >= 2 is unsupported -> fall back to texCoord=0 (graceful degradation):
+    // - VRM 1.0 / MToon spec uses only two UV sets: TEXCOORD_0 and TEXCOORD_1
+    // - UniVRM's MToon implementation (vrmc_materials_mtoon_geometry_uv.hlsl) also only uses UV0/UV1
+    // - The glTF spec allows arbitrary numbers of UV sets, but in practice no VRM model
+    //   uses TEXCOORD_2+
+    // - Keeping rendering alive with texCoord=0 is less harmful than losing the texture
     let tex_coord = if tex_coord > 1 {
         log::warn!(
             "texCoord={} not supported, falling back to texCoord=0 (texture index={})",
@@ -110,7 +110,7 @@ fn read_texture_info(obj: &Value, document: &gltf::Document) -> Option<IrTexture
     } else {
         tex_coord
     };
-    // glTF sampler 情報を読み取り
+    // Read glTF sampler info
     let sampler_info = document
         .textures()
         .nth(texture_index)
@@ -128,7 +128,7 @@ fn read_texture_info(obj: &Value, document: &gltf::Document) -> Option<IrTexture
             };
             let mag_filter = match s.mag_filter() {
                 Some(gltf::texture::MagFilter::Nearest) => IrMagFilter::Nearest,
-                _ => IrMagFilter::Linear, // デフォルトは Linear
+                _ => IrMagFilter::Linear, // default is Linear
             };
             let min_filter = match s.min_filter() {
                 Some(gltf::texture::MinFilter::Nearest) => IrMinFilter::Nearest,
@@ -143,7 +143,7 @@ fn read_texture_info(obj: &Value, document: &gltf::Document) -> Option<IrTexture
                     IrMinFilter::NearestMipmapLinear
                 }
                 Some(gltf::texture::MinFilter::LinearMipmapLinear) | None => {
-                    IrMinFilter::LinearMipmapLinear // デフォルトは LinearMipmapLinear
+                    IrMinFilter::LinearMipmapLinear // default is LinearMipmapLinear
                 }
             };
             IrSamplerInfo {
@@ -202,7 +202,7 @@ pub fn extract_ir_model_with_options(
         ..Default::default()
     };
 
-    // VRM拡張JSONを1回だけデシリアライズ（以後 typed を参照渡しで使い回す）
+    // Deserialize the VRM extension JSON only once (subsequent code reuses `typed` by reference)
     let typed = match version {
         VrmVersion::V0 => {
             let v0: VrmV0 = serde_json::from_value(vrm_ext.clone()).unwrap_or_else(|e| {
@@ -221,18 +221,18 @@ pub fn extract_ir_model_with_options(
         VrmVersion::Unknown => VrmTyped::Unknown,
     };
 
-    // テクスチャ抽出
+    // Extract textures
     model.textures = extract_textures(document, images)?;
 
-    // 材質抽出
+    // Extract materials
     model.materials = extract_materials(document, &typed, version, &model.textures)?;
 
-    // ボーン抽出（ノード→ボーン構造）
+    // Extract bones (node-to-bone structure)
     let (bones, node_to_bone, mut global_mats) = extract_bones(document, &typed)?;
     model.bones = bones;
     model.node_to_bone = node_to_bone;
 
-    // T→Aスタンス変換（オプション）
+    // T-stance to A-stance conversion (optional)
     if normalize_pose {
         model.astance_result = crate::intermediate::pose::normalize_pose_to_astance(
             &mut model.bones,
@@ -240,11 +240,11 @@ pub fn extract_ir_model_with_options(
         );
     }
 
-    // モデル名・コメント
+    // Model name and comment
     model.name = extract_model_name(&typed);
     model.comment = extract_meta_comment(&typed);
 
-    // メッシュ抽出（補正済み global_mats を使用）
+    // Extract meshes (uses the corrected global_mats)
     model.meshes = extract_meshes(
         document,
         buffers,
@@ -254,14 +254,14 @@ pub fn extract_ir_model_with_options(
         &global_mats,
     )?;
 
-    // モーフ抽出
+    // Extract morphs
     model.morphs = extract_morphs(document, &typed, &model.meshes, &model.node_to_bone)?;
 
-    // 物理抽出
+    // Extract physics
     model.physics = extract_physics(&typed, all_extensions, &model.node_to_bone, &model.bones)?;
 
-    // 物理演算ボーン（physics_mode=1）に is_physics フラグを立てる
-    // → build_bones() で BONE_FLAG_PHYS_AFTER に変換される
+    // Set the is_physics flag on physics-driven bones (physics_mode=1)
+    // -> converted to BONE_FLAG_PHYS_AFTER in build_bones()
     for rb in &model.physics.rigid_bodies {
         if rb.physics_mode == 1 {
             if let Some(bi) = rb.bone_index {
@@ -272,7 +272,7 @@ pub fn extract_ir_model_with_options(
         }
     }
 
-    // VRMは常にヒューマノイド
+    // VRM is always humanoid
     model.humanoid_bone_count = model
         .bones
         .iter()
@@ -393,10 +393,11 @@ fn extract_meta_comment(typed: &VrmTyped) -> String {
     comment
 }
 
-/// 生 RGBA バイト列からミップチェーン（レベル 1 以降）を生成する。
-/// linear f32 空間で縮小してから sRGB に戻すことで色空間的に正確なダウンサンプリングを行う。
-/// バックグラウンドスレッドで実行されるため UI への影響はない。
-/// sRGB↔linear 変換は LUT 実装で `powf` 呼び出しを排除済み。
+/// Generate a mip chain (level 1 and later) from a raw RGBA byte buffer.
+/// Downsampling is done in linear f32 space and converted back to sRGB so the result is
+/// color-space accurate.
+/// Runs on a background thread, so it does not affect the UI.
+/// The sRGB <-> linear conversion uses a LUT implementation, eliminating `powf` calls.
 #[allow(clippy::type_complexity)]
 fn generate_mip_chain(rgba: &[u8], width: u32, height: u32) -> Option<Vec<(u32, u32, Arc<[u8]>)>> {
     if rgba.len() != (width * height * 4) as usize {
@@ -408,7 +409,7 @@ fn generate_mip_chain(rgba: &[u8], width: u32, height: u32) -> Option<Vec<(u32, 
     }
     let mip_level_count = 32 - max_side.leading_zeros();
     let base = image::RgbaImage::from_raw(width, height, rgba.to_vec())?;
-    // sRGB → linear f32 に変換（LUT で高速化）
+    // Convert sRGB -> linear f32 (accelerated with a LUT)
     let mut current_linear = crate::color::rgba8_to_linear_f32(&base);
     let mut chain = Vec::with_capacity((mip_level_count - 1) as usize);
     for level in 1..mip_level_count {
@@ -433,8 +434,8 @@ fn extract_textures(
     let mut textures = Vec::with_capacity(images.len());
     for (i, image_data) in images.iter().enumerate() {
         let filename = format!("tex_{:03}.png", i);
-        // gltf 生ピクセルを raw RGBA として保存（PNG エンコード/デコードの往復回避）
-        // RGB の場合は RGBA に変換
+        // Store gltf raw pixels as raw RGBA (avoiding the PNG encode/decode round trip)
+        // Convert RGB to RGBA when needed
         let (w, h) = (image_data.width, image_data.height);
         let rgba: Vec<u8> = match image_data.format {
             gltf::image::Format::R8G8B8A8 => image_data.pixels.clone(),
@@ -449,7 +450,7 @@ fn extract_textures(
                 buf
             }
             _ => {
-                // その他の形式（16bit, float 等）は非対応として空にする
+                // Other formats (16-bit, float, etc.) are unsupported, leave empty
                 log::warn!(
                     "Unsupported gltf image format for texture {}: {:?}",
                     i,
@@ -494,7 +495,7 @@ fn extract_textures(
         });
     }
 
-    // テクスチャ名をgltfのイメージ名で上書き
+    // Overwrite texture names with the glTF image names
     for (i, image) in document.images().enumerate() {
         if i < textures.len() {
             if let Some(name) = image.name() {
@@ -527,7 +528,7 @@ fn extract_materials(
 ) -> Result<Vec<IrMaterial>> {
     let mut materials = Vec::new();
 
-    // VRM 0.0 のmaterialPropertiesを優先使用
+    // Prefer VRM 0.0 materialProperties when available
     let v0_mat_props: &[crate::vrm::types_v0::VrmMaterialProperty] = match typed {
         VrmTyped::V0(v0) => &v0.material_properties,
         VrmTyped::V1(_) | VrmTyped::Unknown => &[],
@@ -539,15 +540,15 @@ fn extract_materials(
 
         let pbr = mat.pbr_metallic_roughness();
 
-        // ベースカラー
+        // Base color
         let bc = pbr.base_color_factor();
         ir_mat.diffuse = Vec4::new(bc[0], bc[1], bc[2], bc[3]);
 
-        // ベーステクスチャ
+        // Base texture
         if let Some(tex_info) = pbr.base_color_texture() {
             let src_idx = tex_info.texture().source().index();
             ir_mat.texture_index = Some(src_idx);
-            // VRM埋め込みテクスチャの名前を source_texture_name に設定
+            // Set the VRM embedded texture name as source_texture_name
             let img_name = tex_info
                 .texture()
                 .source()
@@ -587,8 +588,8 @@ fn extract_materials(
             ir_mat.normal_texture_scale = nt.scale();
         }
 
-        // emissiveTexture / normalTexture の texCoord + KHR_texture_transform 抽出（raw JSON 経由）
-        // read_texture_info が None（texCoord >= 2 等）の場合は core API の仮設定もクリアする
+        // Extract emissiveTexture / normalTexture texCoord + KHR_texture_transform (via raw JSON)
+        // If read_texture_info returns None (e.g. texCoord >= 2), also clear the core API placeholder
         {
             let json = document.as_json();
             if let Some(mat_json) = json.materials.get(i) {
@@ -611,8 +612,8 @@ fn extract_materials(
                         }
                     }
                 }
-                // KHR_materials_emissive_strength: HDR emissive 倍率
-                // UniVRM は maxComponent > 1.0 のとき emissiveStrength を書き出す
+                // KHR_materials_emissive_strength: HDR emissive multiplier
+                // UniVRM writes emissiveStrength when maxComponent > 1.0
                 if let Some(strength) = mat_json
                     .extensions
                     .as_ref()
@@ -625,12 +626,12 @@ fn extract_materials(
             }
         }
 
-        // VRM 0.x _MainTex ST（resolve_tex + base_color_tex_info に伝播用）
+        // VRM 0.x _MainTex ST (used for propagation to resolve_tex + base_color_tex_info)
         let mut main_tex_st: Option<(Vec2, Vec2)> = None;
-        // VRM 0.x MToon で _MainTex が解決済みかどうか（後段の raw JSON 上書き抑制用）
+        // Whether _MainTex has been resolved for VRM 0.x MToon (used to suppress later raw JSON overwrite)
         let mut v0_main_tex_resolved = false;
 
-        // VRM 0.0 マテリアルプロパティ
+        // VRM 0.0 material properties
         if let Some(v0_prop) = v0_mat_props.get(i) {
             let v0_is_mtoon = v0_prop.shader.contains("MToon");
             let v0_is_uts2 = !v0_is_mtoon && {
@@ -643,17 +644,17 @@ fn extract_materials(
                         .and_then(|v| v.as_f64())
                         .is_some()
                 };
-                // 旧版: shader 名で直接判定
+                // Legacy: detect directly by shader name
                 shader.contains("UnityChanToonShader")
-                    // 新版(Toon/Toon): UTS2 固有プロパティの存在で確認
+                    // New version (Toon/Toon): confirm via UTS2-specific properties
                     || (shader.contains("Toon/Toon")
                         && (has_prop("_utsVersion") || has_prop("_BaseColor_Step")))
-                    // プロパティのみでの判定（shader 名が未知の場合のフォールバック）
+                    // Property-only detection (fallback when shader name is unknown)
                     || has_prop("_utsVersion")
             };
             let v0_is_liltoon = !v0_is_mtoon && !v0_is_uts2 && {
                 let shader = v0_prop.shader.as_str();
-                // lilToon: "lilToon" または "lil/" プレフィクス、または固有プロパティ
+                // lilToon: "lilToon" or "lil/" prefix, or specific property
                 shader.contains("lilToon")
                     || shader.starts_with("lil/")
                     || shader.contains("/lil/")
@@ -666,11 +667,11 @@ fn extract_materials(
             };
             let v0_is_poiyomi = !v0_is_mtoon && !v0_is_uts2 && !v0_is_liltoon && {
                 let shader = v0_prop.shader.as_str();
-                // Poiyomi: shader 名に "poiyomi" (大小文字混合あり) または固有プロパティ
+                // Poiyomi: shader name contains "poiyomi" (case-insensitive) or specific property
                 let shader_lower = shader.to_lowercase();
                 shader_lower.contains("poiyomi")
                     || shader_lower.contains(".poyi/")
-                    // プロパティのみでの判定: _EnableShadow (float) + _Shadow1stColor (vector)
+                    // Property-only detection: _EnableShadow (float) + _Shadow1stColor (vector)
                     || (v0_prop
                         .float_properties
                         .as_ref()
@@ -684,9 +685,9 @@ fn extract_materials(
                             .is_some())
             };
 
-            // --- VRM 0.x 共通ヘルパー（MToon / UTS2 両方で使用）---
+            // --- VRM 0.x common helpers (used for both MToon and UTS2) ---
 
-            // ヘルパー: float プロパティ取得
+            // Helper: fetch a float property
             let get_float = |key: &str, default: f64| -> f32 {
                 v0_prop
                     .float_properties
@@ -696,7 +697,7 @@ fn extract_materials(
                     .unwrap_or(default) as f32
             };
 
-            // ヘルパー: vec3 カラー取得
+            // Helper: fetch a vec3 color
             let get_color3 = |key: &str, dr: f64, dg: f64, db: f64| -> Vec3 {
                 v0_prop
                     .vector_properties
@@ -713,11 +714,11 @@ fn extract_materials(
                     .unwrap_or(Vec3::new(dr as f32, dg as f32, db as f32))
             };
 
-            // _MainTex ST 取得（UniVRM 準拠: 全MToon/UTS2テクスチャに伝播）
-            // VRM 0.x vectorProperties 格納順: [offsetX, offsetY, scaleX, scaleY]
-            // Unity ST → glTF KHR_texture_transform 変換:
+            // Fetch _MainTex ST (UniVRM-compliant: propagated to all MToon/UTS2 textures)
+            // VRM 0.x vectorProperties order: [offsetX, offsetY, scaleX, scaleY]
+            // Unity ST -> glTF KHR_texture_transform conversion:
             //   offset.y = 1.0 - unityOffset.y - unityScale.y
-            // (Vrm10MaterialExportUtils.ExportTextureTransform 準拠)
+            // (matches Vrm10MaterialExportUtils.ExportTextureTransform)
             main_tex_st = v0_prop
                 .vector_properties
                 .as_ref()
@@ -731,7 +732,7 @@ fn extract_materials(
                         arr.get(3).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32,
                     );
                     let offset = Vec2::new(unity_offset_x, 1.0 - unity_offset_y - scale.y);
-                    // identity transform (scale=1, offset=0) ならスキップ
+                    // Skip identity transforms (scale=1, offset=0)
                     let is_identity = (scale - Vec2::ONE).length() < 1e-6 && offset.length() < 1e-6;
                     if is_identity {
                         None
@@ -740,8 +741,8 @@ fn extract_materials(
                     }
                 });
 
-            // ヘルパー: テクスチャプロパティ → IrTextureInfo
-            // inherit_st=true の場合、_MainTex ST を適用する（MatCap は除外）
+            // Helper: texture property -> IrTextureInfo
+            // When inherit_st=true, applies the _MainTex ST (MatCap is excluded)
             let resolve_tex = |key: &str, inherit_st: bool| -> Option<IrTextureInfo> {
                 v0_prop
                     .texture_properties
@@ -751,7 +752,7 @@ fn extract_materials(
                     .and_then(|idx| {
                         document.textures().nth(idx as usize).map(|t| {
                             let mut ti = IrTextureInfo::from_index(t.source().index());
-                            // glTF sampler 情報を反映
+                            // Reflect glTF sampler info
                             let s = t.sampler();
                             ti.sampler = IrSamplerInfo {
                                 wrap_u: match s.wrap_s() {
@@ -804,7 +805,7 @@ fn extract_materials(
                     })
             };
 
-            // MToon/UTS2 共通: _MainTex を authoritative source として採用
+            // MToon/UTS2 common: adopt _MainTex as the authoritative source
             let mut adopt_main_tex = |ir_mat: &mut IrMaterial| {
                 if let Some(base_tex) = resolve_tex("_MainTex", true) {
                     ir_mat.texture_index = Some(base_tex.index);
@@ -834,7 +835,7 @@ fn extract_materials(
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0) as i32;
 
-                // OutlineWidthMode を保存（ビューア描画用）
+                // Save OutlineWidthMode (used by the viewer renderer)
                 mtoon.outline_width_mode = match outline_mode {
                     1 => OutlineWidthMode::WorldCoordinates,
                     2 => OutlineWidthMode::ScreenCoordinates,
@@ -856,12 +857,12 @@ fn extract_materials(
                     if let Some(float_props) = &v0_prop.float_properties {
                         if let Some(width) = float_props.get("_OutlineWidth") {
                             let w = width.as_f64().unwrap_or(0.0) as f32;
-                            // UniVRM MigrationMToonMaterial.cs 準拠:
-                            // WorldCoordinates: w * 0.01 (cm→m)
-                            // ScreenCoordinates: w * 0.01 * 0.5 (旧:縦半分の%値 → 新:縦全体の比率)
+                            // Per UniVRM MigrationMToonMaterial.cs:
+                            // WorldCoordinates: w * 0.01 (cm -> m)
+                            // ScreenCoordinates: w * 0.01 * 0.5 (old: % of half height -> new: ratio of full height)
                             mtoon.outline_width_factor = match outline_mode {
-                                1 => w * 0.01,       // WorldCoordinates: メートル
-                                2 => w * 0.01 * 0.5, // ScreenCoordinates: 1/200 換算
+                                1 => w * 0.01,       // WorldCoordinates: meters
+                                2 => w * 0.01 * 0.5, // ScreenCoordinates: 1/200 conversion
                                 _ => 0.0,
                             };
                             ir_mat.edge_size = match outline_mode {
@@ -871,8 +872,8 @@ fn extract_materials(
                             };
                         }
                     }
-                    // _OutlineWidthTexture は _MainTex ST 取得後に resolve_tex() で処理する
-                    // （ここでは設定しない: main_tex_st 伝播のため後段で統一処理）
+                    // _OutlineWidthTexture is processed via resolve_tex() after _MainTex ST is obtained
+                    // (Not set here: handled uniformly later so main_tex_st can be propagated)
                     // _OutlineLightingMix
                     if let Some(float_props) = &v0_prop.float_properties {
                         mtoon.outline_lighting_mix = float_props
@@ -887,11 +888,11 @@ fn extract_materials(
                     i, ir_mat.name, outline_mode, ir_mat.edge_size,
                     ir_mat.edge_color.x, ir_mat.edge_color.y, ir_mat.edge_color.z, ir_mat.edge_color.w);
 
-                // --- VRM 0.x → 1.0 正規化（UniVRM MigrationMToonMaterial.cs 準拠）---
+                // --- VRM 0.x -> 1.0 normalization (per UniVRM MigrationMToonMaterial.cs) ---
 
-                // _Color / _MainTex → lit色/テクスチャ正規化（UniVRM MigrationMToonMaterial.cs:148-164 準拠）
-                // glTF core の baseColorFactor/baseColorTexture は近似値の場合があるため、
-                // materialProperties 側を優先する
+                // _Color / _MainTex -> lit color / texture normalization (per UniVRM MigrationMToonMaterial.cs:148-164)
+                // glTF core's baseColorFactor/baseColorTexture can be approximations, so prefer
+                // the materialProperties side
                 if let Some(color) = v0_prop
                     .vector_properties
                     .as_ref()
@@ -919,9 +920,9 @@ fn extract_materials(
                     _ => AlphaMode::Opaque,
                 };
 
-                // _CullMode: 0=Off(両面), 1=Front(前面カリング), 2=Back(片面)
-                // UniVRM では Front→doubleSided=true にフォールバックするが、
-                // ランタイムレンダラでは Front cull を再現可能
+                // _CullMode: 0=Off (double-sided), 1=Front (front-face culling), 2=Back (single-sided)
+                // UniVRM falls back Front -> doubleSided=true, but the runtime renderer
+                // can faithfully reproduce Front culling
                 let cull_mode_val = get_float("_CullMode", 2.0) as i32;
                 ir_mat.cull_mode = match cull_mode_val {
                     0 => CullMode::None,
@@ -929,7 +930,7 @@ fn extract_materials(
                     _ => CullMode::Back,
                 };
 
-                // 再取得（ir_mat のフィールドアクセス後に mtoon を再借用）
+                // Re-acquire (re-borrow `mtoon` after accessing fields on `ir_mat`)
                 let mtoon = ir_mat
                     .mtoon
                     .as_mut()
@@ -943,11 +944,11 @@ fn extract_materials(
                     0.5,
                 )));
 
-                // _ShadeTexture（未設定時は _MainTex を使用: UniVRM 破壊的マイグレーション準拠）
+                // _ShadeTexture (falls back to _MainTex when unset: per UniVRM destructive migration)
                 mtoon.shade_texture =
                     resolve_tex("_ShadeTexture", true).or_else(|| resolve_tex("_MainTex", true));
 
-                // _ShadeToony / _ShadeShift → UniVRM MigrateToShadingToony/Shift 変換式
+                // _ShadeToony / _ShadeShift -> UniVRM MigrateToShadingToony/Shift conversion formula
                 let toony_0x = get_float("_ShadeToony", 0.9);
                 let shift_0x = get_float("_ShadeShift", 0.0);
                 let range_min = shift_0x;
@@ -956,7 +957,7 @@ fn extract_materials(
                     ((2.0 - (range_max - range_min)) * 0.5).clamp(0.0, 1.0);
                 mtoon.shading_shift_factor = (-(range_max + range_min) * 0.5).clamp(-1.0, 1.0);
 
-                // _BumpMap / _BumpScale（法線マップ）
+                // _BumpMap / _BumpScale (normal map)
                 if let Some(tex_info) = resolve_tex("_BumpMap", true) {
                     ir_mat.normal_texture = Some(tex_info);
                     ir_mat.normal_texture_scale = get_float("_BumpScale", 1.0);
@@ -969,7 +970,7 @@ fn extract_materials(
                 }
 
                 // _RimColor / _RimFresnelPower / _RimLift
-                // 再取得（ir_mat のフィールドアクセス後に mtoon を再借用）
+                // Re-acquire (re-borrow `mtoon` after accessing fields on `ir_mat`)
                 let mtoon = ir_mat
                     .mtoon
                     .as_mut()
@@ -978,14 +979,14 @@ fn extract_materials(
                     srgb_vec3_to_linear(get_color3("_RimColor", 0.0, 0.0, 0.0));
                 mtoon.parametric_rim_fresnel_power = get_float("_RimFresnelPower", 1.0);
                 mtoon.parametric_rim_lift = get_float("_RimLift", 0.0);
-                // rimLightingMixFactor: UniVRM は破壊的マイグレーションで常に 1.0 に設定
+                // rimLightingMixFactor: UniVRM's destructive migration always sets this to 1.0
                 mtoon.rim_lighting_mix = 1.0;
 
-                // _RimTexture → rimMultiplyTexture
+                // _RimTexture -> rimMultiplyTexture
                 mtoon.rim_multiply_texture = resolve_tex("_RimTexture", true);
 
-                // _SphereAdd → matcapTexture（VRM 1.0 では MatCap に変換）
-                // MatCap は VRM 1.0 で ST 不要（UniVRM MigrationMToonMaterial 準拠）
+                // _SphereAdd -> matcapTexture (VRM 1.0 converts it to MatCap).
+                // MatCap requires no ST in VRM 1.0 (per UniVRM MigrationMToonMaterial).
                 if let Some(tex_info) = resolve_tex("_SphereAdd", false) {
                     mtoon.matcap_texture = Some(tex_info);
                     mtoon.matcap_factor = Vec3::ONE;
@@ -995,24 +996,24 @@ fn extract_materials(
 
                 // _UvAnimScrollX / _UvAnimScrollY / _UvAnimRotation
                 mtoon.uv_animation_scroll_x_speed = get_float("_UvAnimScrollX", 0.0);
-                // Y 反転（UniVRM 準拠: invertY = -1）
+                // Flip Y (UniVRM-compatible: invertY = -1)
                 mtoon.uv_animation_scroll_y_speed = -get_float("_UvAnimScrollY", 0.0);
-                // 回転: rotations/sec → rad/sec（× 2π）
+                // Rotation: rotations/sec -> rad/sec (multiply by 2*pi)
                 mtoon.uv_animation_rotation_speed =
                     get_float("_UvAnimRotation", 0.0) * std::f32::consts::TAU;
 
-                // _UvAnimMaskTexture（VRM 0.x: Rチャネル参照、UniVRM MToonCore.cginc:129 準拠）
+                // _UvAnimMaskTexture (VRM 0.x: read the R channel; per UniVRM MToonCore.cginc:129)
                 mtoon.uv_animation_mask_texture = resolve_tex("_UvAnimMaskTexture", true);
                 mtoon.uv_anim_mask_tex_channel = ColorChannel::R;
 
-                // _OutlineWidthTexture（VRM 0.x: Rチャネル参照、UniVRM MToonCore.cginc:86 準拠）
-                // _MainTex ST 伝播: UniVRM MigrationMToonMaterial 準拠
+                // _OutlineWidthTexture (VRM 0.x: read the R channel; per UniVRM MToonCore.cginc:86).
+                // _MainTex ST propagation follows UniVRM MigrationMToonMaterial.
                 if outline_mode != 0 {
                     mtoon.outline_width_texture = resolve_tex("_OutlineWidthTexture", true);
                     mtoon.outline_width_tex_channel = ColorChannel::R;
                 }
 
-                // _OutlineColorMode: 0=FixedColor → outlineLightingMix=0.0, 1=MixedLighting → 元値使用
+                // _OutlineColorMode: 0 = FixedColor -> outlineLightingMix = 0.0; 1 = MixedLighting -> keep the original value
                 if outline_mode != 0 {
                     let outline_color_mode = get_float("_OutlineColorMode", 0.0) as i32;
                     if outline_color_mode == 0 {
@@ -1020,15 +1021,15 @@ fn extract_materials(
                     }
                 }
 
-                // _IndirectLightIntensity → giEqualizationFactor (UniVRM MigrationMToonMaterial.cs:231-232 準拠)
+                // _IndirectLightIntensity -> giEqualizationFactor (per UniVRM MigrationMToonMaterial.cs:231-232)
                 let gi_intensity = get_float("_IndirectLightIntensity", 0.1);
                 mtoon.gi_equalization_factor = (1.0 - gi_intensity).clamp(0.0, 1.0);
             } else if v0_is_uts2 {
-                // --- UTS2 (Unity-Chan Toon Shader Ver.2) → MtoonParams 近似変換 ---
+                // --- UTS2 (Unity-Chan Toon Shader Ver.2) -> MtoonParams approximation ---
                 ir_mat.shader_family = ShaderFamily::Uts2;
                 ir_mat.mtoon = Some(MtoonParams::default());
 
-                // ヘルパー: keyword_map からキーワードの存在を確認
+                // Helper: check whether a keyword is present in keyword_map
                 let has_keyword = |key: &str| {
                     v0_prop
                         .keyword_map
@@ -1037,8 +1038,8 @@ fn extract_materials(
                         .is_some_and(|obj| obj.contains_key(key))
                 };
 
-                // --- ベースカラー ---
-                // _BaseColor → diffuse (UTS2 は _BaseColor、MToon は _Color)
+                // --- Base color ---
+                // _BaseColor -> diffuse (UTS2 uses _BaseColor; MToon uses _Color)
                 if let Some(color) = v0_prop
                     .vector_properties
                     .as_ref()
@@ -1053,7 +1054,7 @@ fn extract_materials(
                 }
                 adopt_main_tex(&mut ir_mat);
 
-                // --- 1st ShadeColor → shade_color ---
+                // --- 1st ShadeColor -> shade_color ---
                 {
                     let mtoon = ir_mat
                         .mtoon
@@ -1065,18 +1066,18 @@ fn extract_materials(
                         0.5,
                         0.5,
                     )));
-                    // _1st_ShadeMap → shade_texture（未設定時は _MainTex）
+                    // _1st_ShadeMap -> shade_texture (falls back to _MainTex when unset)
                     mtoon.shade_texture = resolve_tex("_1st_ShadeMap", true)
                         .or_else(|| resolve_tex("_MainTex", true));
                 }
 
-                // --- 2nd ShadeColor → ambient（PMX 用） ---
+                // --- 2nd ShadeColor -> ambient (used for PMX export) ---
                 let second_shade =
                     srgb_vec3_to_linear(get_color3("_2nd_ShadeColor", 0.3, 0.3, 0.3));
                 ir_mat.ambient = second_shade * 0.5;
 
-                // --- 影境界制御 ---
-                // _BaseColor_Step / _BaseShade_Feather → shading_toony / shading_shift
+                // --- Shadow-boundary controls ---
+                // _BaseColor_Step / _BaseShade_Feather -> shading_toony / shading_shift
                 {
                     let step = get_float("_BaseColor_Step", 0.5);
                     let feather = get_float("_BaseShade_Feather", 0.01).max(0.001);
@@ -1088,7 +1089,7 @@ fn extract_materials(
                     mtoon.shading_shift_factor = (-(step * 2.0 - 1.0)).clamp(-1.0, 1.0);
                 }
 
-                // --- アウトライン ---
+                // --- Outline ---
                 let outline_keyword = if has_keyword("_OUTLINE_POS") {
                     2
                 } else if has_keyword("_OUTLINE_NML") {
@@ -1123,7 +1124,7 @@ fn extract_materials(
                         .mtoon
                         .as_mut()
                         .expect("mtoon は直前で Some に設定済み");
-                    mtoon.outline_width_factor = width * 0.01; // 任意スケール → メートル近似
+                    mtoon.outline_width_factor = width * 0.01; // Arbitrary scale -> meters approximation
                     ir_mat.edge_size = (mtoon.outline_width_factor * PMX_SCALE * 10.0).min(1.0);
 
                     // _Outline_Color
@@ -1131,7 +1132,7 @@ fn extract_materials(
                     let oc_linear = srgb_vec3_to_linear(oc);
                     ir_mat.edge_color = Vec4::new(oc_linear.x, oc_linear.y, oc_linear.z, 1.0);
 
-                    // _Outline_Sampler → outline_width_texture (Rチャネル)
+                    // _Outline_Sampler -> outline_width_texture (R channel)
                     let mtoon = ir_mat
                         .mtoon
                         .as_mut()
@@ -1139,20 +1140,20 @@ fn extract_materials(
                     mtoon.outline_width_texture = resolve_tex("_Outline_Sampler", true);
                     mtoon.outline_width_tex_channel = ColorChannel::R;
 
-                    // _Is_BlendBaseColor → outline_lighting_mix 近似
+                    // _Is_BlendBaseColor -> approximate outline_lighting_mix
                     let blend_base = get_float("_Is_BlendBaseColor", 0.0);
                     mtoon.outline_lighting_mix = if blend_base > 0.5 { 1.0 } else { 0.0 };
                 }
 
-                // --- アルファモード（シェーダーバリアント名ベース）---
-                // UTS2 は _ClippingMode プロパティを持たない。透過種別はシェーダー名で決まる:
-                //   _TransClipping → Blend（透明+クリッピング）
-                //   _Clipping → Mask（カットアウト）
-                //   それ以外 → glTF core の alpha_mode を保持
+                // --- Alpha mode (decided by the shader-variant name) ---
+                // UTS2 has no `_ClippingMode` property; the transparency mode comes from the shader name:
+                //   `_TransClipping` -> Blend (transparency + clipping).
+                //   `_Clipping` -> Mask (cutout).
+                //   Otherwise -> keep the alpha_mode from glTF core.
                 let shader_name = v0_prop.shader.as_str();
                 if shader_name.contains("_TransClipping") || shader_name.contains("_Transparent") {
                     ir_mat.alpha_mode = AlphaMode::Blend;
-                    // TransClipping は Clipping_Level も持つ
+                    // TransClipping carries Clipping_Level as well
                     ir_mat.alpha_cutoff = get_float("_Clipping_Level", 0.5);
                 } else if shader_name.contains("_Clipping") {
                     ir_mat.alpha_mode = AlphaMode::Mask;
@@ -1170,9 +1171,9 @@ fn extract_materials(
                         );
                     }
                 }
-                // それ以外: glTF core から読んだ alpha_mode を保持（Opaque が既定）
+                // Otherwise: keep the alpha_mode read from glTF core (Opaque by default)
 
-                // --- カリング ---
+                // --- Cull mode ---
                 let cull_mode_val = get_float("_CullMode", 2.0) as i32;
                 ir_mat.cull_mode = match cull_mode_val {
                     0 => CullMode::None,
@@ -1180,7 +1181,7 @@ fn extract_materials(
                     _ => CullMode::Back,
                 };
 
-                // --- リムライト ---
+                // --- Rim light ---
                 {
                     let rim_enabled = get_float("_RimLight", 0.0);
                     let mtoon = ir_mat
@@ -1214,26 +1215,26 @@ fn extract_materials(
                     }
                 }
 
-                // --- エミッシブ（HDR: linear のまま） ---
+                // --- Emissive (HDR: leave in linear) ---
                 ir_mat.emissive_factor = get_color3("_Emissive_Color", 0.0, 0.0, 0.0);
                 if let Some(tex_info) = resolve_tex("_Emissive_Tex", true) {
                     ir_mat.emissive_texture = Some(tex_info);
                 }
 
-                // --- 法線マップ ---
+                // --- Normal map ---
                 if let Some(tex_info) = resolve_tex("_NormalMap", true) {
                     ir_mat.normal_texture = Some(tex_info);
                     ir_mat.normal_texture_scale = get_float("_BumpScale", 1.0);
                 }
 
-                // --- HighColor → specular（PMX 出力のみ有効） ---
+                // --- HighColor -> specular (only used for PMX export) ---
                 ir_mat.specular = srgb_vec3_to_linear(get_color3("_HighColor", 0.0, 0.0, 0.0));
                 ir_mat.specular_power = get_float("_HighColor_Power", 0.0) * 10.0;
 
                 // --- GI ---
-                // UTS2 の _GI_Intensity は環境光の加算量（デフォルト 0 = GI なし）。
-                // MToon の gi_equalization_factor は raw/equalized GI の補間係数で意味が異なる。
-                // 直接マッピングすると意味が逆転するため、0.0 固定（GI 均一化なし）で安全に。
+                // UTS2's `_GI_Intensity` adds ambient light (default 0 = no GI).
+                // MToon's `gi_equalization_factor` is a blend factor between raw and equalized GI -- different meaning.
+                // Mapping directly would invert the semantics, so we pin it to 0.0 (no GI equalization) for safety.
                 {
                     let mtoon = ir_mat
                         .mtoon
@@ -1253,12 +1254,12 @@ fn extract_materials(
                         .expect("mtoon は直前で Some に設定済み").shade_color,
                 );
             } else if v0_is_liltoon {
-                // --- lilToon → MtoonParams 近似変換 ---
+                // --- lilToon -> MtoonParams approximation ---
                 ir_mat.shader_family = ShaderFamily::LilToon;
                 ir_mat.mtoon = Some(MtoonParams::default());
 
-                // --- ベースカラー ---
-                // lilToon は _Color を使用
+                // --- Base color ---
+                // lilToon uses _Color
                 if let Some(color) = v0_prop
                     .vector_properties
                     .as_ref()
@@ -1273,7 +1274,7 @@ fn extract_materials(
                 }
                 adopt_main_tex(&mut ir_mat);
 
-                // --- 1st Shadow → shade_color ---
+                // --- 1st Shadow -> shade_color ---
                 {
                     let use_shadow = get_float("_UseShadow", 1.0);
                     let mtoon = ir_mat
@@ -1287,13 +1288,13 @@ fn extract_materials(
                             0.5,
                             0.5,
                         )));
-                        // _ShadowColorTex → shade_texture（未設定時は _MainTex）
+                        // _ShadowColorTex -> shade_texture (falls back to _MainTex when unset)
                         mtoon.shade_texture = resolve_tex("_ShadowColorTex", true)
                             .or_else(|| resolve_tex("_MainTex", true));
                     }
                 }
 
-                // --- 2nd Shadow → ambient ---
+                // --- 2nd Shadow -> ambient ---
                 {
                     let use_shadow2 = get_float("_UseShadow2nd", 0.0);
                     if use_shadow2 > 0.5 {
@@ -1305,7 +1306,7 @@ fn extract_materials(
                     }
                 }
 
-                // --- 影境界制御 ---
+                // --- Shadow-boundary controls ---
                 {
                     let border = get_float("_ShadowBorder", 0.5);
                     let blur = get_float("_ShadowBlur", 0.1).max(0.001);
@@ -1317,7 +1318,7 @@ fn extract_materials(
                     mtoon.shading_shift_factor = (-(border * 2.0 - 1.0)).clamp(-1.0, 1.0);
                 }
 
-                // --- アウトライン ---
+                // --- Outline ---
                 let lil_use_outline = get_float("_UseOutline", 0.0);
                 {
                     let mtoon = ir_mat
@@ -1352,7 +1353,7 @@ fn extract_materials(
                     mtoon.outline_lighting_mix = get_float("_OutlineLitApplyLightColor", 0.0);
                 }
 
-                // --- アルファモード ---
+                // --- Alpha mode ---
                 let transparent_mode = get_float("_TransparentMode", 0.0) as i32;
                 match transparent_mode {
                     1 => {
@@ -1362,10 +1363,10 @@ fn extract_materials(
                     2 | 3 => {
                         ir_mat.alpha_mode = AlphaMode::Blend;
                     }
-                    _ => {} // 0 = Opaque: glTF core を保持
+                    _ => {} // 0 = Opaque: keep the alpha_mode read from glTF core
                 }
 
-                // --- カリング ---
+                // --- Cull mode ---
                 let cull_mode_val = get_float("_Cull", 2.0) as i32;
                 ir_mat.cull_mode = match cull_mode_val {
                     0 => CullMode::None,
@@ -1373,7 +1374,7 @@ fn extract_materials(
                     _ => CullMode::Back,
                 };
 
-                // --- リムライト ---
+                // --- Rim light ---
                 {
                     let use_rim = get_float("_UseRim", 0.0);
                     let mtoon = ir_mat
@@ -1407,7 +1408,7 @@ fn extract_materials(
                     }
                 }
 
-                // --- エミッシブ ---
+                // --- Emissive ---
                 {
                     let use_emission = get_float("_UseEmission", 0.0);
                     if use_emission > 0.5 {
@@ -1415,8 +1416,8 @@ fn extract_materials(
                         if let Some(tex_info) = resolve_tex("_EmissionMap", true) {
                             ir_mat.emissive_texture = Some(tex_info);
                         }
-                        // lilToon Screen ブレンド (1) の近似:
-                        // 加算エミッションしかないため factor を減衰
+                        // Approximation of lilToon's Screen blend (1):
+                        // Only additive emission is available, so attenuate the factor.
                         let emission_blend = get_float("_EmissionBlend", 0.0) as u8;
                         if emission_blend == 1 && ir_mat.emissive_factor != glam::Vec3::ZERO {
                             ir_mat.emissive_factor *= 0.5;
@@ -1424,7 +1425,7 @@ fn extract_materials(
                     }
                 }
 
-                // --- 法線マップ ---
+                // --- Normal map ---
                 {
                     let use_bump = get_float("_UseBumpMap", 0.0);
                     if use_bump > 0.5 {
@@ -1435,7 +1436,7 @@ fn extract_materials(
                     }
                 }
 
-                // --- specular（lilToon は直接的なスペキュラー概念なし → diffuse ベース） ---
+                // --- specular (lilToon has no direct specular concept; derive from diffuse) ---
                 ir_mat.specular = ir_mat.diffuse.truncate() * 0.2;
                 ir_mat.specular_power = 10.0;
 
@@ -1459,11 +1460,11 @@ fn extract_materials(
                         .expect("mtoon は直前で Some に設定済み").shade_color,
                 );
             } else if v0_is_poiyomi {
-                // --- Poiyomi → MtoonParams 近似変換 ---
+                // --- Poiyomi -> MtoonParams approximation ---
                 ir_mat.shader_family = ShaderFamily::Poiyomi;
                 ir_mat.mtoon = Some(MtoonParams::default());
 
-                // --- ベースカラー ---
+                // --- Base color ---
                 if let Some(color) = v0_prop
                     .vector_properties
                     .as_ref()
@@ -1478,7 +1479,7 @@ fn extract_materials(
                 }
                 adopt_main_tex(&mut ir_mat);
 
-                // --- 1st Shadow → shade_color ---
+                // --- 1st Shadow -> shade_color ---
                 {
                     let enable_shadow = get_float("_EnableShadow", 0.0);
                     let mtoon = ir_mat
@@ -1486,7 +1487,7 @@ fn extract_materials(
                         .as_mut()
                         .expect("mtoon は直前で Some に設定済み");
                     if enable_shadow > 0.5 {
-                        // Poiyomi は _Shadow1stColor を vectorProperties に格納
+                        // Poiyomi stores _Shadow1stColor in vectorProperties
                         mtoon.shade_color = Some(srgb_vec3_to_linear(get_color3(
                             "_Shadow1stColor",
                             0.5,
@@ -1498,7 +1499,7 @@ fn extract_materials(
                     }
                 }
 
-                // --- 2nd Shadow → ambient ---
+                // --- 2nd Shadow -> ambient ---
                 {
                     let second_shade =
                         srgb_vec3_to_linear(get_color3("_Shadow2ndColor", 0.3, 0.3, 0.3));
@@ -1514,7 +1515,7 @@ fn extract_materials(
                     }
                 }
 
-                // --- 影境界制御 ---
+                // --- Shadow-boundary controls ---
                 {
                     let border = get_float("_ShadowBorder", 0.5);
                     let blur = get_float("_ShadowBlur", 0.1).max(0.001);
@@ -1526,7 +1527,7 @@ fn extract_materials(
                     mtoon.shading_shift_factor = (-(border * 2.0 - 1.0)).clamp(-1.0, 1.0);
                 }
 
-                // --- アウトライン ---
+                // --- Outline ---
                 let poi_use_outline = get_float("_EnableOutline", 0.0);
                 {
                     let mtoon = ir_mat
@@ -1561,7 +1562,7 @@ fn extract_materials(
                     mtoon.outline_lighting_mix = 0.0;
                 }
 
-                // --- アルファモード ---
+                // --- Alpha mode ---
                 let mode_val = get_float("_Mode", 0.0) as i32;
                 match mode_val {
                     1 => {
@@ -1574,7 +1575,7 @@ fn extract_materials(
                     _ => {}
                 }
 
-                // --- カリング ---
+                // --- Cull mode ---
                 let cull_mode_val = get_float("_Cull", 2.0) as i32;
                 ir_mat.cull_mode = match cull_mode_val {
                     0 => CullMode::None,
@@ -1582,19 +1583,19 @@ fn extract_materials(
                     _ => CullMode::Back,
                 };
 
-                // --- エミッシブ ---
+                // --- Emissive ---
                 ir_mat.emissive_factor = get_color3("_EmissionColor", 0.0, 0.0, 0.0);
                 if let Some(tex_info) = resolve_tex("_EmissionMap", true) {
                     ir_mat.emissive_texture = Some(tex_info);
                 }
 
-                // --- 法線マップ ---
+                // --- Normal map ---
                 if let Some(tex_info) = resolve_tex("_BumpMap", true) {
                     ir_mat.normal_texture = Some(tex_info);
                     ir_mat.normal_texture_scale = get_float("_BumpScale", 1.0);
                 }
 
-                // --- specular（Poiyomi は直接的なスペキュラー概念なし → diffuse ベース） ---
+                // --- specular (Poiyomi has no direct specular concept; derive from diffuse) ---
                 ir_mat.specular = ir_mat.diffuse.truncate() * 0.2;
                 ir_mat.specular_power = 10.0;
 
@@ -1620,9 +1621,9 @@ fn extract_materials(
             }
         }
 
-        // baseColorTexture の texCoord + KHR_texture_transform 抽出（raw JSON 経由）
-        // VRM 0.x MToon で _MainTex が解決済みの場合は materialProperties 側を authoritative source とし、
-        // glTF core の baseColorTexture による上書きをスキップする（近似値の可能性があるため）
+        // Extract baseColorTexture's texCoord + KHR_texture_transform via the raw JSON.
+        // For VRM 0.x MToon, when `_MainTex` is already resolved we treat materialProperties as the
+        // authoritative source and skip the glTF-core baseColorTexture override (which may be approximate).
         if !v0_main_tex_resolved {
             let json = document.as_json();
             if let Some(mat_json) = json.materials.get(i) {
@@ -1644,7 +1645,7 @@ fn extract_materials(
             }
         }
 
-        // VRM 0.x _MainTex ST を baseColorTexture にも適用
+        // Apply VRM 0.x's `_MainTex` ST to baseColorTexture as well
         if let Some((scale, offset)) = main_tex_st {
             if let Some(ref mut ti) = ir_mat.base_color_tex_info {
                 ti.scale = scale;
@@ -1652,7 +1653,7 @@ fn extract_materials(
             }
         }
 
-        // VRM 1.0 MToon拡張からアウトライン情報を抽出
+        // Extract outline info from the VRM 1.0 MToon extension
         if *version == VrmVersion::V1 {
             let json = document.as_json();
             if let Some(mat_json) = json.materials.get(i) {
@@ -1665,13 +1666,13 @@ fn extract_materials(
                             .as_mut()
                             .expect("mtoon は直前で Some に設定済み");
 
-                        // outlineWidthMode が "none" 以外ならエッジ有効
+                        // Edge is enabled when outlineWidthMode is not "none"
                         let mode = mtoon_json
                             .get("outlineWidthMode")
                             .and_then(|v| v.as_str())
                             .unwrap_or("none");
 
-                        // OutlineWidthMode を保存（ビューア描画用）
+                        // Save OutlineWidthMode (used by the viewer renderer)
                         mp.outline_width_mode = match mode {
                             "worldCoordinates" => OutlineWidthMode::WorldCoordinates,
                             "screenCoordinates" => OutlineWidthMode::ScreenCoordinates,
@@ -1684,18 +1685,18 @@ fn extract_materials(
                                 .and_then(|v| v.as_f64())
                                 .unwrap_or(0.0) as f32;
 
-                            // worldCoordinates: メートル→PMXスケール変換
-                            // screenCoordinates: 比率→固定値変換
+                            // worldCoordinates: meters -> PMX-scale conversion.
+                            // screenCoordinates: ratio -> fixed-value conversion.
                             ir_mat.edge_size = match mode {
                                 "worldCoordinates" => width * PMX_SCALE * 10.0,
                                 "screenCoordinates" => width * 100.0,
                                 _ => 0.0,
                             };
 
-                            // ビューア用生値（メートル単位 / 比率）
+                            // Raw value for the viewer (meters / ratio)
                             mp.outline_width_factor = width;
 
-                            // outlineColorFactor [r,g,b] → Vec4(r,g,b,1.0)
+                            // outlineColorFactor [r, g, b] -> Vec4(r, g, b, 1.0)
                             if let Some(color) = mtoon_json.get("outlineColorFactor") {
                                 if let Some(arr) = color.as_array() {
                                     let r =
@@ -1708,7 +1709,7 @@ fn extract_materials(
                                 }
                             }
 
-                            // outlineWidthMultiplyTexture → Gチャネルで頂点エッジ倍率を制御
+                            // outlineWidthMultiplyTexture controls per-vertex edge scale via the G channel
                             if let Some(wtex) = mtoon_json.get("outlineWidthMultiplyTexture") {
                                 mp.outline_width_texture = read_texture_info(wtex, document);
                             }
@@ -1728,7 +1729,7 @@ fn extract_materials(
                             .unwrap_or(0.9)
                             as f32;
 
-                        // shadeColorFactor (default: [0, 0, 0] — VRM 1.0 MToon 仕様準拠)
+                        // shadeColorFactor (default: [0, 0, 0]; VRM 1.0 MToon spec-compliant)
                         mp.shade_color = Some(
                             mtoon_json
                                 .get("shadeColorFactor")
@@ -1801,12 +1802,12 @@ fn extract_materials(
                             mp.matcap_texture = read_texture_info(mc_tex, document);
                         }
 
-                        // shadeMultiplyTexture → shade_texture
+                        // shadeMultiplyTexture -> shade_texture
                         if let Some(tex) = mtoon_json.get("shadeMultiplyTexture") {
                             mp.shade_texture = read_texture_info(tex, document);
                         }
 
-                        // shadingShiftTexture (Rチャネル) + scale
+                        // shadingShiftTexture (R channel) + scale
                         if let Some(tex) = mtoon_json.get("shadingShiftTexture") {
                             mp.shading_shift_texture = read_texture_info(tex, document);
                             if let Some(scale) = tex.get("scale").and_then(|v| v.as_f64()) {
@@ -1819,7 +1820,7 @@ fn extract_materials(
                             mp.rim_multiply_texture = read_texture_info(tex, document);
                         }
 
-                        // uvAnimation パラメータ
+                        // uvAnimation parameters
                         mp.uv_animation_scroll_x_speed = mtoon_json
                             .get("uvAnimationScrollXSpeedFactor")
                             .and_then(|v| v.as_f64())
@@ -1852,7 +1853,7 @@ fn extract_materials(
                             }
                         }
 
-                        // renderQueueOffsetNumber（BLEND 時のみ有効、仕様準拠 clamp）
+                        // renderQueueOffsetNumber (only effective in BLEND; spec-compliant clamp)
                         let raw_offset = mtoon_json
                             .get("renderQueueOffsetNumber")
                             .and_then(|v| v.as_i64())
@@ -1873,7 +1874,7 @@ fn extract_materials(
             }
         }
 
-        // Ambient を diffuseから計算（UTS2/lilToon/Poiyomi は shade_color ベースで設定済みのため抑止）
+        // Compute ambient from diffuse (skipped for UTS2/lilToon/Poiyomi, which already set it from shade_color)
         if !matches!(
             ir_mat.shader_family,
             ShaderFamily::Uts2 | ShaderFamily::LilToon | ShaderFamily::Poiyomi
@@ -1888,13 +1889,13 @@ fn extract_materials(
         materials.push(ir_mat);
     }
 
-    // VRM 0.x renderQueue → render_queue_offset 移行（UniVRM MigrationMToonMaterial 準拠）
-    // rank 圧縮: 透明材質群の相対順序を保ちつつ連番に圧縮する
+    // VRM 0.x renderQueue -> render_queue_offset migration (per UniVRM MigrationMToonMaterial).
+    // Rank compression: preserve the relative order of transparent materials and pack them into a contiguous range.
     if *version == VrmVersion::V0 {
         remap_vrm0_render_queue_offsets(&mut materials, v0_mat_props);
     }
 
-    // 材質が0個なら仮材質を追加
+    // Insert a placeholder when there are zero materials
     if materials.is_empty() {
         materials.push(IrMaterial::default());
     }
@@ -1907,14 +1908,14 @@ fn extract_bones(document: &gltf::Document, typed: &VrmTyped) -> Result<BoneExtr
     let mut bones: Vec<IrBone> = Vec::with_capacity(nodes.len());
     let mut node_to_bone: HashMap<usize, usize> = HashMap::new();
 
-    // VRMヒューマノイドボーンのノードIndex → ボーン名 のマップを構築
+    // Build the VRM humanoid bone map (node index -> bone name)
     let mut humanoid_map: HashMap<usize, String> = HashMap::new();
     build_humanoid_map(typed, &mut humanoid_map)?;
 
-    // 全ノードのグローバル変換行列を計算
+    // Compute the global transform of every node
     let global_mats = compute_global_transforms(&nodes);
 
-    // ノードIndex順にボーンを割り当て
+    // Assign bones in node-index order
     for node in &nodes {
         let idx = node.index();
         let bone_idx = bones.len();
@@ -1947,7 +1948,7 @@ fn extract_bones(document: &gltf::Document, typed: &VrmTyped) -> Result<BoneExtr
         });
     }
 
-    // 親子関係を設定
+    // Wire up parent/child relationships
     for node in &nodes {
         let parent_bone_idx = node_to_bone[&node.index()];
         for child in node.children() {
@@ -1965,7 +1966,7 @@ fn compute_global_transforms(nodes: &[gltf::Node]) -> Vec<Mat4> {
     let mut global_mat = vec![Mat4::IDENTITY; n];
     let mut visited = vec![false; n];
 
-    // 親のないノードから深さ優先で処理
+    // DFS from the parent-less nodes
     let mut has_parent = vec![false; n];
     for node in nodes {
         for child in node.children() {
@@ -1975,7 +1976,7 @@ fn compute_global_transforms(nodes: &[gltf::Node]) -> Vec<Mat4> {
         }
     }
 
-    // BFS/DFS用スタック: (ノードIndex, 親グローバル行列)
+    // BFS/DFS stack: (node index, parent global matrix)
     let mut stack: Vec<(usize, Mat4)> = nodes
         .iter()
         .filter(|n| !has_parent[n.index()])
@@ -2104,7 +2105,7 @@ fn extract_meshes(
             for primitive in mesh.primitives() {
                 let reader = primitive.reader(|buf| Some(&buffers[buf.index()]));
 
-                // 位置
+                // Position
                 let positions: Vec<[f32; 3]> = match reader.read_positions() {
                     Some(iter) => iter.collect(),
                     None => continue,
@@ -2114,13 +2115,13 @@ fn extract_meshes(
                     continue;
                 }
 
-                // 法線
+                // Normal
                 let normals: Vec<[f32; 3]> = reader
                     .read_normals()
                     .map(|iter| iter.collect())
                     .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
 
-                // 接線（glTF TANGENT 属性）
+                // Tangent (glTF TANGENT attribute)
                 let tangents: Vec<[f32; 4]> = reader
                     .read_tangents()
                     .map(|iter| iter.collect())
@@ -2132,13 +2133,13 @@ fn extract_meshes(
                     .map(|iter| iter.into_f32().collect())
                     .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
 
-                // TEXCOORD_1（セカンダリUV）
+                // TEXCOORD_1 (secondary UV)
                 let uvs1: Vec<[f32; 2]> = reader
                     .read_tex_coords(1)
                     .map(|iter| iter.into_f32().collect())
                     .unwrap_or_default();
 
-                // ジョイント・ウェイト
+                // Joints / weights
                 let joints: Vec<[u16; 4]> = reader
                     .read_joints(0)
                     .map(|iter| iter.into_u16().collect())
@@ -2148,7 +2149,7 @@ fn extract_meshes(
                     .map(|iter| iter.into_f32().collect())
                     .unwrap_or_default();
 
-                // スキンのジョイント→ボーンマッピング
+                // Skin joint -> bone mapping
                 let skin_bone_map: Vec<usize> = if let Some(skin) = node.skin() {
                     skin.joints()
                         .map(|j| *node_to_bone.get(&j.index()).unwrap_or(&0))
@@ -2157,8 +2158,8 @@ fn extract_meshes(
                     Vec::new()
                 };
 
-                // スキニング行列（joint_world_mat * inv_bind_mat）を事前計算
-                // これによりバインドポーズ（Aスタンス等）からT-ポーズ世界座標に変換できる
+                // Pre-compute the skinning matrix (joint_world_mat * inv_bind_mat).
+                // This converts the bind pose (e.g. A-stance) into T-pose world coords.
                 let skin_mats: Vec<Mat4> = if let Some(skin) = node.skin() {
                     let inv_binds: Vec<Mat4> = skin
                         .reader(|buf| Some(&buffers[buf.index()]))
@@ -2181,18 +2182,18 @@ fn extract_meshes(
                     Vec::new()
                 };
 
-                // 法線変換用の逆転置行列を事前計算（glTF仕様準拠）
-                // 非一様スケールがある場合に M*n では法線方向が崩れるため (M⁻¹)ᵀ*n を使用
+                // Pre-compute the inverse-transpose matrix for normal transforms (per glTF spec).
+                // Non-uniform scaling makes M*n distort normal direction; use (M^-1)^T * n instead.
                 let normal_mats: Vec<Mat3> = skin_mats
                     .iter()
                     .map(|sm| Mat3::from_mat4(*sm).inverse().transpose())
                     .collect();
 
-                // 接線変換用行列（方向ベクトルなので M の上3x3をそのまま使用、法線とは異なり逆転置不要）
+                // Tangent transform: a direction vector, so use the upper 3x3 of M directly (no inverse-transpose needed)
                 let tangent_mats: Vec<Mat3> =
                     skin_mats.iter().map(|sm| Mat3::from_mat4(*sm)).collect();
 
-                // 頂点構築（スキニングによりT-ポーズ世界座標を計算）
+                // Build vertices (skinning computes the T-pose world coords)
                 let vertices: Vec<IrVertex> = positions
                     .iter()
                     .enumerate()
@@ -2200,10 +2201,10 @@ fn extract_meshes(
                         let normal = normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
                         let uv = uvs.get(i).copied().unwrap_or([0.0, 0.0]);
 
-                        // glTF TANGENT 属性（あれば）
+                        // glTF TANGENT attribute (if present)
                         let src_tangent = tangents.get(i).copied();
 
-                        // スキニング演算でT-ポーズ頂点位置・法線・接線を計算
+                        // Skinning produces the T-pose vertex position / normal / tangent
                         let (final_pos, final_normal, final_tangent) = if !skin_mats.is_empty()
                             && !joints.is_empty()
                         {
@@ -2222,11 +2223,11 @@ fn extract_meshes(
                                     if let Some(sm) = skin_mats.get(ji) {
                                         wp += w[k] * (*sm * lp);
                                     }
-                                    // 法線は逆転置行列で変換（glTF仕様準拠）
+                                    // Normal: transform with the inverse-transpose matrix (per glTF spec)
                                     if let Some(nm) = normal_mats.get(ji) {
                                         wn += w[k] * (*nm * ln);
                                     }
-                                    // 接線は通常行列で変換（方向ベクトル）
+                                    // Tangent: transform with the regular matrix (it is a direction vector)
                                     if let (Some(lt_dir), Some(tm)) = (lt, tangent_mats.get(ji)) {
                                         wt += w[k] * (*tm * lt_dir);
                                     }
@@ -2236,22 +2237,22 @@ fn extract_meshes(
                             let fn3 = wn.normalize_or_zero();
                             let ft = if src_tangent.is_some() {
                                 let t3 = wt.normalize_or_zero();
-                                // Gram-Schmidt 再直交化: 非一様スケール時に
-                                // normal と tangent の直交性が崩れるため（animation.rs と同一方針）
+                                // Gram-Schmidt re-orthogonalization: non-uniform scaling breaks the
+                                // normal/tangent orthogonality (same policy as animation.rs).
                                 let t_ortho = (t3 - fn3 * fn3.dot(t3)).normalize_or_zero();
-                                // 退化判定: tangent が normal とほぼ平行だと Gram-Schmidt で
-                                // ゼロになる → MikkTSpace 再生成ルートへ流す
+                                // Degenerate check: if tangent is nearly parallel to normal, Gram-Schmidt
+                                // produces zero -> route through MikkTSpace regeneration.
                                 if t_ortho.length_squared() < 1e-8 || !t_ortho.is_finite() {
                                     Vec4::ZERO
                                 } else {
                                     t_ortho.extend(if lt_w >= 0.0 { 1.0 } else { -1.0 })
                                 }
                             } else {
-                                Vec4::ZERO // MikkTSpace で後から生成
+                                Vec4::ZERO // Generated later via MikkTSpace
                             };
                             (fp, [fn3.x, fn3.y, fn3.z], ft)
                         } else {
-                            // 非スキンメッシュ: ノードのワールド変換を適用
+                            // Non-skinned mesh: apply the node's world transform
                             let node_mat =
                                 global_mats.get(node_idx).copied().unwrap_or(Mat4::IDENTITY);
                             let lp = Vec4::new(pos[0], pos[1], pos[2], 1.0);
@@ -2264,17 +2265,17 @@ fn extract_meshes(
                                 let tmat = Mat3::from_mat4(node_mat);
                                 let lt = Vec3::new(t[0], t[1], t[2]);
                                 let wt = (tmat * lt).normalize_or_zero();
-                                // Gram-Schmidt 再直交化（非一様スケール対策）
+                                // Gram-Schmidt re-orthogonalization (handles non-uniform scaling)
                                 let t_ortho = (wt - fn3 * fn3.dot(wt)).normalize_or_zero();
-                                // 退化判定: tangent が normal とほぼ平行な場合は
-                                // MikkTSpace 再生成ルートへ流す
+                                // Degenerate check: when the tangent is nearly parallel to the normal,
+                                // route through MikkTSpace regeneration.
                                 if t_ortho.length_squared() < 1e-8 || !t_ortho.is_finite() {
                                     Vec4::ZERO
                                 } else {
                                     t_ortho.extend(if t[3] >= 0.0 { 1.0 } else { -1.0 })
                                 }
                             } else {
-                                Vec4::ZERO // MikkTSpace で後から生成
+                                Vec4::ZERO // Generated later via MikkTSpace
                             };
                             (fp, [fn3.x, fn3.y, fn3.z], ft)
                         };
@@ -2305,26 +2306,26 @@ fn extract_meshes(
                             tangent: final_tangent,
                             weights: vtx_weights,
                             weight_count: vtx_weight_count,
-                            edge_scale: 1.0, // テクスチャサンプリング後に更新
+                            edge_scale: 1.0, // Updated after texture sampling
                         }
                     })
                     .collect();
 
-                // インデックス
+                // Indices
                 let indices: Vec<u32> = reader
                     .read_indices()
                     .map(|iter| iter.into_u32().collect())
                     .unwrap_or_else(|| (0..positions.len() as u32).collect());
 
-                // 材質インデックス
+                // Material index
                 let material_index = primitive.material().index().unwrap_or(0);
 
-                // モーフターゲット
+                // Morph targets
                 let morph_targets =
                     extract_morph_targets_from_reader(&primitive, buffers, positions.len());
 
-                // outlineWidthMultiplyTexture からエッジ倍率を頂点ごとに設定
-                // IrTextureInfo.index は image index に正規化済み
+                // Set the per-vertex edge scale from outlineWidthMultiplyTexture.
+                // IrTextureInfo.index is already normalized to an image index.
                 let mut vertices = vertices;
                 if let Some(ir_mat) = materials.get(material_index) {
                     if let Some(tex_info) = ir_mat.mtoon().outline_width_texture.as_ref() {
@@ -2363,9 +2364,9 @@ fn extract_meshes(
                     node_index: node_idx,
                     uvs1,
                 };
-                // glTF に TANGENT 属性がなければ MikkTSpace で接線を生成
-                // VRM 仕様: 「TANGENT はエクスポートせず、インポート時に MikkTSpace で計算」
-                // normalTexture.texCoord に応じた UV セットで接線を生成
+                // If the glTF has no TANGENT attribute, generate one via MikkTSpace.
+                // VRM spec: "TANGENT is not exported; recompute it on import with MikkTSpace."
+                // Generate the tangent using the UV set selected by normalTexture.texCoord.
                 let normal_tex_coord = materials
                     .get(material_index)
                     .and_then(|m| m.normal_texture.as_ref())
@@ -2380,11 +2381,11 @@ fn extract_meshes(
     Ok(ir_meshes)
 }
 
-/// CPU側 UV 解決: texCoord 選択 + KHR_texture_transform 適用
-/// GPU 側の resolve_mtoon_uv / apply_texture_transform と同一順序（scale → rotation → offset）
+/// CPU-side UV resolution: pick texCoord and apply KHR_texture_transform.
+/// Matches the GPU's `resolve_mtoon_uv` / `apply_texture_transform` order (scale -> rotation -> offset).
 fn resolve_cpu_uv(uv0: Vec2, uv1: Option<Vec2>, info: &IrTextureInfo) -> Vec2 {
     let uv = if info.tex_coord == 1 {
-        uv1.unwrap_or(Vec2::ZERO) // UniVRM 準拠: UV1 不在時は zero
+        uv1.unwrap_or(Vec2::ZERO) // UniVRM-compatible: zero when UV1 is absent
     } else {
         uv0
     };
@@ -2393,7 +2394,7 @@ fn resolve_cpu_uv(uv0: Vec2, uv1: Option<Vec2>, info: &IrTextureInfo) -> Vec2 {
     Vec2::new(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c) + info.offset
 }
 
-/// UV 座標にラップモードを適用して 0.0〜1.0 に正規化する
+/// Apply the wrap mode to a UV and normalize it into 0.0..=1.0.
 fn apply_wrap(coord: f32, mode: IrWrapMode) -> f32 {
     match mode {
         IrWrapMode::Repeat => {
@@ -2416,9 +2417,9 @@ fn apply_wrap(coord: f32, mode: IrWrapMode) -> f32 {
     }
 }
 
-/// 画像の指定チャネル値をUV座標でサンプリング（0.0〜1.0）
-/// VRM 1.0: outlineWidthMultiplyTexture=G, uvAnimationMaskTexture=B
-/// VRM 0.x: 両方ともRチャネル（UniVRM MToonCore.cginc 準拠）
+/// Sample the specified channel of an image at the given UV (returns 0.0..=1.0).
+/// VRM 1.0: outlineWidthMultiplyTexture = G, uvAnimationMaskTexture = B.
+/// VRM 0.x: both channels are R (per UniVRM MToonCore.cginc).
 fn sample_image_channel(
     img: &gltf::image::Data,
     u: f32,
@@ -2432,7 +2433,7 @@ fn sample_image_channel(
         return 1.0;
     }
 
-    // UV → ピクセル座標（サンプラーのラップモードに従う）
+    // UV -> pixel coords (respect the sampler's wrap mode)
     let fu = apply_wrap(u, sampler.wrap_u);
     let fv = apply_wrap(v, sampler.wrap_v);
     let px = ((fu * w as f32) as usize).min(w - 1);
@@ -2445,11 +2446,11 @@ fn sample_image_channel(
         ColorChannel::B => 2,
     };
     let (bpp, offset) = match img.format {
-        Format::R8 => (1, 0), // 単チャネル → 常にR値を使用
+        Format::R8 => (1, 0), // Single channel -> always use the R value
         Format::R8G8 => (2, channel_offset.min(1)),
         Format::R8G8B8 => (3, channel_offset),
         Format::R8G8B8A8 => (4, channel_offset),
-        _ => return 1.0, // 16bit/float形式は非対応
+        _ => return 1.0, // 16-bit / float formats are not supported
     };
     let idx = (py * w + px) * bpp + offset;
     img.pixels
@@ -2539,7 +2540,7 @@ fn extract_morphs_v0(
         None => return Ok(Vec::new()),
     };
 
-    // グローバル頂点オフセット計算（IrMeshes内での先頭位置）
+    // Compute the global vertex offset (head position within IrMeshes)
     let mut mesh_vertex_start: Vec<usize> = vec![0; ir_meshes.len()];
     {
         let mut offset = 0usize;
@@ -2549,9 +2550,9 @@ fn extract_morphs_v0(
         }
     }
 
-    // document.mesh(index)のnameとir_meshのname/indexの対応を構築
-    // meshIndexをベースに: document内mesh[bind.mesh]のprimitiveは複数あり得るが
-    // VRM 0.0はmeshとprimitiveが1:1が多いのでmesh_indexで検索
+    // Build the correspondence between document.mesh(index).name and ir_mesh.name/index.
+    // Driven by mesh index: document mesh[bind.mesh] may have multiple primitives, but
+    // VRM 0.0 typically has a 1:1 mesh-to-primitive ratio, so look up by mesh_index.
     let mut morphs = Vec::new();
     for group in &bsm.blend_shape_groups {
         let (jp_name, panel) = crate::convert::morph::preset_to_jp_v0(&group.preset_name);
@@ -2594,7 +2595,7 @@ fn extract_morphs_v0(
 
                 let morph_target = ir_mesh.morph_targets.get(bind.index as usize);
                 if let Some(mt) = morph_target {
-                    let scale = bind.weight / 100.0; // VRM0.0は0-100スケール
+                    let scale = bind.weight / 100.0; // VRM 0.0 uses a 0-100 scale
                     let vstart = mesh_vertex_start[ir_idx];
                     for &(vi, off) in &mt.position_offsets {
                         vertex_offsets.push((vstart + vi as usize, off * scale));
@@ -2641,7 +2642,7 @@ fn extract_morphs_v1(
         None => return Ok(Vec::new()),
     };
 
-    // グローバル頂点オフセット計算
+    // Compute the global vertex offsets
     let mut mesh_vertex_start: Vec<usize> = vec![0; ir_meshes.len()];
     {
         let mut offset = 0usize;
@@ -2651,13 +2652,13 @@ fn extract_morphs_v1(
         }
     }
 
-    // ノードIndex → IrMeshIndexリスト マッピング（1ノードに複数プリミティブ対応）
+    // Node index -> list of IrMesh indices (handles multiple primitives per node)
     let mut node_to_ir_meshes: HashMap<usize, Vec<usize>> = HashMap::new();
     for (i, m) in ir_meshes.iter().enumerate() {
         node_to_ir_meshes.entry(m.node_index).or_default().push(i);
     }
 
-    // バインドを処理してオフセットを収集するヘルパー
+    // Helper that processes binds and gathers offsets
     let collect_offsets = |binds: &[crate::vrm::types_v1::MorphTargetBind]|
      -> (Vec<(usize, Vec3)>, Vec<(usize, Vec3)>, Vec<(usize, Vec3)>) {
         let mut vertex_offsets: Vec<(usize, Vec3)> = Vec::new();
@@ -2690,7 +2691,7 @@ fn extract_morphs_v1(
         (vertex_offsets, normal_offsets, tangent_offsets)
     };
 
-    // materialColorBinds / textureTransformBinds を IR 型に変換するヘルパー
+    // Helper that converts materialColorBinds / textureTransformBinds into IR types
     let collect_material_binds = |expr: &crate::vrm::types_v1::Expression|
      -> (Vec<IrMaterialColorBind>, Vec<IrTextureTransformBind>) {
         let mut color_binds = Vec::new();
@@ -2750,7 +2751,7 @@ fn extract_morphs_v1(
                         },
                     });
                 }
-                // 材質バインド: Vertex morph とは別の IrMorph として発行（同名で登録）
+                // Material binds: emit as a separate IrMorph from the Vertex morph (registered under the same name)
                 let (color_binds, uv_binds) = collect_material_binds(expr);
                 if !color_binds.is_empty() || !uv_binds.is_empty() {
                     morphs.push(IrMorph {
@@ -2785,7 +2786,7 @@ fn extract_morphs_v1(
         process_expr!(preset.look_right, "lookRight");
     }
 
-    // カスタム表情
+    // Custom expressions
     if let Some(custom) = &expressions.custom {
         for (name, expr) in custom {
             let (vertex_offsets, normal_offs, tangent_offs) =
@@ -2808,7 +2809,7 @@ fn extract_morphs_v1(
                     },
                 });
             }
-            // 材質バインド
+            // Material binds
             let (color_binds, uv_binds) = collect_material_binds(expr);
             if !color_binds.is_empty() || !uv_binds.is_empty() {
                 morphs.push(IrMorph {
@@ -2835,8 +2836,8 @@ fn extract_physics(
 ) -> Result<IrPhysics> {
     match typed {
         VrmTyped::V0(v0) => extract_physics_v0(v0, node_to_bone, bones),
-        // V1 および Unknown: all_extensions から VRMC_springBone を検索
-        // （plain GLB でも VRMC_springBone 拡張を持つ可能性がある）
+        // V1 and Unknown: search `all_extensions` for VRMC_springBone.
+        // (Even plain GLB can carry the VRMC_springBone extension.)
         VrmTyped::V1(_) | VrmTyped::Unknown => {
             extract_physics_v1(all_extensions, node_to_bone, bones)
         }
@@ -2870,20 +2871,20 @@ fn extract_physics_v1(
     crate::convert::physics::build_physics_v1(&spring_bone, node_to_bone, bones)
 }
 
-/// VRM 0.x renderQueue → VRM 1.0 render_queue_offset rank 圧縮
-/// UniVRM MigrationMToonMaterial.cs:47-70 準拠
+/// VRM 0.x renderQueue -> VRM 1.0 render_queue_offset rank compression.
+/// Per UniVRM MigrationMToonMaterial.cs:47-70.
 ///
-/// 1. 全透明材質の source offset を BTreeSet に集める（Blend / BlendWithZWrite 別）
-/// 2. Blend: 降順で 0, -1, -2, ... と連番マッピング → clamp(-9, 0)
-/// 3. BlendWithZWrite: 昇順で 0, 1, 2, ... と連番マッピング → clamp(0, 9)
-/// 4. 各材質に rank 圧縮後の offset を適用
+/// 1. Gather every transparent material's source offset into a BTreeSet (split by Blend / BlendWithZWrite).
+/// 2. Blend: descending order -> 0, -1, -2, ... -> clamp(-9, 0).
+/// 3. BlendWithZWrite: ascending order -> 0, 1, 2, ... -> clamp(0, 9).
+/// 4. Apply the rank-compressed offset back to each material.
 fn remap_vrm0_render_queue_offsets(
     materials: &mut [IrMaterial],
     v0_mat_props: &[crate::vrm::types_v0::VrmMaterialProperty],
 ) {
     // source offset = renderQueue - DefaultValue
-    // Blend: Default=3000, 有効範囲 2951..=3000 → offset -49..=0
-    // BlendWithZWrite: Default=2501, 有効範囲 2501..=2550 → offset 0..=49
+    // Blend: default = 3000, valid range 2951..=3000 -> offset -49..=0.
+    // BlendWithZWrite: default = 2501, valid range 2501..=2550 -> offset 0..=49.
     let mut blend_offsets = BTreeSet::new();
     let mut blend_zw_offsets = BTreeSet::new();
 
@@ -2903,7 +2904,7 @@ fn remap_vrm0_render_queue_offsets(
         }
     }
 
-    // Blend: 降順 (大きい offset → 小さい offset) で 0, -1, -2, ...
+    // Blend: descending (large offset -> small offset) maps to 0, -1, -2, ...
     let blend_map: HashMap<i32, i32> = blend_offsets
         .iter()
         .rev()
@@ -2911,14 +2912,14 @@ fn remap_vrm0_render_queue_offsets(
         .map(|(rank, &src)| (src, (-(rank as i32)).clamp(-9, 0)))
         .collect();
 
-    // BlendWithZWrite: 昇順 (小さい offset → 大きい offset) で 0, 1, 2, ...
+    // BlendWithZWrite: ascending (small offset -> large offset) maps to 0, 1, 2, ...
     let blend_zw_map: HashMap<i32, i32> = blend_zw_offsets
         .iter()
         .enumerate()
         .map(|(rank, &src)| (src, (rank as i32).clamp(0, 9)))
         .collect();
 
-    // 各材質に適用（MToon 材質のみ — 非MToon に mtoon_mut() を呼ぶと誤って MToon 化される）
+    // Apply to each material (MToon only -- calling mtoon_mut() on a non-MToon would mistakenly mark it MToon)
     for (i, mat) in materials.iter_mut().enumerate() {
         if let Some(v0_prop) = v0_mat_props.get(i) {
             if let Some(rq) = v0_prop.render_queue {
@@ -2943,8 +2944,8 @@ mod tests {
     use super::*;
     use crate::vrm::types_v0::VrmMaterialProperty;
 
-    /// テスト用ヘルパー: 指定された alpha_mode と render_queue の材質・v0_prop ペアを生成
-    /// render_queue_offset は MToon 材質にのみ設定されるため、mtoon を初期化する
+    /// Test helper: build a material + v0_prop pair with the requested alpha_mode and render_queue.
+    /// `render_queue_offset` is set only on MToon materials, so we initialize `mtoon` here.
     fn make_test_data(
         entries: &[(AlphaMode, Option<i32>)],
     ) -> (Vec<IrMaterial>, Vec<VrmMaterialProperty>) {
@@ -2973,7 +2974,7 @@ mod tests {
 
     #[test]
     fn rank_compress_blend_single() {
-        // renderQueue=3000 (offset=0) が1つだけ → rank 0 → output 0
+        // Single material with renderQueue = 3000 (offset = 0) -> rank 0 -> output 0
         let (mut mats, props) = make_test_data(&[(AlphaMode::Blend, Some(3000))]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
         assert_eq!(mats[0].mtoon().render_queue_offset, 0);
@@ -2981,8 +2982,8 @@ mod tests {
 
     #[test]
     fn rank_compress_blend_multiple() {
-        // renderQueue: 3000, 2998, 2995 → source offset: 0, -2, -5
-        // 降順 (0, -2, -5) → rank 圧縮 (0, -1, -2)
+        // renderQueue: 3000, 2998, 2995 -> source offset: 0, -2, -5
+        // Descending (0, -2, -5) -> rank-compressed (0, -1, -2)
         let (mut mats, props) = make_test_data(&[
             (AlphaMode::Blend, Some(3000)),
             (AlphaMode::Blend, Some(2998)),
@@ -2996,22 +2997,22 @@ mod tests {
 
     #[test]
     fn rank_compress_blend_same_queue() {
-        // 同一 renderQueue は同じ offset にマッピング
+        // Identical renderQueue values map to the same offset
         let (mut mats, props) = make_test_data(&[
             (AlphaMode::Blend, Some(2995)),
             (AlphaMode::Blend, Some(3000)),
             (AlphaMode::Blend, Some(2995)),
         ]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
-        // source offsets: {-5, 0} → 降順 (0, -5) → rank (0, -1)
-        assert_eq!(mats[0].mtoon().render_queue_offset, -1); // rq=2995 → offset=-5 → rank=-1
-        assert_eq!(mats[1].mtoon().render_queue_offset, 0); // rq=3000 → offset=0 → rank=0
-        assert_eq!(mats[2].mtoon().render_queue_offset, -1); // rq=2995 → offset=-5 → rank=-1
+        // source offsets: {-5, 0} -> descending (0, -5) -> rank (0, -1)
+        assert_eq!(mats[0].mtoon().render_queue_offset, -1); // rq=2995 -> offset=-5 -> rank=-1
+        assert_eq!(mats[1].mtoon().render_queue_offset, 0); // rq=3000 -> offset=0 -> rank=0
+        assert_eq!(mats[2].mtoon().render_queue_offset, -1); // rq=2995 -> offset=-5 -> rank=-1
     }
 
     #[test]
     fn rank_compress_blend_out_of_range() {
-        // 範囲外の renderQueue → 0
+        // Out-of-range renderQueue -> 0
         let (mut mats, props) = make_test_data(&[
             (AlphaMode::Blend, Some(2950)),
             (AlphaMode::Blend, Some(3001)),
@@ -3025,7 +3026,7 @@ mod tests {
 
     #[test]
     fn rank_compress_blend_clamp_at_minus9() {
-        // 10種類以上の distinct offset → 10番目以降は -9 にクランプ
+        // More than 10 distinct offsets -> entries beyond the 10th are clamped to -9
         let queues: Vec<(AlphaMode, Option<i32>)> = (0..11)
             .map(|i| (AlphaMode::Blend, Some(3000 - i)))
             .collect();
@@ -3040,8 +3041,8 @@ mod tests {
 
     #[test]
     fn rank_compress_blend_with_zwrite_multiple() {
-        // renderQueue: 2501, 2505, 2510 → source offset: 0, 4, 9
-        // 昇順 (0, 4, 9) → rank 圧縮 (0, 1, 2)
+        // renderQueue: 2501, 2505, 2510 -> source offset: 0, 4, 9
+        // Ascending (0, 4, 9) -> rank-compressed (0, 1, 2)
         let (mut mats, props) = make_test_data(&[
             (AlphaMode::BlendWithZWrite, Some(2501)),
             (AlphaMode::BlendWithZWrite, Some(2505)),
@@ -3055,21 +3056,21 @@ mod tests {
 
     #[test]
     fn rank_compress_blend_with_zwrite_same_queue() {
-        // 同一 renderQueue は同じ offset にマッピング
+        // Identical renderQueue values map to the same offset
         let (mut mats, props) = make_test_data(&[
             (AlphaMode::BlendWithZWrite, Some(2510)),
             (AlphaMode::BlendWithZWrite, Some(2501)),
             (AlphaMode::BlendWithZWrite, Some(2510)),
         ]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
-        assert_eq!(mats[0].mtoon().render_queue_offset, 1); // rq=2510 → offset=9 → rank=1
-        assert_eq!(mats[1].mtoon().render_queue_offset, 0); // rq=2501 → offset=0 → rank=0
+        assert_eq!(mats[0].mtoon().render_queue_offset, 1); // rq=2510 -> offset=9 -> rank=1
+        assert_eq!(mats[1].mtoon().render_queue_offset, 0); // rq=2501 -> offset=0 -> rank=0
         assert_eq!(mats[2].mtoon().render_queue_offset, 1);
     }
 
     #[test]
     fn rank_compress_blend_with_zwrite_out_of_range() {
-        // 範囲外 → 0
+        // Out of range -> 0
         let (mut mats, props) = make_test_data(&[
             (AlphaMode::BlendWithZWrite, Some(2500)),
             (AlphaMode::BlendWithZWrite, Some(2551)),
@@ -3083,7 +3084,7 @@ mod tests {
 
     #[test]
     fn rank_compress_blend_with_zwrite_clamp_at_9() {
-        // 10種類以上 → 10番目以降は 9 にクランプ
+        // More than 10 distinct values -> entries beyond the 10th are clamped to 9
         let queues: Vec<(AlphaMode, Option<i32>)> = (0..11)
             .map(|i| (AlphaMode::BlendWithZWrite, Some(2501 + i)))
             .collect();
@@ -3108,7 +3109,7 @@ mod tests {
 
     #[test]
     fn rank_compress_mixed_modes() {
-        // Blend と BlendWithZWrite が混在: 各集合は独立に rank 圧縮される
+        // Mixed Blend and BlendWithZWrite: each set gets rank-compressed independently
         let (mut mats, props) = make_test_data(&[
             (AlphaMode::Blend, Some(2998)),
             (AlphaMode::BlendWithZWrite, Some(2505)),
@@ -3117,10 +3118,10 @@ mod tests {
             (AlphaMode::Opaque, Some(2000)),
         ]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
-        // Blend offsets: {-2, 0} → 降順 (0, -2) → rank (0, -1)
+        // Blend offsets: {-2, 0} -> descending (0, -2) -> rank (0, -1)
         assert_eq!(mats[0].mtoon().render_queue_offset, -1); // rq=2998
         assert_eq!(mats[2].mtoon().render_queue_offset, 0); // rq=3000
-                                                            // BlendWithZWrite offsets: {0, 4} → 昇順 (0, 4) → rank (0, 1)
+                                                            // BlendWithZWrite offsets: {0, 4} -> ascending (0, 4) -> rank (0, 1)
         assert_eq!(mats[3].mtoon().render_queue_offset, 0); // rq=2501
         assert_eq!(mats[1].mtoon().render_queue_offset, 1); // rq=2505
                                                             // Opaque
@@ -3129,7 +3130,7 @@ mod tests {
 
     #[test]
     fn rank_compress_no_render_queue() {
-        // render_queue が None → offset 変更なし（デフォルト 0 のまま）
+        // render_queue is None -> offset stays at the default (0)
         let (mut mats, props) = make_test_data(&[(AlphaMode::Blend, None)]);
         remap_vrm0_render_queue_offsets(&mut mats, &props);
         assert_eq!(mats[0].mtoon().render_queue_offset, 0);
