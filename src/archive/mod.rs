@@ -1,7 +1,7 @@
-//! アーカイブ（ZIP / 7z）直接ロード機能
+//! Direct archive (ZIP / 7z) loading.
 //!
-//! アーカイブ内のモデルファイル（VRM/FBX/PMX/PMD）を検出し、
-//! 関連テクスチャと共に展開する統一インターフェース。
+//! Provides a uniform interface for detecting model files (VRM/FBX/PMX/PMD)
+//! inside an archive and extracting them together with their textures.
 
 pub mod sevenz;
 pub mod zip_extract;
@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crate::error::{PoponeError, Result};
 use rust_i18n::t;
 
-/// アーカイブ対応モデル拡張子（unitypackage も二重展開で対応）
+/// Archive-supported model extensions (`unitypackage` is supported via a second-stage extraction).
 pub const MODEL_EXTENSIONS: &[&str] = &[
     "vrm",
     "glb",
@@ -26,32 +26,32 @@ pub const MODEL_EXTENSIONS: &[&str] = &[
     "unitypackage",
 ];
 
-/// テクスチャ拡張子（psd は数百MB級で OOM リスクのため除外）
+/// Texture extensions (`psd` excluded -- multi-hundred-MB files risk OOM).
 pub const TEXTURE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff", "dds"];
 
-/// 展開サイズ上限: 2GB
+/// Extraction size cap: 2 GB.
 const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
-/// アーカイブ内のエントリメタデータ（一覧取得用、データなし）
+/// Archive entry metadata (used for listing; no payload).
 pub struct ArchiveEntryMeta {
     pub path: PathBuf,
     pub size: u64,
 }
 
-/// アーカイブ内の展開済みエントリ（データあり）
+/// Extracted archive entry (with payload).
 pub struct ArchiveEntry {
     pub path: PathBuf,
     pub data: Vec<u8>,
 }
 
-/// アーカイブ形式
+/// Archive format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveFormat {
     Zip,
     SevenZ,
 }
 
-/// アーカイブ内モデルの種別
+/// Model kind inside the archive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveModelKind {
     Vrm,
@@ -81,7 +81,7 @@ impl ArchiveModelKind {
         }
     }
 
-    /// UI 表示用ラベル
+    /// Display label for the UI.
     pub fn label(&self) -> &'static str {
         match self {
             Self::Vrm => "VRM",
@@ -97,27 +97,27 @@ impl ArchiveModelKind {
     }
 }
 
-/// モデル展開結果
+/// Model-extraction result.
 pub struct ModelBundle {
     pub model: ArchiveEntry,
     pub kind: ArchiveModelKind,
-    /// FBX/VRM 用: テクスチャファイル群 (ファイル名, データ)
+    /// For FBX/VRM: texture files as (filename, data).
     pub textures: Vec<(String, Vec<u8>)>,
-    /// PMX/PMD 用: 相対パス→バイト列の補助ファイル群
+    /// For PMX/PMD: auxiliary files keyed by relative path -> bytes.
     pub aux_files: HashMap<PathBuf, Arc<[u8]>>,
 }
 
-/// アーカイブ内モデル一覧の結果
+/// Result of an archive model listing.
 pub struct ArchiveContents {
-    /// (index, 正規化済み内部パス, 表示用ファイル名, kind)
+    /// (index, normalized internal path, display filename, kind).
     pub models: Vec<(usize, PathBuf, String, ArchiveModelKind)>,
-    /// 7z の場合は全展開済みエントリを保持
+    /// For 7z: holds every extracted entry.
     entries: Option<Vec<ArchiveEntry>>,
-    /// ZIP の場合はメタデータのみ
+    /// For ZIP: only metadata.
     metas: Option<Vec<ArchiveEntryMeta>>,
 }
 
-/// パス正規化（.. や絶対パス要素を拒否）
+/// Normalize a path (rejects `..` and absolute-path components).
 pub fn normalize_archive_path(raw: &str) -> Result<PathBuf> {
     let cleaned = raw.replace('\\', "/");
     let mut out = PathBuf::new();
@@ -135,7 +135,7 @@ pub fn normalize_archive_path(raw: &str) -> Result<PathBuf> {
     Ok(out)
 }
 
-/// 拡張子からアーカイブ形式を判定
+/// Determine the archive format from a file extension.
 pub fn archive_format_from_ext(ext: &str) -> Option<ArchiveFormat> {
     match ext {
         "zip" => Some(ArchiveFormat::Zip),
@@ -144,12 +144,12 @@ pub fn archive_format_from_ext(ext: &str) -> Option<ArchiveFormat> {
     }
 }
 
-/// アーカイブ内モデル一覧を取得
+/// List models inside an archive.
 ///
-/// **注意**: 7z 形式はストリーミング展開の制約上、対象拡張子のファイルを全展開して
-/// メモリに保持します（`MAX_TOTAL_BYTES` 上限あり）。ZIP はメタデータのみ取得。
-/// 7z の展開済みエントリは `ArchiveContents` 内に保持され、後続の
-/// `extract_model_bundle` で再展開なく利用されます。
+/// **Note**: 7z's streaming-only API forces us to fully extract every file matching
+/// the target extensions and keep them in memory (capped by `MAX_TOTAL_BYTES`). ZIP
+/// only fetches metadata. The 7z entries are kept inside `ArchiveContents` so that
+/// `extract_model_bundle` can reuse them without re-extracting.
 pub fn list_models(data: &[u8], format: ArchiveFormat) -> Result<ArchiveContents> {
     match format {
         ArchiveFormat::Zip => {
@@ -173,7 +173,7 @@ pub fn list_models(data: &[u8], format: ArchiveFormat) -> Result<ArchiveContents
     }
 }
 
-/// メタデータ一覧からモデルを検出
+/// Detect models from a metadata listing.
 fn find_models_from_metas(
     metas: &[ArchiveEntryMeta],
 ) -> Vec<(usize, PathBuf, String, ArchiveModelKind)> {
@@ -192,7 +192,7 @@ fn find_models_from_metas(
     models
 }
 
-/// エントリ一覧からモデルを検出
+/// Detect models from an entry listing.
 fn find_models_from_entries(
     entries: &[ArchiveEntry],
 ) -> Vec<(usize, PathBuf, String, ArchiveModelKind)> {
@@ -219,7 +219,7 @@ fn path_to_model_kind(path: &Path) -> Option<ArchiveModelKind> {
     ArchiveModelKind::from_ext(&ext)
 }
 
-/// 選択モデル + 関連ファイルを展開
+/// Extract the selected model plus its associated files.
 pub fn extract_model_bundle(
     data: &[u8],
     format: ArchiveFormat,
@@ -248,7 +248,7 @@ pub fn extract_model_bundle(
     }
 }
 
-/// ZIP から選択モデル + 関連ファイルを展開
+/// Extract the selected model + its associated files from a ZIP.
 fn extract_bundle_from_zip(
     data: &[u8],
     model_path: &Path,
@@ -257,7 +257,7 @@ fn extract_bundle_from_zip(
 ) -> Result<ModelBundle> {
     match kind {
         ArchiveModelKind::Pmx | ArchiveModelKind::Pmd => {
-            // PMX/PMD: まずモデルを展開してテクスチャ参照パスを取得し、必要なファイルのみ追加展開
+            // PMX/PMD: extract the model first to discover texture references, then extract just the needed files
             let model_entries = zip_extract::extract_files(data, &[model_path], MAX_TOTAL_BYTES)?;
             let model_entry = model_entries
                 .into_iter()
@@ -272,11 +272,11 @@ fn extract_bundle_from_zip(
                     )
                 })?;
 
-            // テクスチャ参照パスを取得
+            // Read out the referenced texture paths
             let tex_refs = get_texture_refs_from_model(&model_entry.data, kind)?;
             let model_dir = model_path.parent().unwrap_or(Path::new(""));
 
-            // 必要なファイルを特定
+            // Pick the files that are actually needed
             let needed: Vec<PathBuf> = if let Some(metas) = metas {
                 collect_needed_paths(metas.iter().map(|m| &m.path), &tex_refs, model_dir)
             } else {
@@ -300,7 +300,7 @@ fn extract_bundle_from_zip(
             })
         }
         ArchiveModelKind::Stl | ArchiveModelKind::UnityPackage => {
-            // STL / UnityPackage: 本体のみ展開（テクスチャ不要）
+            // STL / UnityPackage: extract only the model itself (no textures needed)
             let model_entries = zip_extract::extract_files(data, &[model_path], MAX_TOTAL_BYTES)?;
             let model_entry = model_entries
                 .into_iter()
@@ -322,7 +322,7 @@ fn extract_bundle_from_zip(
             })
         }
         _ => {
-            // VRM/GLB/FBX/OBJ/STL: モデル + 同ディレクトリ以下のテクスチャを展開
+            // VRM/GLB/FBX/OBJ/STL: extract the model plus textures under the same directory
             let model_dir = model_path.parent().unwrap_or(Path::new(""));
             let mut paths_to_extract = vec![model_path.to_path_buf()];
 
@@ -333,10 +333,10 @@ fn extract_bundle_from_zip(
                     } else if (kind == ArchiveModelKind::DirectX || kind == ArchiveModelKind::Obj)
                         && is_texture_near_model(&meta.path, model_dir)
                     {
-                        // モデルディレクトリ外のテクスチャも収集（"../textures/foo.png" 等）
+                        // Collect textures outside the model directory too (e.g. "../textures/foo.png")
                         paths_to_extract.push(meta.path.clone());
                     }
-                    // OBJ: .mtl sidecar も収集
+                    // OBJ: also collect the .mtl sidecar
                     if kind == ArchiveModelKind::Obj
                         && is_sidecar_in_scope(&meta.path, model_dir, "mtl")
                     {
@@ -355,12 +355,12 @@ fn extract_bundle_from_zip(
                 if entry.path == model_path {
                     model_entry = Some(entry);
                 } else if kind == ArchiveModelKind::Obj || kind == ArchiveModelKind::DirectX {
-                    // OBJ/DirectX: model_dir からの相対パスを正規化して格納
-                    // resolve_texture 側の normalize_rel_path と同じ正規化を適用し、キーを一致させる
+                    // OBJ/DirectX: store the path normalized relative to model_dir.
+                    // Apply the same normalization as `normalize_rel_path` in resolve_texture so the keys line up.
                     let rel = if let Ok(r) = entry.path.strip_prefix(model_dir) {
                         r.to_path_buf()
                     } else {
-                        // model_dir 外のファイル: 相対パスを計算して正規化
+                        // File outside model_dir: compute and normalize the relative path
                         relative_from_model_dir(model_dir, &entry.path)
                     };
                     aux_files.insert(rel, Arc::from(entry.data.into_boxed_slice()));
@@ -389,7 +389,7 @@ fn extract_bundle_from_zip(
     }
 }
 
-/// 7z 展開済みエントリからバンドルを構築
+/// Build a bundle from previously extracted 7z entries.
 fn extract_bundle_from_entries(
     entries: Vec<ArchiveEntry>,
     model_path: &Path,
@@ -429,7 +429,7 @@ fn extract_bundle_from_entries(
             })
         }
         ArchiveModelKind::Stl | ArchiveModelKind::UnityPackage => {
-            // STL / UnityPackage: 本体のみ（テクスチャ不要）
+            // STL / UnityPackage: model only (no textures)
             Ok(ModelBundle {
                 model: model_entry,
                 kind,
@@ -450,13 +450,13 @@ fn extract_bundle_from_entries(
                 .collect();
 
             if kind == ArchiveModelKind::Obj || kind == ArchiveModelKind::DirectX {
-                // OBJ/DirectX: model_dir からの相対パスを正規化して格納
+                // OBJ/DirectX: store paths normalized relative to model_dir
                 let mut aux_files: HashMap<PathBuf, Arc<[u8]>> = HashMap::new();
                 for e in relevant {
                     let rel = if let Ok(r) = e.path.strip_prefix(model_dir) {
                         r.to_path_buf()
                     } else {
-                        // model_dir 外のファイル: 相対パスを計算して正規化
+                        // File outside model_dir: compute and normalize the relative path
                         relative_from_model_dir(model_dir, &e.path)
                     };
                     aux_files.insert(rel, Arc::from(e.data.into_boxed_slice()));
@@ -491,7 +491,7 @@ fn extract_bundle_from_entries(
     }
 }
 
-/// PMX/PMD モデルデータからテクスチャ参照パス一覧を取得
+/// Extract the list of texture references from a PMX/PMD model.
 fn get_texture_refs_from_model(data: &[u8], kind: ArchiveModelKind) -> Result<Vec<String>> {
     match kind {
         ArchiveModelKind::Pmx => {
@@ -503,7 +503,7 @@ fn get_texture_refs_from_model(data: &[u8], kind: ArchiveModelKind) -> Result<Ve
             let mut refs = Vec::new();
             for mat in &pmd.materials {
                 if !mat.texture_name.is_empty() {
-                    // PMD テクスチャ名は "*" でスフィア区切り
+                    // PMD texture names use "*" to separate the sphere texture
                     for part in mat.texture_name.split('*') {
                         let trimmed = part.trim();
                         if !trimmed.is_empty() {
@@ -512,7 +512,7 @@ fn get_texture_refs_from_model(data: &[u8], kind: ArchiveModelKind) -> Result<Ve
                     }
                 }
             }
-            // toon テクスチャ
+            // Toon textures
             for toon in &pmd.toon_textures {
                 if !toon.is_empty() {
                     refs.push(toon.clone());
@@ -526,7 +526,7 @@ fn get_texture_refs_from_model(data: &[u8], kind: ArchiveModelKind) -> Result<Ve
     }
 }
 
-/// テクスチャ参照パスにマッチするアーカイブ内パスを収集
+/// Collect archive paths that match the texture references.
 fn collect_needed_paths<'a>(
     archive_paths: impl Iterator<Item = &'a PathBuf>,
     tex_refs: &[String],
@@ -537,27 +537,27 @@ fn collect_needed_paths<'a>(
 
     for tex_ref in tex_refs {
         let ref_path = PathBuf::from(tex_ref.replace('\\', "/"));
-        // モデル親ディレクトリ基準で解決
+        // Resolve relative to the model's parent directory
         let resolved = normalize_relative_path(&model_dir.join(&ref_path));
 
         for &ap in &archive_paths {
-            // 完全一致
+            // Exact match
             if *ap == resolved {
                 needed.push(ap.clone());
                 continue;
             }
-            // Case-insensitive フォールバック
+            // Case-insensitive fallback
             if path_eq_ignore_case(ap, &resolved) {
                 needed.push(ap.clone());
                 continue;
             }
-            // PMD: basename のみで照合
+            // PMD: match by basename only
             if ref_path.components().count() == 1 {
                 if let (Some(a_name), Some(r_name)) = (ap.file_name(), ref_path.file_name()) {
                     if a_name.to_string_lossy().to_lowercase()
                         == r_name.to_string_lossy().to_lowercase()
                     {
-                        // 同ディレクトリまたはサブディレクトリ内
+                        // Same directory or any subdirectory
                         if ap.starts_with(model_dir) || model_dir == Path::new("") {
                             needed.push(ap.clone());
                         }
@@ -566,7 +566,7 @@ fn collect_needed_paths<'a>(
             }
         }
     }
-    // .txt ファイルも収集（PMD/PMX の readme 等）
+    // Also collect .txt files (e.g. PMD/PMX readmes)
     for &ap in &archive_paths {
         let ext = crate::path_ext_lower(ap);
         if ext == "txt" && (ap.starts_with(model_dir) || model_dir == Path::new("")) {
@@ -578,7 +578,7 @@ fn collect_needed_paths<'a>(
     needed
 }
 
-/// aux_files を構築（モデル親ディレクトリ基準の相対パスをキーに）
+/// Build `aux_files` keyed by relative paths from the model's parent directory.
 fn build_aux_files(entries: Vec<ArchiveEntry>, model_dir: &Path) -> HashMap<PathBuf, Arc<[u8]>> {
     let mut aux = HashMap::new();
     for entry in entries {
@@ -596,7 +596,7 @@ fn build_aux_files(entries: Vec<ArchiveEntry>, model_dir: &Path) -> HashMap<Path
     aux
 }
 
-/// 7z 展開済みエントリから PMX/PMD 用 aux_files を構築
+/// Build PMX/PMD `aux_files` from previously extracted 7z entries.
 fn build_aux_from_entries_pmx(
     entries: Vec<ArchiveEntry>,
     tex_refs: &[String],
@@ -610,7 +610,7 @@ fn build_aux_from_entries_pmx(
         let is_needed = if ext == "txt" {
             entry.path.starts_with(model_dir) || model_dir == Path::new("")
         } else {
-            // テクスチャ参照パスにマッチするか確認
+            // Match against the texture reference paths
             tex_refs.iter().any(|tex_ref| {
                 let ref_path = PathBuf::from(tex_ref.replace('\\', "/"));
                 let resolved = normalize_relative_path(&model_dir.join(&ref_path));
@@ -648,8 +648,8 @@ fn build_aux_from_entries_pmx(
     aux
 }
 
-/// 指定拡張子のサイドカーファイルがスコープ内にあるか
-/// model_dir の親ディレクトリまで許容（"../shared/materials.mtl" 等の参照用）
+/// Whether a sidecar file with the given extension is in scope.
+/// Allows up to model_dir's parent (so references like `../shared/materials.mtl` work).
 fn is_sidecar_in_scope(path: &Path, model_dir: &Path, ext: &str) -> bool {
     let file_ext = crate::path_ext_lower(path);
     if file_ext != ext {
@@ -659,14 +659,14 @@ fn is_sidecar_in_scope(path: &Path, model_dir: &Path, ext: &str) -> bool {
     parent == Path::new("") || path.starts_with(parent)
 }
 
-/// テクスチャ拡張子かつモデルの親ディレクトリ以下にあるか判定
-/// model_dir の1段上まで許容し、アーカイブ全体の無関係テクスチャを除外する
+/// Whether the path has a texture extension and lives under the model's parent directory.
+/// Allows one level above model_dir while excluding unrelated textures elsewhere in the archive.
 fn is_texture_near_model(path: &Path, model_dir: &Path) -> bool {
     let ext = crate::path_ext_lower(path);
     if !TEXTURE_EXTENSIONS.contains(&ext.as_str()) {
         return false;
     }
-    // model_dir の親ディレクトリ以下であれば収集対象
+    // Collect anything under model_dir's parent directory
     let parent = model_dir.parent().unwrap_or(Path::new(""));
     parent == Path::new("") || path.starts_with(parent)
 }
@@ -679,7 +679,7 @@ fn is_texture_in_scope(path: &Path, model_dir: &Path) -> bool {
     model_dir == Path::new("") || path.starts_with(model_dir)
 }
 
-/// 相対パスを正規化（`foo/../bar` → `bar`）
+/// Normalize a relative path (`foo/../bar` -> `bar`).
 fn normalize_relative_path(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {
@@ -695,8 +695,8 @@ fn normalize_relative_path(path: &Path) -> PathBuf {
     out
 }
 
-/// model_dir から target への相対パスを計算する（正規化なし、".." を保持）
-/// 例: source_dir="assets/models", target="assets/shared/body.png" → "../shared/body.png"
+/// Compute the relative path from `source_dir` to `target` (no normalization; keeps `..`).
+/// Example: source_dir = "assets/models", target = "assets/shared/body.png" -> "../shared/body.png".
 fn relative_from_model_dir(source_dir: &Path, target: &Path) -> PathBuf {
     let source_components: Vec<_> = source_dir.components().collect();
     let target_components: Vec<_> = target.components().collect();
@@ -712,11 +712,11 @@ fn relative_from_model_dir(source_dir: &Path, target: &Path) -> PathBuf {
     for comp in &target_components[common_len..] {
         rel.push(comp);
     }
-    // バックスラッシュをスラッシュに統一
+    // Normalize backslashes to forward slashes
     PathBuf::from(rel.to_string_lossy().replace('\\', "/"))
 }
 
-/// Case-insensitive パス比較
+/// Case-insensitive path comparison.
 fn path_eq_ignore_case(a: &Path, b: &Path) -> bool {
     let a_str = a.to_string_lossy().to_lowercase();
     let b_str = b.to_string_lossy().to_lowercase();
@@ -802,8 +802,8 @@ mod tests {
 
     #[test]
     fn test_unitypackage_extracts_only_model() {
-        // ZIP内に .unitypackage と無関係な画像がある場合、
-        // UnityPackage 抽出時にテクスチャを巻き込まないことを確認
+        // Verify that when a ZIP contains a `.unitypackage` plus unrelated images,
+        // the UnityPackage extraction does not pull those textures in.
         let mut buf = Vec::new();
         {
             let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
@@ -823,7 +823,7 @@ mod tests {
         assert_eq!(contents.models[0].3, ArchiveModelKind::UnityPackage);
 
         let bundle = extract_model_bundle(&buf, ArchiveFormat::Zip, contents, 0).unwrap();
-        // モデル本体のみ展開、テクスチャは空
+        // Only the model itself is extracted; textures are empty
         assert_eq!(bundle.model.data, b"fake unitypackage data");
         assert!(
             bundle.textures.is_empty(),
@@ -834,21 +834,21 @@ mod tests {
 
     #[test]
     fn test_relative_from_model_dir() {
-        // model_dir 外のファイル: ".." が保持される
+        // File outside model_dir: ".." segments are preserved
         let rel = relative_from_model_dir(
             Path::new("assets/models"),
             Path::new("assets/shared/body.png"),
         );
         assert_eq!(rel, PathBuf::from("../shared/body.png"));
 
-        // model_dir 内のファイル: ".." なし
+        // File inside model_dir: no ".."
         let rel2 = relative_from_model_dir(
             Path::new("assets/models"),
             Path::new("assets/models/tex/body.png"),
         );
         assert_eq!(rel2, PathBuf::from("tex/body.png"));
 
-        // ルート外に2段上がるケース: ".." が2つ保持される
+        // Two levels above the root: two ".." segments are preserved
         let rel3 = relative_from_model_dir(Path::new("a/b/c"), Path::new("a/other/body.png"));
         assert_eq!(rel3, PathBuf::from("../../other/body.png"));
     }
@@ -873,14 +873,14 @@ mod tests {
 
     #[test]
     fn test_zip_roundtrip() {
-        // プログラム的にZIPを作成してテスト
+        // Build a ZIP programmatically for the test
         let mut buf = Vec::new();
         {
             let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
             let options = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
             writer.start_file("test/model.pmx", options).unwrap();
-            // PMX マジック + 最小ヘッダ（パースは失敗するが list_entries は動く）
+            // PMX magic + minimal header (parsing will fail, but list_entries works)
             std::io::Write::write_all(&mut writer, b"PMX test data").unwrap();
             writer.start_file("test/texture.png", options).unwrap();
             std::io::Write::write_all(&mut writer, b"PNG fake data").unwrap();
@@ -897,7 +897,7 @@ mod tests {
 
     #[test]
     fn test_broken_archive_error() {
-        // 壊れたデータではエラーが返る
+        // Corrupt data must return an error
         let result = list_models(b"this is not a zip file", ArchiveFormat::Zip);
         assert!(result.is_err());
     }
@@ -915,7 +915,7 @@ mod tests {
 
     #[test]
     fn test_zip_bomb_protection() {
-        // declared size が上限を超える場合のテスト
+        // Test the case where the declared size exceeds the cap
         let mut buf = Vec::new();
         {
             let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
@@ -925,15 +925,15 @@ mod tests {
             std::io::Write::write_all(&mut writer, b"small data").unwrap();
             writer.finish().unwrap();
         }
-        // 極小上限でテスト
+        // Test with a tiny cap
         let result = zip_extract::extract_files(&buf, &[Path::new("huge.pmx")], 1);
-        // 10バイトのデータに対して上限1バイト → サイズ超過エラー
+        // 10 bytes of data against a 1-byte cap -> size-overflow error
         assert!(result.is_err());
     }
 
     #[test]
     fn test_subdirectory_pmx_aux_keys() {
-        // サブディレクトリ内PMXの aux_files キーが正しい相対パスか確認
+        // Verify that the aux_files keys for a PMX in a subdirectory use the correct relative path
         let entries = vec![
             ArchiveEntry {
                 path: PathBuf::from("model/sub/test.pmx"),
@@ -956,11 +956,11 @@ mod tests {
         let tex_refs = vec!["tex/body.png".to_string()];
         let aux = build_aux_from_entries_pmx(entries, &tex_refs, model_dir);
 
-        // tex/body.png はモデルディレクトリ基準の相対パスでキーに
+        // tex/body.png is keyed relative to the model directory
         assert!(aux.contains_key(Path::new("tex/body.png")));
-        // readme.txt も収集される
+        // readme.txt is collected too
         assert!(aux.contains_key(Path::new("readme.txt")));
-        // 他ディレクトリのファイルは除外
+        // Files in other directories are excluded
         assert!(!aux.contains_key(Path::new("unrelated.png")));
     }
 }

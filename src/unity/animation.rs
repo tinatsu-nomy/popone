@@ -7,18 +7,18 @@ use std::path::Path;
 
 use crate::intermediate::animation::*;
 
-/// Unity .anim ファイルからアニメーションを読み込む
+/// Load an animation from a Unity `.anim` file.
 ///
-/// `muscle_scale`: Muscle角度の倍率（デフォルト1.0）。通常は変更不要。
+/// `muscle_scale`: muscle-angle multiplier (default 1.0). Typically left untouched.
 pub fn load_unity_anim(path: &Path, muscle_scale: f32) -> Result<VrmaAnimation> {
     load_unity_anim_with_params(path, muscle_scale, None)
 }
 
-/// Unity .anim ファイルからアニメーションを読み込む（パラメータJSON指定可能）
+/// Load an animation from a Unity `.anim` file (with an optional parameter JSON).
 ///
-/// `params_path`: DumpHumanoidParams.cs で出力した JSON パス（任意）。
-/// 指定すると model-specific な preQ/postQ/sign を使用して高精度な変換を行う。
-/// 未指定の場合は V-Sekai 正規化スケルトンのフォールバック値を使用。
+/// `params_path`: optional path to JSON produced by DumpHumanoidParams.cs.
+/// When supplied, model-specific preQ/postQ/sign values give a high-precision conversion.
+/// Otherwise, V-Sekai normalized-skeleton fallback values are used.
 pub fn load_unity_anim_with_params(
     path: &Path,
     muscle_scale: f32,
@@ -41,7 +41,7 @@ pub fn load_unity_anim_with_params(
             .unwrap_or_else(|| "unity_anim".to_string())
     });
 
-    // Unity パラメータ読み込み
+    // Load Unity parameters
     let params = if let Some(pp) = params_path {
         Some(load_humanoid_params(pp)?)
     } else {
@@ -49,7 +49,7 @@ pub fn load_unity_anim_with_params(
     };
     let has_params = params.is_some();
 
-    // Muscle カーブを VRM ヒューマノイドボーンチャネルに変換
+    // Convert Muscle curves to VRM humanoid bone channels
     let bone_channels = build_bone_channels(
         &parsed.float_curves,
         parsed.duration,
@@ -67,8 +67,8 @@ pub fn load_unity_anim_with_params(
         mode_name,
     );
 
-    // パラメータ使用時: 絶対ローカル回転出力（is_additive=false）
-    // フォールバック時: 正規化デルタ出力（is_additive=true, is_bone_local_delta=true）
+    // With parameters: emit absolute local rotations (is_additive = false).
+    // Fallback path: emit normalized deltas (is_additive = true, is_bone_local_delta = true).
     Ok(VrmaAnimation {
         name,
         duration: parsed.duration,
@@ -82,7 +82,7 @@ pub fn load_unity_anim_with_params(
     })
 }
 
-// ─── YAML パーサー ───
+// --- YAML parser ---
 
 struct ParsedAnim {
     name: Option<String>,
@@ -95,20 +95,20 @@ struct AnimCurve {
     keyframes: Vec<(f32, f32)>, // (time, value)
 }
 
-/// 行ベースの高速 Unity YAML パーサー
+/// Line-oriented fast Unity-YAML parser.
 fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
     let mut name: Option<String> = None;
     let mut duration: f32 = 0.0;
     let mut float_curves: Vec<AnimCurve> = Vec::new();
 
-    // 現在の状態
+    // Current parser state
     let mut in_float_curves = false;
-    let mut in_curve_data = false; // curve.m_Curve 配列内
+    let mut in_curve_data = false; // Inside curve.m_Curve array
     let mut current_attribute = String::new();
     let mut current_keyframes: Vec<(f32, f32)> = Vec::new();
     let mut current_time: Option<f32> = None;
     let mut current_value: Option<f32> = None;
-    let mut indent_float_curves = 0usize; // m_FloatCurves のインデントレベル
+    let mut indent_float_curves = 0usize; // Indent level of m_FloatCurves
 
     let mut line_num = 0u32;
     for line_result in reader.lines() {
@@ -118,7 +118,7 @@ fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
         };
         line_num += 1;
 
-        // ヘッダチェック（最初の数行のみ）
+        // Header check (first few lines only)
         if line_num <= 3 {
             if line_num == 1 && !line.starts_with("%YAML") {
                 return Err(PoponeError::Other(
@@ -151,20 +151,20 @@ fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
             continue;
         }
 
-        // m_FloatCurves セクション開始
+        // Start of the m_FloatCurves section
         if trimmed == "m_FloatCurves:" || trimmed == "m_FloatCurves: []" {
             in_float_curves = trimmed != "m_FloatCurves: []";
             indent_float_curves = indent;
             continue;
         }
 
-        // m_FloatCurves セクション終了判定（同レベルか浅い別フィールドが来たら）
+        // End of the m_FloatCurves section (when a sibling/shallower field appears)
         if in_float_curves
             && indent <= indent_float_curves
             && !trimmed.starts_with('-')
             && trimmed.contains(':')
         {
-            // 現在のカーブを保存
+            // Persist the current curve
             if !current_attribute.is_empty() && !current_keyframes.is_empty() {
                 float_curves.push(AnimCurve {
                     attribute: std::mem::take(&mut current_attribute),
@@ -180,9 +180,9 @@ fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
             continue;
         }
 
-        // attribute フィールド（m_Curve データの後に来る）
-        // Unity YAML: 各エントリ = { curve: { m_Curve: [...] }, attribute: "名前", ... }
-        // m_Curve → attribute の順なので、attribute 到達時にキーフレームは収集済み
+        // attribute field (appears after the m_Curve data).
+        // Unity YAML: each entry = { curve: { m_Curve: [...] }, attribute: "name", ... }.
+        // m_Curve precedes attribute, so by the time we reach attribute the keyframes are already collected.
         if trimmed.starts_with("attribute:") {
             current_attribute = trimmed.trim_start_matches("attribute:").trim().to_string();
             if !current_attribute.is_empty() && !current_keyframes.is_empty() {
@@ -195,17 +195,17 @@ fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
             continue;
         }
 
-        // m_Curve 配列開始
+        // Start of the m_Curve array
         if trimmed == "m_Curve:" {
             in_curve_data = true;
             continue;
         }
 
-        // m_Curve 配列内のキーフレーム
+        // Keyframes inside the m_Curve array
         if in_curve_data {
-            // キーフレームエントリ開始
+            // Start of a keyframe entry
             if trimmed.starts_with("- serializedVersion:") {
-                // 前のキーフレームを保存
+                // Persist the previous keyframe
                 if let (Some(t), Some(v)) = (current_time.take(), current_value.take()) {
                     current_keyframes.push((t, v));
                 }
@@ -228,7 +228,7 @@ fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
                 continue;
             }
 
-            // m_Curve 配列終了（m_PreInfinity 等が来たら）
+            // End of the m_Curve array (e.g. when m_PreInfinity arrives)
             if !trimmed.starts_with('-')
                 && !trimmed.starts_with("time:")
                 && !trimmed.starts_with("value:")
@@ -240,7 +240,7 @@ fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
                 && !trimmed.starts_with("outWeight:")
                 && !trimmed.starts_with("serializedVersion:")
             {
-                // 最後のキーフレームを保存
+                // Persist the final keyframe
                 if let (Some(t), Some(v)) = (current_time.take(), current_value.take()) {
                     current_keyframes.push((t, v));
                 }
@@ -249,7 +249,7 @@ fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
         }
     }
 
-    // 最後のカーブを保存
+    // Persist the final curve
     if !current_attribute.is_empty() && !current_keyframes.is_empty() {
         float_curves.push(AnimCurve {
             attribute: std::mem::take(&mut current_attribute),
@@ -270,9 +270,9 @@ fn parse_anim_yaml(reader: BufReader<std::fs::File>) -> Result<ParsedAnim> {
     })
 }
 
-// ─── SwingTwist 変換 (ShaderMotion 準拠) ───
+// --- SwingTwist conversion (ShaderMotion-compatible) ---
 
-/// SwingTwist分解による回転構築
+/// Build a rotation from a SwingTwist decomposition.
 ///
 /// degrees = (twist_x, swing_y, swing_z) in degrees
 /// SwingTwist(deg) = AngleAxis(|yz|, normalize(yz)) × AngleAxis(x, (1,0,0))
@@ -289,9 +289,9 @@ fn swing_twist(x_deg: f32, y_deg: f32, z_deg: f32) -> Quat {
     swing * twist
 }
 
-// ─── Unity Humanoid 定数テーブル ───
+// --- Unity humanoid constant tables ---
 
-/// Muscle名一覧 (index = muscle index)
+/// Muscle name table (index = muscle index).
 const MUSCLE_NAMES: [&str; 95] = [
     "Spine Front-Back",
     "Spine Left-Right",
@@ -390,7 +390,7 @@ const MUSCLE_NAMES: [&str; 95] = [
     "RightHand.Little.3 Stretched",
 ];
 
-/// Muscle デフォルト最小角度 (HumanTrait.GetMuscleDefaultMin)
+/// Default minimum muscle angles (HumanTrait.GetMuscleDefaultMin).
 const MUSCLE_DEFAULT_MIN: [f32; 95] = [
     -40.0, -40.0, -40.0, -40.0, -40.0, -40.0, -20.0, -20.0, -20.0, -40.0, -40.0, -40.0, -40.0,
     -40.0, -40.0, -10.0, -20.0, -10.0, -20.0, -10.0, -10.0, -90.0, -60.0, -60.0, -80.0, -90.0,
@@ -402,7 +402,7 @@ const MUSCLE_DEFAULT_MIN: [f32; 95] = [
     -20.0, -45.0, -45.0,
 ];
 
-/// Muscle デフォルト最大角度 (HumanTrait.GetMuscleDefaultMax)
+/// Default maximum muscle angles (HumanTrait.GetMuscleDefaultMax).
 const MUSCLE_DEFAULT_MAX: [f32; 95] = [
     40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 20.0, 20.0, 20.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 15.0,
     20.0, 15.0, 20.0, 10.0, 10.0, 50.0, 60.0, 60.0, 80.0, 90.0, 50.0, 30.0, 50.0, 50.0, 60.0, 60.0,
@@ -413,8 +413,8 @@ const MUSCLE_DEFAULT_MAX: [f32; 95] = [
     45.0,
 ];
 
-/// ボーンインデックス → (twist_muscle, swing_y_muscle, swing_z_muscle)
-/// -1 は該当 DOF なし
+/// Bone index -> (twist_muscle, swing_y_muscle, swing_z_muscle).
+/// -1 means the bone has no DOF for that channel.
 const MUSCLE_FROM_BONE: [(i8, i8, i8); 55] = [
     (-1, -1, -1), // 0: Hips
     (23, 22, 21), // 1: LeftUpperLeg
@@ -532,12 +532,12 @@ const SIGNS: [(f32, f32, f32); 55] = [
     (1.0, 1.0, 1.0),    // 54: UpperChest
 ];
 
-/// V-Sekai 正規化スケルトンの postQ_inverse (右手系/glTF座標系)
-/// postQ = conjugate(postQ_inverse) で復元
-/// 左右対称ボーンは意図的に同一値（LeftFoot/RightFoot 等）
-/// 数値は V-Sekai 参照データの固定値（計算値ではない）
+/// `postQ_inverse` for the V-Sekai normalized skeleton (glTF right-handed coords).
+/// `postQ` is recovered as `conjugate(postQ_inverse)`.
+/// Symmetric bones intentionally share the same value (e.g. LeftFoot/RightFoot).
+/// Values are V-Sekai reference data (fixed constants, not derived).
 #[allow(clippy::if_same_then_else, clippy::approx_constant)]
-/// 正規化スケルトンでは preQ == postQ
+/// In the normalized skeleton, preQ == postQ.
 const POSTQ_INV_NORMALIZED: [(f32, f32, f32, f32); 55] = [
     (0.0, 0.0, 0.0, 1.0),                        // 0: Hips
     (0.48977, -0.50952, 0.51876, 0.48105),       // 1: LeftUpperLeg
@@ -596,7 +596,7 @@ const POSTQ_INV_NORMALIZED: [(f32, f32, f32, f32); 55] = [
     (-0.56563, 0.42434, -0.56563, -0.42434),     // 54: UpperChest
 ];
 
-/// POSTQ_INV → postQ (conjugate) を取得
+/// Compute postQ from POSTQ_INV by taking the conjugate.
 fn get_post_q(unity_idx: usize) -> Quat {
     if unity_idx >= POSTQ_INV_NORMALIZED.len() {
         return Quat::IDENTITY;
@@ -606,28 +606,28 @@ fn get_post_q(unity_idx: usize) -> Quat {
     Quat::from_xyzw(-x, -y, -z, w).normalize()
 }
 
-// ─── Unity Humanoid パラメータ (DumpHumanoidParams.cs 出力) ───
+// --- Unity humanoid parameters (output of DumpHumanoidParams.cs) ---
 
-/// ボーンごとの preQ/postQ/sign パラメータ
+/// Per-bone preQ/postQ/sign parameters.
 struct BoneParams {
-    pre_q: Quat,  // glTF 右手系
-    post_q: Quat, // glTF 右手系
+    pre_q: Quat,  // glTF right-handed
+    post_q: Quat, // glTF right-handed
     sign: (f32, f32, f32),
-    /// ボーンのローカル回転 (glTF 右手系、Hips用)
+    /// Local rotation of the bone (glTF right-handed; used for Hips).
     local_rotation: Quat,
-    /// ボーンのローカル位置 (glTF 右手系、Hips用)
+    /// Local position of the bone (glTF right-handed; used for Hips).
     local_position: Vec3,
 }
 
-/// DumpHumanoidParams.cs 出力 JSON の読み込み結果
+/// Result of loading the JSON produced by DumpHumanoidParams.cs.
 pub struct HumanoidParams {
-    /// Unity ボーンインデックス → BoneParams
+    /// Unity bone index -> `BoneParams`.
     bones: HashMap<usize, BoneParams>,
-    /// Muscle デフォルト角度上書き (muscle_idx → (min, max))
+    /// Muscle range overrides (muscle_idx -> (min, max)).
     muscle_ranges: HashMap<usize, (f32, f32)>,
 }
 
-/// JSON配列から Unity左手系 → glTF右手系 のクォータニオンをパース
+/// Parse a quaternion from a JSON array, converting Unity LH -> glTF RH.
 fn parse_quat_lh_to_rh(json: &serde_json::Value, key: &str) -> Quat {
     if let Some(arr) = json.get(key).and_then(|v| v.as_array()) {
         let x = arr.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
@@ -640,7 +640,7 @@ fn parse_quat_lh_to_rh(json: &serde_json::Value, key: &str) -> Quat {
     }
 }
 
-/// JSON配列からf32×3タプルをパース（デフォルト値指定可）
+/// Parse an f32 x 3 tuple from a JSON array (with optional defaults).
 fn parse_f32x3(json: &serde_json::Value, key: &str, default: (f32, f32, f32)) -> (f32, f32, f32) {
     if let Some(arr) = json.get(key).and_then(|v| v.as_array()) {
         (
@@ -659,7 +659,7 @@ fn parse_f32x3(json: &serde_json::Value, key: &str, default: (f32, f32, f32)) ->
     }
 }
 
-/// DumpHumanoidParams.cs が出力した JSON を読み込む
+/// Load the JSON file produced by DumpHumanoidParams.cs.
 pub fn load_humanoid_params(path: &Path) -> Result<HumanoidParams> {
     let text = std::fs::read_to_string(path).with_context(|| {
         t!(
@@ -674,7 +674,7 @@ pub fn load_humanoid_params(path: &Path) -> Result<HumanoidParams> {
     let mut bones = HashMap::new();
     let mut muscle_ranges = HashMap::new();
 
-    // bones 配列
+    // bones array
     if let Some(bones_arr) = json.get("bones").and_then(|v| v.as_array()) {
         for bd in bones_arr {
             let idx = match bd.get("index").and_then(|v| v.as_u64()) {
@@ -685,7 +685,7 @@ pub fn load_humanoid_params(path: &Path) -> Result<HumanoidParams> {
                 continue;
             }
 
-            // preQ/postQ: Unity 左手系 → glTF 右手系 (x, -y, -z, w)
+            // preQ/postQ: Unity LH -> glTF RH (x, -y, -z, w)
             let pre_q = parse_quat_lh_to_rh(bd, "preQ");
             let post_q = parse_quat_lh_to_rh(bd, "postQ");
             let sign = parse_f32x3(bd, "sign", (1.0, 1.0, 1.0));
@@ -709,7 +709,7 @@ pub fn load_humanoid_params(path: &Path) -> Result<HumanoidParams> {
         }
     }
 
-    // muscles 配列 (デフォルト角度範囲の上書き)
+    // muscles array (default-angle overrides)
     if let Some(muscles_arr) = json.get("muscles").and_then(|v| v.as_array()) {
         for md in muscles_arr {
             let mi = match md.get("index").and_then(|v| v.as_u64()) {
@@ -741,10 +741,10 @@ pub fn load_humanoid_params(path: &Path) -> Result<HumanoidParams> {
     })
 }
 
-// ─── Muscle → ボーンチャネル変換 ───
+// --- Muscle -> bone-channel conversion ---
 
-/// Muscle 値を角度（度）に変換
-/// muscle=0 → 0°, muscle=+1 → max_deg, muscle=-1 → -min_deg (= max of negative range)
+/// Convert a muscle value to an angle in degrees.
+/// muscle = 0 -> 0 deg, muscle = +1 -> max_deg, muscle = -1 -> -min_deg (= max of the negative range).
 #[inline]
 fn muscle_to_deg_with_range(value: f32, min_deg: f32, max_deg: f32) -> f32 {
     if value >= 0.0 {
@@ -754,7 +754,7 @@ fn muscle_to_deg_with_range(value: f32, min_deg: f32, max_deg: f32) -> f32 {
     }
 }
 
-/// Root直値のattribute名パターン
+/// Root-direct-value attribute-name patterns.
 #[derive(Debug)]
 enum RootAttr {
     TransX,
@@ -779,39 +779,39 @@ fn parse_root_attr(attr: &str) -> Option<RootAttr> {
     }
 }
 
-/// Unity左手系 → glTF右手系 クォータニオン変換
-/// reverseX: Y, Z の符号を反転
+/// Unity LH -> glTF RH quaternion conversion.
+/// reverseX: flip the Y and Z signs.
 #[inline]
 fn unity_quat_to_gltf(qx: f32, qy: f32, qz: f32, qw: f32) -> Quat {
     Quat::from_xyzw(qx, -qy, -qz, qw).normalize()
 }
 
-/// Unity左手系 → glTF右手系 ベクトル変換
+/// Unity LH -> glTF RH vector conversion.
 #[inline]
 fn unity_vec3_to_gltf(x: f32, y: f32, z: f32) -> Vec3 {
     Vec3::new(-x, y, z)
 }
 
-/// Muscle カーブからボーンチャネルを構築
+/// Build bone channels from muscle curves.
 ///
-/// params あり: preQ × SwingTwist(sign × degrees) × Inv(postQ) → 絶対ローカル回転
-/// params なし: postQ_norm × SwingTwist(sign × degrees) × Inv(postQ_norm) → 正規化デルタ
-///   （ビューアでは rest × result で最終ローカル回転を得る）
+/// With params: preQ * SwingTwist(sign * degrees) * Inv(postQ) -> absolute local rotation.
+/// Without params: postQ_norm * SwingTwist(sign * degrees) * Inv(postQ_norm) -> normalized delta
+///   (the viewer combines this with the rest pose via `rest * result` to get the final local rotation).
 fn build_bone_channels(
     curves: &[AnimCurve],
     duration: f32,
     muscle_scale: f32,
     params: Option<&HumanoidParams>,
 ) -> HashMap<String, BoneChannel> {
-    // Muscle名 → (muscle_index, カーブ) のマップ
+    // Map muscle name -> (muscle_index, curve)
     let muscle_name_to_idx: HashMap<&str, usize> = MUSCLE_NAMES
         .iter()
         .enumerate()
         .map(|(i, &name)| (name, i))
         .collect();
 
-    // カーブを分類
-    let mut muscle_curves: HashMap<usize, &AnimCurve> = HashMap::new(); // muscle_idx → curve
+    // Classify the curves
+    let mut muscle_curves: HashMap<usize, &AnimCurve> = HashMap::new(); // muscle_idx -> curve
     let mut root_tx: Option<&AnimCurve> = None;
     let mut root_ty: Option<&AnimCurve> = None;
     let mut root_tz: Option<&AnimCurve> = None;
@@ -841,7 +841,7 @@ fn build_bone_channels(
 
     let mut channels: HashMap<String, BoneChannel> = HashMap::new();
 
-    // Unity ボーンインデックス → VRM ボーン名
+    // Unity bone index -> VRM bone name
     let unity_bone_to_vrm: [(usize, &str); 54] = [
         (1, "leftUpperLeg"),
         (2, "rightUpperLeg"),
@@ -899,33 +899,33 @@ fn build_bone_channels(
         (54, "upperChest"),
     ];
 
-    // 各ボーンのチャネルを構築
+    // Build a channel per bone
     for &(unity_idx, vrm_bone) in &unity_bone_to_vrm {
         let mfb = MUSCLE_FROM_BONE[unity_idx];
 
-        // パラメータがあればmodel-specific値を使用、なければフォールバック
+        // Use model-specific values when params are available, otherwise fall back
         let (pre_q, post_q, sign) = if let Some(p) = params {
             if let Some(bp) = p.bones.get(&unity_idx) {
                 (bp.pre_q, bp.post_q, bp.sign)
             } else {
-                // params にこのボーンがない場合はフォールバック
+                // Fall back when this bone is missing from params
                 let pq = get_post_q(unity_idx);
                 (pq, pq, SIGNS[unity_idx])
             }
         } else {
-            // V-Sekai フォールバック: preQ == postQ
+            // V-Sekai fallback: preQ == postQ
             let pq = get_post_q(unity_idx);
             (pq, pq, SIGNS[unity_idx])
         };
         let post_q_inv = post_q.inverse();
 
-        // このボーンに関連する muscle カーブがあるか
+        // Are any muscle curves relevant to this bone?
         let has_curve = |mi: i8| -> bool { mi >= 0 && muscle_curves.contains_key(&(mi as usize)) };
         if !has_curve(mfb.0) && !has_curve(mfb.1) && !has_curve(mfb.2) {
             continue;
         }
 
-        // 全DOFのキーフレーム時刻を統合
+        // Merge keyframe times across all DOFs
         let mut all_times: Vec<f32> = Vec::new();
         for &mi in &[mfb.0, mfb.1, mfb.2] {
             if mi >= 0 {
@@ -956,7 +956,7 @@ fn build_bone_channels(
                     } else {
                         0.0
                     };
-                    // Muscle角度範囲: params の上書きがあればそちらを使用
+                    // Muscle range: use the override from params when present
                     let (min_deg, max_deg) = if let Some(p) = params {
                         p.muscle_ranges
                             .get(&mi)
@@ -974,12 +974,12 @@ fn build_bone_channels(
                     degrees[dof_idx] = s * deg;
                 }
 
-                // SwingTwist 変換
+                // SwingTwist conversion
                 let st = swing_twist(degrees[0], degrees[1], degrees[2]);
 
-                // preQ × SwingTwist × Inv(postQ)
-                // params あり: 絶対ローカル回転
-                // params なし: postQ × SwingTwist × Inv(postQ)（正規化デルタ、muscle=0でIdentity）
+                // preQ * SwingTwist * Inv(postQ).
+                // With params: absolute local rotation.
+                // Without params: postQ * SwingTwist * Inv(postQ) -> normalized delta (Identity at muscle = 0).
                 let anim_rot = (pre_q * st * post_q_inv).normalize();
 
                 RotationKeyframe {
@@ -1000,7 +1000,7 @@ fn build_bone_channels(
         );
     }
 
-    // Hips の rest 情報（params から取得可能な場合）
+    // Hips rest data (when available from params)
     let hips_rest_rot = params
         .and_then(|p| p.bones.get(&0))
         .map(|bp| bp.local_rotation);
@@ -1008,7 +1008,7 @@ fn build_bone_channels(
         .and_then(|p| p.bones.get(&0))
         .map(|bp| bp.local_position);
 
-    // Root → hips: 回転（RootQ）
+    // Root -> hips: rotation (RootQ)
     if root_qx.is_some() || root_qy.is_some() || root_qz.is_some() || root_qw.is_some() {
         let mut all_times: Vec<f32> = Vec::new();
         for c in [&root_qx, &root_qy, &root_qz, &root_qw]
@@ -1021,7 +1021,7 @@ fn build_bone_channels(
         all_times.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
 
         if !all_times.is_empty() {
-            // 初期フレームの回転（glTF座標系）
+            // Rotation at the initial frame (glTF coords)
             let q0_x = root_qx
                 .map(|c| sample_curve_linear(&c.keyframes, 0.0))
                 .unwrap_or(0.0);
@@ -1057,23 +1057,23 @@ fn build_bone_channels(
 
                     let mut qi = unity_quat_to_gltf(qx, qy, qz, qw);
 
-                    // 符号一貫性: 前フレームとの内積が負なら反転
+                    // Sign consistency: flip when the dot product with the previous frame is negative
                     if prev_q.dot(qi) < 0.0 {
                         qi = -qi;
                     }
                     prev_q = qi;
 
-                    // デルタ: Inv(q0) × qi — rest からの回転差分
+                    // Delta: Inv(q0) * qi -- rotation offset from the rest pose
                     let delta = (q0_inv * qi).normalize();
 
                     if let Some(rest) = hips_rest_rot {
-                        // params あり: 絶対ローカル回転 = rest × delta
+                        // With params: absolute local rotation = rest * delta
                         RotationKeyframe {
                             time: t,
                             value: (rest * delta).normalize(),
                         }
                     } else {
-                        // フォールバック: デルタのまま（ビューアで rest × delta）
+                        // Fallback: keep the delta (the viewer applies `rest * delta`)
                         RotationKeyframe {
                             time: t,
                             value: delta,
@@ -1094,7 +1094,7 @@ fn build_bone_channels(
         }
     }
 
-    // Root → hips: 平行移動（RootT）
+    // Root -> hips: translation (RootT)
     if root_tx.is_some() || root_ty.is_some() || root_tz.is_some() {
         let mut all_times: Vec<f32> = Vec::new();
         for c in [&root_tx, &root_ty, &root_tz].into_iter().flatten() {
@@ -1104,7 +1104,7 @@ fn build_bone_channels(
         all_times.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
 
         if !all_times.is_empty() {
-            // 初期フレームの値をデルタ基準にする
+            // Use the initial-frame values as the delta baseline
             let t0_tx = root_tx
                 .map(|c| sample_curve_linear(&c.keyframes, 0.0))
                 .unwrap_or(0.0);
@@ -1130,17 +1130,17 @@ fn build_bone_channels(
                         .map(|c| sample_curve_linear(&c.keyframes, t))
                         .unwrap_or(0.0)
                         - t0_tz;
-                    // Unity左手系 → glTF右手系 のデルタ
+                    // Delta in Unity LH -> glTF RH
                     let delta = unity_vec3_to_gltf(tx, ty, tz);
 
                     if let Some(rest_pos) = hips_rest_pos {
-                        // params あり: 絶対位置 = rest + delta
+                        // With params: absolute position = rest + delta
                         TranslationKeyframe {
                             time: t,
                             value: rest_pos + delta,
                         }
                     } else {
-                        // フォールバック: デルタのまま
+                        // Fallback: keep the delta as-is
                         TranslationKeyframe {
                             time: t,
                             value: delta,
@@ -1167,7 +1167,7 @@ fn build_bone_channels(
     channels
 }
 
-/// キーフレーム配列から指定時刻の値を線形補間
+/// Linearly interpolate a value at the given time from a keyframe array.
 fn sample_curve_linear(keyframes: &[(f32, f32)], time: f32) -> f32 {
     if keyframes.is_empty() {
         return 0.0;
@@ -1244,7 +1244,7 @@ mod tests {
 
     #[test]
     fn test_postq_identity_at_rest() {
-        // muscle=0 のとき postQ × Id × Inv(postQ) = Identity
+        // When muscle = 0, postQ * Id * Inv(postQ) = Identity
         for unity_idx in 1..55 {
             let post_q = get_post_q(unity_idx);
             let result = post_q * Quat::IDENTITY * post_q.inverse();
