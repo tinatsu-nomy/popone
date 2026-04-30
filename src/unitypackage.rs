@@ -1,4 +1,4 @@
-//! .unitypackage (tar.gz) からアセットを抽出するモジュール
+//! Module for extracting assets from .unitypackage (tar.gz)
 
 use crate::error::{PoponeError, Result, ResultExt};
 use crate::intermediate::types::{SourceMaterialRef, TextureData};
@@ -9,9 +9,9 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 use std::sync::Arc;
 
-// ── Prefab テクスチャマッピング用エラー型 ──
+// ── Error type for Prefab texture mapping ──
 
-/// unitypackage 処理の専用エラー型
+/// Dedicated error type for unitypackage processing
 #[derive(Debug, thiserror::Error)]
 pub enum PkgError {
     #[error("Asset not found (GUID: {guid}, expected: {expected_type})")]
@@ -45,12 +45,12 @@ pub enum PkgError {
     Io(#[from] std::io::Error),
 }
 
-/// unitypackage 内部処理用の Result 型
+/// Result type for unitypackage internal processing
 pub type PkgResult<T> = std::result::Result<T, PkgError>;
 
-// ── Prefab テクスチャマッピング用型定義 ──
+// ── Type definitions for Prefab texture mapping ──
 
-/// unitypackage 内のモデルファイル種別
+/// Model file kind inside a unitypackage
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PkgModelType {
     Fbx,
@@ -58,7 +58,7 @@ pub enum PkgModelType {
     Prefab,
 }
 
-/// モデル選択の唯一キー（GUID + pathname で一意識別）
+/// Unique key for model selection (uniquely identified by GUID + pathname)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PkgModelLocator {
     pub guid: std::sync::Arc<str>,
@@ -66,20 +66,20 @@ pub struct PkgModelLocator {
     pub kind: PkgModelType,
 }
 
-/// モデル一覧の表示用アイテム
+/// Display item for the model list
 pub struct PkgModelListItem {
     pub locator: PkgModelLocator,
     pub label: std::sync::Arc<str>,
 }
 
-/// append 複数回を区別する scene 内インスタンス ID
+/// In-scene instance ID used to distinguish multiple appends
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PkgInstanceId(pub u32);
 
-/// ベースモデル用の固定インスタンス ID
+/// Fixed instance ID for the base model
 pub const BASE_INSTANCE_ID: PkgInstanceId = PkgInstanceId(0);
 
-/// reload/append 復元の安定キー
+/// Stable key used for reload/append restoration
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PkgMaterialKey {
     pub instance_id: PkgInstanceId,
@@ -88,21 +88,21 @@ pub struct PkgMaterialKey {
     pub material_name: std::sync::Arc<str>,
 }
 
-// ── 既存コード ──
+// ── Existing code ──
 
-/// FBXデータ、ファイル名、テクスチャ一覧のタプル型
+/// Tuple type of FBX data, filename, and texture list
 pub type FbxWithTextures = (Arc<[u8]>, String, Vec<(String, Arc<[u8]>)>);
 
-/// 展開されたアセット情報
+/// Information about an extracted asset
 pub struct ExtractedAsset {
-    /// Unity プロジェクト内パス（例: "Assets/Models/xxx.fbx"）
+    /// Path inside the Unity project (e.g. "Assets/Models/xxx.fbx")
     pub pathname: String,
-    /// アセット本体データ（Arc で AssetEntry と共有し二重コピーを回避）
+    /// Asset payload data (shared with AssetEntry via Arc to avoid double copies)
     pub data: Arc<[u8]>,
 }
 
 impl ExtractedAsset {
-    /// パスからファイル名部分を取得
+    /// Extract the filename portion from the path
     pub fn filename(&self) -> String {
         std::path::Path::new(&self.pathname)
             .file_name()
@@ -112,7 +112,7 @@ impl ExtractedAsset {
     }
 }
 
-/// unitypackage 内のアセットエントリ（GUID・パス・データ・メタ情報を保持）
+/// Asset entry inside a unitypackage (holds GUID, path, data, and meta information)
 pub struct AssetEntry {
     pub guid: String,
     pub pathname: String,
@@ -120,7 +120,7 @@ pub struct AssetEntry {
     pub meta: Option<String>,
 }
 
-/// unitypackage のインデックス（全アセット + GUID/パスの逆引きマップ）
+/// Index of a unitypackage (all assets + reverse lookup maps for GUID/path)
 pub struct UnityPackageIndex {
     pub entries: Vec<AssetEntry>,
     pub by_guid: HashMap<String, usize>,
@@ -140,11 +140,11 @@ pub struct ParsedPrefabCache {
     pub old_infos: Vec<OldPrefabInfo>,
 }
 
-/// 展開サイズ上限: 2GB（archive モジュールと同じ）
+/// Extraction size limit: 2GB (same as the archive module)
 const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
-/// .unitypackage からすべてのアセットを展開
-/// 内部で `build_unity_package_index()` を呼び、`Vec<ExtractedAsset>` に変換して返す
+/// Extracts all assets from a .unitypackage
+/// Internally calls `build_unity_package_index()` and converts the result into `Vec<ExtractedAsset>`
 pub fn extract_all_assets(archive_data: &[u8]) -> Result<Vec<ExtractedAsset>> {
     let index = build_unity_package_index(archive_data)?;
     let result = index
@@ -158,12 +158,12 @@ pub fn extract_all_assets(archive_data: &[u8]) -> Result<Vec<ExtractedAsset>> {
     Ok(result)
 }
 
-/// .unitypackage からインデックスを構築（全アセット + GUID/パスの逆引きマップ）
+/// Builds an index from a .unitypackage (all assets + reverse lookup maps for GUID/path)
 pub fn build_unity_package_index(archive_data: &[u8]) -> Result<UnityPackageIndex> {
     build_unity_package_index_with_limit(archive_data, MAX_TOTAL_BYTES)
 }
 
-/// .unitypackage からインデックスを構築（サイズ上限指定）
+/// Builds an index from a .unitypackage (with a specified size limit)
 fn build_unity_package_index_with_limit(
     archive_data: &[u8],
     max_bytes: u64,
@@ -171,7 +171,7 @@ fn build_unity_package_index_with_limit(
     let decoder = GzDecoder::new(Cursor::new(archive_data));
     let mut archive = tar::Archive::new(decoder);
 
-    // GUID → (pathname, asset_data, meta) を収集
+    // Collect GUID -> (pathname, asset_data, meta)
     let mut pathnames: HashMap<String, String> = HashMap::new();
     let mut assets: HashMap<String, Vec<u8>> = HashMap::new();
     let mut metas: HashMap<String, String> = HashMap::new();
@@ -188,7 +188,7 @@ fn build_unity_package_index_with_limit(
             .with_context(|| t!("error.unitypackage.path_failed").to_string())?
             .to_string_lossy()
             .to_string();
-        // パスは "GUID/filename" 形式
+        // The path is in "GUID/filename" form
         let parts: Vec<&str> = path.splitn(3, ['/', '\\']).collect();
         if parts.len() < 2 {
             continue;
@@ -202,7 +202,7 @@ fn build_unity_package_index_with_limit(
                 entry
                     .read_to_string(&mut s)
                     .with_context(|| t!("error.unitypackage.pathname_read_failed").to_string())?;
-                // B-9: pathname の読み込みバイト数も加算
+                // B-9: also count bytes read for pathname
                 total_bytes += s.len() as u64;
                 if total_bytes > max_bytes {
                     return Err(PoponeError::UnityPackage(
@@ -247,7 +247,7 @@ fn build_unity_package_index_with_limit(
                 entry
                     .read_to_end(&mut data)
                     .with_context(|| t!("error.unitypackage.asset_meta_read_failed").to_string())?;
-                // B-9: asset.meta の読み込みバイト数も加算
+                // B-9: also count bytes read for asset.meta
                 total_bytes += data.len() as u64;
                 if total_bytes > max_bytes {
                     return Err(PoponeError::UnityPackage(
@@ -264,11 +264,11 @@ fn build_unity_package_index_with_limit(
                 }
                 metas.insert(guid, cow.into_owned());
             }
-            _ => {} // preview.png 等は無視
+            _ => {} // ignore preview.png etc.
         }
     }
 
-    // pathname と asset を結合して AssetEntry を構築
+    // Combine pathname and asset to build AssetEntry
     let mut entries = Vec::new();
     let mut by_guid = HashMap::new();
     let mut by_path = HashMap::new();
@@ -309,14 +309,14 @@ fn build_unity_package_index_with_limit(
     Ok(index)
 }
 
-/// フルパス（pathname）でアセットインデックスを検索
-/// `selected_pkg_model.pathname` を使った GUID/パスベースの正確な再選択に使用
+/// Searches the asset index by full path (pathname).
+/// Used for accurate GUID/path-based reselection via `selected_pkg_model.pathname`.
 pub fn find_asset_by_pathname(assets: &[ExtractedAsset], pathname: &str) -> Option<usize> {
     assets.iter().position(|a| a.pathname == pathname)
 }
 
-/// 展開済みアセットからFBX一覧を取得
-/// 戻り値: [(アセットインデックス, ファイル名)]
+/// Returns the list of FBX assets from already-extracted assets.
+/// Returns: [(asset index, filename)]
 pub fn find_fbx_list(assets: &[ExtractedAsset]) -> Vec<(usize, String)> {
     assets
         .iter()
@@ -326,7 +326,7 @@ pub fn find_fbx_list(assets: &[ExtractedAsset]) -> Vec<(usize, String)> {
         .collect()
 }
 
-/// 展開済みアセットから指定FBXとテクスチャを参照ベースで取得する
+/// Returns the specified FBX and its textures by reference from extracted assets
 pub fn take_fbx_and_textures(
     assets: &[ExtractedAsset],
     fbx_index: usize,
@@ -345,7 +345,7 @@ pub fn take_fbx_and_textures(
     let fbx_name = fbx_asset.filename();
     let fbx_data = Arc::clone(&fbx_asset.data);
 
-    // テクスチャ（画像ファイル）を収集（FBX 自身を除外）
+    // Collect textures (image files), excluding the FBX itself
     let texture_exts = ["png", "jpg", "jpeg", "tga", "bmp", "psd", "tif", "tiff"];
     let textures: Vec<(String, Arc<[u8]>)> = assets
         .iter()
@@ -371,8 +371,8 @@ pub fn take_fbx_and_textures(
     Ok((fbx_data, fbx_name, textures))
 }
 
-/// 展開済みアセットからVRM一覧を取得
-/// 戻り値: [(アセットインデックス, ファイル名)]
+/// Returns the list of VRM assets from already-extracted assets.
+/// Returns: [(asset index, filename)]
 pub fn find_vrm_list(assets: &[ExtractedAsset]) -> Vec<(usize, String)> {
     assets
         .iter()
@@ -382,7 +382,7 @@ pub fn find_vrm_list(assets: &[ExtractedAsset]) -> Vec<(usize, String)> {
         .collect()
 }
 
-/// 展開済みアセットから指定VRMを参照ベースで取得する
+/// Returns the specified VRM by reference from extracted assets
 pub fn take_vrm(assets: &[ExtractedAsset], vrm_index: usize) -> Result<(Arc<[u8]>, String)> {
     if vrm_index >= assets.len() {
         return Err(PoponeError::UnityPackage(
@@ -404,9 +404,9 @@ pub fn take_vrm(assets: &[ExtractedAsset], vrm_index: usize) -> Result<(Arc<[u8]
     Ok((vrm_data, vrm_name))
 }
 
-/// .unitypackage から FBX を探して抽出する（CLI用）
-/// fbx_name が指定されていればそのFBXを使用、なければ最初のFBXを使用
-/// 戻り値: (FBXデータ, FBXファイル名, テクスチャ一覧 [(パス名, データ)])
+/// Finds and extracts an FBX from a .unitypackage (CLI use).
+/// If fbx_name is given, uses that FBX; otherwise uses the first FBX.
+/// Returns: (FBX data, FBX filename, texture list [(pathname, data)])
 pub fn extract_fbx_from_unitypackage(
     archive_data: &[u8],
     fbx_name: Option<&str>,
@@ -420,7 +420,7 @@ pub fn extract_fbx_from_unitypackage(
         ));
     }
 
-    // 複数ある場合はログ出力
+    // Log if multiple FBX files exist
     if fbx_list.len() > 1 {
         log::info!("Found {} FBX files in .unitypackage:", fbx_list.len(),);
         for (_, name) in &fbx_list {
@@ -428,7 +428,7 @@ pub fn extract_fbx_from_unitypackage(
         }
     }
 
-    // FBX 名が指定されていればそれを使用
+    // If an FBX name was specified, use it
     let selected_idx = if let Some(target) = fbx_name {
         let target_lower = target.to_lowercase();
         fbx_list
@@ -457,9 +457,9 @@ pub fn extract_fbx_from_unitypackage(
     take_fbx_and_textures(&assets, selected_idx)
 }
 
-/// unitypackage内テクスチャをIrModelの材質に自動割り当て
-/// 材質の source_texture_name とテクスチャファイル名をマッチングする
-/// 戻り値: 未割当材質のインデックス一覧
+/// Automatically assigns textures inside the unitypackage to materials of an IrModel.
+/// Matches each material's source_texture_name against texture filenames.
+/// Returns: list of indices of unassigned materials
 pub fn embed_textures_into_ir<T: AsRef<[u8]>>(
     ir: &mut crate::intermediate::types::IrModel,
     textures: &[(String, T)],
@@ -467,7 +467,7 @@ pub fn embed_textures_into_ir<T: AsRef<[u8]>>(
     embed_textures_into_ir_with_label(ir, textures, "package")
 }
 
-/// テクスチャ埋め込み（ソースラベル指定版）
+/// Texture embedding (variant with explicit source label)
 pub fn embed_textures_into_ir_with_label<T: AsRef<[u8]>>(
     ir: &mut crate::intermediate::types::IrModel,
     textures: &[(String, T)],
@@ -477,13 +477,13 @@ pub fn embed_textures_into_ir_with_label<T: AsRef<[u8]>>(
         return (0..ir.materials.len()).collect();
     }
 
-    // ファイル名 → データのマップ（小文字キー）
+    // Filename -> data map (lowercase keys)
     let tex_map: HashMap<String, &[u8]> = textures
         .iter()
         .map(|(name, data)| (name.to_lowercase(), data.as_ref()))
         .collect();
 
-    // ステム（拡張子なし） → フルキーの逆引きマップ（ステム一致高速化）
+    // Stem (without extension) -> full-key reverse map (speeds up stem matching)
     let stem_map: HashMap<String, String> = tex_map
         .keys()
         .map(|k| {
@@ -502,7 +502,7 @@ pub fn embed_textures_into_ir_with_label<T: AsRef<[u8]>>(
             Some(name) if !name.is_empty() => name.to_lowercase(),
             _ => continue,
         };
-        // 完全一致 → ステム一致のフォールバック
+        // Exact match -> fall back to stem match
         let found_key = if tex_map.contains_key(&src_name) {
             Some(src_name.clone())
         } else {
@@ -537,7 +537,7 @@ pub fn embed_textures_into_ir_with_label<T: AsRef<[u8]>>(
         }
     }
 
-    // 未割当材質のインデックスを収集
+    // Collect indices of unassigned materials
     let unmatched: Vec<usize> = ir
         .materials
         .iter()
@@ -555,14 +555,14 @@ pub fn embed_textures_into_ir_with_label<T: AsRef<[u8]>>(
     unmatched
 }
 
-// ── Step 6: ヘルパー関数 + パーサー群 ──
+// ── Step 6: Helper functions + parsers ──
 
-/// 行から "guid: " の後の32文字hexを抽出
+/// Extracts the 32-character hex following "guid: " from a line
 fn extract_guid_from_line(line: &str) -> Option<&str> {
     let idx = line.find("guid: ")?;
     let start = idx + 6; // "guid: ".len()
     let rest = line.get(start..)?;
-    // 32文字hex部分を取得（カンマ等で区切られている）
+    // Get the 32-character hex part (delimited by comma etc.)
     let end = rest
         .find(|c: char| !c.is_ascii_hexdigit())
         .unwrap_or(rest.len());
@@ -573,7 +573,7 @@ fn extract_guid_from_line(line: &str) -> Option<&str> {
     }
 }
 
-/// "data[N]" から N を抽出
+/// Extracts N from "data[N]"
 fn extract_array_index(line: &str) -> Option<usize> {
     let idx = line.find("data[")?;
     let start = idx + 5; // "data[".len()
@@ -582,7 +582,7 @@ fn extract_array_index(line: &str) -> Option<usize> {
     rest[..end].parse().ok()
 }
 
-/// Unity YAML の `\uXXXX` エスケープをデコードする
+/// Decodes Unity YAML `\uXXXX` escape sequences
 fn decode_unity_escape(s: &str) -> String {
     if !s.contains("\\u") {
         return s.to_string();
@@ -601,7 +601,7 @@ fn decode_unity_escape(s: &str) -> String {
                         }
                     }
                 }
-                // デコード失敗時はそのまま
+                // On decode failure, keep as-is
                 result.push('\\');
                 result.push('u');
                 result.push_str(&hex);
@@ -615,16 +615,16 @@ fn decode_unity_escape(s: &str) -> String {
     result
 }
 
-/// Prefab 形式
+/// Prefab format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefabFormat {
     New,
     Old,
 }
 
-/// Prefab 形式を判別
-/// 行頭に独立した `PrefabInstance:` があれば新形式。
-/// `m_PrefabInstance: {fileID: 0}` 等のフィールドとの誤マッチを防ぐため行単位で判定。
+/// Detects the Prefab format.
+/// If a standalone `PrefabInstance:` appears at the start of a line, it is the new format.
+/// Detection is performed line-by-line to avoid mismatching fields such as `m_PrefabInstance: {fileID: 0}`.
 fn detect_prefab_format(content: &str) -> PrefabFormat {
     if content.lines().any(|line| line.trim() == "PrefabInstance:") {
         PrefabFormat::New
@@ -633,26 +633,26 @@ fn detect_prefab_format(content: &str) -> PrefabFormat {
     }
 }
 
-/// 新形式 Prefab の解析結果
+/// Parse result for the new-format Prefab
 #[derive(Clone)]
 pub struct NewPrefabInfo {
     pub source_fbx_guid: String,
     pub material_overrides: Vec<MaterialOverride>,
 }
 
-/// マテリアルオーバーライド（スロット番号 + マテリアル GUID）
+/// Material override (slot index + material GUID)
 #[derive(Clone)]
 pub struct MaterialOverride {
     pub slot_index: usize,
     pub material_guid: String,
 }
 
-/// 新形式 Prefab をパース
+/// Parses the new-format Prefab.
 ///
-/// 新形式では `PrefabInstance:` ブロック内に `m_Modifications` (オーバーライド一覧) が先に来て、
-/// `m_SourcePrefab:` が後に出現する。そのため2パス方式で処理する:
-/// 1. オーバーライドを蓄積
-/// 2. `m_SourcePrefab:` 出現時に蓄積分と紐付けて結果を生成
+/// In the new format, `m_Modifications` (override list) appears first within a `PrefabInstance:`
+/// block, and `m_SourcePrefab:` appears later. Therefore a two-pass approach is used:
+/// 1. Accumulate overrides
+/// 2. When `m_SourcePrefab:` is seen, associate the accumulated overrides and produce a result
 fn parse_prefab_new(content: &str) -> PkgResult<Vec<NewPrefabInfo>> {
     let mut results: Vec<NewPrefabInfo> = Vec::new();
     let mut current_overrides: Vec<MaterialOverride> = Vec::new();
@@ -662,9 +662,9 @@ fn parse_prefab_new(content: &str) -> PkgResult<Vec<NewPrefabInfo>> {
     for line in content.lines() {
         let trimmed = line.trim();
 
-        // PrefabInstance: ブロック開始
+        // PrefabInstance: block start
         if trimmed == "PrefabInstance:" {
-            // 新しい PrefabInstance ブロック開始時に蓄積をリセット
+            // Reset accumulators when a new PrefabInstance block begins
             current_overrides.clear();
             pending_slot_index = None;
             in_prefab_instance = true;
@@ -693,7 +693,7 @@ fn parse_prefab_new(content: &str) -> PkgResult<Vec<NewPrefabInfo>> {
             continue;
         }
 
-        // m_SourcePrefab: で GUID を取得し、蓄積したオーバーライドと紐付け
+        // Pick up the GUID from m_SourcePrefab: and bind it to the accumulated overrides
         if trimmed.contains("m_SourcePrefab:") {
             if let Some(guid) = extract_guid_from_line(trimmed) {
                 results.push(NewPrefabInfo {
@@ -709,14 +709,14 @@ fn parse_prefab_new(content: &str) -> PkgResult<Vec<NewPrefabInfo>> {
     Ok(results)
 }
 
-/// 旧形式 Prefab の解析結果
+/// Parse result for the old-format Prefab
 #[derive(Clone)]
 pub struct OldPrefabInfo {
     pub fbx_guid: String,
     pub material_guids: Vec<String>,
 }
 
-/// 旧形式 Prefab をパース
+/// Parses the old-format Prefab
 fn parse_prefab_old(content: &str) -> PkgResult<Vec<OldPrefabInfo>> {
     let mut results: Vec<OldPrefabInfo> = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
@@ -725,7 +725,7 @@ fn parse_prefab_old(content: &str) -> PkgResult<Vec<OldPrefabInfo>> {
     while i < lines.len() {
         let trimmed = lines[i].trim();
 
-        // SkinnedMeshRenderer セクション検出
+        // Detect SkinnedMeshRenderer section
         if trimmed.starts_with("--- !u!137") {
             let mut mat_guids: Vec<String> = Vec::new();
             let mut mesh_guid: Option<String> = None;
@@ -736,14 +736,14 @@ fn parse_prefab_old(content: &str) -> PkgResult<Vec<OldPrefabInfo>> {
                 let line = lines[i];
                 let lt = line.trim();
 
-                // 次のオブジェクト境界
+                // Next object boundary
                 if lt.starts_with("--- ") {
                     break;
                 }
 
-                // m_Materials: (複数行リスト) または m_Materials: [] (空インライン)
+                // m_Materials: (multi-line list) or m_Materials: [] (empty inline)
                 if lt.starts_with("m_Materials:") {
-                    // "m_Materials: []" のような空インラインはスキップ
+                    // Skip empty inline forms like "m_Materials: []"
                     if !lt.contains("[]") {
                         in_materials = true;
                     }
@@ -771,7 +771,7 @@ fn parse_prefab_old(content: &str) -> PkgResult<Vec<OldPrefabInfo>> {
             }
 
             if let Some(fg) = mesh_guid {
-                // m_Mesh があれば m_Materials が空でも FBX 参照として有効
+                // If m_Mesh exists, this is a valid FBX reference even when m_Materials is empty
                 results.push(OldPrefabInfo {
                     fbx_guid: fg,
                     material_guids: mat_guids,
@@ -786,13 +786,13 @@ fn parse_prefab_old(content: &str) -> PkgResult<Vec<OldPrefabInfo>> {
     Ok(results)
 }
 
-/// FBX .meta 内のマテリアル情報
+/// Material information inside an FBX .meta
 struct FbxMetaMaterial {
     material_name: String,
     material_guid: String,
 }
 
-/// FBX .meta をパースして (マテリアル一覧, materialImportMode) を返す
+/// Parses an FBX .meta and returns (material list, materialImportMode)
 fn parse_fbx_meta(meta_content: &str) -> PkgResult<(Vec<FbxMetaMaterial>, Option<u32>)> {
     let mut materials: Vec<FbxMetaMaterial> = Vec::new();
     let mut import_mode: Option<u32> = None;
@@ -807,7 +807,7 @@ fn parse_fbx_meta(meta_content: &str) -> PkgResult<(Vec<FbxMetaMaterial>, Option
             continue;
         }
 
-        // externalObjects セクション終了検出（インデントレベルが戻った場合）
+        // Detect end of externalObjects section (when indent level returns)
         if in_external_objects
             && !line.starts_with(' ')
             && !line.starts_with('\t')
@@ -817,7 +817,7 @@ fn parse_fbx_meta(meta_content: &str) -> PkgResult<(Vec<FbxMetaMaterial>, Option
         }
 
         if in_external_objects {
-            // name: で始まるマテリアル名（Unity YAML の \uXXXX エスケープをデコード、クォート除去）
+            // Material name starting with `name:` (decodes Unity YAML \uXXXX escapes, strips quotes)
             if trimmed.starts_with("name:") {
                 let val = trimmed
                     .strip_prefix("name:")
@@ -827,7 +827,7 @@ fn parse_fbx_meta(meta_content: &str) -> PkgResult<(Vec<FbxMetaMaterial>, Option
                 current_name = Some(decode_unity_escape(val));
                 continue;
             }
-            // second: で始まる GUID
+            // GUID prefixed with `second:`
             if trimmed.starts_with("second:") && current_name.is_some() {
                 if let Some(guid) = extract_guid_from_line(trimmed) {
                     let name = current_name
@@ -855,7 +855,7 @@ fn parse_fbx_meta(meta_content: &str) -> PkgResult<(Vec<FbxMetaMaterial>, Option
         }
     }
 
-    // materialImportMode の値はログ出力のみ（値に関わらず externalObjects を参照する）
+    // The materialImportMode value is logged only (we always look at externalObjects regardless)
     if let Some(mode) = import_mode {
         if mode != 2 {
             log::info!(
@@ -869,19 +869,19 @@ fn parse_fbx_meta(meta_content: &str) -> PkgResult<(Vec<FbxMetaMaterial>, Option
     Ok((materials, import_mode))
 }
 
-/// .mat ファイル内のテクスチャスロット情報
+/// Texture-slot info inside a `.mat` file.
 struct MatTextureSlot {
     slot_name: String,
     texture_guid: String,
 }
 
-/// .mat ファイル内の Float パラメータ情報
+/// Float-parameter info inside a `.mat` file.
 struct MatFloatParam {
     param_name: String,
     value: f32,
 }
 
-/// .mat ファイル内の Color パラメータ情報
+/// Color-parameter info inside a `.mat` file.
 #[expect(dead_code)]
 struct MatColorParam {
     param_name: String,
@@ -891,17 +891,17 @@ struct MatColorParam {
     a: f32,
 }
 
-/// .mat ファイルの解析結果
+/// Parse result for a `.mat` file.
 struct ParsedMaterial {
     name: String,
     textures: Vec<MatTextureSlot>,
     floats: Vec<MatFloatParam>,
     colors: Vec<MatColorParam>,
-    /// m_ShaderKeywords / m_ValidKeywords に含まれるキーワード
+    /// Keywords contained in `m_ShaderKeywords` / `m_ValidKeywords`.
     shader_keywords: Vec<String>,
 }
 
-/// m_SavedProperties 内のセクション種別
+/// Section kinds inside `m_SavedProperties`.
 enum MatSection {
     None,
     TexEnvs,
@@ -910,7 +910,7 @@ enum MatSection {
     Keywords,
 }
 
-/// .mat ファイルからマテリアル名・テクスチャスロット・Float パラメータを抽出
+/// Extract the material name, texture slots, and float parameters from a `.mat` file.
 fn parse_material_textures(mat_content: &str) -> PkgResult<ParsedMaterial> {
     let mut name = String::new();
     let mut textures: Vec<MatTextureSlot> = Vec::new();
@@ -923,7 +923,7 @@ fn parse_material_textures(mat_content: &str) -> PkgResult<ParsedMaterial> {
     for line in mat_content.lines() {
         let trimmed = line.trim();
 
-        // m_Name:（セクション外でも処理）
+        // m_Name: (handled even outside sections)
         if trimmed.starts_with("m_Name:") {
             name = trimmed
                 .strip_prefix("m_Name:")
@@ -933,16 +933,16 @@ fn parse_material_textures(mat_content: &str) -> PkgResult<ParsedMaterial> {
             continue;
         }
 
-        // m_ShaderKeywords / m_ValidKeywords: インライン "KEY1 KEY2 KEY3" または複数行リスト
+        // m_ShaderKeywords / m_ValidKeywords: either inline "KEY1 KEY2 KEY3" or a multi-line list
         if trimmed.starts_with("m_ShaderKeywords:") || trimmed.starts_with("m_ValidKeywords:") {
             let val = trimmed.split_once(':').map(|(_, v)| v.trim()).unwrap_or("");
             if val.is_empty() || val == "[]" {
-                // 値なし or 空配列 → 複数行リスト形式の可能性があるのでセクション切替
+                // No value or empty array -> may be the multi-line list form, so switch sections
                 if val != "[]" {
                     section = MatSection::Keywords;
                 }
             } else {
-                // インライン形式: "KEY1 KEY2 KEY3"
+                // Inline form: "KEY1 KEY2 KEY3"
                 let val = val.trim_matches('"').trim_matches('\'');
                 for kw in val.split_whitespace() {
                     if !shader_keywords.contains(&kw.to_string()) {
@@ -953,7 +953,7 @@ fn parse_material_textures(mat_content: &str) -> PkgResult<ParsedMaterial> {
             continue;
         }
 
-        // セクション切り替え
+        // Section switching
         if trimmed == "m_TexEnvs:" {
             section = MatSection::TexEnvs;
             continue;
@@ -966,12 +966,12 @@ fn parse_material_textures(mat_content: &str) -> PkgResult<ParsedMaterial> {
             section = MatSection::Colors;
             continue;
         }
-        // 空配列インライン
+        // Inline empty array
         if trimmed == "m_Floats: []" || trimmed == "m_TexEnvs: []" || trimmed == "m_Colors: []" {
             section = MatSection::None;
             continue;
         }
-        // 他の m_ セクションヘッダーで終了
+        // End the section when another `m_` header appears
         if trimmed.starts_with("m_")
             && !trimmed.starts_with("m_Texture:")
             && !trimmed.starts_with("m_Scale:")
@@ -982,7 +982,7 @@ fn parse_material_textures(mat_content: &str) -> PkgResult<ParsedMaterial> {
 
         match section {
             MatSection::TexEnvs => {
-                // スロット名検出: "- _SlotName:" の形式
+                // Detect a slot name in the form "- _SlotName:"
                 if trimmed.starts_with("- _") {
                     // "- _MainTex:" → "_MainTex"
                     let Some(stripped) = trimmed.strip_prefix("- ") else {
@@ -993,10 +993,10 @@ fn parse_material_textures(mat_content: &str) -> PkgResult<ParsedMaterial> {
                     continue;
                 }
 
-                // m_Texture: 行
+                // m_Texture: line
                 if trimmed.starts_with("m_Texture:") {
                     if let Some(ref slot) = current_slot {
-                        // fileID: 0 はスキップ（テクスチャ未設定）
+                        // fileID: 0 means no texture is set, so skip
                         if trimmed.contains("fileID: 0") {
                             current_slot = None;
                             continue;
@@ -1037,7 +1037,7 @@ fn parse_material_textures(mat_content: &str) -> PkgResult<ParsedMaterial> {
                         trimmed.strip_prefix("- ").and_then(|s| s.split_once(':'))
                     {
                         let val_str = val_str.trim();
-                        // {r: R, g: G, b: B, a: A} をパース
+                        // Parse {r: R, g: G, b: B, a: A}
                         if let Some(color) = parse_unity_color(val_str) {
                             colors.push(MatColorParam {
                                 param_name: param_name.trim().to_string(),
@@ -1051,14 +1051,14 @@ fn parse_material_textures(mat_content: &str) -> PkgResult<ParsedMaterial> {
                 }
             }
             MatSection::Keywords => {
-                // 複数行リスト: "- _EMISSION" の形式
+                // Multi-line list form: "- _EMISSION"
                 if let Some(kw) = trimmed.strip_prefix("- ") {
                     let kw = kw.trim();
                     if !kw.is_empty() && !shader_keywords.contains(&kw.to_string()) {
                         shader_keywords.push(kw.to_string());
                     }
                 } else if !trimmed.starts_with('-') {
-                    // リスト項目以外が来たらセクション終了
+                    // End the section when a non-list-item line appears
                     section = MatSection::None;
                 }
             }
@@ -1075,7 +1075,7 @@ fn parse_material_textures(mat_content: &str) -> PkgResult<ParsedMaterial> {
     })
 }
 
-/// Unity の色値 `{r: R, g: G, b: B, a: A}` をパース
+/// Parse a Unity color value of the form `{r: R, g: G, b: B, a: A}`.
 fn parse_unity_color(s: &str) -> Option<(f32, f32, f32, f32)> {
     let s = s.trim().strip_prefix('{')?.strip_suffix('}')?;
     let mut r = 0.0f32;
@@ -1100,42 +1100,42 @@ fn parse_unity_color(s: &str) -> Option<(f32, f32, f32, f32)> {
 
 // ── Step 7: resolve_prefab_textures ──
 
-/// Prefab 解決済みマテリアルテクスチャ情報
+/// Material-texture info resolved through Prefab references.
 pub struct ResolvedMaterialTextures {
     pub source_material: Option<SourceMaterialRef>,
     pub material_name: Arc<str>,
     pub main_texture_guid: Option<Arc<str>>,
-    /// ノーマルマップテクスチャ GUID（_BumpMap > _NormalMap の優先順）
+    /// Normal-map texture GUID (_BumpMap > _NormalMap, in priority order).
     pub normal_texture_guid: Option<Arc<str>>,
-    /// ノーマルマップスケール（_BumpScale、デフォルト 1.0）
+    /// Normal-map scale (`_BumpScale`, default 1.0).
     pub bump_scale: f32,
-    /// FBX .meta の externalObjects に記載された FBX 内マテリアル名（IrModel の材質名と一致する）
+    /// FBX-internal material name listed in the FBX `.meta` `externalObjects` (matches the IrModel material name).
     pub fbx_material_name: Option<Arc<str>>,
-    /// Emission テクスチャ GUID（_EmissionMap）
+    /// Emission-texture GUID (`_EmissionMap`).
     pub emission_texture_guid: Option<Arc<str>>,
-    /// Emission 色 (r, g, b)（_EmissionColor、デフォルト黒 = 無効）
+    /// Emission color (r, g, b) (`_EmissionColor`; default black means disabled).
     pub emission_color: [f32; 3],
-    /// Emission 有効フラグ（_Emission float == 1.0）
+    /// Emission-enabled flag (`_Emission` float == 1.0).
     pub emission_enabled: bool,
-    /// Emission ブレンドモード（lilToon: 0=Add, 1=Screen; デフォルト 0）
+    /// Emission blend mode (lilToon: 0 = Add, 1 = Screen; default 0).
     pub emission_blend: u8,
 }
 
-/// Prefab 候補（パスと解決済みマテリアル一覧）
+/// Prefab candidate (path + resolved material list).
 struct PrefabCandidate {
     prefab_path: String,
     materials: Vec<ResolvedMaterialTextures>,
 }
 
-/// Prefab パスと FBX パスの類似度スコア
+/// Similarity score between a Prefab path and an FBX path.
 fn score_prefab_path(prefab_path: &str, fbx_path: &str) -> usize {
-    // 共通プレフィックスの長さでスコアリング
+    // Score by the length of the shared prefix
     let prefab_parts: Vec<&str> = prefab_path.split('/').collect();
     let fbx_parts: Vec<&str> = fbx_path.split('/').collect();
     let mut score = 0;
     for (a, b) in prefab_parts.iter().zip(fbx_parts.iter()) {
         if a == b {
-            score += a.len() + 1; // パス区切り分も加算
+            score += a.len() + 1; // Account for the path separator too
         } else {
             break;
         }
@@ -1143,7 +1143,7 @@ fn score_prefab_path(prefab_path: &str, fbx_path: &str) -> usize {
     score
 }
 
-/// 複数候補から最適な Prefab を選択
+/// Pick the best Prefab from multiple candidates.
 fn choose_prefab<'a>(
     candidates: &'a [PrefabCandidate],
     fbx_path: &str,
@@ -1156,14 +1156,14 @@ fn choose_prefab<'a>(
         .max_by_key(|c| score_prefab_path(&c.prefab_path, fbx_path))
 }
 
-/// Variant Prefab の再帰解決（source_prefab GUID → 元 FBX の GUID）
+/// Recursive resolution of Variant Prefabs (source_prefab GUID -> original FBX GUID).
 pub fn resolve_variant(pkg: &UnityPackageIndex, guid: &str) -> PkgResult<Option<String>> {
     let guids = resolve_variant_multi(pkg, guid)?;
     Ok(guids.into_iter().next())
 }
 
-/// Variant Prefab を再帰的に解決し、参照先の FBX GUID を全て返す。
-/// 混合形式 Prefab（PrefabInstance + SkinnedMeshRenderer が共存）にも対応。
+/// Resolve Variant Prefabs recursively and return every referenced FBX GUID.
+/// Also supports mixed-format Prefabs (PrefabInstance + SkinnedMeshRenderer co-existing).
 pub fn resolve_variant_multi(pkg: &UnityPackageIndex, guid: &str) -> PkgResult<Vec<String>> {
     let mut visited = HashSet::new();
     resolve_variant_multi_inner(pkg, guid, 0, &mut visited)
@@ -1190,7 +1190,7 @@ fn resolve_variant_multi_inner(
         return Err(PkgError::PrefabVariantTooDeep { guid: guid.into() });
     }
 
-    // GUID から pathname を解決
+    // Resolve the pathname from the GUID
     let entry_idx = match pkg.by_guid.get(guid) {
         Some(&idx) => idx,
         None => {
@@ -1440,7 +1440,7 @@ fn build_prefab_fbx_map(index: &mut UnityPackageIndex) {
     );
 }
 
-/// Prefab テクスチャ解決: FBX GUID に対応する Prefab を探してマテリアル→テクスチャマッピングを返す
+/// Prefab texture resolution: locate the Prefab that matches the FBX GUID and return a material -> texture mapping.
 pub fn resolve_prefab_textures(
     pkg: &UnityPackageIndex,
     fbx_guid: &str,
@@ -1659,7 +1659,7 @@ pub fn resolve_prefab_textures(
     match choose_prefab(&candidates, fbx_path) {
         Some(c) => {
             log::info!("Prefab selected: {}", c.prefab_path);
-            // 所有権を移動するため候補リストから取り出す
+            // Pull the chosen candidate out of the list to move ownership
             let idx = candidates
                 .iter()
                 .position(|x| std::ptr::eq(x, c))
@@ -1677,19 +1677,19 @@ pub fn resolve_prefab_textures(
     }
 }
 
-/// 単一 FBX の解決結果
+/// Resolution result for a single FBX.
 pub struct FbxResolveEntry {
     pub fbx_guid: String,
     pub fbx_index: usize,
     pub materials: Vec<ResolvedMaterialTextures>,
 }
 
-/// Prefab 全体の解決結果（複数 FBX を含む可能性あり）
+/// Full Prefab resolution result (may contain multiple FBX entries).
 pub struct PrefabResolveResult {
     pub entries: Vec<FbxResolveEntry>,
 }
 
-/// 特定の Prefab エントリから全 FBX を解決し、テクスチャマッピングを返す
+/// Resolve every FBX referenced from a specific Prefab entry and return their texture mappings.
 pub fn resolve_single_prefab(
     pkg: &UnityPackageIndex,
     prefab_index: usize,
@@ -1697,7 +1697,7 @@ pub fn resolve_single_prefab(
     resolve_single_prefab_inner(pkg, prefab_index, 0)
 }
 
-/// 再帰対応の内部実装（depth で無限ループ防止）
+/// Recursive internal implementation (uses `depth` to guard against infinite loops).
 fn resolve_single_prefab_inner(
     pkg: &UnityPackageIndex,
     prefab_index: usize,
@@ -1716,12 +1716,12 @@ fn resolve_single_prefab_inner(
     let mut seen_guids = HashSet::new();
     let mut parsed_count = 0;
 
-    // New 形式パース（PrefabInstance ブロック）
+    // Parse the New format (PrefabInstance block)
     if format == PrefabFormat::New {
         let infos = parse_prefab_new(&content)?;
         parsed_count += infos.len();
         for info in infos {
-            // 参照先が Prefab かどうかチェック（Nested Prefab / Variant 対応）
+            // Check whether the reference points to another Prefab (handles Nested Prefab / Variant)
             let is_nested_prefab = pkg
                 .by_guid
                 .get(&info.source_fbx_guid)
@@ -1734,7 +1734,7 @@ fn resolve_single_prefab_inner(
                 .unwrap_or(false);
 
             if is_nested_prefab {
-                // Nested Prefab: 再帰的に解決して全 FBX エントリを取得
+                // Nested Prefab: recurse and collect every FBX entry
                 let nested_idx = *pkg
                     .by_guid
                     .get(&info.source_fbx_guid)
@@ -1757,17 +1757,17 @@ fn resolve_single_prefab_inner(
                     }
                 }
             } else {
-                // 参照先が FBX（または Variant 経由で FBX に解決）
+                // The reference is an FBX (or resolves to an FBX via a Variant)
                 let resolved_guid =
                     resolve_variant(pkg, &info.source_fbx_guid)?.unwrap_or(info.source_fbx_guid);
                 if !seen_guids.insert(resolved_guid.clone()) {
-                    continue; // 重複 FBX GUID スキップ
+                    continue; // Skip duplicate FBX GUID
                 }
                 let Some(&fbx_idx) = pkg.by_guid.get(&resolved_guid) else {
                     log::warn!("Prefab referenced FBX not found: GUID={}", resolved_guid);
                     continue;
                 };
-                // 新形式: FBX .meta + Prefab オーバーライド
+                // New format: FBX .meta + Prefab overrides
                 let meta_materials = if let Some(ref meta) = pkg.entries[fbx_idx].meta {
                     match parse_fbx_meta(meta) {
                         Ok((mats, _)) => mats,
@@ -1804,13 +1804,13 @@ fn resolve_single_prefab_inner(
         }
     }
 
-    // Old 形式パース（SkinnedMeshRenderer セクション）
-    // 混合形式対応: New の後にも Old を常に実行し、追加の FBX 参照を取得
+    // Parse the Old format (SkinnedMeshRenderer section).
+    // Mixed-format support: always run Old after New so we still pick up any extra FBX references.
     {
         if let Ok(infos) = parse_prefab_old(&content) {
             if !infos.is_empty() {
                 parsed_count += infos.len();
-                // 同じ FBX GUID を参照する複数の SkinnedMeshRenderer のマテリアルを統合
+                // Merge materials across multiple SkinnedMeshRenderers that point at the same FBX GUID
                 let mut fbx_mat_guids: HashMap<String, Vec<String>> = HashMap::new();
                 let mut fbx_guid_order: Vec<String> = Vec::new();
                 for info in infos {
@@ -1829,13 +1829,13 @@ fn resolve_single_prefab_inner(
                 }
                 for fbx_guid in fbx_guid_order {
                     if !seen_guids.insert(fbx_guid.clone()) {
-                        continue; // New 経路で既に追加済み
+                        continue; // Already added through the New path
                     }
                     let Some(&fbx_idx) = pkg.by_guid.get(&fbx_guid) else {
                         log::warn!("Prefab referenced FBX not found: GUID={}", fbx_guid);
                         continue;
                     };
-                    // FBX .meta からマテリアル GUID → FBX マテリアル名のマッピングを構築
+                    // Build material GUID -> FBX material name mapping from the FBX .meta
                     let meta_guid_to_fbx_name: HashMap<String, String> =
                         if let Some(ref meta) = pkg.entries[fbx_idx].meta {
                             match parse_fbx_meta(meta) {
@@ -1853,7 +1853,7 @@ fn resolve_single_prefab_inner(
                         };
 
                     let mat_guids = fbx_mat_guids.remove(&fbx_guid).unwrap_or_default();
-                    // .meta から取得できていないマテリアルも Prefab の m_Materials から追加
+                    // Also include materials missing from .meta by reading the Prefab's m_Materials
                     let mut all_mat_guids = mat_guids;
                     for meta_guid in meta_guid_to_fbx_name.keys() {
                         if !all_mat_guids.contains(meta_guid) {
@@ -1892,7 +1892,7 @@ fn resolve_single_prefab_inner(
     Ok(PrefabResolveResult { entries })
 }
 
-/// マテリアル GUID マップからテクスチャ解決結果を生成（.meta の FBX マテリアル名付き）
+/// Build texture-resolution results from a material-GUID map (with FBX material names from .meta).
 fn resolve_material_guids_to_textures_with_meta(
     pkg: &UnityPackageIndex,
     mat_guid_map: &HashMap<usize, String>,
@@ -1922,8 +1922,8 @@ fn resolve_material_guids_to_textures_with_meta(
             }
         };
 
-        // _MainTex を最優先、次に _BaseMap、最後に _BaseColorMap（lilToon 等では
-        // _BaseColorMap が _MainTex と異なるテクスチャを参照する場合があるため）
+        // Priority: _MainTex first, then _BaseMap, then _BaseColorMap. lilToon (and similar shaders)
+        // sometimes assign a different texture to _BaseColorMap from _MainTex.
         let main_tex_guid = parsed
             .textures
             .iter()
@@ -1937,10 +1937,10 @@ fn resolve_material_guids_to_textures_with_meta(
             })
             .map(|t| Arc::from(t.texture_guid.as_str()));
 
-        // ノーマルマップ: _BumpMap (Standard/lilToon/Poiyomi/AXCS/WF) > _NormalMap (UTS2)
+        // Normal map: _BumpMap (Standard/lilToon/Poiyomi/AXCS/WF) > _NormalMap (UTS2)
         let bump_map = parsed.textures.iter().find(|t| t.slot_name == "_BumpMap");
         let normal_map = parsed.textures.iter().find(|t| t.slot_name == "_NormalMap");
-        // 両方存在して GUID が異なる場合は warn
+        // Warn when both exist with different GUIDs
         if let (Some(b), Some(n)) = (bump_map, normal_map) {
             if b.texture_guid != n.texture_guid {
                 log::warn!(
@@ -1960,14 +1960,14 @@ fn resolve_material_guids_to_textures_with_meta(
             .map(|f| f.value)
             .unwrap_or(1.0);
 
-        // Emission テクスチャ
+        // Emission texture
         let emission_tex_guid = parsed
             .textures
             .iter()
             .find(|t| t.slot_name == "_EmissionMap")
             .map(|t| Arc::from(t.texture_guid.as_str()));
 
-        // Emission 色（_EmissionColor）
+        // Emission color (`_EmissionColor`)
         let emission_color = parsed
             .colors
             .iter()
@@ -1975,13 +1975,14 @@ fn resolve_material_guids_to_textures_with_meta(
             .map(|c| [c.r, c.g, c.b])
             .unwrap_or([0.0; 3]);
 
-        // Emission 有効判定（優先順）:
-        // 1. _UseEmission (lilToon) が明示的にある場合はその値で判定
-        // 2. _Emission float (Standard) が明示的にある場合はその値で判定
-        // 3. m_ShaderKeywords / m_ValidKeywords に _EMISSION が含まれる場合は有効
-        // 4. _EmissionMap テクスチャがある場合は有効
-        // 5. _EmissionColor が非黒かつ非白の場合は有効
-        //    白 (1,1,1) 除外理由: 多くのシェーダーが emission 無効時でも白で初期化（実例: Masscat v1.02）
+        // Emission enabled-detection (priority order):
+        // 1. If `_UseEmission` (lilToon) is set explicitly, follow its value.
+        // 2. If `_Emission` float (Standard) is set explicitly, follow its value.
+        // 3. Enabled if `_EMISSION` appears in `m_ShaderKeywords` / `m_ValidKeywords`.
+        // 4. Enabled if an `_EmissionMap` texture exists.
+        // 5. Enabled if `_EmissionColor` is neither black nor white.
+        //    White (1, 1, 1) is excluded because many shaders initialize emission to white
+        //    even when disabled (real-world example: Masscat v1.02).
         let has_emission_keyword = parsed.shader_keywords.iter().any(|kw| kw == "_EMISSION");
         let emission_color_meaningful =
             emission_color != [0.0; 3] && emission_color != [1.0, 1.0, 1.0];
@@ -2003,7 +2004,7 @@ fn resolve_material_guids_to_textures_with_meta(
                 )
         });
 
-        // Emission ブレンドモード（lilToon: 0=Add, 1=Screen）
+        // Emission blend mode (lilToon: 0 = Add, 1 = Screen)
         let emission_blend = parsed
             .floats
             .iter()
@@ -2046,16 +2047,16 @@ fn resolve_material_guids_to_textures_with_meta(
 
 // ── Step 8: PackageTexture + PreparedPkgFbx ──
 
-/// unitypackage 内のテクスチャ（GUID 付き）
+/// Texture inside a unitypackage (with its GUID).
 pub struct PackageTexture {
     pub guid: Arc<str>,
     pub display_name: Arc<str>,
     pub data: Arc<[u8]>,
-    /// アーカイブ内フルパス（例: "Assets/texture/body.png"）
+    /// Full path inside the archive (e.g. "Assets/texture/body.png").
     pub pathname: Arc<str>,
 }
 
-/// Prefab 解決済み FBX パッケージ
+/// Prefab-resolved FBX package.
 pub struct PreparedPkgFbx {
     pub model: PkgModelLocator,
     pub fbx_data: Arc<[u8]>,
@@ -2063,7 +2064,7 @@ pub struct PreparedPkgFbx {
     pub resolved: Vec<ResolvedMaterialTextures>,
 }
 
-/// 画像ファイル拡張子かどうか
+/// Whether the path has an image-file extension.
 fn is_image_extension(path: &str) -> bool {
     let lower = path.to_lowercase();
     const IMAGE_EXTS: &[&str] = &[
@@ -2072,23 +2073,23 @@ fn is_image_extension(path: &str) -> bool {
     IMAGE_EXTS.iter().any(|ext| lower.ends_with(ext))
 }
 
-/// UnityPackageIndex から FBX を準備（Prefab 解決 + テクスチャ収集）
+/// Prepare an FBX from a `UnityPackageIndex` (Prefab resolution + texture collection).
 pub fn prepare_pkg_fbx(pkg: &UnityPackageIndex, fbx_index: usize) -> Result<PreparedPkgFbx> {
     let entry = &pkg.entries[fbx_index];
     let fbx_guid = &entry.guid;
     let fbx_path = &entry.pathname;
 
-    // PkgModelLocator 構築
+    // Build the PkgModelLocator
     let model = PkgModelLocator {
         guid: Arc::from(fbx_guid.as_str()),
         pathname: Arc::from(fbx_path.as_str()),
         kind: PkgModelType::Fbx,
     };
 
-    // Prefab テクスチャ解決
+    // Prefab texture resolution
     let resolved = resolve_prefab_textures(pkg, fbx_guid, fbx_path);
 
-    // テクスチャ収集（画像拡張子フィルタ）
+    // Texture collection (filtered by image extension)
     let textures: Vec<PackageTexture> = pkg
         .entries
         .iter()
@@ -2122,15 +2123,15 @@ pub fn prepare_pkg_fbx(pkg: &UnityPackageIndex, fbx_index: usize) -> Result<Prep
     })
 }
 
-/// FBX インデックス一覧からベストな FBX を自動選択
+/// Automatically pick the best FBX from a list of FBX indices.
 ///
-/// 選択基準（優先順）:
-/// 1. ファイルサイズが最大の FBX を優先（本体モデルはアニメーション・小道具より大きい傾向）
+/// Selection criteria (priority order):
+/// 1. Prefer the largest FBX by file size (the main model tends to be bigger than animations or props).
 pub fn select_best_fbx_index(pkg: &UnityPackageIndex, fbx_indices: &[(usize, String)]) -> usize {
     if fbx_indices.len() == 1 {
         return fbx_indices[0].0;
     }
-    // データサイズが最大の FBX を選択
+    // Pick the FBX with the largest data size
     let best = fbx_indices
         .iter()
         .max_by_key(|(idx, _)| pkg.entries[*idx].data.len())
@@ -2149,8 +2150,8 @@ pub fn select_best_fbx_index(pkg: &UnityPackageIndex, fbx_indices: &[(usize, Str
     best.0
 }
 
-/// CLI 用モデル解決: --fbx-name ヒントで FBX 候補リストから1件選択
-/// FBX 限定（CLI は FBX 変換のみ対応のため）
+/// Model resolution for the CLI: pick one entry from a list of FBX candidates using the `--fbx-name` hint.
+/// FBX only (the CLI supports only FBX conversion).
 pub fn resolve_pkg_model_for_cli<'a>(
     items: &'a [PkgModelListItem],
     hint: Option<&str>,
@@ -2201,8 +2202,8 @@ pub fn resolve_pkg_model_for_cli<'a>(
     }
 }
 
-/// Resolved テクスチャ情報を IrMaterial に適用するヘルパー
-/// 戦略1（source_material 照合）と戦略2（material_name 照合）の共通ロジック
+/// Helper that applies resolved texture info to an `IrMaterial`.
+/// Shared logic between strategy 1 (source_material match) and strategy 2 (material_name match).
 #[allow(clippy::too_many_arguments)]
 fn apply_resolved_textures(
     mat: &mut crate::intermediate::types::IrMaterial,
@@ -2215,7 +2216,7 @@ fn apply_resolved_textures(
     prefab_label: &str,
     strategy: &str,
 ) {
-    // ── メインテクスチャ ──
+    // -- Main texture --
     if mat.texture_index.is_none() {
         if let Some(ref tex_guid) = res.main_texture_guid {
             if let Some(&existing_idx) = added_guids.get(tex_guid) {
@@ -2258,7 +2259,7 @@ fn apply_resolved_textures(
         }
     }
 
-    // ── ノーマルマップ ──
+    // -- Normal map --
     if mat.normal_texture.is_none() {
         if let Some(ref normal_guid) = res.normal_texture_guid {
             if let Some(&existing_idx) = added_guids.get(normal_guid) {
@@ -2367,9 +2368,9 @@ fn apply_resolved_textures(
             );
         }
 
-        // lilToon Screen ブレンド (1) の近似:
-        // Screen 合成 = base + emission - base*emission は加算合成より暗い。
-        // PBR の加算エミッションしかないため、factor を減衰させて近似する。
+        // Approximation for lilToon's Screen blend (mode 1):
+        // Screen composite = base + emission - base * emission is dimmer than additive blending.
+        // PBR only provides additive emission, so we attenuate the factor to approximate it.
         if res.emission_blend == 1 && mat.emissive_factor != glam::Vec3::ZERO {
             const SCREEN_ATTENUATION: f32 = 0.5;
             let before = mat.emissive_factor;
@@ -2384,8 +2385,8 @@ fn apply_resolved_textures(
     }
 }
 
-/// Prefab 解決テクスチャを IrModel に埋め込み（三段階フォールバック）
-/// 戻り値: 未割当材質のインデックス一覧
+/// Embed Prefab-resolved textures into an `IrModel` (with a three-stage fallback).
+/// Returns the indices of materials that remained unassigned.
 pub fn embed_textures_with_prefab(
     ir: &mut crate::intermediate::types::IrModel,
     textures: &[PackageTexture],
@@ -2396,18 +2397,18 @@ pub fn embed_textures_with_prefab(
         return (0..ir.materials.len()).collect();
     }
 
-    // GUID → PackageTexture の逆引き
+    // Reverse map GUID -> PackageTexture
     let tex_by_guid: HashMap<&str, &PackageTexture> =
         textures.iter().map(|t| (t.guid.as_ref(), t)).collect();
 
-    // 既に追加済みのテクスチャ GUID → ir.textures index
+    // Already-added texture GUID -> ir.textures index
     let mut added_guids: HashMap<Arc<str>, usize> = HashMap::new();
 
     let mut matched_base = 0usize;
     let mut matched_normal = 0usize;
 
-    // ── 戦略1: source_material (renderer_path + slot_index) で照合 ──
-    // FBX extract が source_material を設定している場合、Prefab 解決結果と正確にマッチする
+    // -- Strategy 1: match via source_material (renderer_path + slot_index) --
+    // When FBX extract sets source_material, this matches the Prefab resolution result exactly.
     {
         let resolved_by_source: HashMap<&SourceMaterialRef, &ResolvedMaterialTextures> = resolved
             .iter()
@@ -2435,21 +2436,21 @@ pub fn embed_textures_with_prefab(
         }
     }
 
-    // ── 戦略2: material_name / fbx_material_name で照合 ──
+    // -- Strategy 2: match via material_name / fbx_material_name --
     if !resolved.is_empty() {
-        // resolved の material_name → index マップ（完全一致用）
+        // Map resolved.material_name -> index (for exact matches)
         let resolved_by_name: HashMap<&str, &ResolvedMaterialTextures> = resolved
             .iter()
             .map(|r| (r.material_name.as_ref(), r))
             .collect();
 
-        // 小文字化マップ（大文字小文字無視マッチ用）
+        // Lowercased map (for case-insensitive matches)
         let resolved_by_lower: HashMap<String, &ResolvedMaterialTextures> = resolved
             .iter()
             .map(|r| (r.material_name.to_lowercase(), r))
             .collect();
 
-        // fbx_material_name による照合マップ（FBX .meta の externalObjects から取得した名前）
+        // fbx_material_name lookup map (names taken from the FBX .meta externalObjects)
         let resolved_by_fbx_name: HashMap<&str, &ResolvedMaterialTextures> = resolved
             .iter()
             .filter_map(|r| r.fbx_material_name.as_ref().map(|n| (n.as_ref(), r)))
@@ -2483,7 +2484,7 @@ pub fn embed_textures_with_prefab(
         );
 
         for mat in &mut ir.materials {
-            // 完全一致 → 大文字小文字無視 → FBX名完全一致 → FBX名大小無視 → サフィックス一致
+            // Exact -> case-insensitive -> exact FBX-name -> case-insensitive FBX-name -> suffix match
             let mat_lower = mat.name.to_lowercase();
             let res_opt = resolved_by_name
                 .get(mat.name.as_str())
@@ -2492,15 +2493,15 @@ pub fn embed_textures_with_prefab(
                 .or_else(|| resolved_by_fbx_name.get(mat.name.as_str()).copied())
                 .or_else(|| resolved_by_fbx_lower.get(mat_lower.as_str()).copied())
                 .or_else(|| {
-                    // サフィックス一致: resolved 名（小文字）が mat.name（小文字）で終わるか、
-                    // mat.name（小文字）が resolved 名（小文字）で終わる
-                    // 例: "fc_milltina_body" ends_with "milltina_body"
+                    // Suffix match: lowercase(resolved) ends with lowercase(mat.name), or
+                    // lowercase(mat.name) ends with lowercase(resolved).
+                    // Example: "fc_milltina_body" ends_with "milltina_body".
                     resolved.iter().find(|r| {
                         let r_lower = r.material_name.to_lowercase();
                         if r_lower.ends_with(&mat_lower) || mat_lower.ends_with(&r_lower) {
                             return true;
                         }
-                        // fbx_material_name でもサフィックス一致を試行
+                        // Try a suffix match against fbx_material_name as well
                         if let Some(ref fbx_name) = r.fbx_material_name {
                             let f_lower = fbx_name.to_lowercase();
                             f_lower.ends_with(&mat_lower) || mat_lower.ends_with(&f_lower)
@@ -2526,8 +2527,8 @@ pub fn embed_textures_with_prefab(
         }
     }
 
-    // ── 戦略3: source_texture_name ファイル名マッチング（既存ロジック流用）──
-    // ファイル名 → PackageTexture の逆引き
+    // -- Strategy 3: filename matching against source_texture_name (reuses the legacy path) --
+    // Reverse map filename -> PackageTexture
     let tex_by_name: HashMap<String, &PackageTexture> = textures
         .iter()
         .map(|t| (t.display_name.to_lowercase(), t))
@@ -2567,7 +2568,7 @@ pub fn embed_textures_with_prefab(
 
         if let Some(ref key) = found_key {
             if let Some(pkg_tex) = tex_by_name.get(key) {
-                // GUID 重複チェック
+                // Check for GUID duplicates
                 if let Some(&existing_idx) = added_guids.get(&pkg_tex.guid) {
                     mat.texture_index = Some(existing_idx);
                     matched_base += 1;
@@ -2620,7 +2621,7 @@ pub fn embed_textures_with_prefab(
     unmatched
 }
 
-// ── Step 6: ユニットテスト ──
+// -- Step 6: unit tests --
 
 #[cfg(test)]
 mod tests {
@@ -2731,7 +2732,7 @@ Material:
 
     #[test]
     fn test_detect_prefab_format_unpacked() {
-        // Unpacked 形式: m_PrefabInstance フィールドはあるが、独立した PrefabInstance: ブロックはない
+        // Unpacked form: has the m_PrefabInstance field but no standalone PrefabInstance: block
         let content = r#"--- !u!1 &1234
 GameObject:
   m_PrefabInstance: {fileID: 0}
@@ -2792,7 +2793,7 @@ SkinnedMeshRenderer:
 
     #[test]
     fn test_parse_fbx_meta_import_mode_not_2() {
-        // materialImportMode が 0 でも externalObjects を返す（チェック緩和済み）
+        // Returns externalObjects even when materialImportMode is 0 (the check has been relaxed)
         let meta = r#"
 externalObjects:
   - first:
@@ -2811,7 +2812,7 @@ externalObjects:
 
     #[test]
     fn test_parse_fbx_meta_mode_1() {
-        // materialImportMode: 1 でも externalObjects を返す
+        // Still returns externalObjects with materialImportMode: 1
         let meta = r#"
 externalObjects:
   - first:
@@ -2831,7 +2832,7 @@ externalObjects:
 
     #[test]
     fn test_parse_fbx_meta_empty_external_objects() {
-        // externalObjects: {} （空インライン形式）は空 Vec を返す
+        // externalObjects: {} (empty inline form) yields an empty Vec
         let meta = r#"
 externalObjects: {}
 materials:
@@ -2846,7 +2847,7 @@ materials:
     fn test_parse_material_textures() {
         let parsed = parse_material_textures(MAT_SAMPLE).unwrap();
         assert_eq!(parsed.name, "Shinano_body");
-        // _MainTex と _BaseMap の2つ（_BumpMap は fileID: 0 でスキップ）
+        // Two slots (_MainTex and _BaseMap); _BumpMap is skipped because fileID is 0
         assert_eq!(parsed.textures.len(), 2);
         assert_eq!(parsed.textures[0].slot_name, "_MainTex");
         assert_eq!(
@@ -2858,7 +2859,7 @@ materials:
             parsed.textures[1].texture_guid,
             "aabbccdd11223344aabbccdd11223344"
         );
-        // m_Floats なし → floats 空
+        // No m_Floats -> floats is empty
         assert!(parsed.floats.is_empty());
     }
 
@@ -2904,7 +2905,7 @@ Material:
 
     #[test]
     fn test_parse_material_floats_empty_inline() {
-        // m_Floats: [] （空配列インライン形式）は floats 空
+        // m_Floats: [] (empty inline array) leaves floats empty
         let mat = r#"
 Material:
   m_Name: EmptyFloats
@@ -2924,7 +2925,7 @@ Material:
         let mut ir = crate::intermediate::types::IrModel::default();
         let mat = crate::intermediate::types::IrMaterial {
             name: "Body".into(),
-            texture_index: Some(0), // ベースカラーは既にある
+            texture_index: Some(0), // Base color is already populated
             ..Default::default()
         };
         ir.materials.push(mat);
@@ -2957,9 +2958,9 @@ Material:
 
         let unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved, "test");
 
-        // ベースカラーは設定済みなので unmatched は空
+        // Base color is already set, so unmatched is empty
         assert!(unmatched.is_empty());
-        // ノーマルマップが割り当てられている
+        // The normal map is assigned
         assert_eq!(
             ir.materials[0].normal_texture.as_ref().map(|t| t.index),
             Some(1)
@@ -2969,7 +2970,7 @@ Material:
 
     #[test]
     fn test_embed_unmatched_based_on_base_texture_only() {
-        // ベースカラーなし + ノーマルマップありでも unmatched に入る
+        // Even with no base color and a normal map, the material lands in unmatched
         let mut ir = crate::intermediate::types::IrModel::default();
         let mat = crate::intermediate::types::IrMaterial {
             name: "Body".into(),
@@ -2998,15 +2999,15 @@ Material:
 
         let unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved, "test");
 
-        // ベースカラーが None のまま → unmatched に含まれる
+        // Base color stays None -> ends up in unmatched
         assert_eq!(unmatched, vec![0]);
-        // ノーマルマップは割り当てられている
+        // The normal map is assigned
         assert!(ir.materials[0].normal_texture.is_some());
     }
 
     #[test]
     fn test_embed_normal_reuses_added_guid() {
-        // 同じノーマルマップ GUID を2つの材質で共有
+        // The same normal-map GUID is shared by two materials
         let mut ir = crate::intermediate::types::IrModel::default();
         for name in &["Body", "Face"] {
             let mat = crate::intermediate::types::IrMaterial {
@@ -3059,7 +3060,7 @@ Material:
 
         let _unmatched = embed_textures_with_prefab(&mut ir, &textures, &resolved, "test");
 
-        // 両方の材質が同じテクスチャインデックスを参照
+        // Both materials reference the same texture index
         let idx0 = ir.materials[0]
             .normal_texture
             .as_ref()
@@ -3071,7 +3072,7 @@ Material:
             .map(|t| t.index)
             .unwrap();
         assert_eq!(idx0, idx1);
-        // テクスチャは1回だけ追加されている（base + normal = 2）
+        // The texture is only added once (base + normal = 2)
         assert_eq!(ir.textures.len(), 2);
     }
 
@@ -3093,7 +3094,7 @@ Material:
         assert!(!is_image_extension("scene.prefab"));
     }
 
-    /// Mixed-format Prefab: PrefabInstance (New) + SkinnedMeshRenderer (Old) が共存
+    /// Mixed-format Prefab: PrefabInstance (New) + SkinnedMeshRenderer (Old) coexist.
     const MIXED_PREFAB_SAMPLE: &str = r#"
 %YAML 1.1
 --- !u!1001 &1234567890
