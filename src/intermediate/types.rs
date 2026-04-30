@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
-/// テクスチャの UV ラッピングモード
+/// Texture UV-wrapping mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IrWrapMode {
     Repeat,
@@ -10,15 +10,15 @@ pub enum IrWrapMode {
     MirroredRepeat,
 }
 
-/// テクスチャの拡大フィルタリングモード（mag_filter）
+/// Texture magnification filter mode (mag_filter).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IrMagFilter {
     Nearest,
     Linear,
 }
 
-/// テクスチャの縮小フィルタリングモード（min_filter + mipmap_filter）
-/// glTF の minFilter 6 値をそのまま保持する
+/// Texture minification filter mode (min_filter + mipmap_filter).
+/// Preserves the six raw glTF `minFilter` values verbatim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IrMinFilter {
     Nearest,
@@ -29,7 +29,7 @@ pub enum IrMinFilter {
     LinearMipmapLinear,
 }
 
-/// glTF sampler に対応するサンプラー情報
+/// Sampler info that corresponds to a glTF sampler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct IrSamplerInfo {
     pub wrap_u: IrWrapMode,
@@ -49,13 +49,13 @@ impl Default for IrSamplerInfo {
     }
 }
 
-/// 材質編集時にテクスチャを割り当てる先のスロットを表す enum（§B）。
+/// Enum identifying texture-assignment slots used during material editing (Section B).
 ///
-/// `assign_texture_core` が slot 引数で受け取り、MToon 補助テクスチャの 8 スロット +
-/// 標準 3 スロット + MMD 専用 2 スロットを区別する。Step 1-4 時点では `BaseColor`
-/// のみ既存経路として機能し、その他のスロットは Step 2 以降で書き込み経路を追加する。
+/// `assign_texture_core` receives this as the `slot` argument; it distinguishes the eight MToon
+/// auxiliary slots, the three standard slots, and the two MMD-specific slots. As of Step 1-4 only
+/// `BaseColor` exercises an existing write path; the remaining slots gain write paths from Step 2 onward.
 ///
-/// | Slot | 書き込み先 | 色空間 |
+/// | Slot | Destination | Color space |
 /// |---|---|---|
 /// | `BaseColor` | `IrMaterial.texture_index` + `base_color_tex_info` | sRGB |
 /// | `Emissive` | `IrMaterial.emissive_texture` | sRGB |
@@ -66,10 +66,10 @@ impl Default for IrSamplerInfo {
 /// | `OutlineWidth` | `MtoonParams.outline_width_texture` | Linear |
 /// | `Matcap` | `MtoonParams.matcap_texture` | sRGB |
 /// | `UvAnimMask` | `MtoonParams.uv_animation_mask_texture` | Linear |
-/// | `Sphere` / `Toon` | `sphere_texture_index` / `toon_texture_index` | sRGB (MMD 専用) |
+/// | `Sphere` / `Toon` | `sphere_texture_index` / `toon_texture_index` | sRGB (MMD-only) |
 ///
-/// `serde` 派生は Step 3 の `MaterialEditRecord` 永続化で `TextureSlotRecord<S>` の
-/// キーとして使う前提で先行付与している。
+/// `serde` derivations are added preemptively because Step 3 will use this enum as the key of
+/// `TextureSlotRecord<S>` inside `MaterialEditRecord` persistence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TextureSlot {
@@ -87,11 +87,11 @@ pub enum TextureSlot {
 }
 
 impl TextureSlot {
-    /// `true` の場合、GPU へのアップロードは Linear / Unorm ビューを使用する。
-    /// 通常値マップや UV マスクなど、sRGB デコードを挟んではいけないスロットを返す。
+    /// When `true`, the GPU upload uses a Linear / Unorm view.
+    /// Returns true for slots that must skip sRGB decoding (normal maps, UV masks, etc.).
     ///
-    /// このメソッドは `rebuild_mtoon_aux_bind_group` / `assign_texture_core` 側で
-    /// sRGB / Unorm のビューを選択するために使われる（§B の判定表に対応）。
+    /// `rebuild_mtoon_aux_bind_group` and `assign_texture_core` use this to pick between
+    /// sRGB / Unorm views (matches the decision table in Section B).
     pub fn is_linear(self) -> bool {
         matches!(
             self,
@@ -100,24 +100,24 @@ impl TextureSlot {
     }
 }
 
-/// MToon 補助テクスチャ情報（texCoord + KHR_texture_transform + sampler）
+/// MToon auxiliary texture info (texCoord + KHR_texture_transform + sampler).
 #[derive(Clone, Debug)]
 pub struct IrTextureInfo {
     pub index: usize,
-    /// TEXCOORD セット番号（デフォルト 0）
+    /// TEXCOORD set index (default 0).
     pub tex_coord: u32,
-    /// KHR_texture_transform offset（デフォルト (0,0)）
+    /// KHR_texture_transform offset (default (0, 0)).
     pub offset: Vec2,
-    /// KHR_texture_transform scale（デフォルト (1,1)）
+    /// KHR_texture_transform scale (default (1, 1)).
     pub scale: Vec2,
-    /// KHR_texture_transform rotation（デフォルト 0）
+    /// KHR_texture_transform rotation (default 0).
     pub rotation: f32,
-    /// glTF sampler 情報（デフォルト Repeat / Linear）
+    /// glTF sampler info (default Repeat / Linear).
     pub sampler: IrSamplerInfo,
 }
 
 impl IrTextureInfo {
-    /// テクスチャインデックスのみ指定（デフォルト texCoord=0, transform なし）
+    /// Construct from a texture index only (defaults: texCoord = 0, no transform).
     pub fn from_index(index: usize) -> Self {
         Self {
             index,
@@ -129,12 +129,12 @@ impl IrTextureInfo {
         }
     }
 
-    /// テクスチャインデックスをオフセットする（merge 時に使用）
+    /// Offset the texture index (used during merge).
     pub fn offset_index(&mut self, offset: usize) {
         self.index += offset;
     }
 
-    /// テクスチャインデックスをリマップする（export_filter 時に使用）
+    /// Remap the texture index (used during export_filter).
     pub fn remap_index(self, remap: &std::collections::HashMap<usize, usize>) -> Option<Self> {
         remap.get(&self.index).map(|&new_idx| Self {
             index: new_idx,
@@ -143,7 +143,7 @@ impl IrTextureInfo {
     }
 }
 
-/// MToon アウトライン幅モード
+/// MToon outline-width mode.
 #[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub enum OutlineWidthMode {
     #[default]
@@ -152,21 +152,21 @@ pub enum OutlineWidthMode {
     ScreenCoordinates,
 }
 
-/// glTF alphaMode + MToon transparentWithZWrite を統合したアルファモード
+/// Alpha mode unified from glTF `alphaMode` + MToon `transparentWithZWrite`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum AlphaMode {
-    /// 完全不透明（デプス書込あり）
+    /// Fully opaque (depth write on).
     #[default]
     Opaque,
-    /// alphaCutoff でピクセル単位切り抜き（デプス書込あり）
+    /// Per-pixel cutout via `alphaCutoff` (depth write on).
     Mask,
-    /// 半透明・デプス書込あり（MToon transparentWithZWrite=true）
+    /// Translucent with depth write (MToon `transparentWithZWrite = true`).
     BlendWithZWrite,
-    /// 半透明・デプス書込なし（通常 BLEND）
+    /// Translucent without depth write (regular BLEND).
     Blend,
 }
 
-/// ソースファイル形式
+/// Source file format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SourceFormat {
     #[default]
@@ -194,32 +194,32 @@ impl SourceFormat {
         }
     }
 
-    /// VRM 0.0 の座標変換を使うか
+    /// Whether to use the VRM 0.0 coord transform.
     pub fn is_vrm0(&self) -> bool {
         matches!(self, SourceFormat::Vrm0)
     }
 
-    /// PMX/PMD 形式か
+    /// Whether the format is PMX or PMD.
     pub fn is_pmx_pmd(&self) -> bool {
         matches!(self, SourceFormat::Pmx | SourceFormat::Pmd)
     }
 }
 
-/// Aスタンス変換の結果
+/// Result of an A-stance conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AStanceResult {
-    /// 未適用（チェックボックスOFF、または非対応形式）
+    /// Not applied (checkbox off, or unsupported format).
     #[default]
     NotRequested,
-    /// 適用成功（補正した腕の数: 通常2）
+    /// Applied successfully (number of corrected arms; typically 2).
     Applied(usize),
-    /// 既にAスタンスに近いためスキップ
+    /// Skipped because the model is already close to A-stance.
     AlreadyAStance,
-    /// 腕ボーンが見つからず変換失敗
+    /// Failed because the arm bones were not found.
     NotFound,
 }
 
-/// 中間表現モデル
+/// Intermediate-representation model.
 #[derive(Debug, Default, Clone)]
 pub struct IrModel {
     pub name: String,
@@ -230,21 +230,21 @@ pub struct IrModel {
     pub textures: Vec<IrTexture>,
     pub morphs: Vec<IrMorph>,
     pub physics: IrPhysics,
-    /// ノードIndex → ボーンIndex のマッピング
+    /// Node-index -> bone-index mapping.
     pub node_to_bone: std::collections::HashMap<usize, usize>,
-    /// ソースファイル形式（座標変換の分岐に使用）
+    /// Source file format (used to branch on coord conversions).
     pub source_format: SourceFormat,
-    /// ヒューマノイドリグ種別（FBX 用、None = 未検出/VRM）
+    /// Humanoid rig kind (FBX-specific; None = not detected / VRM).
     pub rig_type: Option<String>,
-    /// マッピングされたヒューマノイドボーン数
+    /// Number of humanoid bones that were mapped.
     pub humanoid_bone_count: usize,
-    /// Aスタンス変換の結果
+    /// Result of the A-stance conversion.
     pub astance_result: AStanceResult,
 }
 
 impl IrModel {
-    /// PMX 変換向け軽量 clone。GPU 専用データ（mip_chain, uvs1）を除外する。
-    /// vertices / indices / morph_targets は Arc 共有で O(1) clone。
+    /// Lightweight clone for PMX export. Drops GPU-only data (`mip_chain`, `uvs1`).
+    /// `vertices`, `indices`, and `morph_targets` are Arc-shared for O(1) clones.
     pub fn clone_for_export(&self) -> Self {
         Self {
             name: self.name.clone(),
@@ -260,7 +260,7 @@ impl IrModel {
                     material_index: m.material_index,
                     morph_targets: Arc::clone(&m.morph_targets),
                     node_index: m.node_index,
-                    uvs1: Vec::new(), // PMX では不使用
+                    uvs1: Vec::new(), // Unused in PMX
                 })
                 .collect(),
             materials: self.materials.clone(),
@@ -269,10 +269,10 @@ impl IrModel {
                 .iter()
                 .map(|t| IrTexture {
                     filename: t.filename.clone(),
-                    data: t.data.clone(), // Arc 共有で軽量
+                    data: t.data.clone(), // Arc-shared, cheap to clone
                     mime_type: t.mime_type.clone(),
                     source_path: t.source_path.clone(),
-                    mip_chain: None, // GPU 専用、PMX では不使用
+                    mip_chain: None, // GPU-only; not used by PMX
                 })
                 .collect(),
             morphs: self.morphs.clone(),
@@ -285,22 +285,22 @@ impl IrModel {
         }
     }
 
-    /// 全メッシュの頂点数合計
+    /// Total vertex count across every mesh.
     pub fn total_vertices(&self) -> usize {
         self.meshes.iter().map(|m| m.vertices.len()).sum()
     }
 
-    /// 全メッシュの面数合計
+    /// Total face count across every mesh.
     pub fn total_faces(&self) -> usize {
         self.meshes.iter().map(|m| m.indices.len() / 3).sum()
     }
 
-    /// 別の IrModel をこのモデルにマージ（追加読み込み）
+    /// Merge another `IrModel` into this one (for "additional load" operations).
     ///
-    /// 同名ボーンは既存側に統合し、固有ボーンのみ新規追加する。
-    /// テクスチャ・材質・メッシュ・モーフ・物理のインデックスはリマップテーブルで変換。
+    /// Bones with the same name are merged into the existing side; only unique bones are added.
+    /// Texture / material / mesh / morph / physics indices are remapped via lookup tables.
     ///
-    /// 返り値: (統合されたボーン数, 新規追加されたボーン数)
+    /// Returns (number of merged bones, number of newly added bones).
     pub fn merge(&mut self, mut other: IrModel) -> (usize, usize) {
         let tex_offset = self.textures.len();
         let mat_offset = self.materials.len();
@@ -308,8 +308,8 @@ impl IrModel {
         let morph_offset = self.morphs.len();
         let vtx_offset = self.total_vertices();
 
-        // ── ボーンリマップテーブル構築 ──
-        // other_bone_idx → self_bone_idx のマッピング
+        // -- Build the bone remap table --
+        // Mapping other_bone_idx -> self_bone_idx
         let mut bone_name_to_self: std::collections::HashMap<&str, usize> =
             std::collections::HashMap::with_capacity(self.bones.len());
         for (i, bone) in self.bones.iter().enumerate() {
@@ -317,19 +317,19 @@ impl IrModel {
         }
 
         let other_bone_count = other.bones.len();
-        // リマップテーブル: other 側の各ボーンが self 側のどのIndexに対応するか
+        // Remap table: which self-side index each other-side bone corresponds to
         let mut bone_remap: Vec<usize> = vec![usize::MAX; other_bone_count];
-        // other 側のどのボーンが新規追加されたか
+        // Which other-side bones were newly added
         let mut is_new_bone: Vec<bool> = vec![true; other_bone_count];
         let mut merged_count: usize = 0;
 
-        // ── 3段フォールバック候補決定 ──
-        // candidate[i] = Some(self_idx) なら統合候補
+        // -- Three-tier fallback for candidate selection --
+        // candidate[i] = Some(self_idx) marks a merge candidate
         let mut candidate: Vec<Option<usize>> = vec![None; other_bone_count];
-        // vrm_bone_name マッチは確定扱い（パス2の親伝播取り消し対象外）
+        // vrm_bone_name matches are treated as final (excluded from the parent-propagation undo in pass 2)
         let mut is_vrm_match: Vec<bool> = vec![false; other_bone_count];
 
-        // Pass 1a: vrm_bone_name 照合（最高信頼度、親チェック不要 — VRM名は全身で一意）
+        // Pass 1a: vrm_bone_name match (highest confidence; no parent check -- VRM names are body-wide unique)
         let mut vrm_to_self: std::collections::HashMap<&str, usize> =
             std::collections::HashMap::new();
         for (i, bone) in self.bones.iter().enumerate() {
@@ -346,8 +346,8 @@ impl IrModel {
             }
         }
 
-        // Pass 1b: original_name 照合（親整合性チェック付き）
-        // to_lowercase() を事前キャッシュして繰り返し呼び出しを回避
+        // Pass 1b: original_name match (with parent-consistency check).
+        // Pre-cache `to_lowercase()` to avoid repeated allocations.
         let self_lower_names: Vec<String> = self
             .bones
             .iter()
@@ -382,7 +382,7 @@ impl IrModel {
             }
         }
 
-        // Pass 1c: bone.name 照合（既存ロジック — 後方互換）
+        // Pass 1c: bone.name match (legacy logic, kept for backwards compatibility)
         for (i, other_bone) in other.bones.iter().enumerate() {
             if candidate[i].is_some() {
                 continue;
@@ -398,9 +398,10 @@ impl IrModel {
             }
         }
 
-        // パス2: 親の統合状態を伝播して最終決定（順序非依存）
-        // 候補ボーンの親が候補でない場合は統合を取り消す（異なる部分木の子孫が誤統合されるのを防ぐ）
-        // vrm_bone_name マッチは意味的に確定なので取り消し対象外
+        // Pass 2: propagate the parent's merge state to converge on a final decision (order-independent).
+        // If a candidate's parent is not itself a candidate, drop the merge (prevents misjoining
+        // descendants of distinct subtrees).
+        // vrm_bone_name matches are semantically final, so they are excluded from the undo.
         let mut changed = true;
         while changed {
             changed = false;
@@ -409,7 +410,7 @@ impl IrModel {
                     continue;
                 }
                 if let Some(parent_idx) = other.bones[i].parent {
-                    // 親が候補でない → この子も統合不可
+                    // Parent is not a candidate -> this child also cannot be merged
                     if candidate[parent_idx].is_none() {
                         candidate[i] = None;
                         changed = true;
@@ -418,7 +419,7 @@ impl IrModel {
             }
         }
 
-        // 候補を確定
+        // Lock in the candidates
         for i in 0..other_bone_count {
             if let Some(self_idx) = candidate[i] {
                 bone_remap[i] = self_idx;
@@ -427,7 +428,7 @@ impl IrModel {
             }
         }
 
-        // 新規ボーンの正確なIndex割り当て
+        // Assign accurate indices to new bones
         let mut next_new_idx = self.bones.len();
         for i in 0..other_bone_count {
             if is_new_bone[i] {
@@ -437,16 +438,17 @@ impl IrModel {
         }
         let new_bone_count = next_new_idx - self.bones.len();
 
-        // node_index 衝突回避: 既存の最大node_id + 1をオフセットに使用
+        // Avoid node_index collisions: use (existing max node_id + 1) as the offset
         let max_existing_node = self.bones.iter().map(|b| b.node_index).max().unwrap_or(0);
         let max_mesh_node = self.meshes.iter().map(|m| m.node_index).max().unwrap_or(0);
         let node_offset = max_existing_node.max(max_mesh_node) + 1;
 
-        // 新規ボーンを self.bones に追加（parent/children をリマップ）
+        // Append new bones to self.bones (remapping parent/children)
         for (other_idx, other_bone) in other.bones.iter().enumerate() {
             if !is_new_bone[other_idx] {
-                // 既存ボーンに統合 → 追加モデル側の子を既存ボーンの children に補完
-                // （新規ボーンだけでなく、既存ボーン同士の接続も補完する）
+                // Merged into an existing bone -> extend the existing bone's `children` with
+                // the appended model's children. We patch existing-to-existing connections too,
+                // not just new bones.
                 let self_idx = bone_remap[other_idx];
                 for &child_other_idx in &other_bone.children {
                     let child_self_idx = bone_remap[child_other_idx];
@@ -454,7 +456,7 @@ impl IrModel {
                         self.bones[self_idx].children.push(child_self_idx);
                     }
                 }
-                // ヒューマノイドメタデータの補完（既存側が未設定の場合のみ）
+                // Backfill humanoid metadata (only when the existing side is unset)
                 if self.bones[self_idx].vrm_bone_name.is_none() {
                     if let Some(ref vrm_name) = other_bone.vrm_bone_name {
                         self.bones[self_idx].vrm_bone_name = Some(vrm_name.clone());
@@ -464,29 +466,29 @@ impl IrModel {
             }
 
             let mut new_bone = other_bone.clone();
-            // parent をリマップ
+            // Remap parent
             if let Some(ref mut p) = new_bone.parent {
                 *p = bone_remap[*p];
             }
-            // children をリマップ
+            // Remap children
             for child in &mut new_bone.children {
                 *child = bone_remap[*child];
             }
-            // node_index の衝突回避（固定オフセットで全構造体と一致させる）
+            // Avoid node_index collisions (a fixed offset keeps every struct in sync)
             new_bone.node_index += node_offset;
             self.bones.push(new_bone);
         }
 
-        // node_to_bone マッピング更新（同じ node_offset を使用）
+        // Update the node_to_bone mapping (uses the same node_offset)
         for (node, bone_idx) in other.node_to_bone {
             let remapped = bone_remap[bone_idx];
             self.node_to_bone.insert(node + node_offset, remapped);
         }
 
-        // ── テクスチャ ──
+        // -- Textures --
         self.textures.append(&mut other.textures);
 
-        // ── 材質: テクスチャIndexをオフセット ──
+        // -- Materials: offset every texture index --
         for mat in &mut other.materials {
             if let Some(ref mut idx) = mat.texture_index {
                 *idx += tex_offset;
@@ -529,7 +531,7 @@ impl IrModel {
         }
         self.materials.append(&mut other.materials);
 
-        // ── メッシュ: 材質Index・頂点ウェイトのボーンIndexをリマップ ──
+        // -- Meshes: remap material indices and vertex-weight bone indices --
         for mesh in &mut other.meshes {
             mesh.material_index += mat_offset;
             mesh.node_index += node_offset;
@@ -541,7 +543,7 @@ impl IrModel {
         }
         self.meshes.append(&mut other.meshes);
 
-        // ── モーフ: グローバル頂点Indexをオフセット ──
+        // -- Morphs: offset global vertex indices --
         for morph in &mut other.morphs {
             match &mut morph.kind {
                 IrMorphKind::Vertex {
@@ -579,7 +581,7 @@ impl IrModel {
                     channel: _,
                     offsets,
                 } => {
-                    // Phase 3 A-2: アペンドモデル側のグローバル頂点Indexも vtx_offset 分シフト。
+                    // Phase 3 A-2: shift the appended model's global vertex indices by vtx_offset too.
                     for (global_idx, _) in offsets.iter_mut() {
                         *global_idx += vtx_offset;
                     }
@@ -588,7 +590,7 @@ impl IrModel {
         }
         self.morphs.append(&mut other.morphs);
 
-        // ── 物理: ボーンIndexをリマップ、剛体Indexをオフセット ──
+        // -- Physics: remap bone indices and offset rigid-body indices --
         for rb in &mut other.physics.rigid_bodies {
             if let Some(ref mut idx) = rb.bone_index {
                 *idx = bone_remap[*idx];
@@ -604,30 +606,30 @@ impl IrModel {
         }
         self.physics.joints.append(&mut other.physics.joints);
 
-        // ── メタ情報更新 ──
+        // -- Update metadata --
         self.name = format!("{} + {}", self.name, other.name);
-        // ヒューマノイドボーン数を再計算（共有ボーンへの補完分も含めるため）
+        // Recount humanoid bones (so backfilled shared bones are included)
         self.humanoid_bone_count = self
             .bones
             .iter()
             .filter(|b| b.vrm_bone_name.is_some())
             .count();
-        // Aスタンス変換結果の統合
-        // NotRequested は透過、Applied は NotFound より優先（小物アペンド対策）
+        // Combine the A-stance conversion results.
+        // NotRequested is transparent; Applied wins over NotFound (matters when appending small props).
         self.astance_result = match (self.astance_result, other.astance_result) {
-            // NotRequested は無視して相手の値を採用
+            // Drop NotRequested in favor of the other side
             (AStanceResult::NotRequested, other) => other,
             (host, AStanceResult::NotRequested) => host,
-            // Applied 同士は合算
+            // Applied + Applied -> sum
             (AStanceResult::Applied(a), AStanceResult::Applied(b)) => AStanceResult::Applied(a + b),
-            // Applied + NotFound/AlreadyAStance → Applied を優先
-            // （メインモデルが変換済みなら、小物の NotFound は問題なし）
+            // Applied + NotFound/AlreadyAStance -> Applied wins
+            // (if the main model was already converted, the prop's NotFound is harmless)
             (AStanceResult::Applied(n), _) | (_, AStanceResult::Applied(n)) => {
                 AStanceResult::Applied(n)
             }
-            // 両方 NotFound
+            // Both NotFound
             (AStanceResult::NotFound, AStanceResult::NotFound) => AStanceResult::NotFound,
-            // AlreadyAStance + NotFound → AlreadyAStance を優先
+            // AlreadyAStance + NotFound -> AlreadyAStance wins
             (AStanceResult::AlreadyAStance, _) | (_, AStanceResult::AlreadyAStance) => {
                 AStanceResult::AlreadyAStance
             }
@@ -636,9 +638,9 @@ impl IrModel {
         (merged_count, new_bone_count)
     }
 
-    /// 各材質に割り当てられたテクスチャ情報をログ出力する
+    /// Log the texture assignments of every material.
     pub fn log_texture_assignments(&self) {
-        // テクスチャ名 + ソースパスを表示するヘルパー
+        // Helper that renders "texture name + source path"
         let tex_label = |idx: usize| -> String {
             self.textures.get(idx).map_or("?".to_string(), |t| {
                 if t.source_path.is_empty() {
@@ -709,78 +711,77 @@ impl IrModel {
     }
 }
 
-/// 中間ボーン
+/// Intermediate bone.
 #[derive(Debug, Clone)]
 pub struct IrBone {
     pub name: String,
     pub name_en: String,
-    /// ソースファイルでの元のボーン名（FBX: ノード名、VRM: glTFノード名）
+    /// Original bone name in the source file (FBX: node name; VRM: glTF node name).
     pub original_name: String,
-    /// VRMヒューマノイドボーン名（例: "hips", "spine"）
+    /// VRM humanoid bone name (e.g. "hips", "spine").
     pub vrm_bone_name: Option<String>,
-    /// グローバル位置（glTF座標系）
+    /// Global position (glTF coords).
     pub position: Vec3,
-    /// グローバル変換行列（glTF座標系）：コライダーのローカルオフセット変換に使用
+    /// Global transform (glTF coords); used to convert collider local offsets.
     pub global_mat: Mat4,
-    /// 親ボーンIndex（なければNone）
+    /// Parent bone index (None for roots).
     pub parent: Option<usize>,
-    /// 子ボーンIndexリスト
+    /// Child-bone indices.
     pub children: Vec<usize>,
-    /// glTFノードIndex
+    /// glTF node index.
     pub node_index: usize,
-    /// ボーン追従/物理フラグ
+    /// Bone-follow / physics flag.
     pub is_physics: bool,
-    /// ボーンテイル位置（glTF座標系、PMX/PMDのみ）
-    /// PMXの BoneTail（オフセットまたはボーンIndex）から計算した先端位置（レストポーズ）
+    /// Tail position (glTF coords; PMX/PMD only).
+    /// Computed from PMX's BoneTail (offset or bone index) and represents the rest-pose tip.
     pub tail_position: Option<Vec3>,
-    /// テイル先ボーンIndex（BoneTail::BoneIndex由来、アニメーション時の動的追従用）
+    /// Tail-target bone index (from `BoneTail::BoneIndex`, used for dynamic follow during animation).
     pub tail_bone_index: Option<usize>,
-    /// IK影響下フラグ（IKの Target + Link に登録されているボーン）
+    /// Whether the bone is inside an IK chain (registered as IK Target + Link).
     pub is_ik: bool,
-    /// IKコントローラフラグ（PMX: BONE_FLAG_IK、PMD: bone_type==2）
+    /// Whether the bone is an IK controller (PMX: BONE_FLAG_IK; PMD: bone_type == 2).
     pub is_ik_bone: bool,
-    /// 移動可能フラグ（PMX: BONE_FLAG_TRANSLATABLE、PMD: bone_type==1）
+    /// Whether the bone is translatable (PMX: BONE_FLAG_TRANSLATABLE; PMD: bone_type == 1).
     pub is_translatable: bool,
-    /// 軸制限フラグ（PMX: BONE_FLAG_AXIS_FIXED）
+    /// Whether the bone has an axis lock (PMX: BONE_FLAG_AXIS_FIXED).
     pub is_axis_fixed: bool,
-    /// 表示フラグ（PMX: BONE_FLAG_VISIBLE、PMD: bone_type!=7）
+    /// Whether the bone is visible (PMX: BONE_FLAG_VISIBLE; PMD: bone_type != 7).
     pub is_visible: bool,
-    /// 付与データ（PMX回転付与・移動付与）
+    /// Grant data (PMX rotation grant / move grant).
     pub grant: Option<IrGrant>,
 }
 
-/// 付与データ（PMX回転付与・移動付与）
+/// Grant data (PMX rotation grant / move grant).
 #[derive(Debug, Clone)]
 pub struct IrGrant {
-    /// 付与親ボーンIndex
+    /// Grant parent bone index.
     pub parent_index: usize,
-    /// 付与率
+    /// Grant ratio.
     pub ratio: f32,
-    /// 回転付与フラグ
+    /// Whether rotation is granted.
     pub is_rotation: bool,
-    /// 移動付与フラグ
+    /// Whether translation is granted.
     pub is_move: bool,
-    /// ローカル付与フラグ
+    /// Whether the grant is local.
     pub is_local: bool,
 }
 
-/// 中間メッシュ
+/// Intermediate mesh.
 ///
-/// `vertices`, `indices`, `morph_targets` は `Arc` で共有され、
-/// `clone` 時のコピーコストを O(1) に削減する。
-/// mutation が必要な場合は `vertices_mut()` 等のヘルパーを使用する
-/// （内部で `Arc::make_mut` による COW が行われる）。
+/// `vertices`, `indices`, and `morph_targets` are `Arc`-shared so that `clone`
+/// stays O(1). When mutation is required, use the `vertices_mut()` helpers
+/// (which apply `Arc::make_mut` COW internally).
 #[derive(Debug, Clone)]
 pub struct IrMesh {
     pub name: String,
     pub vertices: Arc<Vec<IrVertex>>,
     pub indices: Arc<Vec<u32>>,
     pub material_index: usize,
-    /// モーフターゲット（頂点オフセット）
+    /// Morph targets (per-vertex offsets).
     pub morph_targets: Arc<Vec<IrMorphTarget>>,
-    /// このメッシュが属するglTFノードIndex
+    /// glTF node index this mesh belongs to.
     pub node_index: usize,
-    /// TEXCOORD_1（セカンダリUV）。空なら UV1 なし。
+    /// TEXCOORD_1 (secondary UV). Empty means no UV1.
     pub uvs1: Vec<[f32; 2]>,
 }
 
@@ -804,36 +805,36 @@ impl IrMesh {
     }
 }
 
-/// 中間頂点
+/// Intermediate vertex.
 #[derive(Debug, Clone, Copy)]
 pub struct IrVertex {
     pub position: Vec3,
     pub normal: Vec3,
     pub uv: Vec2,
-    /// 接線ベクトル（xyz=tangent方向, w=handedness ±1）。
-    /// glTF TANGENT 属性から読み込むか、MikkTSpace で生成する。
+    /// Tangent vector (xyz = tangent direction, w = handedness +/-1).
+    /// Either read from the glTF TANGENT attribute or generated with MikkTSpace.
     pub tangent: Vec4,
-    /// ボーンウェイト固定配列 (ボーンIndex, ウェイト)。有効要素数は weight_count。
+    /// Fixed-size bone-weight array (bone index, weight). The first `weight_count` entries are valid.
     pub weights: [(usize, f32); 4],
-    /// 有効なウェイト数 (0..=4)
+    /// Number of valid weights (0..=4).
     pub weight_count: u8,
-    pub edge_scale: f32, // エッジ倍率（outlineWidthMultiplyTexture由来）
+    pub edge_scale: f32, // Edge multiplier (from outlineWidthMultiplyTexture).
 }
 
 impl IrVertex {
-    /// ウェイトの有効スライスを返す
+    /// Return the active slice of weights.
     #[inline]
     pub fn active_weights(&self) -> &[(usize, f32)] {
         &self.weights[..self.weight_count as usize]
     }
 
-    /// ウェイトの有効スライスを可変で返す
+    /// Return the active slice of weights mutably.
     #[inline]
     pub fn active_weights_mut(&mut self) -> &mut [(usize, f32)] {
         &mut self.weights[..self.weight_count as usize]
     }
 
-    /// Vec からウェイトを設定する（最大4要素、超過分は切り捨て）
+    /// Set weights from a `Vec` (cap at 4 entries; surplus is truncated).
     pub fn set_weights_from_vec(&mut self, src: &[(usize, f32)]) {
         let n = src.len().min(4);
         self.weights = [(0, 0.0); 4];
@@ -841,7 +842,7 @@ impl IrVertex {
         self.weight_count = n as u8;
     }
 
-    /// Vec<(usize, f32)> からウェイト付き IrVertex を構築するヘルパー
+    /// Helper that builds the weighted form of an `IrVertex` from `Vec<(usize, f32)>`.
     pub fn from_weights(src: Vec<(usize, f32)>) -> ([(usize, f32); 4], u8) {
         let mut arr = [(0usize, 0.0f32); 4];
         let n = src.len().min(4);
@@ -852,31 +853,31 @@ impl IrVertex {
     }
 }
 
-/// モーフターゲット（メッシュ内）
+/// Morph target (per-mesh).
 #[derive(Debug, Clone)]
 pub struct IrMorphTarget {
     pub name: String,
-    /// 影響のある頂点の位置オフセット（疎表現: 頂点Index昇順）
+    /// Position offsets for affected vertices (sparse, sorted by vertex index ascending).
     pub position_offsets: Vec<(u32, Vec3)>,
-    /// 影響のある頂点の法線オフセット（疎表現: 頂点Index昇順）
+    /// Normal offsets for affected vertices (sparse, sorted by vertex index ascending).
     pub normal_offsets: Vec<(u32, Vec3)>,
-    /// 影響のある頂点の接線オフセット（疎表現: 頂点Index昇順）
+    /// Tangent offsets for affected vertices (sparse, sorted by vertex index ascending).
     pub tangent_offsets: Vec<(u32, Vec3)>,
 }
 
-/// カリングモード
+/// Cull mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CullMode {
-    /// 背面カリング（デフォルト、片面描画）
+    /// Back-face culling (default; single-sided rendering).
     Back,
-    /// カリングなし（両面描画）
+    /// No culling (double-sided rendering).
     None,
-    /// 前面カリング（VRM 0.x _CullMode=1 用。glTF 仕様に存在しないため UniVRM では
-    /// doubleSided=true にフォールバックするが、ランタイムレンダラでは再現可能）
+    /// Front-face culling (for VRM 0.x `_CullMode = 1`). Not in the glTF spec, so UniVRM falls back
+    /// to `doubleSided = true`, but runtime renderers can reproduce it.
     Front,
 }
 
-/// テクスチャマスクの参照カラーチャネル
+/// Color channel referenced by a texture mask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorChannel {
     R,
@@ -885,7 +886,7 @@ pub enum ColorChannel {
 }
 
 impl ColorChannel {
-    /// GPU uniform 用の f32 値（0.0=R, 1.0=G, 2.0=B）
+    /// f32 value for GPU uniforms (0.0 = R, 1.0 = G, 2.0 = B).
     pub fn to_f32(self) -> f32 {
         match self {
             Self::R => 0.0,
@@ -895,7 +896,7 @@ impl ColorChannel {
     }
 }
 
-/// シェーダー種別（Phase 3: 複数シェーダー検出対応）
+/// Shader family (Phase 3: supports detecting multiple shaders).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShaderFamily {
     #[default]
@@ -918,60 +919,60 @@ impl std::fmt::Display for ShaderFamily {
     }
 }
 
-/// MToon シェーダー固有パラメータ
+/// MToon shader-specific parameters.
 #[derive(Debug, Clone)]
 pub struct MtoonParams {
-    /// shadeColorFactor (デフォルト [0,0,0])
+    /// shadeColorFactor (default [0, 0, 0]).
     pub shade_color: Option<Vec3>,
-    /// shadeMultiplyTexture
+    /// shadeMultiplyTexture.
     pub shade_texture: Option<IrTextureInfo>,
-    /// shadingToonyFactor (0.0~1.0, 影境界の硬さ)
+    /// shadingToonyFactor (0.0..=1.0; sharpness of the shadow boundary).
     pub shading_toony_factor: f32,
-    /// shadingShiftFactor (-1.0~1.0, 影の閾値シフト)
+    /// shadingShiftFactor (-1.0..=1.0; shadow threshold shift).
     pub shading_shift_factor: f32,
-    /// shadingShiftTexture (Rチャネル)
+    /// shadingShiftTexture (R channel).
     pub shading_shift_texture: Option<IrTextureInfo>,
-    /// shadingShiftTexture.scale (デフォルト 1.0)
+    /// shadingShiftTexture.scale (default 1.0).
     pub shading_shift_texture_scale: f32,
-    /// アウトライン幅テクスチャ（glTFテクスチャIndex）
-    /// VRM 1.0: outlineWidthMultiplyTexture (Gチャネル)
-    /// VRM 0.0: _OutlineWidthTexture (Rチャネル)
+    /// Outline-width texture (glTF texture index).
+    /// VRM 1.0: outlineWidthMultiplyTexture (G channel).
+    /// VRM 0.0: _OutlineWidthTexture (R channel).
     pub outline_width_texture: Option<IrTextureInfo>,
-    /// outlineWidthTexture の参照チャネル（VRM 1.0=G, VRM 0.x=R）
+    /// Channel referenced by outlineWidthTexture (VRM 1.0 = G, VRM 0.x = R).
     pub outline_width_tex_channel: ColorChannel,
-    /// アウトライン幅モード（ビューア描画用）
+    /// Outline-width mode (used by the viewer).
     pub outline_width_mode: OutlineWidthMode,
-    /// アウトライン幅の生値（world=メートル, screen=比率）
+    /// Raw outline-width value (world = meters, screen = ratio).
     pub outline_width_factor: f32,
-    /// outlineLightingMixFactor (0.0=純色, 1.0=ライト混合)
+    /// outlineLightingMixFactor (0.0 = pure color, 1.0 = mix with light).
     pub outline_lighting_mix: f32,
-    /// parametricRimColorFactor (デフォルト [0,0,0])
+    /// parametricRimColorFactor (default [0, 0, 0]).
     pub parametric_rim_color: Vec3,
-    /// parametricRimFresnelPowerFactor (デフォルト 5.0)
+    /// parametricRimFresnelPowerFactor (default 5.0).
     pub parametric_rim_fresnel_power: f32,
-    /// parametricRimLiftFactor (デフォルト 0.0)
+    /// parametricRimLiftFactor (default 0.0).
     pub parametric_rim_lift: f32,
-    /// rimLightingMixFactor (0.0=放射, 1.0=ライト混合, デフォルト 1.0)
+    /// rimLightingMixFactor (0.0 = emissive, 1.0 = mix with light; default 1.0).
     pub rim_lighting_mix: f32,
-    /// rimMultiplyTexture
+    /// rimMultiplyTexture.
     pub rim_multiply_texture: Option<IrTextureInfo>,
-    /// giEqualizationFactor (0.0~1.0, GI均一化係数, デフォルト 0.9)
+    /// giEqualizationFactor (0.0..=1.0; GI equalization, default 0.9).
     pub gi_equalization_factor: f32,
-    /// matcapFactor (デフォルト [1,1,1])
+    /// matcapFactor (default [1, 1, 1]).
     pub matcap_factor: Vec3,
-    /// matcapTexture
+    /// matcapTexture.
     pub matcap_texture: Option<IrTextureInfo>,
-    /// uvAnimationScrollXSpeedFactor (デフォルト 0.0)
+    /// uvAnimationScrollXSpeedFactor (default 0.0).
     pub uv_animation_scroll_x_speed: f32,
-    /// uvAnimationScrollYSpeedFactor (デフォルト 0.0)
+    /// uvAnimationScrollYSpeedFactor (default 0.0).
     pub uv_animation_scroll_y_speed: f32,
-    /// uvAnimationRotationSpeedFactor (デフォルト 0.0)
+    /// uvAnimationRotationSpeedFactor (default 0.0).
     pub uv_animation_rotation_speed: f32,
-    /// uvAnimationMaskTexture
+    /// uvAnimationMaskTexture.
     pub uv_animation_mask_texture: Option<IrTextureInfo>,
-    /// uvAnimationMaskTexture の参照チャネル（VRM 1.0=B, VRM 0.x=R）
+    /// Channel referenced by uvAnimationMaskTexture (VRM 1.0 = B, VRM 0.x = R).
     pub uv_anim_mask_tex_channel: ColorChannel,
-    /// renderQueueOffsetNumber（BLEND 内描画順オフセット）
+    /// renderQueueOffsetNumber (within-BLEND draw-order offset).
     pub render_queue_offset: i32,
 }
 
@@ -1007,20 +1008,20 @@ impl Default for MtoonParams {
     }
 }
 
-/// 空の MtoonParams 定数（非MToon材質からのフィールドアクセス用）
+/// Empty MtoonParams constant (for field access from non-MToon materials).
 static MTOON_DEFAULT: std::sync::LazyLock<MtoonParams> =
     std::sync::LazyLock::new(MtoonParams::default);
 
-/// FBX 内のマテリアルのソース位置（renderer 階層パス + スロット番号）
+/// Source location of a material inside an FBX (renderer hierarchy path + slot number).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SourceMaterialRef {
-    /// renderer の階層パス（同名 sibling は ordinal 付き: "Root/Body[1]"）
+    /// Renderer hierarchy path (same-name siblings receive an ordinal suffix: "Root/Body[1]").
     pub renderer_path: std::sync::Arc<str>,
-    /// メッシュ内のマテリアルスロット番号
+    /// Material slot index inside the mesh.
     pub slot_index: u16,
 }
 
-/// 中間材質
+/// Intermediate material.
 #[derive(Debug, Clone)]
 pub struct IrMaterial {
     pub name: String,
@@ -1029,62 +1030,62 @@ pub struct IrMaterial {
     pub specular_power: f32,
     pub ambient: Vec3,
     pub texture_index: Option<usize>,
-    /// ベースカラーテクスチャの texCoord + KHR_texture_transform 情報（ビューア描画用）
+    /// Base-color texCoord + KHR_texture_transform info (used by the viewer).
     pub base_color_tex_info: Option<IrTextureInfo>,
-    /// カリングモード（Back=片面, None=両面, Front=前面カリング）
+    /// Cull mode (Back = single-sided, None = double-sided, Front = front-face culling).
     pub cull_mode: CullMode,
-    /// エッジ（輪郭線）
+    /// Edge (outline) color.
     pub edge_color: Vec4,
     pub edge_size: f32,
-    /// MToon シェーダー固有パラメータ（None = 非MToon材質）
+    /// MToon shader-specific parameters (None means non-MToon material).
     pub mtoon: Option<MtoonParams>,
-    /// シェーダー種別（MToon / UTS2 / Other）
+    /// Shader family (MToon / UTS2 / Other).
     pub shader_family: ShaderFamily,
-    /// FBX元テクスチャファイル名（一括割り当て用）
+    /// Original texture filename in the FBX (used for batch assignment).
     pub source_texture_name: Option<String>,
-    /// 材質の出自（RenderStyle 決定に使用）
+    /// Material origin (used to decide RenderStyle).
     pub source_format: SourceFormat,
-    /// スフィアマップテクスチャ
+    /// Sphere-map texture.
     pub sphere_texture_index: Option<usize>,
-    /// スフィアモード: 0=無効, 1=乗算, 2=加算 (3=サブテクスチャは非対応)
+    /// Sphere mode: 0 = off, 1 = multiply, 2 = add (3 = sub-texture is unsupported).
     pub sphere_mode: u8,
-    /// 個別トゥーンテクスチャIndex
+    /// Per-material toon texture index.
     pub toon_texture_index: Option<usize>,
-    /// 共有トゥーン番号 (0-9 = toon01-10)
+    /// Shared-toon number (0-9 = toon01-10).
     pub toon_shared_index: Option<u8>,
-    /// アルファモード（glTF alphaMode + MToon transparentWithZWrite）
+    /// Alpha mode (glTF `alphaMode` + MToon `transparentWithZWrite`).
     pub alpha_mode: AlphaMode,
-    /// MASK モード時のカットオフ閾値（glTF alphaCutoff, デフォルト 0.5）
+    /// Cutoff threshold in MASK mode (glTF `alphaCutoff`, default 0.5).
     pub alpha_cutoff: f32,
-    /// glTF emissiveFactor (デフォルト [0,0,0])
+    /// glTF `emissiveFactor` (default [0, 0, 0]).
     pub emissive_factor: Vec3,
-    /// glTF emissiveTexture
+    /// glTF `emissiveTexture`.
     pub emissive_texture: Option<IrTextureInfo>,
-    /// glTF normalTexture
+    /// glTF `normalTexture`.
     pub normal_texture: Option<IrTextureInfo>,
-    /// glTF normalTexture.scale (デフォルト 1.0)
+    /// glTF `normalTexture.scale` (default 1.0).
     pub normal_texture_scale: f32,
-    /// FBX 内のマテリアルソース位置（Prefab テクスチャマッピング用）
+    /// Material source location inside the FBX (used for Prefab texture mapping).
     pub source_material: Option<SourceMaterialRef>,
 }
 
 impl IrMaterial {
-    /// MToon 材質かどうか
+    /// Whether this is an MToon material.
     pub fn is_mtoon(&self) -> bool {
         self.mtoon.is_some()
     }
 
-    /// MToon パラメータへの参照（非MToon時はデフォルト値を返す）
+    /// Reference to the MToon parameters (returns the default for non-MToon materials).
     pub fn mtoon(&self) -> &MtoonParams {
         self.mtoon.as_ref().unwrap_or(&MTOON_DEFAULT)
     }
 
-    /// MToon パラメータへの可変参照を取得（None の場合はデフォルト値で初期化）
+    /// Mutable reference to the MToon parameters (initialized with defaults when None).
     pub fn mtoon_mut(&mut self) -> &mut MtoonParams {
         self.mtoon.get_or_insert_with(MtoonParams::default)
     }
 
-    /// テクスチャ有り時の PMX 材質パラメータを設定
+    /// Apply the PMX material parameter defaults that are used when a texture is present.
     pub fn apply_textured_defaults(&mut self) {
         let alpha = self.diffuse.w;
         self.diffuse = Vec4::new(1.0, 1.0, 1.0, alpha);
@@ -1126,13 +1127,13 @@ impl Default for IrMaterial {
     }
 }
 
-/// テクスチャの実データ
+/// Texture payload.
 #[derive(Debug, Clone)]
 pub enum TextureData {
-    /// PNG/JPEG/TGA 等のエンコード済みバイナリ
+    /// Encoded binary (PNG / JPEG / TGA / etc.).
     Encoded(Arc<[u8]>),
-    /// デコード済み生 RGBA ピクセル（GPU アップロード時にデコード不要）
-    /// pixels は Arc で共有し、IrModel clone 時のコピーコストを排除する。
+    /// Decoded raw RGBA pixels (skip decoding on GPU upload).
+    /// `pixels` is `Arc`-shared so cloning an `IrModel` is cheap.
     RawRgba {
         pixels: Arc<[u8]>,
         width: u32,
@@ -1141,7 +1142,7 @@ pub enum TextureData {
 }
 
 impl TextureData {
-    /// バイト列への参照を返す
+    /// Return a reference to the byte buffer.
     pub fn as_bytes(&self) -> &[u8] {
         match self {
             Self::Encoded(v) => v,
@@ -1149,43 +1150,43 @@ impl TextureData {
         }
     }
 
-    /// データ長を返す
+    /// Return the data length.
     pub fn len(&self) -> usize {
         self.as_bytes().len()
     }
 
-    /// データが空かどうか
+    /// Whether the data is empty.
     pub fn is_empty(&self) -> bool {
         self.as_bytes().is_empty()
     }
 }
 
-/// 中間テクスチャ
+/// Intermediate texture.
 #[derive(Debug, Clone)]
 #[allow(clippy::type_complexity)]
 pub struct IrTexture {
-    /// ファイル名（���力時に使用）
+    /// Filename (used during output).
     pub filename: String,
-    /// テクスチャデータ（エンコード済みまたは生 RGBA）
+    /// Texture data (encoded or raw RGBA).
     pub data: TextureData,
-    /// MIME タイプ（エンコード済みデータのフォーマットヒント、ログ用）
+    /// MIME type (format hint for encoded data, used in logs).
     pub mime_type: String,
-    /// ��クスチャの出自パス（トラブルシュート用ログ表示）
-    /// embedded/アーカイブ内パス/外部ファイ���パス等
+    /// Origin path of the texture (shown in troubleshooting logs).
+    /// Embedded path / archive-internal path / external file path / etc.
     pub source_path: String,
-    /// ミップチェーン（レベル1以降のダウンサンプル済みRGBA）。
-    /// バックグラウンドスレッドで事前生成することでメインスレッドの GPU 構築を高速化する。
-    /// Vec<(width, height, RGBA bytes)>  — Arc で共有し clone コストを排除。
+    /// Mipmap chain (downsampled RGBA from level 1 onward).
+    /// Built ahead of time on a background thread so the main thread's GPU build runs faster.
+    /// Vec<(width, height, RGBA bytes)> -- Arc-shared so cloning is cheap.
     pub mip_chain: Option<Vec<(u32, u32, Arc<[u8]>)>>,
 }
 
 impl IrTexture {
-    /// `data` が生 RGBA バイト列（PNG デコード不要）かどうか
+    /// Whether `data` is a raw RGBA byte buffer (no PNG decoding required).
     pub fn is_raw_rgba(&self) -> bool {
         matches!(self.data, TextureData::RawRgba { .. })
     }
 
-    /// 生 RGBA の場合の寸法を返す（後方互換ヘルパー）
+    /// Return the dimensions when `data` is raw RGBA (backwards-compatible helper).
     pub fn raw_dims(&self) -> Option<(u32, u32)> {
         match &self.data {
             TextureData::RawRgba { width, height, .. } => Some((*width, *height)),
@@ -1194,7 +1195,7 @@ impl IrTexture {
     }
 }
 
-/// 拡張子から MIME タイプを返す（小文字の拡張子を期待）
+/// Return the MIME type for an extension (expects lowercase input).
 pub fn mime_for_ext(ext: &str) -> &'static str {
     match ext {
         "png" => "image/png",
@@ -1205,61 +1206,61 @@ pub fn mime_for_ext(ext: &str) -> &'static str {
     }
 }
 
-/// 中間モーフ
+/// Intermediate morph.
 #[derive(Debug, Clone)]
 pub struct IrMorph {
     pub name: String,
     pub name_en: String,
-    /// パネル種別（1:眉, 2:目, 3:口, 4:その他）
+    /// Panel kind (1: Eyebrow, 2: Eye, 3: Mouth, 4: Other).
     pub panel: u8,
     pub kind: IrMorphKind,
 }
 
 #[derive(Debug, Clone)]
 pub enum IrMorphKind {
-    /// 頂点モーフ: position=(グローバル頂点Index, オフセット), normal/tangent も同形式
+    /// Vertex morph: position = (global vertex index, offset); normal / tangent share the layout.
     Vertex {
         positions: Vec<(usize, Vec3)>,
         normals: Vec<(usize, Vec3)>,
         tangents: Vec<(usize, Vec3)>,
     },
-    /// グループモーフ: (モーフIndex, 率)
+    /// Group morph: (morph index, ratio).
     Group(Vec<(usize, f32)>),
-    /// 材質モーフ: VRM 1.0 Expression の materialColorBinds / textureTransformBinds
+    /// Material morph: VRM 1.0 Expression's `materialColorBinds` / `textureTransformBinds`.
     Material {
         color_binds: Vec<IrMaterialColorBind>,
         uv_binds: Vec<IrTextureTransformBind>,
     },
-    /// UV モーフ (v0.5.5 / Phase 3 A-2)。PMX タイプ 3〜7 に対応。
-    /// `channel = 0` は UV0 (`IrVertex.uv`)、`channel = 1..=4` は追加 UV1〜UV4。
-    /// `offsets` は `(グローバル頂点Index, [f32; 4])`。`[f32; 4]` は PMX 仕様そのままで、
-    /// UV0 編集時は xy のみが使われる。`channel >= 2` のオフセットはランタイム合成対象外
-    /// （GPU 側が UV2〜4 を持たないため）で、読み込み・書き戻しのみ対応する。
+    /// UV morph (v0.5.5 / Phase 3 A-2). Covers PMX types 3-7.
+    /// `channel = 0` -> UV0 (`IrVertex.uv`); `channel = 1..=4` -> additional UV1-UV4.
+    /// `offsets` is `(global vertex index, [f32; 4])`. The `[f32; 4]` matches the PMX spec exactly,
+    /// and only xy is used when editing UV0. Offsets with `channel >= 2` are not composed at
+    /// runtime (the GPU has no UV2-UV4 attributes); we only support reading them in and writing them back.
     Uv {
         channel: u8,
         offsets: Vec<(usize, [f32; 4])>,
     },
 }
 
-/// VRM 1.0 materialColorBind の対象プロパティ
+/// Target property of a VRM 1.0 `materialColorBind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaterialColorBindType {
-    /// baseColorFactor → IrMaterial.diffuse
+    /// baseColorFactor -> IrMaterial.diffuse.
     Color,
-    /// emissiveFactor → IrMaterial.emissive_factor
+    /// emissiveFactor -> IrMaterial.emissive_factor.
     EmissionColor,
-    /// shadeColorFactor → MtoonParams.shade_color
+    /// shadeColorFactor -> MtoonParams.shade_color.
     ShadeColor,
-    /// matcapFactor → MtoonParams.matcap_factor
+    /// matcapFactor -> MtoonParams.matcap_factor.
     MatcapColor,
-    /// parametricRimColorFactor → MtoonParams.parametric_rim_color
+    /// parametricRimColorFactor -> MtoonParams.parametric_rim_color.
     RimColor,
-    /// outlineColorFactor → IrMaterial.edge_color
+    /// outlineColorFactor -> IrMaterial.edge_color.
     OutlineColor,
 }
 
 impl MaterialColorBindType {
-    /// VRM 1.0 Expression の `type` 文字列からパー���
+    /// Parse from the `type` string of a VRM 1.0 Expression.
     pub fn from_vrm_str(s: &str) -> Option<Self> {
         match s {
             "color" => Some(Self::Color),
@@ -1273,7 +1274,7 @@ impl MaterialColorBindType {
     }
 }
 
-/// VRM 1.0 Expression の materialColorBind
+/// VRM 1.0 Expression `materialColorBind`.
 #[derive(Debug, Clone)]
 pub struct IrMaterialColorBind {
     pub material_index: usize,
@@ -1281,7 +1282,7 @@ pub struct IrMaterialColorBind {
     pub target_value: [f32; 4],
 }
 
-/// VRM 1.0 Expression ��� textureTransformBind
+/// VRM 1.0 Expression `textureTransformBind`.
 #[derive(Debug, Clone)]
 pub struct IrTextureTransformBind {
     pub material_index: usize,
@@ -1289,14 +1290,14 @@ pub struct IrTextureTransformBind {
     pub offset: [f32; 2],
 }
 
-/// 物理��報
+/// Physics info.
 #[derive(Debug, Default, Clone)]
 pub struct IrPhysics {
     pub rigid_bodies: Vec<IrRigidBody>,
     pub joints: Vec<IrJoint>,
 }
 
-/// 剛体
+/// Rigid body.
 #[derive(Debug, Clone)]
 pub struct IrRigidBody {
     pub name: String,
@@ -1311,7 +1312,7 @@ pub struct IrRigidBody {
     pub angular_damping: f32,
     pub restitution: f32,
     pub friction: f32,
-    pub physics_mode: u8, // 0:ボーン追従 1:物理演算 2:物理+Bone
+    pub physics_mode: u8, // 0: bone-follow, 1: physics, 2: physics + bone
 }
 
 #[derive(Debug, Clone)]
@@ -1321,7 +1322,7 @@ pub enum RigidShape {
     Capsule { radius: f32, height: f32 },
 }
 
-/// ジョイント
+/// Joint.
 #[derive(Debug, Clone)]
 pub struct IrJoint {
     pub name: String,
@@ -1341,7 +1342,7 @@ pub struct IrJoint {
 mod tests {
     use super::*;
 
-    /// テスト用ヘルパー: 最小限のボーンを作成
+    /// Test helper: build a minimal bone.
     fn bone(name: &str, parent: Option<usize>, children: Vec<usize>) -> IrBone {
         IrBone {
             name: name.to_string(),
@@ -1365,7 +1366,7 @@ mod tests {
         }
     }
 
-    /// テスト用ヘルパー: ウェイト付き頂点を含むメッシュ
+    /// Test helper: a mesh containing weighted vertices.
     fn mesh_with_weights(name: &str, mat_idx: usize, bone_indices: &[usize]) -> IrMesh {
         let vertices: Vec<IrVertex> = bone_indices
             .iter()
@@ -1392,7 +1393,7 @@ mod tests {
 
     #[test]
     fn test_merge_shared_bones_are_unified() {
-        // ホストモデル: Armature → Spine → Head
+        // Host model: Armature -> Spine -> Head
         let mut host = IrModel {
             name: "Host".into(),
             bones: vec![
@@ -1408,7 +1409,7 @@ mod tests {
             ..Default::default()
         };
 
-        // 追加モデル: Armature → Spine → Ribbon（Ribbonだけが新規）
+        // Appended model: Armature -> Spine -> Ribbon (only Ribbon is new)
         let other = IrModel {
             name: "Costume".into(),
             bones: vec![
@@ -1426,53 +1427,53 @@ mod tests {
 
         let (merged, new) = host.merge(other);
 
-        // Armature(0), Spine(1) が統合、Ribbon(3) が新規追加
+        // Armature(0) and Spine(1) merge; Ribbon(3) is added new
         assert_eq!(merged, 2, "Armature と Spine が統合されるべき");
         assert_eq!(new, 1, "Ribbon のみ新規追加");
         assert_eq!(host.bones.len(), 4, "Host(3) + New(1) = 4");
 
-        // ボーン名確認
+        // Verify the bone names
         assert_eq!(host.bones[0].name, "Armature");
         assert_eq!(host.bones[1].name, "Spine");
         assert_eq!(host.bones[2].name, "Head");
         assert_eq!(host.bones[3].name, "Ribbon");
 
-        // Ribbon の parent は既存の Spine(1) を指すべき
+        // Ribbon's parent should point at the existing Spine(1)
         assert_eq!(host.bones[3].parent, Some(1));
 
-        // Spine の children に Ribbon(3) が追加されているべき
+        // Ribbon(3) should appear in Spine's children
         assert!(
             host.bones[1].children.contains(&3),
             "Spine の children に Ribbon(3) がない"
         );
-        // Head(2) も残っている
+        // Head(2) must still be present
         assert!(
             host.bones[1].children.contains(&2),
             "Spine の children に Head(2) がない"
         );
 
-        // 衣装メッシュの頂点ウェイトが既存ボーンにリマップされていること
+        // The clothing mesh's vertex weights must be remapped onto the existing bones
         let costume_mesh = &host.meshes[1];
-        // other の Spine(idx=1) → self の Spine(idx=1)
+        // other's Spine(idx=1) -> self's Spine(idx=1)
         assert_eq!(
             costume_mesh.vertices[0].active_weights()[0].0,
             1,
             "Spine にリマップ"
         );
-        // other の Ribbon(idx=2) → self の Ribbon(idx=3)
+        // other's Ribbon(idx=2) -> self's Ribbon(idx=3)
         assert_eq!(
             costume_mesh.vertices[1].active_weights()[0].0,
             3,
             "Ribbon にリマップ"
         );
 
-        // 材質が2つ
+        // Two materials in total
         assert_eq!(host.materials.len(), 2);
         assert_eq!(host.materials[1].name, "mat_costume");
-        // 衣装メッシュの material_index がオフセット済み
+        // The clothing mesh's `material_index` must be offset
         assert_eq!(costume_mesh.material_index, 1);
 
-        // モデル名
+        // Model name
         assert_eq!(host.name, "Host + Costume");
     }
 
@@ -1505,7 +1506,7 @@ mod tests {
             ..Default::default()
         };
 
-        // 追加: Armature(共通) → NewBone(新規)、剛体はNewBoneに紐づく
+        // Append: Armature (shared) -> NewBone (new); the rigid body is bound to NewBone
         let other = IrModel {
             name: "Accessory".into(),
             bones: vec![
@@ -1515,7 +1516,7 @@ mod tests {
             physics: IrPhysics {
                 rigid_bodies: vec![IrRigidBody {
                     name: "rb_new".into(),
-                    bone_index: Some(1), // other の NewBone(1)
+                    bone_index: Some(1), // other's NewBone(1)
                     group: 1,
                     no_collision_mask: 0xFFFF,
                     shape: RigidShape::Sphere { radius: 0.05 },
@@ -1530,8 +1531,8 @@ mod tests {
                 }],
                 joints: vec![IrJoint {
                     name: "joint_new".into(),
-                    rigid_a: 0, // other 側の最初の剛体（ただし実際はホスト側）
-                    rigid_b: 0, // other 側の剛体 (rb_new)
+                    rigid_a: 0, // First rigid body on the other side (actually points at the host)
+                    rigid_b: 0, // Rigid body on the other side (rb_new)
                     position: Vec3::ZERO,
                     rotation: Vec3::ZERO,
                     move_limit_lo: Vec3::ZERO,
@@ -1549,21 +1550,21 @@ mod tests {
         assert_eq!(merged, 1); // Armature
         assert_eq!(new, 1); // NewBone
 
-        // NewBone は self[2] に追加
+        // NewBone lands at self[2]
         assert_eq!(host.bones[2].name, "NewBone");
         assert_eq!(host.bones[2].parent, Some(0)); // Armature
 
-        // 追加側の剛体の bone_index がリマップ: other NewBone(1) → self NewBone(2)
+        // The appended rigid body's bone_index is remapped: other NewBone(1) -> self NewBone(2)
         assert_eq!(host.physics.rigid_bodies[1].bone_index, Some(2));
 
-        // ジョイントの rigid_a/b がオフセット: +1 (ホスト側の剛体数)
+        // The joint's rigid_a/b are offset by +1 (the host's rigid-body count)
         assert_eq!(host.physics.joints[0].rigid_a, 1); // 0 + rigid_offset(1)
         assert_eq!(host.physics.joints[0].rigid_b, 1);
     }
 
     #[test]
     fn test_merge_no_shared_bones() {
-        // 共通ボーンなしの場合は全ボーンが新規追加される
+        // When there are no shared bones, every bone is added new
         let mut host = IrModel {
             name: "A".into(),
             bones: vec![bone("Root_A", None, vec![])],
@@ -1621,7 +1622,7 @@ mod tests {
 
         host.merge(other);
 
-        // other のモーフの頂点Index は +3 (host の頂点数) されるべき
+        // other's morph vertex indices should be shifted by +3 (host's vertex count)
         if let IrMorphKind::Vertex { ref positions, .. } = host.morphs[1].kind {
             assert_eq!(positions[0].0, 4, "vtx_offset=3, 元Index=1 → 4");
         } else {
@@ -1629,7 +1630,7 @@ mod tests {
         }
     }
 
-    /// merge で base_color_tex_info の index がテクスチャオフセット分加算されることを確認
+    /// Verify that `merge` shifts `base_color_tex_info.index` by the texture offset.
     #[test]
     fn test_merge_base_color_tex_info_offset() {
         let mut host = IrModel {
@@ -1680,37 +1681,37 @@ mod tests {
 
         host.merge(other);
 
-        // テクスチャ2つ
+        // Two textures
         assert_eq!(host.textures.len(), 2);
 
-        // other の材質の texture_index: 0 → 1 (host のテクスチャ数=1 でオフセット)
+        // other's material `texture_index`: 0 -> 1 (offset by host's texture count = 1)
         let mat1 = &host.materials[1];
         assert_eq!(mat1.texture_index, Some(1));
 
-        // base_color_tex_info の index も同様に 0 → 1
+        // base_color_tex_info.index should also shift 0 -> 1
         let ti = mat1.base_color_tex_info.as_ref().unwrap();
         assert_eq!(
             ti.index, 1,
             "base_color_tex_info.index がオフセットされるべき"
         );
-        // UV transform 情報は維持
+        // UV transform data must be preserved
         assert_eq!(ti.tex_coord, 1);
         assert!((ti.offset.x - 0.1).abs() < 1e-6);
         assert!((ti.scale.y - 3.0).abs() < 1e-6);
         assert!((ti.rotation - 0.5).abs() < 1e-6);
     }
 
-    // ===== Step 7-36: TextureSlot::is_linear テスト =====
+    // ===== Step 7-36: TextureSlot::is_linear tests =====
 
     #[test]
     fn test_texture_slot_is_linear() {
-        // Linear スロット: 法線・ShadingShift・OutlineWidth・UvAnimMask
+        // Linear slots: Normal, ShadingShift, OutlineWidth, UvAnimMask
         assert!(TextureSlot::Normal.is_linear());
         assert!(TextureSlot::ShadingShift.is_linear());
         assert!(TextureSlot::OutlineWidth.is_linear());
         assert!(TextureSlot::UvAnimMask.is_linear());
 
-        // sRGB スロット: それ以外すべて
+        // sRGB slots: every other slot
         assert!(!TextureSlot::BaseColor.is_linear());
         assert!(!TextureSlot::Emissive.is_linear());
         assert!(!TextureSlot::ShadeMultiply.is_linear());
@@ -1722,7 +1723,7 @@ mod tests {
 
     #[test]
     fn test_texture_slot_all_variants_covered() {
-        // 全 11 バリアントを列挙して is_linear が panic しないこと
+        // Iterate through all 11 variants and confirm `is_linear` does not panic
         let all = [
             TextureSlot::BaseColor,
             TextureSlot::Emissive,
