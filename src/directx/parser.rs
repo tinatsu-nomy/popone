@@ -3,7 +3,7 @@ use glam::{Mat4, Vec2, Vec3};
 use rust_i18n::t;
 use std::collections::HashMap;
 
-/// DirectX .x パース済みモデル
+/// Parsed DirectX `.x` model.
 #[derive(Debug)]
 pub struct XModel {
     pub name: String,
@@ -11,7 +11,7 @@ pub struct XModel {
     pub meshes: Vec<XMesh>,
 }
 
-/// Frame（階層ノード）
+/// Frame (hierarchy node).
 #[derive(Debug)]
 pub struct XFrame {
     pub name: String,
@@ -19,18 +19,18 @@ pub struct XFrame {
     pub parent: Option<usize>,
 }
 
-/// Mesh データ
+/// Mesh data.
 #[derive(Debug)]
 pub struct XMesh {
     pub name: String,
     pub positions: Vec<Vec3>,
-    /// 三角形化済みインデックス（3個ずつ）
+    /// Triangulated indices (groups of three).
     pub indices: Vec<u32>,
     pub normals: Option<XMeshNormals>,
     pub texcoords: Option<Vec<Vec2>>,
     pub materials: Option<XMeshMaterialList>,
     pub frame_index: Option<usize>,
-    /// スキニング情報（SkinWeights）が検出されたか
+    /// Whether SkinWeights data was detected.
     pub has_skin_weights: bool,
 }
 
@@ -38,17 +38,17 @@ pub struct XMesh {
 #[derive(Debug)]
 pub struct XMeshNormals {
     pub normals: Vec<Vec3>,
-    /// 面ごとの法線インデックス（三角形化済み、3個ずつ）
+    /// Per-face normal indices (triangulated, in groups of three).
     pub face_normals: Vec<u32>,
 }
 
 /// MeshMaterialList
 #[derive(Debug)]
 pub struct XMeshMaterialList {
-    /// 三角形化済み: 各三角形に対応する材質インデックス
+    /// Triangulated: per-triangle material index.
     pub face_material_indices: Vec<usize>,
     pub materials: Vec<XMaterial>,
-    /// 未解決の前方参照（材質スロットインデックス, 参照名）
+    /// Unresolved forward references: (material slot index, referenced name).
     pub unresolved_refs: Vec<(usize, String)>,
 }
 
@@ -64,10 +64,10 @@ pub struct XMaterial {
 }
 
 // ---------------------------------------------------------------------------
-// トークナイザ
+// Tokenizer
 // ---------------------------------------------------------------------------
 
-/// 最小トークン
+/// Minimal token set.
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Ident(String),
@@ -85,11 +85,11 @@ fn tokenize(text: &str) -> Vec<Token> {
 
     while let Some(&ch) = chars.peek() {
         match ch {
-            // 空白
+            // Whitespace
             c if c.is_whitespace() => {
                 chars.next();
             }
-            // コメント: // 行末まで、# 行末まで
+            // Comments: `//` to end-of-line, `#` to end-of-line
             '/' if chars.clone().nth(1) == Some('/') => {
                 while let Some(&c) = chars.peek() {
                     chars.next();
@@ -134,10 +134,10 @@ fn tokenize(text: &str) -> Vec<Token> {
                 }
                 tokens.push(Token::Str(s));
             }
-            // 数値 (先頭が '-' の場合も含む)
+            // Numbers (including a leading '-')
             c if c == '-' || c == '+' || c.is_ascii_digit() || c == '.' => {
                 let mut num = String::new();
-                // 符号
+                // Sign
                 if ch == '-' || ch == '+' {
                     num.push(ch);
                     chars.next();
@@ -150,7 +150,8 @@ fn tokenize(text: &str) -> Vec<Token> {
                         || c == '-'
                         || c == '+'
                     {
-                        // 'e-' 等の指数表記も含む。ただし先頭以外の '-' は指数部の直後のみ
+                        // Includes exponent notation like 'e-'. A non-leading '-' is only allowed
+                        // immediately after the exponent letter.
                         if (c == '-' || c == '+') && !num.ends_with('e') && !num.ends_with('E') {
                             break;
                         }
@@ -162,7 +163,7 @@ fn tokenize(text: &str) -> Vec<Token> {
                 }
                 tokens.push(Token::Num(num));
             }
-            // 識別子 (英数字 + '_' + '-')
+            // Identifiers (alphanumerics + '_' + '-')
             c if c.is_alphanumeric() || c == '_' => {
                 let mut id = String::new();
                 while let Some(&c) = chars.peek() {
@@ -175,7 +176,7 @@ fn tokenize(text: &str) -> Vec<Token> {
                 }
                 tokens.push(Token::Ident(id));
             }
-            // UUID <...> はスキップ
+            // Skip UUIDs of the form <...>
             '<' => {
                 while let Some(&c) = chars.peek() {
                     chars.next();
@@ -185,7 +186,7 @@ fn tokenize(text: &str) -> Vec<Token> {
                 }
             }
             _ => {
-                chars.next(); // 不明な文字はスキップ
+                chars.next(); // Skip unknown characters
             }
         }
     }
@@ -194,7 +195,7 @@ fn tokenize(text: &str) -> Vec<Token> {
 }
 
 // ---------------------------------------------------------------------------
-// パーサー
+// Parser
 // ---------------------------------------------------------------------------
 
 struct Parser {
@@ -202,7 +203,7 @@ struct Parser {
     pos: usize,
     frames: Vec<XFrame>,
     meshes: Vec<XMesh>,
-    /// トップレベル Material の名前→定義テーブル
+    /// Top-level Material name -> definition lookup.
     global_materials: HashMap<String, XMaterial>,
 }
 
@@ -312,8 +313,8 @@ impl Parser {
         }
     }
 
-    /// 名前を読む（LBrace の手前まで Ident/Num を連結）
-    /// "Cube.001" → Ident("Cube") + Num(".001") を結合して "Cube.001" を返す
+    /// Read a name (concatenating Ident/Num tokens until the next LBrace).
+    /// "Cube.001" arrives as Ident("Cube") + Num(".001"), and we recombine it into "Cube.001".
     fn read_optional_name(&mut self) -> String {
         let mut name = String::new();
         while let Some(Token::Ident(_)) | Some(Token::Num(_)) = self.peek() {
@@ -326,7 +327,7 @@ impl Parser {
         name
     }
 
-    /// 中括弧の対応を数えてブロックをスキップ
+    /// Skip a block by tracking the `{` / `}` balance.
     fn skip_block(&mut self) {
         let mut depth = 1;
         while depth > 0 {
@@ -339,7 +340,7 @@ impl Parser {
         }
     }
 
-    /// トップレベルの解析
+    /// Parse the top level.
     fn parse(&mut self) -> Result<()> {
         while self.pos < self.tokens.len() {
             match self.peek() {
@@ -348,7 +349,7 @@ impl Parser {
                     match id.as_str() {
                         "template" => {
                             self.pos += 1;
-                            // template 名をスキップ
+                            // Skip the template name
                             self.read_optional_name();
                             if self.peek() == Some(&Token::LBrace) {
                                 self.pos += 1;
@@ -356,8 +357,8 @@ impl Parser {
                             }
                         }
                         "xof" => {
-                            // ヘッダ行: xof 0303txt 0032
-                            // "0303txt" は Num("0303") + Ident("txt") に分割されるため最大4トークン
+                            // Header line: xof 0303txt 0032
+                            // "0303txt" is split into Num("0303") + Ident("txt"), so up to 4 tokens.
                             self.pos += 1;
                             for _ in 0..4 {
                                 match self.peek() {
@@ -383,7 +384,7 @@ impl Parser {
                             self.parse_mesh(None)?;
                         }
                         "Material" => {
-                            // トップレベル Material をグローバルテーブルに登録
+                            // Register top-level Materials in the global table
                             self.pos += 1;
                             let mat = self.parse_material()?;
                             if !mat.name.is_empty() {
@@ -391,7 +392,7 @@ impl Parser {
                             }
                         }
                         _ => {
-                            // 未知のトップレベルテンプレート: ブロックをスキップ
+                            // Unknown top-level template -> skip the block
                             self.pos += 1;
                             self.read_optional_name();
                             if self.peek() == Some(&Token::LBrace) {
@@ -402,7 +403,7 @@ impl Parser {
                     }
                 }
                 Some(Token::RBrace) => {
-                    // 余分な閉じ括弧はスキップ
+                    // Skip stray closing braces
                     self.pos += 1;
                 }
                 _ => {
@@ -411,7 +412,7 @@ impl Parser {
             }
         }
 
-        // 2パス目: パース完了後に未解決の前方参照マテリアルを再束縛
+        // Second pass: rebind unresolved forward-reference materials after parsing
         for mesh in &mut self.meshes {
             if let Some(mat_list) = &mut mesh.materials {
                 for (slot_idx, ref_name) in &mat_list.unresolved_refs {
@@ -435,7 +436,7 @@ impl Parser {
         Ok(())
     }
 
-    /// Frame ブロックの解析
+    /// Parse a Frame block.
     fn parse_frame(&mut self, parent: Option<usize>) -> Result<()> {
         let name = self.read_optional_name();
         self.expect_lbrace()?;
@@ -447,7 +448,7 @@ impl Parser {
             parent,
         });
 
-        // Frame 内のコンテンツ
+        // Frame body
         while self.pos < self.tokens.len() {
             match self.peek() {
                 Some(Token::RBrace) => {
@@ -478,7 +479,7 @@ impl Parser {
                             }
                         }
                         _ => {
-                            // 未知テンプレートをスキップ
+                            // Skip unknown templates
                             self.pos += 1;
                             self.read_optional_name();
                             if self.peek() == Some(&Token::LBrace) {
@@ -496,7 +497,7 @@ impl Parser {
         Ok(())
     }
 
-    /// FrameTransformMatrix の解析（4×4 行列）
+    /// Parse FrameTransformMatrix (4x4 matrix).
     fn parse_frame_transform_matrix(&mut self) -> Result<Mat4> {
         self.read_optional_name();
         self.expect_lbrace()?;
@@ -508,27 +509,27 @@ impl Parser {
         }
         self.expect_semi();
 
-        // .x は行優先格納、glam は列優先 → 転置
+        // .x stores matrices row-major; glam is column-major -> transpose
         let mat = Mat4::from_cols_array(&m).transpose();
 
-        // 閉じ括弧
+        // Closing brace
         if matches!(self.peek(), Some(Token::RBrace)) {
             self.pos += 1;
         }
         Ok(mat)
     }
 
-    /// Mesh ブロックの解析
+    /// Parse a Mesh block.
     fn parse_mesh(&mut self, frame_index: Option<usize>) -> Result<()> {
         let name = self.read_optional_name();
         self.expect_lbrace()?;
         let mut skin_warned = false;
 
-        // 頂点数
+        // Vertex count
         let vert_count = self.read_int()? as usize;
         self.expect_semi();
 
-        // 頂点座標
+        // Vertex positions
         let mut positions = Vec::with_capacity(vert_count);
         for _ in 0..vert_count {
             let x = self.read_float()?;
@@ -541,11 +542,11 @@ impl Parser {
             positions.push(Vec3::new(x, y, z));
         }
 
-        // 面数
+        // Face count
         let face_count = self.read_int()? as usize;
         self.expect_semi();
 
-        // 面インデックス（三角形化）+ 元の面ごとのインデックス
+        // Face indices (triangulated) plus the original per-face index counts
         let mut indices = Vec::new();
         let mut face_tri_counts: Vec<usize> = Vec::with_capacity(face_count);
         for _ in 0..face_count {
@@ -562,7 +563,7 @@ impl Parser {
             self.expect_semi();
             self.expect_semi_or_comma();
 
-            // 三角形化（fan 分割）
+            // Triangulate via fan splitting
             let tri_count = if n >= 3 { n - 2 } else { 0 };
             for t in 0..tri_count {
                 indices.push(face_indices[0]);
@@ -583,7 +584,7 @@ impl Parser {
             has_skin_weights: false,
         };
 
-        // Mesh 内のサブテンプレート
+        // Sub-templates inside the Mesh
         while self.pos < self.tokens.len() {
             match self.peek() {
                 Some(Token::RBrace) => {
@@ -630,7 +631,7 @@ impl Parser {
                             }
                         }
                         _ => {
-                            // 未知サブテンプレート（MeshVertexColors 等）をスキップ
+                            // Skip unknown sub-templates (e.g. MeshVertexColors)
                             self.pos += 1;
                             self.read_optional_name();
                             if self.peek() == Some(&Token::LBrace) {
@@ -650,7 +651,7 @@ impl Parser {
         Ok(())
     }
 
-    /// MeshNormals の解析
+    /// Parse MeshNormals.
     fn parse_mesh_normals(&mut self, face_tri_counts: &[usize]) -> Result<XMeshNormals> {
         self.read_optional_name();
         self.expect_lbrace()?;
@@ -670,7 +671,7 @@ impl Parser {
             normals.push(Vec3::new(x, y, z));
         }
 
-        // 面法線インデックス
+        // Face-normal indices
         let face_count = self.read_int()? as usize;
         self.expect_semi();
 
@@ -689,13 +690,13 @@ impl Parser {
             self.expect_semi();
             self.expect_semi_or_comma();
 
-            // 三角形化（面インデックスと同じ fan 分割）
+            // Triangulate (same fan-split as the face indices)
             let tri_count =
                 face_tri_counts
                     .get(fi)
                     .copied()
                     .unwrap_or(if n >= 3 { n - 2 } else { 0 });
-            // 法線インデックス数と三角形化数の整合性チェック
+            // Sanity-check the normal-index count against the triangle count
             let safe_tri_count = if tri_count > 0 && n >= 3 {
                 tri_count.min(n - 2)
             } else {
@@ -708,7 +709,7 @@ impl Parser {
             }
         }
 
-        // 閉じ括弧
+        // Closing brace
         if matches!(self.peek(), Some(Token::RBrace)) {
             self.pos += 1;
         }
@@ -719,7 +720,7 @@ impl Parser {
         })
     }
 
-    /// MeshTextureCoords の解析
+    /// Parse MeshTextureCoords.
     fn parse_mesh_texcoords(&mut self) -> Result<Vec<Vec2>> {
         self.read_optional_name();
         self.expect_lbrace()?;
@@ -744,7 +745,7 @@ impl Parser {
         Ok(coords)
     }
 
-    /// MeshMaterialList の解析
+    /// Parse MeshMaterialList.
     fn parse_mesh_material_list(&mut self, face_tri_counts: &[usize]) -> Result<XMeshMaterialList> {
         self.read_optional_name();
         self.expect_lbrace()?;
@@ -755,7 +756,7 @@ impl Parser {
         let face_count = self.read_int()? as usize;
         self.expect_semi();
 
-        // 元の面ごとの材質インデックス
+        // Per-face material indices (pre-triangulation)
         let mut orig_face_mat = Vec::with_capacity(face_count);
         for i in 0..face_count {
             let idx = self.read_int()? as usize;
@@ -767,7 +768,7 @@ impl Parser {
         self.expect_semi();
         self.expect_semi_or_comma();
 
-        // 三角形化後の材質インデックスに展開
+        // Expand to per-triangle material indices after triangulation
         let mut face_material_indices = Vec::new();
         for (fi, &mat_idx) in orig_face_mat.iter().enumerate() {
             let tri_count = face_tri_counts.get(fi).copied().unwrap_or(1);
@@ -776,7 +777,7 @@ impl Parser {
             }
         }
 
-        // Material ブロック
+        // Material blocks
         let mut materials = Vec::with_capacity(mat_count);
         let mut unresolved_refs: Vec<(usize, String)> = Vec::new();
         while self.pos < self.tokens.len() {
@@ -788,14 +789,14 @@ impl Parser {
                 Some(Token::Ident(id)) if id == "Material" => {
                     self.pos += 1;
                     let mat = self.parse_material()?;
-                    // 名前付き材質はグローバルテーブルにも登録（他メッシュからの参照・2-pass 再束縛用）
+                    // Register named materials in the global table too (for cross-mesh references and the 2-pass rebind)
                     if !mat.name.is_empty() {
                         self.global_materials.insert(mat.name.clone(), mat.clone());
                     }
                     materials.push(mat);
                 }
                 Some(Token::Ident(id)) if id == "SI_PhongMaterial" || id == "EffectInstance" => {
-                    // 未知の材質テンプレートをスキップ
+                    // Skip unknown material templates
                     self.pos += 1;
                     self.read_optional_name();
                     if self.peek() == Some(&Token::LBrace) {
@@ -804,15 +805,15 @@ impl Parser {
                     }
                 }
                 Some(Token::LBrace) => {
-                    // 参照ブロック（{ MaterialName } 形式）— グローバルテーブルから解決
+                    // Reference block ({ MaterialName }) -- resolve from the global table
                     self.pos += 1;
-                    // ドット付き名前にも対応（"Material.001" → Ident + Num の連結）
+                    // Support dotted names too ("Material.001" -> Ident + Num concatenated)
                     let ref_name = self.read_optional_name();
                     if !ref_name.is_empty() {
                         if let Some(mat) = self.global_materials.get(&ref_name) {
                             materials.push(mat.clone());
                         } else {
-                            // 前方参照の可能性: プレースホルダを挿入し、後で解決する
+                            // Possibly a forward reference: insert a placeholder and resolve later
                             let slot_idx = materials.len();
                             unresolved_refs.push((slot_idx, ref_name.clone()));
                             log::debug!(
@@ -829,7 +830,7 @@ impl Parser {
                                 texture_filename: None,
                             });
                         }
-                        // 閉じ括弧をスキップ
+                        // Skip the closing brace
                         if matches!(self.peek(), Some(Token::RBrace)) {
                             self.pos += 1;
                         }
@@ -843,7 +844,7 @@ impl Parser {
             }
         }
 
-        // 宣言された材質数に満たない場合、プレースホルダ材質で埋める
+        // Fill with placeholder materials when the declared count was not met
         while materials.len() < mat_count {
             let idx = materials.len();
             log::warn!(
@@ -867,7 +868,7 @@ impl Parser {
         })
     }
 
-    /// Material ブロックの解析
+    /// Parse a Material block.
     fn parse_material(&mut self) -> Result<XMaterial> {
         let name = self.read_optional_name();
         self.expect_lbrace()?;
@@ -905,7 +906,7 @@ impl Parser {
         self.expect_semi();
         self.expect_semi();
 
-        // TextureFilename（オプション）
+        // TextureFilename (optional)
         let mut texture_filename = None;
         while self.pos < self.tokens.len() {
             match self.peek() {
@@ -925,7 +926,7 @@ impl Parser {
                     }
                 }
                 Some(Token::Ident(_)) => {
-                    // 未知のサブブロックをスキップ
+                    // Skip unknown sub-blocks
                     self.pos += 1;
                     self.read_optional_name();
                     if self.peek() == Some(&Token::LBrace) {
@@ -951,10 +952,10 @@ impl Parser {
 }
 
 // ---------------------------------------------------------------------------
-// 公開 API
+// Public API
 // ---------------------------------------------------------------------------
 
-/// .x ファイルをパスから読み込む
+/// Read a `.x` file from a path.
 pub fn read_x(path: &std::path::Path) -> Result<XModel> {
     let data = std::fs::read(path)?;
     let name = path
@@ -965,14 +966,14 @@ pub fn read_x(path: &std::path::Path) -> Result<XModel> {
     read_x_from_data(&data, &name)
 }
 
-/// .x データをメモリから読み込む
+/// Read `.x` data from memory.
 pub fn read_x_from_data(data: &[u8], name: &str) -> Result<XModel> {
-    // Shift_JIS / UTF-8 対応
-    // バイナリ/圧縮形式の検出
+    // Shift_JIS / UTF-8 support
+    // Detect binary / compressed formats
     if data.len() >= 16 {
         let header = &data[..16];
         if header.starts_with(b"xof ") {
-            // ヘッダ形式: "xof 0303bin 0032" など
+            // Header form: e.g. "xof 0303bin 0032"
             let header_str = std::str::from_utf8(header).unwrap_or("");
             if header_str.contains("bin") {
                 return Err(PoponeError::DirectXParse(
@@ -987,11 +988,11 @@ pub fn read_x_from_data(data: &[u8], name: &str) -> Result<XModel> {
         }
     }
 
-    // Shift_JIS / UTF-8 対応
+    // Shift_JIS / UTF-8 support
     let text = match std::str::from_utf8(data) {
         Ok(s) => s.to_string(),
         Err(_) => {
-            // Shift_JIS として試行
+            // Fall back to Shift_JIS
             let (decoded, _, had_errors) = encoding_rs::SHIFT_JIS.decode(data);
             if had_errors {
                 return Err(PoponeError::DirectXParse(
@@ -1116,7 +1117,7 @@ Mesh {
 }
 "#;
         let model = read_x_from_data(x_data.as_bytes(), "quad").unwrap();
-        // 4角形 → 三角形2つ = 6インデックス
+        // Quad -> 2 triangles = 6 indices
         assert_eq!(model.meshes[0].indices.len(), 6);
         assert_eq!(model.meshes[0].indices, vec![0, 1, 2, 0, 2, 3]);
     }

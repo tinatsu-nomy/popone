@@ -1,5 +1,5 @@
-// viewer feature 有効時は Windows GUI サブシステムでビルドし、
-// Explorer からの起動時にコンソールウィンドウを表示しない
+// When the viewer feature is enabled, build for the Windows GUI subsystem
+// so launching from Explorer does not pop up a console window.
 #![cfg_attr(
     all(feature = "viewer", target_os = "windows"),
     windows_subsystem = "windows"
@@ -121,10 +121,10 @@ fn build_localized_command() -> clap::Command {
 
 use popone::SharedLogBuffer;
 
-/// fern に接続するための `Write` ラッパー
+/// `Write` wrapper used to feed `fern`.
 struct SharedLogBufferWriter(SharedLogBuffer);
 
-/// ログバッファの最大サイズ（16MB）。超過時は先頭を切り詰める。
+/// Maximum log-buffer size (16 MB). The head is trimmed when it overflows.
 const LOG_BUFFER_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 impl std::io::Write for SharedLogBufferWriter {
@@ -132,7 +132,7 @@ impl std::io::Write for SharedLogBufferWriter {
         if let Ok(mut lb) = self.0.lock() {
             lb.data.extend(buf.iter().copied());
             lb.total_written += buf.len();
-            // 上限超過時は先頭を切り詰め（直近ログを優先保持）
+            // Trim the head once the cap is exceeded (keep the most recent logs)
             if lb.data.len() > LOG_BUFFER_MAX_BYTES {
                 let excess = lb.data.len() - LOG_BUFFER_MAX_BYTES;
                 lb.data.drain(..excess);
@@ -145,7 +145,7 @@ impl std::io::Write for SharedLogBufferWriter {
     }
 }
 
-/// メモリバッファの内容をファイルに一括書き出す
+/// Flush the in-memory buffer to a file in one shot.
 #[cfg(feature = "viewer")]
 fn flush_log_buffer(buffer: &SharedLogBuffer, path: &std::path::Path) {
     if let Ok(mut lb) = buffer.lock() {
@@ -155,18 +155,18 @@ fn flush_log_buffer(buffer: &SharedLogBuffer, path: &std::path::Path) {
     }
 }
 
-/// ロガーセットアップ。
-/// stderr には `stderr_level` までのログを出力する。
-/// `log_file` が Some の場合、そのパスに DEBUG レベルまで全て書き出す。
-/// `log_buffer` が Some の場合、ファイル I/O の代わりにメモリバッファに書き出す（ビューアモード用）。
+/// Logger setup.
+/// Logs up to `stderr_level` are written to stderr.
+/// When `log_file` is Some, every record up to DEBUG is written to that path.
+/// When `log_buffer` is Some, records go into an in-memory buffer instead of a file (used by the viewer).
 fn setup_logging(
     stderr_level: log::LevelFilter,
     log_file: Option<&std::path::Path>,
     log_buffer: Option<SharedLogBuffer>,
 ) -> Result<()> {
-    let mut base = fern::Dispatch::new().level(log::LevelFilter::Debug); // グローバル最小フィルター
+    let mut base = fern::Dispatch::new().level(log::LevelFilter::Debug); // Global floor
 
-    // stderr: ユーザー指定レベル
+    // stderr: user-specified level
     base = base.chain(
         fern::Dispatch::new()
             .level(stderr_level)
@@ -177,7 +177,7 @@ fn setup_logging(
             .chain(std::io::stderr()),
     );
 
-    // DEBUG 出力先: メモリバッファ（ビューア）またはファイル（CLI）
+    // DEBUG sink: in-memory buffer (viewer) or file (CLI)
     if let Some(buffer) = log_buffer {
         base = base.chain(
             fern::Dispatch::new()
@@ -209,8 +209,8 @@ fn setup_logging(
         .map_err(|e| anyhow::anyhow!("{}: {}", t!("cli.error.logger_init_failed"), e))
 }
 
-/// Windows GUI サブシステムの場合、親コンソールにアタッチして
-/// stdout/stdin/stderr を使えるようにする
+/// On the Windows GUI subsystem, attach to the parent console
+/// so stdout/stdin/stderr are usable.
 #[cfg(all(feature = "viewer", target_os = "windows"))]
 fn attach_parent_console() {
     extern "system" {
@@ -246,7 +246,7 @@ fn attach_parent_console() {
             return;
         }
 
-        // CONIN$ / CONOUT$ を開いてプロセスの標準ハンドルを差し替え
+        // Open CONIN$ / CONOUT$ and swap the process's standard handles
         let h_in = CreateFileA(
             c"CONIN$".as_ptr().cast(),
             GENERIC_READ,
@@ -260,7 +260,7 @@ fn attach_parent_console() {
             SetStdHandle(STD_INPUT_HANDLE, h_in);
         }
 
-        // stdout 用ハンドル
+        // Handle for stdout
         let h_out = CreateFileA(
             c"CONOUT$".as_ptr().cast(),
             GENERIC_WRITE,
@@ -274,7 +274,7 @@ fn attach_parent_console() {
             SetStdHandle(STD_OUTPUT_HANDLE, h_out);
         }
 
-        // stderr 用に別ハンドルを開く（stdout と共有するとクローズ時に二重解放になる）
+        // Open a separate handle for stderr (sharing with stdout would double-free on close)
         let h_err = CreateFileA(
             c"CONOUT$".as_ptr().cast(),
             GENERIC_WRITE,
@@ -288,14 +288,13 @@ fn attach_parent_console() {
             SetStdHandle(STD_ERROR_HANDLE, h_err);
         }
 
-        // Rust の std::io が新しいハンドルを使うよう、
-        // 内部バッファをリセットするために std::io::set_output_capture 等は不要
-        // — SetStdHandle で OS レベルのハンドルが更新されるため、
-        // 以降の Rust print!/stdin は新しいハンドルを使用する
+        // No need to call std::io::set_output_capture or reset Rust's internal buffers --
+        // SetStdHandle updates the handle at the OS level, so subsequent Rust print! / stdin
+        // calls automatically pick up the new handle.
     }
 }
 
-/// コンソールを切り離す（ビューア起動前に呼び出す）
+/// Detach from the console (called before launching the viewer).
 #[cfg(all(feature = "viewer", target_os = "windows"))]
 fn detach_console() {
     extern "system" {
@@ -405,7 +404,7 @@ fn main() {
     // Apply OS-detected locale before any user-visible string is generated.
     popone::i18n::init_default_locale();
 
-    // GUI サブシステムでも CLI 引数がある場合はコンソール出力を有効にする
+    // Even on the GUI subsystem, when CLI args are present we want console output
     #[cfg(all(feature = "viewer", target_os = "windows"))]
     if std::env::args().len() > 1 {
         attach_parent_console();
@@ -434,7 +433,7 @@ fn main() {
 }
 
 fn run_main(mut args: Args) -> Result<()> {
-    // 引数なし → ビューア起動
+    // No args -> launch the viewer
     if args.input.is_none() {
         #[cfg(feature = "viewer")]
         {
@@ -446,17 +445,17 @@ fn run_main(mut args: Args) -> Result<()> {
         }
     }
 
-    // unwrap 安全: 上で is_none() チェック済み
+    // unwrap safe: is_none() was checked above
     let input = args.input.take().expect("input は is_none チェック済み");
 
     let ext = popone::path_ext_lower(&input);
 
-    // --list-models が非アーカイブファイルに使われた場合はエラー
+    // Reject `--list-models` on non-archive inputs
     if args.list_models && !matches!(ext.as_str(), "zip" | "7z") {
         anyhow::bail!("{}", t!("cli.error.list_models_archive_only"));
     }
 
-    // アーカイブ: --list-models はビューアモードより先に処理
+    // Archives: handle `--list-models` before the viewer-mode branch
     if args.list_models && matches!(ext.as_str(), "zip" | "7z") {
         let data = std::fs::read(&input).with_context(|| {
             t!(
@@ -487,13 +486,13 @@ fn run_main(mut args: Args) -> Result<()> {
         return Ok(());
     }
 
-    // --model-name はCLI変換専用（ビューアモードでは使用不可）
+    // `--model-name` is for CLI conversion only (not allowed in viewer mode)
     #[cfg(feature = "viewer")]
     if args.model_name.is_some() && args.output.is_none() && !args.dump {
         anyhow::bail!("{}", t!("cli.error.model_name_cli_only"));
     }
 
-    // viewer feature: 出力未指定 → ビューアモードで開く
+    // viewer feature: output not specified -> open in viewer mode
     #[cfg(feature = "viewer")]
     {
         if args.output.is_none() && !args.dump {
@@ -501,7 +500,7 @@ fn run_main(mut args: Args) -> Result<()> {
         }
     }
 
-    // アーカイブ経由のPMX変換
+    // PMX conversion via an archive
     if matches!(ext.as_str(), "zip" | "7z") {
         let output = args
             .output
@@ -516,7 +515,7 @@ fn run_main(mut args: Args) -> Result<()> {
         .with_context(|| t!("cli.error.output_required_vrm").to_string())?
         .clone();
 
-    // ロガー初期化（dump 時はファイルログなし）
+    // Initialize the logger (no file log on `--dump`)
     let log_level = args
         .log_level
         .parse::<log::LevelFilter>()
@@ -534,8 +533,8 @@ fn run_main(mut args: Args) -> Result<()> {
 
     log::info!("Input file: {}", input.display());
 
-    // 中間表現抽出（VRM / FBX / OBJ / STL / unitypackage 分岐）
-    // VRM の場合は glb を保持してテクスチャ書き出しに再利用（二重読み込み回避）
+    // IR extraction (branches on VRM / FBX / OBJ / STL / unitypackage).
+    // For VRM, keep the glb so texture writing can reuse it (avoids a second load).
     let (ir, glb_for_tex) = match ext.as_str() {
         "obj" => {
             let ir = popone::obj::extract::load_obj(&input)
@@ -580,7 +579,7 @@ fn run_main(mut args: Args) -> Result<()> {
             let pkg = popone::unitypackage::build_unity_package_index(&archive_data)
                 .with_context(|| t!("cli.error.unitypackage_extract_failed").to_string())?;
 
-            // FBX 一覧を取得
+            // Collect the FBX entries
             let fbx_indices: Vec<(usize, String)> = pkg
                 .entries
                 .iter()
@@ -607,7 +606,7 @@ fn run_main(mut args: Args) -> Result<()> {
                 }
             }
 
-            // FBX 選択
+            // Pick an FBX
             let selected_idx = if let Some(ref target) = args.fbx_name {
                 let target_lower = target.to_lowercase();
                 fbx_indices
@@ -637,7 +636,7 @@ fn run_main(mut args: Args) -> Result<()> {
                 .with_context(|| t!("cli.error.prefab_resolve_failed").to_string())?;
             log::info!("FBX in unitypackage: {}", prepared.model.pathname);
 
-            // unitypackage 経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
+            // Via unitypackage: passing fbx_path=None disables the texture lookup near the FBX
             let mut ir = popone::fbx::extract::extract_ir_model_from_fbx_with_options(
                 &prepared.fbx_data,
                 None,
@@ -661,7 +660,7 @@ fn run_main(mut args: Args) -> Result<()> {
                     &prefab_label,
                 );
             } else {
-                // フォールバック: 既存のファイル名マッチング
+                // Fallback: legacy filename-based matching
                 let textures: Vec<(String, Arc<[u8]>)> = prepared
                     .textures
                     .iter()
@@ -696,7 +695,7 @@ fn run_main(mut args: Args) -> Result<()> {
         }
     };
 
-    // テクスチャ割当ログ出力
+    // Log the texture assignments
     ir.log_texture_assignments();
 
     if args.dump {
@@ -704,7 +703,7 @@ fn run_main(mut args: Args) -> Result<()> {
         return Ok(());
     }
 
-    // 出力ディレクトリ確定
+    // Resolve the output directory
     let output_dir = output.parent().unwrap_or(Path::new(".")).to_path_buf();
     std::fs::create_dir_all(&output_dir).with_context(|| {
         t!(
@@ -714,7 +713,7 @@ fn run_main(mut args: Args) -> Result<()> {
         .to_string()
     })?;
 
-    // テクスチャ書き出し（VRM は保持済み glb を再利用）
+    // Write textures (for VRM, reuse the previously loaded glb)
     let tex_dir = output_dir.join("textures");
     let written_filenames = if let Some(ref glb) = glb_for_tex {
         convert::texture::write_all_textures(&ir.textures, &glb.images, &tex_dir)
@@ -724,7 +723,7 @@ fn run_main(mut args: Args) -> Result<()> {
             .with_context(|| t!("cli.error.texture_write_failed").to_string())?
     };
 
-    // PMXモデル構築
+    // Build the PMX model
     let build_options = pmx::build::PmxBuildOptions {
         align_rigid_rotation: args.align_rigid_rotation,
         no_physics: args.no_physics,
@@ -734,13 +733,13 @@ fn run_main(mut args: Args) -> Result<()> {
     let (mut pmx_model, toon_textures) =
         pmx::build::build_pmx_model_with_options(&ir, &build_options)
             .with_context(|| t!("cli.error.pmx_build_failed").to_string())?;
-    // PSD→PNG 変換でファイル名が変わった場合、PMX テクスチャパスを補正
+    // Patch PMX texture paths when PSD->PNG conversion changed the filename
     for (i, name) in written_filenames.iter().enumerate() {
         if i < pmx_model.textures.len() {
             pmx_model.textures[i] = format!("textures\\{}", name);
         }
     }
-    // 生成トゥーンテクスチャをディスクに書き出し、PMX パスを補正
+    // Write generated toon textures to disk and patch the PMX paths
     let base_tex_count = ir.textures.len();
     let toon_written =
         popone::convert::texture::write_all_textures_from_ir(&toon_textures, &tex_dir)?;
@@ -751,7 +750,7 @@ fn run_main(mut args: Args) -> Result<()> {
         }
     }
 
-    // PMX書き出し
+    // Write the PMX
     let output_file = std::fs::File::create(&output).with_context(|| {
         t!(
             "cli.error.output_file_create_failed",
@@ -780,7 +779,7 @@ fn run_main(mut args: Args) -> Result<()> {
     Ok(())
 }
 
-/// アーカイブ（ZIP/7z）→ PMX 変換
+/// Archive (ZIP / 7z) -> PMX conversion.
 fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> Result<()> {
     let log_level = args
         .log_level
@@ -817,10 +816,10 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         anyhow::bail!("{}", t!("cli.error.archive_no_models_found"));
     }
 
-    // モデル選択
+    // Pick a model
     let selected = match (&args.model_name, contents.models.len()) {
         (Some(name), _) => {
-            // 完全一致 → 前方一致 → 部分一致（各段階で一意のみ採用）
+            // Exact -> prefix -> substring (only accept when uniquely matched at each stage)
             let exact: Vec<usize> = contents
                 .models
                 .iter()
@@ -917,7 +916,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
     let bundle = popone::archive::extract_model_bundle(&data, format, contents, selected)
         .with_context(|| t!("cli.error.archive_model_extract_failed").to_string())?;
 
-    // 種別で分岐して中間表現を構築
+    // Build the IR by branching on the model kind
     use popone::archive::ArchiveModelKind;
     let ir = match bundle.kind {
         ArchiveModelKind::Pmx => {
@@ -941,7 +940,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
             .with_context(|| t!("cli.error.pmd_extract_failed").to_string())?
         }
         ArchiveModelKind::Fbx => {
-            // アーカイブ経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
+            // Via archive: passing fbx_path=None disables the texture lookup near the FBX
             let mut ir = popone::fbx::extract::extract_ir_model_from_fbx_with_options(
                 &bundle.model.data,
                 None,
@@ -1028,11 +1027,11 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
             .with_context(|| t!("cli.error.directx_extract_failed").to_string())?
         }
         ArchiveModelKind::UnityPackage => {
-            // アーカイブ内 .unitypackage を二重展開
+            // Re-extract a `.unitypackage` nested inside the archive
             let pkg = popone::unitypackage::build_unity_package_index(&bundle.model.data)
                 .with_context(|| t!("cli.error.archive_unitypackage_extract_failed").to_string())?;
 
-            // FBX 一覧を取得
+            // Collect the FBX entries
             let fbx_indices: Vec<(usize, String)> = pkg
                 .entries
                 .iter()
@@ -1076,7 +1075,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
                 prepared.textures.len()
             );
 
-            // unitypackage 経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
+            // Via unitypackage: passing fbx_path=None disables the texture lookup near the FBX
             let mut ir = popone::fbx::extract::extract_ir_model_from_fbx_with_options(
                 &prepared.fbx_data,
                 None,
@@ -1111,7 +1110,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         }
     };
 
-    // テクスチャ割当ログ出力
+    // Log the texture assignments
     ir.log_texture_assignments();
 
     if args.dump {
@@ -1119,7 +1118,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         return Ok(());
     }
 
-    // テクスチャ書き出し（アーカイブ経由は常に write_all_textures_from_ir を使用）
+    // Write textures (for archive flows, always use `write_all_textures_from_ir`)
     let output_dir = output.parent().unwrap_or(Path::new(".")).to_path_buf();
     std::fs::create_dir_all(&output_dir).with_context(|| {
         t!(
@@ -1132,7 +1131,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
     let written_filenames = convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)
         .with_context(|| t!("cli.error.texture_write_failed").to_string())?;
 
-    // PMXモデル構築 & 書き出し
+    // Build and write the PMX model
     let build_options = pmx::build::PmxBuildOptions {
         align_rigid_rotation: args.align_rigid_rotation,
         no_physics: args.no_physics,
@@ -1142,7 +1141,7 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
     let (mut pmx_model, toon_textures) =
         pmx::build::build_pmx_model_with_options(&ir, &build_options)
             .with_context(|| t!("cli.error.pmx_build_failed").to_string())?;
-    // PSD→PNG 変換でファイル名が変わった場合、PMX テクスチャパスを補正
+    // Patch PMX texture paths when PSD->PNG conversion changed the filename
     for (i, name) in written_filenames.iter().enumerate() {
         if i < pmx_model.textures.len() {
             pmx_model.textures[i] = format!("textures\\{}", name);
@@ -1193,26 +1192,26 @@ fn run_viewer_with_file(input: PathBuf) -> Result<()> {
     run_viewer_with_initial(Some(input))
 }
 
-/// ビューア共通起動（ログ・パニックフック・NativeOptions 設定）
+/// Shared viewer launch (logging, panic hook, NativeOptions setup).
 #[cfg(feature = "viewer")]
 fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
-    // シングルインスタンス: 既存インスタンスへの転送を試みる
+    // Single-instance: try to forward to an existing instance
     #[cfg(target_os = "windows")]
     {
         use popone::viewer::single_instance::InstanceCheck;
         match popone::viewer::single_instance::try_send_to_existing(initial_file.as_deref()) {
             InstanceCheck::Forwarded => return Ok(()),
-            // Primary / FallbackStart は両方とも続行（v0.4.0 以降はログローテーションを
-            // 行わないので両者を区別する必要がない）
+            // Both Primary and FallbackStart continue execution. v0.4.0 onwards no longer
+            // performs log rotation, so the two cases need no further distinction.
             InstanceCheck::Primary | InstanceCheck::FallbackStart => {}
         }
     }
 
-    // アプリデータディレクトリ（%LOCALAPPDATA%\popone）
+    // App data directory (%LOCALAPPDATA%\popone)
     let data_dir = popone::viewer::app::persistence::data_dir();
     popone::viewer::app::persistence::migrate_from_exe_dir(&data_dir);
 
-    // セッション設定の読み込み（ログ設定に先立って読み込む）
+    // Load session config (loaded before the log config is applied)
     let app_config = popone::viewer::app::persistence::load_config(&data_dir);
     let log_config = app_config
         .as_ref()
@@ -1221,9 +1220,10 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
 
     let logs_dir = data_dir.join("logs");
     let _ = std::fs::create_dir_all(&logs_dir);
-    // v0.4.0 で「パニックログ以外は保存しない」方針に変えたうえ、ログ保存もユーザの
-    // 明示操作（ログビュアー内「ログ保存」ボタン）に集約したため、自動ローテーションは
-    // 廃止した。生成されるファイルはすべてユーザ意図のものなので勝手に削除しない。
+    // v0.4.0 changed the policy to "only persist panic logs"; saving a normal log is now
+    // an explicit user action via the "Save log" button inside the log viewer. Automatic
+    // rotation was therefore removed -- every generated file is user-intentional, so we never
+    // delete it on our own.
 
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
     let log_path = logs_dir.join(format!("popone_{timestamp}.log"));
@@ -1232,10 +1232,9 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
     setup_logging(log_config.level_filter(), None, Some(log_buffer.clone()))?;
 
     {
-        // パニックダンプは `popone_<ts>.log` への中継書き込みを介さず、最初から
-        // `panic_<ts>.log` に直接書き出す（1 クラッシュ＝1 ファイルに揃えるため）。
-        // v0.4.0 以降はログローテーションも廃止しているため、生成された panic ダンプは
-        // ユーザが手動削除するまでずっと残る。
+        // Panic dumps are written directly to `panic_<ts>.log` without bouncing through
+        // `popone_<ts>.log` (one crash = one file). Since v0.4.0 also dropped log rotation,
+        // generated panic dumps stay on disk until the user removes them manually.
         let panic_dump_path = match log_path.file_name().and_then(|n| n.to_str()) {
             Some(name) => match name.strip_prefix("popone_") {
                 Some(rest) => log_path.with_file_name(format!("panic_{rest}")),
@@ -1248,7 +1247,7 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
             let bt = std::backtrace::Backtrace::force_capture();
             let msg = format!("[PANIC] {info}\n{bt}");
             log::error!("{msg}");
-            // メモリバッファを panic_<ts>.log に直接フラッシュ（コピーは不要）
+            // Flush the in-memory buffer directly into panic_<ts>.log (no copy needed)
             flush_log_buffer(&panic_buffer, &panic_dump_path);
         }));
     }
@@ -1268,7 +1267,7 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
         height: h,
     };
 
-    // NativeOptions: 保存済み設定があればサイズを適用（位置は初回フレームで適用）
+    // NativeOptions: apply the saved size if one exists (position is applied on the first frame)
     let inner_size = app_config
         .as_ref()
         .and_then(|c| c.window.as_ref())
@@ -1308,7 +1307,7 @@ fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
         ..Default::default()
     };
 
-    // ビューア起動前にコンソールを切り離す
+    // Detach from the console before launching the viewer
     #[cfg(target_os = "windows")]
     detach_console();
 

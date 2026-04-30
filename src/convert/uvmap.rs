@@ -1,5 +1,5 @@
-//! UVマップを材質ごとにレイヤー分けした PSD ファイルとして出力する。
-//! グループ化指定により、複数モデルマージ時にモデル別フォルダを生成できる。
+//! Export the UV map as a PSD file with one layer per material.
+//! When groups are supplied, merging multiple models places each one in its own folder.
 
 use rust_i18n::t;
 use std::io::{self, Write};
@@ -8,30 +8,30 @@ use std::path::Path;
 
 use crate::intermediate::types::IrModel;
 
-/// UVマップ出力のデフォルト解像度
+/// Default resolution for UV-map exports.
 pub const DEFAULT_UV_SIZE: u32 = 4096;
 
-// ── PSD レイヤーエントリ ──────────────────────────────────
+// -- PSD layer entries --------------------------------------
 
-/// PSD レイヤーセクションに書き出すエントリ（下→上順で格納）
+/// Entries written into the PSD layer section (stored bottom-to-top).
 enum PsdLayerEntry<'a> {
-    /// 実画像レイヤー
+    /// Real image layer.
     Content { name: &'a str, rgba: &'a [u8] },
-    /// グループ開始マーカー (lsct type=1, blend mode=pass)
+    /// Group-start marker (lsct type = 1, blend mode = pass).
     GroupStart { name: &'a str },
-    /// グループ終端マーカー (lsct type=3, "</Layer group>")
+    /// Group-end marker (lsct type = 3, "</Layer group>").
     GroupEnd,
 }
 
-// ── 公開 API ──────────────────────────────────────────────
+// -- Public API ---------------------------------------------
 
-/// UVマップを PSD として出力する（フラット版、下位互換ラッパー）。
+/// Export the UV map as a PSD (flat version; backwards-compatible wrapper).
 pub fn export_uv_map(ir: &IrModel, path: &Path, size: u32) -> io::Result<()> {
     export_uv_map_grouped(ir, path, size, &[])
 }
 
-/// UVマップを PSD として出力する（グループ化対応版）。
-/// `groups` は `(グループ名, 材質index範囲)` のスライス。空なら全材質フラット出力。
+/// Export the UV map as a PSD with grouping support.
+/// `groups` is a slice of `(group name, material index range)`. An empty slice flattens every material.
 pub fn export_uv_map_grouped(
     ir: &IrModel,
     path: &Path,
@@ -41,12 +41,12 @@ pub fn export_uv_map_grouped(
     let mat_count = ir.materials.len();
     let dim = size as usize;
 
-    // 各材質のレイヤー画像を生成（RGBA、透明背景 + 黒線）
+    // Generate the layer image for each material (RGBA, transparent background + black lines)
     let mut layers: Vec<Vec<u8>> = Vec::with_capacity(mat_count);
     let mut layer_names: Vec<String> = Vec::with_capacity(mat_count);
 
     for mat_idx in 0..mat_count {
-        let mut buf = vec![0u8; dim * dim * 4]; // RGBA 全透明
+        let mut buf = vec![0u8; dim * dim * 4]; // RGBA, fully transparent
 
         for mesh in &ir.meshes {
             if mesh.material_index != mat_idx {
@@ -90,7 +90,7 @@ pub fn export_uv_map_grouped(
                         });
 
                         let px: [(i32, i32); 3] = std::array::from_fn(|i| {
-                            // u=1.0 や v=1.0 の場合にピクセル範囲外にならないようクランプ
+                            // Clamp so u=1.0 or v=1.0 cannot land outside the pixel range
                             let x = (shifted[i].0 * dim as f32) as i32;
                             let y = (shifted[i].1 * dim as f32) as i32;
                             let max = dim as i32 - 1;
@@ -109,11 +109,11 @@ pub fn export_uv_map_grouped(
         layer_names.push(ir.materials[mat_idx].name.clone());
     }
 
-    // entries を PSD 書き込み順（下→上）で構築
+    // Build entries in PSD write order (bottom-to-top)
     let processed = validate_groups(groups, mat_count)?;
     let entries = build_entries(&layers, &layer_names, groups, &processed, mat_count);
 
-    // PSD 書き出し
+    // Write the PSD
     let file = std::fs::File::create(path)?;
     let mut w = io::BufWriter::new(file);
     write_psd_file(&mut w, size, size, &entries)?;
@@ -129,10 +129,10 @@ pub fn export_uv_map_grouped(
     Ok(())
 }
 
-// ── entries 構築 ──────────────────────────────────────────
+// -- Entry construction -------------------------------------
 
-/// グループ情報を検証し、各材質の処理済みフラグを返す。
-/// 範囲外・重複・逆順があればエラー。
+/// Validate the group spec and return a processed flag per material.
+/// Errors on out-of-range, overlapping, or reversed ranges.
 fn validate_groups(groups: &[(String, Range<usize>)], mat_count: usize) -> io::Result<Vec<bool>> {
     let mut processed = vec![false; mat_count];
     for (name, range) in groups {
@@ -174,8 +174,8 @@ fn validate_groups(groups: &[(String, Range<usize>)], mat_count: usize) -> io::R
     Ok(processed)
 }
 
-/// PSD 書き込み順（下→上）の entries リストを構築する。
-/// material index 降順で走査し、グループ境界で GroupEnd/GroupStart マーカーを挿入する。
+/// Build the entries list in PSD write order (bottom-to-top).
+/// Walks materials in descending index order and inserts GroupEnd/GroupStart markers at boundaries.
 fn build_entries<'a>(
     layers: &'a [Vec<u8>],
     layer_names: &'a [String],
@@ -183,13 +183,13 @@ fn build_entries<'a>(
     _processed: &[bool],
     mat_count: usize,
 ) -> Vec<PsdLayerEntry<'a>> {
-    // groups を material_range.start 昇順にソートした index 配列
+    // Indexes into groups, sorted by material_range.start ascending
     let mut sorted_indices: Vec<usize> = (0..groups.len())
         .filter(|&i| !groups[i].1.is_empty())
         .collect();
     sorted_indices.sort_by_key(|&i| groups[i].1.start);
 
-    // 各材質がどのソート済みグループに属するか逆引きマップ
+    // Reverse map: material index -> sorted group index
     let mut group_map: Vec<Option<usize>> = vec![None; mat_count];
     for (si, &gi) in sorted_indices.iter().enumerate() {
         for mat_idx in groups[gi].1.clone() {
@@ -200,19 +200,20 @@ fn build_entries<'a>(
     let mut entries = Vec::new();
     let mut current_group: Option<usize> = None;
 
-    // PSD 配列は下→上順。mat index 降順で走査（mat 0 が最前面 = 既存動作と一致）
+    // PSD layers are stored bottom-to-top. Walk material indices in descending order so that
+    // material 0 ends up on top (matches the existing behavior).
     for mat_idx in (0..mat_count).rev() {
         let target_group = group_map[mat_idx];
 
-        // グループが変わったら境界マーカーを挿入
+        // Insert boundary markers when the active group changes
         if current_group != target_group {
-            // 前のグループを閉じる
+            // Close the previous group
             if let Some(prev_si) = current_group {
                 entries.push(PsdLayerEntry::GroupStart {
                     name: &groups[sorted_indices[prev_si]].0,
                 });
             }
-            // 新しいグループを開く
+            // Open the new group
             if target_group.is_some() {
                 entries.push(PsdLayerEntry::GroupEnd);
             }
@@ -225,7 +226,7 @@ fn build_entries<'a>(
         });
     }
 
-    // 最後のグループを閉じる
+    // Close the final group
     if let Some(last_si) = current_group {
         entries.push(PsdLayerEntry::GroupStart {
             name: &groups[sorted_indices[last_si]].0,
@@ -235,10 +236,10 @@ fn build_entries<'a>(
     entries
 }
 
-// ── UV 描画ヘルパー ──────────────────────────────────────
+// -- UV-drawing helpers -------------------------------------
 
-/// UV値を 0..1 に正規化（負値対応の fract）
-/// [0, 1] 範囲内の値はそのまま保持（1.0 % 1.0 = 0.0 への丸めを防止）
+/// Normalize a UV to 0..1 (`fract` with negative-value support).
+/// Values inside [0, 1] are kept as-is (prevents 1.0 % 1.0 = 0.0 rounding).
 #[inline]
 fn fract_uv(v: f32) -> f32 {
     if (0.0..=1.0).contains(&v) {
@@ -252,7 +253,7 @@ fn fract_uv(v: f32) -> f32 {
     }
 }
 
-/// 三角形の3頂点の UV 座標（fract済み 0..1）が境界をまたぐか判定
+/// Whether the three triangle UVs (already fract-ed to 0..1) cross the wrap boundary.
 #[inline]
 fn uv_wraps(a: f32, b: f32, c: f32) -> bool {
     let min = a.min(b).min(c);
@@ -260,7 +261,7 @@ fn uv_wraps(a: f32, b: f32, c: f32) -> bool {
     (max - min) > 0.5
 }
 
-/// Bresenham 線描画（黒色、アルファ255）
+/// Bresenham line drawing (black, alpha = 255).
 fn draw_line(buf: &mut [u8], dim: usize, p0: (i32, i32), p1: (i32, i32)) {
     let (mut x0, mut y0) = p0;
     let (x1, y1) = p1;
@@ -293,7 +294,7 @@ fn draw_line(buf: &mut [u8], dim: usize, p0: (i32, i32), p1: (i32, i32)) {
     }
 }
 
-/// ピクセル書き込み（黒色 RGBA = 0,0,0,255）
+/// Plot a pixel (black RGBA = 0, 0, 0, 255).
 #[inline]
 fn put_pixel(buf: &mut [u8], dim: usize, x: i32, y: i32) {
     if x < 0 || y < 0 || x >= dim as i32 || y >= dim as i32 {
@@ -306,10 +307,10 @@ fn put_pixel(buf: &mut [u8], dim: usize, x: i32, y: i32) {
     buf[offset + 3] = 255; // A
 }
 
-// ── PSD ライター ──────────────────────────────────────────
+// -- PSD writer ---------------------------------------------
 
-/// lsct (Section Divider Setting) ブロックを構築する。
-/// section_type: 1=グループ開始(open folder), 3=グループ終端(bounding section divider)
+/// Build an lsct (Section Divider Setting) block.
+/// section_type: 1 = group start (open folder), 3 = group end (bounding section divider).
 fn build_lsct_block(section_type: u32) -> Vec<u8> {
     let mut block = Vec::with_capacity(24);
     block.extend_from_slice(b"8BIM");
@@ -321,7 +322,7 @@ fn build_lsct_block(section_type: u32) -> Vec<u8> {
     block
 }
 
-/// PSD ファイル全体を一括書き出し（RGBA, 8bit/ch）
+/// Write the entire PSD file at once (RGBA, 8 bit/channel).
 fn write_psd_file<W: Write>(
     w: &mut W,
     width: u32,
@@ -331,7 +332,7 @@ fn write_psd_file<W: Write>(
     let ch_count: u16 = 4;
     let pixel_count = (width as usize) * (height as usize);
 
-    // ── File Header (26 bytes) ──
+    // -- File header (26 bytes) --
     w.write_all(b"8BPS")?;
     w.write_all(&1u16.to_be_bytes())?; // version = 1
     w.write_all(&[0u8; 6])?;
@@ -341,18 +342,18 @@ fn write_psd_file<W: Write>(
     w.write_all(&8u16.to_be_bytes())?; // depth = 8 bit
     w.write_all(&3u16.to_be_bytes())?; // color mode = RGB
 
-    // ── Color Mode Data ──
+    // -- Color Mode Data --
     w.write_all(&0u32.to_be_bytes())?;
 
-    // ── Image Resources ──
+    // -- Image Resources --
     w.write_all(&0u32.to_be_bytes())?;
 
-    // ── Layer and Mask Information ──
+    // -- Layer and Mask Information --
     let layer_section = build_layer_section(width, height, entries)?;
     w.write_all(&(layer_section.len() as u32).to_be_bytes())?;
     w.write_all(&layer_section)?;
 
-    // ── Image Data (composite) ──
+    // -- Image Data (composite) --
     w.write_all(&0u16.to_be_bytes())?; // compression = raw
     let composite = build_composite(width, height, entries);
     let mut ch_buf = vec![0u8; pixel_count];
@@ -366,7 +367,7 @@ fn write_psd_file<W: Write>(
     Ok(())
 }
 
-/// レイヤーセクションを構築
+/// Build the layer section.
 fn build_layer_section(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
 
@@ -380,21 +381,21 @@ fn build_layer_section(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io
     Ok(buf)
 }
 
-/// レイヤー情報を構築（entries ベース）
+/// Build the layer info (driven by `entries`).
 fn build_layer_info(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
     let layer_count = entries.len() as i16;
     let pixel_count = (width as usize) * (height as usize);
 
-    // layer count (正の値 = 合成画像にアルファなし)
+    // layer count (positive = composite has no alpha)
     w_i16(&mut buf, layer_count)?;
 
-    // Content レイヤーのチャンネルデータ長（raw = 2 + pixel_count per channel）
+    // Channel data length for Content layers (raw = 2 + pixel_count per channel)
     let content_ch_data_len = (2 + pixel_count) as u32;
-    // グループマーカーのチャンネルデータ長（compression u16 のみ）
+    // Channel data length for group markers (just the compression u16)
     let marker_ch_data_len: u32 = 2;
 
-    // ── 各エントリのレイヤーレコード ──
+    // -- Layer records per entry --
     for entry in entries {
         match entry {
             PsdLayerEntry::Content { name, .. } => {
@@ -427,7 +428,7 @@ fn build_layer_info(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::R
                 buf.extend_from_slice(&luni_block);
             }
             PsdLayerEntry::GroupStart { name } => {
-                // グループ開始: top=left=bottom=right=0, 4ch empty
+                // Group start: top = left = bottom = right = 0, 4 empty channels
                 w_u32(&mut buf, 0)?; // top
                 w_u32(&mut buf, 0)?; // left
                 w_u32(&mut buf, 0)?; // bottom
@@ -493,7 +494,7 @@ fn build_layer_info(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::R
         }
     }
 
-    // ── 各エントリのチャンネルデータ ──
+    // -- Channel data per entry --
     for entry in entries {
         match entry {
             PsdLayerEntry::Content { rgba, .. } => {
@@ -507,9 +508,9 @@ fn build_layer_info(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::R
                 }
             }
             PsdLayerEntry::GroupStart { .. } | PsdLayerEntry::GroupEnd => {
-                // 4チャンネル × compression(u16) のみ
+                // 4 channels x compression(u16) only
                 for _ in 0..4 {
-                    w_u16(&mut buf, 0)?; // compression = raw, ピクセルデータなし
+                    w_u16(&mut buf, 0)?; // compression = raw, no pixel data
                 }
             }
         }
@@ -518,12 +519,12 @@ fn build_layer_info(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::R
     Ok(buf)
 }
 
-/// 全レイヤーを合成（entries 順 = PSD 下→上順、上のレイヤーが優先）
+/// Composite every layer (entries order = PSD bottom-to-top; later entries win).
 fn build_composite(width: u32, height: u32, entries: &[PsdLayerEntry]) -> Vec<u8> {
     let pixel_count = (width as usize) * (height as usize);
-    let mut composite = vec![255u8; pixel_count * 4]; // 白背景（RGBA全255）
+    let mut composite = vec![255u8; pixel_count * 4]; // White background (RGBA all 255)
 
-    // entries は PSD 下→上順。Content のみを順に合成（後のレイヤーが上に重なる）
+    // entries is in PSD bottom-to-top order. Composite only Content layers; later ones land on top.
     for entry in entries {
         if let PsdLayerEntry::Content { rgba, .. } = entry {
             for i in 0..pixel_count {
@@ -541,9 +542,9 @@ fn build_composite(width: u32, height: u32, entries: &[PsdLayerEntry]) -> Vec<u8
     composite
 }
 
-// ── 文字列エンコード ──────────────────────────────────────
+// -- String encoding ----------------------------------------
 
-/// Pascal文字列エンコード（4バイト境界パディング）
+/// Pascal-string encoding (padded to a 4-byte boundary).
 fn encode_pascal_string(s: &str) -> Vec<u8> {
     let bytes = s.as_bytes();
     let len = bytes.len().min(255) as u8;
@@ -555,7 +556,7 @@ fn encode_pascal_string(s: &str) -> Vec<u8> {
     out
 }
 
-/// Unicode レイヤー名リソース (luni) を構築
+/// Build the Unicode layer-name resource (luni).
 fn build_luni_block(name: &str) -> Vec<u8> {
     let utf16: Vec<u16> = name.encode_utf16().collect();
     let str_bytes = utf16.len() * 2;
@@ -574,7 +575,7 @@ fn build_luni_block(name: &str) -> Vec<u8> {
     block
 }
 
-// ── バイナリヘルパー ──────────────────────────────────────
+// -- Binary helpers -----------------------------------------
 
 fn w_u16<W: Write>(w: &mut W, v: u16) -> io::Result<()> {
     w.write_all(&v.to_be_bytes())
@@ -588,7 +589,7 @@ fn w_u32<W: Write>(w: &mut W, v: u32) -> io::Result<()> {
     w.write_all(&v.to_be_bytes())
 }
 
-// ── テスト ────────────────────────────────────────────────
+// -- Tests --------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -664,19 +665,19 @@ mod tests {
 
     #[test]
     fn test_empty_groups_flat_output() {
-        // 空グループでフラット出力
+        // Empty groups -> flat output
         let dim = 2usize;
         let layers: Vec<Vec<u8>> = (0..3).map(|_| vec![0u8; dim * dim * 4]).collect();
         let names: Vec<String> = vec!["a".into(), "b".into(), "c".into()];
         let processed = validate_groups(&[], 3).unwrap();
         let entries = build_entries(&layers, &names, &[], &processed, 3);
 
-        // 全て Content、グループマーカーなし
+        // All entries are Content; no group markers
         assert_eq!(entries.len(), 3);
         for entry in &entries {
             assert!(matches!(entry, PsdLayerEntry::Content { .. }));
         }
-        // mat index 降順: c, b, a
+        // mat-index descending: c, b, a
         match &entries[0] {
             PsdLayerEntry::Content { name, .. } => assert_eq!(*name, "c"),
             _ => panic!(),
@@ -700,7 +701,7 @@ mod tests {
         let processed = validate_groups(&groups, 3).unwrap();
         let entries = build_entries(&layers, &names, &groups, &processed, 3);
 
-        // GroupEnd → m2 → m1 → m0 → GroupStart
+        // GroupEnd -> m2 -> m1 -> m0 -> GroupStart
         assert_eq!(entries.len(), 5);
         assert!(matches!(&entries[0], PsdLayerEntry::GroupEnd));
         assert!(matches!(
@@ -723,7 +724,7 @@ mod tests {
 
     #[test]
     fn test_orphan_materials_output() {
-        // mat0,1 はグループ、mat2 は孤立
+        // mat0/mat1 belong to a group; mat2 is orphaned
         let dim = 2usize;
         let layers: Vec<Vec<u8>> = (0..3).map(|_| vec![0u8; dim * dim * 4]).collect();
         let names: Vec<String> = vec!["m0".into(), "m1".into(), "orphan".into()];
@@ -731,7 +732,7 @@ mod tests {
         let processed = validate_groups(&groups, 3).unwrap();
         let entries = build_entries(&layers, &names, &groups, &processed, 3);
 
-        // orphan(2) → GroupEnd → m1 → m0 → GroupStart
+        // orphan(2) -> GroupEnd -> m1 -> m0 -> GroupStart
         assert_eq!(entries.len(), 5);
         assert!(matches!(
             &entries[0],
@@ -754,7 +755,7 @@ mod tests {
 
     #[test]
     fn test_two_groups_layer_order() {
-        // mat0-1: GroupA, mat2: 孤立, mat3-4: GroupB
+        // mat0-1: GroupA, mat2: orphan, mat3-4: GroupB
         let dim = 2usize;
         let layers: Vec<Vec<u8>> = (0..5).map(|_| vec![0u8; dim * dim * 4]).collect();
         let names: Vec<String> = (0..5).map(|i| format!("m{i}")).collect();
@@ -762,10 +763,10 @@ mod tests {
         let processed = validate_groups(&groups, 5).unwrap();
         let entries = build_entries(&layers, &names, &groups, &processed, 5);
 
-        // PSD 下→上:
-        // GroupEnd(GB) → m4 → m3 → GroupStart(GB)
-        // → orphan(m2)
-        // → GroupEnd(GA) → m1 → m0 → GroupStart(GA)
+        // PSD bottom-to-top:
+        // GroupEnd(GB) -> m4 -> m3 -> GroupStart(GB)
+        // -> orphan(m2)
+        // -> GroupEnd(GA) -> m1 -> m0 -> GroupStart(GA)
         let entry_desc: Vec<&str> = entries
             .iter()
             .map(|e| match e {
@@ -783,7 +784,7 @@ mod tests {
 
     #[test]
     fn test_entries_sorted_by_material_range() {
-        // groups を逆順で渡しても material_range.start 昇順にソートされる
+        // Even when groups are passed in reverse, they should be sorted by material_range.start ascending
         let dim = 2usize;
         let layers: Vec<Vec<u8>> = (0..4).map(|_| vec![0u8; dim * dim * 4]).collect();
         let names: Vec<String> = (0..4).map(|i| format!("m{i}")).collect();
@@ -791,7 +792,7 @@ mod tests {
         let processed = validate_groups(&groups, 4).unwrap();
         let entries = build_entries(&layers, &names, &groups, &processed, 4);
 
-        // Second(2..4) が下、First(0..2) が上
+        // Second(2..4) is at the bottom, First(0..2) is on top
         let entry_desc: Vec<&str> = entries
             .iter()
             .map(|e| match e {
@@ -809,8 +810,8 @@ mod tests {
 
     #[test]
     fn test_layer_info_lsct_bytes() {
-        // 1グループ1材質で PSD バイト列を検証
-        let layers = vec![vec![0u8, 0, 0, 255]]; // 1x1 黒ピクセル
+        // Verify the PSD byte stream for a single material in a single group
+        let layers = vec![vec![0u8, 0, 0, 255]]; // 1x1 black pixel
         let names = vec!["mat".to_string()];
         let groups = vec![("G".to_string(), 0..1)];
         let processed = validate_groups(&groups, 1).unwrap();
@@ -822,7 +823,7 @@ mod tests {
         let count = i16::from_be_bytes([info[0], info[1]]);
         assert_eq!(count, 3);
 
-        // lsct ブロックを検索して type 値を確認
+        // Find every lsct block and capture its type
         let info_bytes = &info;
         let mut lsct_types = Vec::new();
         for i in 0..info_bytes.len().saturating_sub(8) {
@@ -836,13 +837,13 @@ mod tests {
                 lsct_types.push(t);
             }
         }
-        // GroupEnd(type=3) が先、GroupStart(type=1) が後
+        // GroupEnd (type=3) comes first, GroupStart (type=1) comes after
         assert_eq!(lsct_types, vec![3, 1]);
     }
 
     #[test]
     fn test_group_start_blend_mode() {
-        // GroupStart のレイヤーレコードが "pass" blend mode を持つことを検証
+        // Verify that the GroupStart layer record uses the "pass" blend mode
         let layers = vec![vec![0u8; 4]];
         let names = vec!["m".to_string()];
         let groups = vec![("G".to_string(), 0..1)];
@@ -851,23 +852,23 @@ mod tests {
 
         let info = build_layer_info(1, 1, &entries).unwrap();
 
-        // "pass" が2回出現するはず（GroupEnd と GroupStart のレイヤーレコード内）
+        // "pass" should appear twice (in the GroupEnd and GroupStart layer records)
         let mut pass_count = 0;
         for i in 0..info.len().saturating_sub(4) {
             if &info[i..i + 4] == b"pass" {
                 pass_count += 1;
             }
         }
-        // GroupEnd(pass blend) + GroupStart(pass blend) + lsct内pass × 2 = 4回
+        // GroupEnd(pass blend) + GroupStart(pass blend) + 2x pass inside lsct = 4 occurrences
         assert!(pass_count >= 4, "pass count: {pass_count}");
     }
 
     #[test]
     fn test_group_end_name() {
-        // GroupEnd のレイヤー名が "</Layer group>" であることを検証（luni ブロック内）
+        // Verify that the GroupEnd layer name is "</Layer group>" (inside the luni block)
         let luni = build_luni_block("</Layer group>");
         let expected_utf16: Vec<u16> = "</Layer group>".encode_utf16().collect();
-        // luni 構造: "8BIM" + "luni" + len(4) + char_count(4) + UTF-16BE chars
+        // luni layout: "8BIM" + "luni" + len(4) + char_count(4) + UTF-16BE chars
         let char_count = u32::from_be_bytes([luni[12], luni[13], luni[14], luni[15]]);
         assert_eq!(char_count, expected_utf16.len() as u32);
     }

@@ -24,7 +24,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 use std::path::{Path, PathBuf};
 
-/// パスの拡張子を小文字で返す（拡張子なし・非UTF-8の場合は空文字列）
+/// Return the path extension lowercased (empty string when missing or not valid UTF-8).
 pub fn path_ext_lower(path: &Path) -> String {
     path.extension()
         .and_then(|e| e.to_str())
@@ -32,11 +32,11 @@ pub fn path_ext_lower(path: &Path) -> String {
         .to_lowercase()
 }
 
-/// 相対パスを正規化し、ディレクトリトラバーサルを防止する。
-/// バックスラッシュをスラッシュに変換し、"."/".." を解決する。
-/// ".." がルートを超えて遡ろうとする場合は無視し、警告ログを出力する。
-/// Windows ドライブレター（`C:` 等）も除去し、絶対パスによるベースディレクトリ
-/// すり抜けを防ぐ。
+/// Normalize a relative path and prevent directory traversal.
+/// Converts backslashes to slashes and resolves `.` / `..`.
+/// `..` segments that would escape the root are dropped (a warning is logged).
+/// Windows drive letters (e.g. `C:`) are also stripped to keep absolute paths
+/// from escaping the base directory.
 pub fn sanitize_rel_path(raw: &str) -> PathBuf {
     let s = raw.replace('\\', "/");
     let mut out: Vec<&str> = Vec::new();
@@ -49,7 +49,7 @@ pub fn sanitize_rel_path(raw: &str) -> PathBuf {
                     traversal_blocked = true;
                 }
             }
-            // ドライブレター "C:" 等を除去（絶対パスによるベースディレクトリすり抜け防止）
+            // Strip drive letters like "C:" (prevents absolute-path escapes of the base dir)
             c if c.contains(':') => {
                 traversal_blocked = true;
             }
@@ -62,11 +62,11 @@ pub fn sanitize_rel_path(raw: &str) -> PathBuf {
     PathBuf::from(out.join("/"))
 }
 
-/// ログメモリバッファ（上限付き、累計オフセット追跡）
-/// VecDeque を使用し、先頭切り詰め（drain）を O(1) で行う。
+/// In-memory log buffer with a cap and a cumulative-offset cursor.
+/// Backed by `VecDeque` so head-trimming (drain) stays O(1).
 pub struct LogBuffer {
     pub data: std::collections::VecDeque<u8>,
-    /// 累計書き込みバイト数（drain しても減らない）
+    /// Cumulative bytes written (never decreases on drain).
     pub total_written: usize,
 }
 
@@ -84,14 +84,14 @@ impl LogBuffer {
         }
     }
 
-    /// 累計オフセット `offset` 以降のデータを読み取る。
-    /// drain 済み範囲は切り捨て、残存データから可能な限り返す。
+    /// Read data from cumulative offset `offset` onwards.
+    /// Already-drained ranges are clipped; we return whatever remains in the buffer.
     pub fn read_from_offset(&self, offset: usize) -> Option<String> {
         let drained = self.total_written - self.data.len();
         let start = if offset <= drained {
-            0 // 要求範囲が drain 済み → 残存データの先頭から
+            0 // Requested range is already drained -> start at the buffer head
         } else if offset >= self.total_written {
-            return None; // まだ何も書かれていない範囲
+            return None; // Nothing written in this range yet
         } else {
             offset - drained
         };
@@ -100,7 +100,7 @@ impl LogBuffer {
         if start >= total_len {
             return None;
         }
-        // VecDeque は内部的に2つの連続スライスで構成される
+        // VecDeque is internally backed by two contiguous slices
         let bytes: std::borrow::Cow<'_, [u8]> = if start < front.len() {
             if back.is_empty() {
                 std::borrow::Cow::Borrowed(&front[start..])
@@ -118,7 +118,7 @@ impl LogBuffer {
     }
 }
 
-/// ログメモリバッファの共有型
+/// Shared handle to a log buffer.
 pub type SharedLogBuffer = std::sync::Arc<std::sync::Mutex<LogBuffer>>;
 
 use error::Result;
@@ -137,18 +137,18 @@ pub struct ConvertStats {
     pub morphs: usize,
 }
 
-/// VRM → PMX 変換オプション
+/// Options for the VRM -> PMX conversion.
 #[derive(Debug, Clone)]
 pub struct VrmConvertOptions {
-    /// 物理（剛体・ジョイント）を出力しない
+    /// Skip writing physics data (rigid bodies and joints).
     pub no_physics: bool,
-    /// 剛体回転をボーン方向に揃える
+    /// Align rigid-body rotations with the bone direction.
     pub align_rigid_rotation: bool,
-    /// Aスタンスへ正規化
+    /// Normalize the pose to A-stance.
     pub normalize_pose: bool,
-    /// 標準ボーン挿入をスキップ（元のボーン構造を維持）
+    /// Skip standard-bone insertion (preserve the original bone structure).
     pub raw_structure: bool,
-    /// PMX出力倍率（デフォルト: 1.0）
+    /// PMX output scale multiplier (default: 1.0).
     pub scale: f32,
 }
 
@@ -196,7 +196,7 @@ pub fn convert_vrm_to_pmx(
     let (mut pmx_model, toon_textures) =
         pmx::build::build_pmx_model_with_options(&ir, &build_options)?;
     let toon_written = convert::texture::write_all_textures_from_ir(&toon_textures, &tex_dir)?;
-    // 生成トゥーンテクスチャの実ファイル名で PMX パスを補正
+    // Patch PMX texture paths with the actual generated toon-texture filenames
     let base_tex_count = ir.textures.len();
     for (i, name) in toon_written.iter().enumerate() {
         let pmx_idx = base_tex_count + i;
@@ -207,7 +207,7 @@ pub fn convert_vrm_to_pmx(
     write_pmx_and_stats(&pmx_model, output_path, &tex_dir, None)
 }
 
-/// FBX → PMX 変換
+/// FBX -> PMX conversion.
 pub fn convert_fbx_to_pmx(
     input_path: &Path,
     output_path: &Path,
@@ -229,7 +229,7 @@ pub fn convert_fbx_to_pmx(
     convert_ir_to_pmx(&ir, output_path, &build_options)
 }
 
-/// OBJ → PMX 変換
+/// OBJ -> PMX conversion.
 pub fn convert_obj_to_pmx(
     input_path: &Path,
     output_path: &Path,
@@ -245,7 +245,7 @@ pub fn convert_obj_to_pmx(
     convert_ir_to_pmx(&ir, output_path, &build_options)
 }
 
-/// STL → PMX 変換
+/// STL -> PMX conversion.
 pub fn convert_stl_to_pmx(
     input_path: &Path,
     output_path: &Path,
@@ -261,7 +261,7 @@ pub fn convert_stl_to_pmx(
     convert_ir_to_pmx(&ir, output_path, &build_options)
 }
 
-/// DirectX .x → PMX 変換
+/// DirectX `.x` -> PMX conversion.
 pub fn convert_x_to_pmx(
     input_path: &Path,
     output_path: &Path,
@@ -277,7 +277,7 @@ pub fn convert_x_to_pmx(
     convert_ir_to_pmx(&ir, output_path, &build_options)
 }
 
-/// IrModel から直接 PMX 変換（ビューアで編集済みの IrModel を使用）
+/// Convert directly from an `IrModel` to PMX (used for IrModels already edited in the viewer).
 pub fn convert_ir_to_pmx(
     ir: &intermediate::types::IrModel,
     output_path: &Path,
@@ -289,13 +289,13 @@ pub fn convert_ir_to_pmx(
     let written_filenames = convert::texture::write_all_textures_from_ir(&ir.textures, &tex_dir)?;
 
     let (mut pmx_model, toon_textures) = pmx::build::build_pmx_model_with_options(ir, options)?;
-    // PSD→PNG 変換でファイル名が変わった場合、PMX テクスチャパスを補正
+    // Patch PMX texture paths when PSD->PNG conversion changed the filename
     for (i, name) in written_filenames.iter().enumerate() {
         if i < pmx_model.textures.len() {
             pmx_model.textures[i] = format!("textures\\{}", name);
         }
     }
-    // 生成トゥーンテクスチャをディスクに書き出し、PMX パスを補正
+    // Write generated toon textures to disk and patch the PMX paths
     let base_tex_count = ir.textures.len();
     let toon_written = convert::texture::write_all_textures_from_ir(&toon_textures, &tex_dir)?;
     for (i, name) in toon_written.iter().enumerate() {
@@ -307,9 +307,9 @@ pub fn convert_ir_to_pmx(
     write_pmx_and_stats(&pmx_model, output_path, &tex_dir, None)
 }
 
-/// IrModel から PMX 変換（協調キャンセル対応版）。
-/// 全出力を一時ディレクトリに書き出し、成功時のみ最終パスへ移動する。
-/// キャンセル時は一時ディレクトリごと削除し、出力先に中途半端なファイルが残ることを防ぐ。
+/// Convert `IrModel` -> PMX with cooperative cancellation.
+/// Writes everything into a temporary directory and only moves to the final path on success.
+/// On cancel the entire temp directory is removed, so no partial files are left behind.
 pub fn convert_ir_to_pmx_with_cancel(
     ir: &intermediate::types::IrModel,
     output_path: &Path,
@@ -328,7 +328,7 @@ pub fn convert_ir_to_pmx_with_cancel(
     let output_dir = output_path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(output_dir)?;
 
-    // Drop guard: scope 離脱時に一時ディレクトリを自動削除（成功時は disarm）
+    // Drop guard: removes the temp directory when the scope exits (disarmed on success)
     let tmp_dir = output_dir.join(".popone_convert_tmp");
     if tmp_dir.exists() {
         let _ = std::fs::remove_dir_all(&tmp_dir);
@@ -378,10 +378,10 @@ pub fn convert_ir_to_pmx_with_cancel(
     // Final cancel check after PMX write, before committing to output path
     check()?;
 
-    // 成功パス: guard を disarm して一時ディレクトリを残す
+    // Success path: disarm the guard so the temp directory survives
     guard.disarm();
 
-    // 一時ディレクトリから最終出力先へ移動
+    // Move from the temp directory to the final output location
     let final_tex_dir = output_dir.join("textures");
     if tmp_tex_dir.exists() {
         std::fs::create_dir_all(&final_tex_dir)?;
@@ -429,7 +429,7 @@ impl Drop for TmpDirGuard {
     }
 }
 
-/// PMX モデルをファイルに書き出して ConvertStats を返す（共通処理）
+/// Write a PMX model to a file and return `ConvertStats` (shared helper).
 fn write_pmx_and_stats(
     pmx_model: &pmx::types::PmxModel,
     output_path: &Path,
@@ -456,7 +456,7 @@ fn write_pmx_and_stats(
     Ok(stats)
 }
 
-/// base_dir が既に converted_modelXX 配下なら親ディレクトリを返す（入れ子防止）
+/// When `base_dir` is already inside `converted_modelXX`, return its parent (prevents nesting).
 pub fn resolve_converted_base(dir: &Path) -> &Path {
     if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
         if name.starts_with("converted_model")
@@ -470,7 +470,7 @@ pub fn resolve_converted_base(dir: &Path) -> &Path {
     dir
 }
 
-/// converted_modelXX ディレクトリの次の空き番号を検索（上限なし）
+/// Find the next free `converted_modelXX` directory number (no upper bound).
 pub fn next_converted_dir(base_dir: &Path) -> std::path::PathBuf {
     let base_dir = resolve_converted_base(base_dir);
     for i in 1.. {
@@ -482,8 +482,8 @@ pub fn next_converted_dir(base_dir: &Path) -> std::path::PathBuf {
     unreachable!()
 }
 
-/// モデル名をファイル名に安全な文字列にサニタイズ
-/// Windows の不正文字・予約名を処理し、空の場合は None を返す
+/// Sanitize a model name into a filesystem-safe filename.
+/// Handles Windows-illegal characters and reserved names; returns None if the result is empty.
 pub fn sanitize_filename(name: &str) -> Option<String> {
     const INVALID_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
     const RESERVED: &[&str] = &[
@@ -493,7 +493,7 @@ pub fn sanitize_filename(name: &str) -> Option<String> {
     if name.is_empty() {
         return None;
     }
-    // 不正文字を _ に置換
+    // Replace illegal characters with `_`
     let sanitized: String = name
         .chars()
         .map(|c| {
@@ -504,24 +504,24 @@ pub fn sanitize_filename(name: &str) -> Option<String> {
             }
         })
         .collect();
-    // 末尾の空白・ピリオドを除去
+    // Strip trailing spaces and periods
     let trimmed = sanitized.trim_end_matches([' ', '.']);
     if trimmed.is_empty() {
         return None;
     }
-    // ファイル名が長すぎる場合は切り詰め（char 境界で安全にカット）
+    // Truncate names that are too long (cutting at a safe char boundary)
     const MAX_FILENAME_CHARS: usize = 80;
     let trimmed = if trimmed.chars().count() > MAX_FILENAME_CHARS {
         let end = trimmed
             .char_indices()
             .nth(MAX_FILENAME_CHARS)
             .map_or(trimmed.len(), |(i, _)| i);
-        // 切り詰め後の末尾空白・ピリオドも除去
+        // After truncation, strip trailing spaces / periods again
         trimmed[..end].trim_end_matches([' ', '.'])
     } else {
         trimmed
     };
-    // Windows 予約名チェック（ベース名 = 最初の '.' より前で判定）
+    // Windows reserved-name check (compares the basename, i.e. the part before the first '.')
     let base = match trimmed.find('.') {
         Some(pos) => &trimmed[..pos],
         None => trimmed,
@@ -533,7 +533,7 @@ pub fn sanitize_filename(name: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
-/// 拡張子で VRM/FBX を自動判定して PMX 変換
+/// Detect the input format from the extension (VRM/FBX/...) and convert to PMX.
 pub fn convert_to_pmx(
     input_path: &Path,
     output_path: &Path,
@@ -549,19 +549,19 @@ pub fn convert_to_pmx(
     }
 }
 
-/// テスト用ユーティリティ（テストデータのパス解決）
+/// Test utilities (resolves paths to test fixtures).
 ///
-/// パス解決の優先順位（ファイルごと）:
-///   1. ファイル個別の環境変数（例: `POPONE_TEST_VRM_SEED_SAN`）
-///   2. ルート環境変数 `POPONE_TEST_DATA` + 相対パス
-///   3. `CARGO_MANIFEST_DIR/..` + 相対パス（ローカル開発デフォルト）
+/// Per-file resolution priority:
+///   1. File-specific environment variable (e.g. `POPONE_TEST_VRM_SEED_SAN`).
+///   2. Root environment variable `POPONE_TEST_DATA` + relative path.
+///   3. `CARGO_MANIFEST_DIR/..` + relative path (the default for local development).
 ///
-/// CI 設定例:
+/// Example CI configuration:
 /// ```sh
-/// # ルート指定（全ファイル共通ベース）
+/// # Root override (shared base for every fixture)
 /// export POPONE_TEST_DATA=/path/to/test-fixtures
 ///
-/// # または個別指定（特定ファイルだけ別の場所にある場合）
+/// # Or per-file overrides (when a single fixture lives somewhere else)
 /// export POPONE_TEST_VRM_SEED_SAN=/data/models/Seed-san.vrm
 /// export POPONE_TEST_PMX_SEED_SAN=/data/converted/Seed-san.pmx
 /// export POPONE_TEST_PMD_MIKU_V2=/data/mmd/初音ミクVer2.pmd
@@ -570,7 +570,7 @@ pub fn convert_to_pmx(
 pub mod test_util {
     use std::path::PathBuf;
 
-    /// テストデータのルートディレクトリ
+    /// Root directory for test fixtures.
     fn test_data_root() -> PathBuf {
         if let Ok(dir) = std::env::var("POPONE_TEST_DATA") {
             return PathBuf::from(dir);
@@ -578,7 +578,7 @@ pub mod test_util {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
     }
 
-    /// ファイル個別の環境変数 → ルート相対パスの順で解決
+    /// Resolve via the file-specific env var first, then via the root + relative path.
     fn resolve(env_key: &str, relative: &str) -> PathBuf {
         if let Ok(path) = std::env::var(env_key) {
             return PathBuf::from(path);
@@ -586,8 +586,8 @@ pub mod test_util {
         test_data_root().join(relative)
     }
 
-    /// VRM サンプル (vrm-c/vrm-specification リポジトリ内)
-    /// 環境変数: `POPONE_TEST_VRM_SEED_SAN`
+    /// VRM sample (in the vrm-c/vrm-specification repository).
+    /// Environment variable: `POPONE_TEST_VRM_SEED_SAN`.
     pub fn seed_san_vrm() -> PathBuf {
         resolve(
             "POPONE_TEST_VRM_SEED_SAN",
@@ -595,19 +595,19 @@ pub mod test_util {
         )
     }
 
-    /// PMX テストファイル (Seed-san.vrm を popone で変換済み)
-    /// 環境変数: `POPONE_TEST_PMX_SEED_SAN`
+    /// PMX test fixture (Seed-san.vrm already converted with popone).
+    /// Environment variable: `POPONE_TEST_PMX_SEED_SAN`.
     pub fn seed_san_pmx() -> PathBuf {
         resolve("POPONE_TEST_PMX_SEED_SAN", "tmp/Seed-san.pmx")
     }
 
-    /// PMD テストファイル (MikuMikuDance_v932x64.zip 同梱)
-    /// 環境変数: `POPONE_TEST_PMD_MIKU_V2`
+    /// PMD test fixture (bundled with MikuMikuDance_v932x64.zip).
+    /// Environment variable: `POPONE_TEST_PMD_MIKU_V2`.
     pub fn miku_v2_pmd() -> PathBuf {
         resolve("POPONE_TEST_PMD_MIKU_V2", "tmp/pmd/初音ミクVer2.pmd")
     }
 
-    /// テストファイルが存在すれば Some(path)、なければ None を返す
+    /// Return Some(path) when the test file exists, None otherwise.
     pub fn try_test_file(path: PathBuf) -> Option<PathBuf> {
         if path.exists() {
             Some(path)
@@ -651,13 +651,13 @@ mod tests {
 
     #[test]
     fn test_sanitize_rel_path_dotdot_resolved() {
-        // "a/../b" → "b" (正当な ".." 解決)
+        // "a/../b" -> "b" (legitimate ".." resolution)
         assert_eq!(sanitize_rel_path("a/../b.png"), PathBuf::from("b.png"));
     }
 
     #[test]
     fn test_sanitize_rel_path_traversal_blocked() {
-        // ルートを超える ".." は無視される
+        // ".." segments that escape the root are dropped
         assert_eq!(
             sanitize_rel_path("../../../etc/passwd"),
             PathBuf::from("etc/passwd")
@@ -684,7 +684,7 @@ mod tests {
 
     #[test]
     fn test_sanitize_rel_path_absolute_drive_letter() {
-        // Windows ドライブレター付き絶対パスはドライブ部分を除去
+        // Absolute paths with a Windows drive letter must drop the drive part
         assert_eq!(
             sanitize_rel_path("C:/secret.png"),
             PathBuf::from("secret.png")
@@ -706,12 +706,12 @@ mod tests {
         };
         let output = std::env::temp_dir().join("popone_test_e2e.pmx");
 
-        // VRM → PMX 変換
+        // VRM -> PMX conversion
         let stats =
             crate::convert_vrm_to_pmx(&input, &output, &crate::VrmConvertOptions::default())
                 .expect("VRM→PMX変換失敗");
 
-        // 統計値の確認
+        // Sanity-check the stats
         assert!(stats.bones > 100, "ボーン数が少なすぎる: {}", stats.bones);
         assert!(
             stats.vertices > 1000,
@@ -720,7 +720,7 @@ mod tests {
         );
         assert!(stats.materials > 0, "材質数がゼロ");
 
-        // 出力ファイルの存在とサイズ確認
+        // Check that the output file exists and has a reasonable size
         let metadata = std::fs::metadata(&output).expect("出力ファイルなし");
         assert!(
             metadata.len() > 1000,
@@ -728,7 +728,7 @@ mod tests {
             metadata.len()
         );
 
-        // 読み戻して検証
+        // Read back and verify
         let pmx = crate::pmx::reader::read_pmx(&output).expect("PMX再読み込み失敗");
         assert!(
             pmx.bones.len() > 100,
@@ -741,7 +741,7 @@ mod tests {
             pmx.vertices.len()
         );
 
-        // テンポラリファイルのクリーンアップ
+        // Clean up the temporary files
         let _ = std::fs::remove_file(&output);
         let tex_dir = output.parent().unwrap().join("textures");
         let _ = std::fs::remove_dir_all(&tex_dir);
