@@ -1,7 +1,7 @@
-//! ray-mmd 2.0 `.fx` マテリアル生成 (§K)
+//! ray-mmd 2.0 `.fx` material generation (Section K).
 //!
-//! 標準 ray-mmd 2.0 は `CUSTOM_ENABLE` + `customA` + `customB` で材質種別を表現する。
-//! 本モジュールはカテゴリ推定 → `.fx` テンプレート生成 → `#include` 相対パス解決を行う。
+//! Stock ray-mmd 2.0 expresses material types via `CUSTOM_ENABLE` + `customA` + `customB`.
+//! This module covers category inference -> `.fx` template generation -> `#include` relative-path resolution.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 use crate::intermediate::types::{IrMaterial, IrModel, TextureData};
 
 // ---------------------------------------------------------------------------
-// K.1 型定義
+// K.1 Type definitions
 // ---------------------------------------------------------------------------
 
-/// ray-mmd 材質カテゴリ（CUSTOM_ENABLE ベース、TODO-5 で値を固定）
+/// ray-mmd material category (CUSTOM_ENABLE-based; values fixed by TODO-5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RayMmdMaterialKind {
@@ -28,7 +28,7 @@ pub enum RayMmdMaterialKind {
     Glass,
     /// CUSTOM_ENABLE 6 — Materials/ClearCoat/material_metal_clearcoat.fx
     ClearCoat,
-    /// emissive 専用経路
+    /// Dedicated emissive path.
     Emissive,
 }
 
@@ -55,7 +55,7 @@ impl RayMmdMaterialKind {
         }
     }
 
-    /// `CUSTOM_ENABLE` の値。Emissive は特殊経路なので None。
+    /// Returns the `CUSTOM_ENABLE` value. None for Emissive (special path).
     pub fn custom_enable(self) -> Option<u32> {
         match self {
             Self::Standard => Some(0),
@@ -70,27 +70,27 @@ impl RayMmdMaterialKind {
 }
 
 // ---------------------------------------------------------------------------
-// K.3 カテゴリ推定ヒューリスティック
+// K.3 Category-inference heuristics
 // ---------------------------------------------------------------------------
 
-/// 材質名とパラメータからカテゴリを推定する。
+/// Infer the material category from the name and parameters.
 ///
-/// | キーワード（大小無視） | カテゴリ |
+/// | Keyword (case-insensitive) | Category |
 /// |---|---|
 /// | skin / body / face / hada / 肌 / 顔 / 体 | Skin |
 /// | hair / kami / 髪 | HairAniso |
 /// | cloth / fuku / 服 / skirt / shirt / dress | Cloth |
 /// | glass / eye / pupil / iris / me / 目 / 瞳 / 水 | Glass |
-/// | （emissive_factor が非ゼロ） | Emissive |
-/// | （上記未該当） | Standard |
+/// | (non-zero emissive_factor) | Emissive |
+/// | (none of the above) | Standard |
 pub fn guess_ray_mmd_kind(mat: &IrMaterial) -> RayMmdMaterialKind {
     let name_lower = mat.name.to_lowercase();
 
-    // キーワードマッチ（優先順位順）
+    // Keyword match (in priority order)
     let skin_keywords = ["skin", "body", "face", "hada", "肌", "顔", "体"];
     let hair_keywords = ["hair", "kami", "髪"];
     let cloth_keywords = ["cloth", "fuku", "服", "skirt", "shirt", "dress"];
-    // review_022 [P2-1]: "me" は "metal"/"frame"/"smile" 等に誤爆するため削除。
+    // review_022 [P2-1]: dropped "me" because it false-matches "metal"/"frame"/"smile" etc.
     let glass_keywords = ["glass", "eye", "pupil", "iris", "目", "瞳", "水"];
 
     for kw in &skin_keywords {
@@ -114,7 +114,7 @@ pub fn guess_ray_mmd_kind(mat: &IrMaterial) -> RayMmdMaterialKind {
         }
     }
 
-    // emissive_factor が非ゼロ → Emissive
+    // Non-zero emissive_factor -> Emissive
     if mat.emissive_factor.length_squared() > 1e-6 {
         return RayMmdMaterialKind::Emissive;
     }
@@ -123,16 +123,16 @@ pub fn guess_ray_mmd_kind(mat: &IrMaterial) -> RayMmdMaterialKind {
 }
 
 // ---------------------------------------------------------------------------
-// K.2 #include 相対パス解決
+// K.2 #include relative-path resolution
 // ---------------------------------------------------------------------------
 
-/// ray-mmd ルートと出力先ディレクトリから `material_common_2.0.fxsub` への相対パスを計算。
-/// 相対パス計算に失敗した場合（ドライブ跨ぎ・相対/絶対混在等）は絶対パスをフォールバック。
+/// Compute the relative path from the output dir to `material_common_2.0.fxsub` under the ray-mmd root.
+/// Falls back to the absolute path when relative computation fails (cross-drive, mixed absolute/relative, etc.).
 pub fn resolve_include_path(ray_mmd_root: &Path, mme_output_dir: &Path) -> PathBuf {
     let common_fxsub = ray_mmd_root
         .join("Materials")
         .join("material_common_2.0.fxsub");
-    // 両方を絶対パスに正規化してから diff を試みる
+    // Canonicalize both sides before computing the diff
     let abs_fxsub = dunce::canonicalize(&common_fxsub)
         .or_else(|_| std::fs::canonicalize(&common_fxsub))
         .unwrap_or_else(|_| common_fxsub.clone());
@@ -143,13 +143,13 @@ pub fn resolve_include_path(ray_mmd_root: &Path, mme_output_dir: &Path) -> PathB
 }
 
 // ---------------------------------------------------------------------------
-// K.4 ファイル名サニタイズ
+// K.4 Filename sanitization
 // ---------------------------------------------------------------------------
 
-/// 材質名から `.fx` ファイル名を生成（サニタイズ + 重複回避 + Windows 予約名弾き）
-/// review_022 [P2-2]: `used` を lowercase ベースで衝突判定する。
-/// Windows ではファイル名の大小が区別されないため、`"Body"` と `"body"` が同時生成
-/// されると上書きになる。`used` には lowercase 化した文字列を入れて判定する。
+/// Generate a `.fx` filename from a material name (sanitize + collision avoidance + Windows-reserved-name guard).
+/// review_022 [P2-2]: collision detection uses lowercase strings.
+/// Windows is case-insensitive on filenames, so generating `"Body"` and `"body"` together would overwrite.
+/// We store lowercase strings in `used` and compare against them.
 pub fn make_fx_filename(mat_name: &str, used: &mut HashSet<String>) -> String {
     let base = sanitize_material_name(mat_name);
     let base = if is_windows_reserved(&base) {
@@ -209,12 +209,12 @@ fn is_windows_reserved(name: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// K.4 .fx ジェネレータ
+// K.4 .fx generator
 // ---------------------------------------------------------------------------
 
-/// 1 材質分の `.fx` ファイル内容を生成する（全パラメータをデフォルト値付きで展開）。
+/// Generate the `.fx` file body for a single material (every parameter expanded with defaults).
 ///
-/// 戻り値は Shift-JIS + CR+LF エンコード済みバイト列。
+/// The return value is encoded as Shift-JIS + CR+LF.
 pub fn generate_fx(
     mat: &IrMaterial,
     kind: RayMmdMaterialKind,
@@ -228,12 +228,12 @@ pub fn generate_fx(
         &mat.name
     };
 
-    // ヘッダコメント
+    // Header comments
     ln(&mut fx, &format!("// {}", mat_label));
     ln(
         &mut fx,
         &format!(
-            "// カテゴリ: {} (CUSTOM_ENABLE {})",
+            "// Category: {} (CUSTOM_ENABLE {})",
             kind.label(),
             kind.custom_enable()
                 .map_or("N/A".to_string(), |v| v.to_string())
@@ -496,15 +496,15 @@ pub fn generate_fx(
         ),
     );
 
-    // LF → CR+LF
+    // LF -> CR+LF
     let crlf = fx.replace('\n', "\r\n");
 
-    // Shift-JIS エンコード
+    // Shift-JIS encode
     let (encoded, _, _) = encoding_rs::SHIFT_JIS.encode(&crlf);
     encoded.into_owned()
 }
 
-/// テクスチャ参照を解決: (MAP_FROM値, ファイルパス文字列)
+/// Resolve a texture reference: returns (MAP_FROM value, file-path string).
 fn resolve_tex_ref(
     tex_info: &Option<crate::intermediate::types::IrTextureInfo>,
     support_textures: &std::collections::HashMap<usize, PathBuf>,
@@ -517,21 +517,21 @@ fn resolve_tex_ref(
     (0, None)
 }
 
-/// 改行なし push（改行は後で一括変換）
+/// Push without an explicit newline (newlines are converted in a later pass).
 fn ln(buf: &mut String, s: &str) {
     buf.push_str(s);
     buf.push('\n');
 }
 
 // ---------------------------------------------------------------------------
-// K.4.1 補助テクスチャ書き出し
+// K.4.1 Support-texture export
 // ---------------------------------------------------------------------------
 
-/// 各材質から参照される補助テクスチャ（normal / emissive 等、BaseColor 以外）を
-/// `mme_dir/textures/` にコピーし、`tex_index → 相対パス（mme_dir 基準）` を返す。
+/// Copy support textures referenced by each material (normal / emissive / etc.; BaseColor excluded)
+/// into `mme_dir/textures/` and return a `tex_index -> relative path (relative to mme_dir)` map.
 ///
-/// 同一 `tex_idx` を複数材質が参照する場合は 1 度だけ書き出す。
-/// `RawRgba` テクスチャは PNG にエンコードして書き出す。
+/// When multiple materials reference the same `tex_idx`, the texture is written exactly once.
+/// `RawRgba` textures are PNG-encoded before being written.
 pub fn export_mme_support_textures(
     ir: &IrModel,
     mme_dir: &Path,
@@ -541,7 +541,7 @@ pub fn export_mme_support_textures(
     let mut used_names: HashSet<String> = HashSet::new();
     let mut result: std::collections::HashMap<usize, PathBuf> = std::collections::HashMap::new();
 
-    // 全材質から参照される補助テクスチャインデックスを収集（BaseColor は除外）
+    // Collect support-texture indices referenced by every material (BaseColor excluded)
     let mut needed: HashSet<usize> = HashSet::new();
     for mat in &ir.materials {
         if let Some(ref info) = mat.normal_texture {
@@ -578,7 +578,7 @@ pub fn export_mme_support_textures(
         }
         let tex = &ir.textures[tex_idx];
 
-        // RawRgba は PNG エンコードするため拡張子を .png に強制
+        // RawRgba is PNG-encoded, so force the extension to .png
         let is_raw = matches!(tex.data, TextureData::RawRgba { .. });
         let ext = if is_raw {
             "png"
@@ -594,11 +594,11 @@ pub fn export_mme_support_textures(
                 .unwrap_or(&tex.filename)
                 .trim_end_matches(&format!(".{}", ext)),
         );
-        // RawRgba で元の拡張子を trim した後にさらに残る別の拡張子を除去
-        // 例: "normal.dds" → stem="normal_dds" (sanitize 後) → trim ".dds" 不要
-        // ただし元拡張子と異なる場合のフォールバック
+        // For RawRgba, drop any additional extension that survived the trim of the original.
+        // e.g. "normal.dds" -> stem = "normal_dds" (after sanitize) -> trimming ".dds" is unnecessary.
+        // Fallback for mismatches with the original extension.
         let stem = if is_raw {
-            // 元ファイル名からパスと全拡張子を除いた部分
+            // The portion of the original filename with the path and all extensions stripped
             let raw_stem = tex
                 .filename
                 .rsplit(&['/', '\\'][..])
@@ -622,7 +622,7 @@ pub fn export_mme_support_textures(
         }
         used_names.insert(candidate.to_ascii_lowercase());
 
-        // テクスチャデータを書き出す
+        // Write the texture data
         let out_path = tex_dir.join(&candidate);
         match &tex.data {
             TextureData::Encoded(data) => {
@@ -646,7 +646,7 @@ pub fn export_mme_support_textures(
                 std::fs::write(&out_path, &png_data)?;
             }
         }
-        // .fx からの相対パス: "textures/<filename>"
+        // Relative path from the .fx file: "textures/<filename>"
         result.insert(tex_idx, PathBuf::from("textures").join(&candidate));
     }
 
@@ -654,11 +654,11 @@ pub fn export_mme_support_textures(
 }
 
 // ---------------------------------------------------------------------------
-// K.5 README 生成
+// K.5 README generation
 // ---------------------------------------------------------------------------
 
-/// `mme/README.txt` を生成する。
-/// MaterialMap タブへの割当手順と注意事項を記載。
+/// Generate `mme/README.txt`.
+/// Documents the MaterialMap-tab assignment procedure and operational notes.
 pub fn write_mme_readme(
     mme_dir: &Path,
     fx_files: &[(usize, String, RayMmdMaterialKind)],
@@ -774,14 +774,14 @@ mod tests {
         assert_eq!(n2, "material_Body_2.fx");
     }
 
-    /// review_022 [P2-2]: 大小無視の衝突判定
+    /// review_022 [P2-2]: case-insensitive collision detection
     #[test]
     fn test_make_fx_filename_case_insensitive() {
         let mut used = HashSet::new();
         let n1 = make_fx_filename("Body", &mut used);
         let n2 = make_fx_filename("body", &mut used);
         assert_eq!(n1, "material_Body.fx");
-        // Windows では同一ファイル名になるので _2 が付く
+        // On Windows the names collide, so a `_2` suffix is added
         assert_eq!(n2, "material_body_2.fx");
     }
 
@@ -797,7 +797,7 @@ mod tests {
         let root = Path::new("E:/mme/ray-mmd");
         let output = Path::new("E:/output/mme");
         let result = resolve_include_path(root, output);
-        // material_common_2.0.fxsub を含むパスが返されること
+        // The returned path must contain material_common_2.0.fxsub
         assert!(result
             .to_string_lossy()
             .contains("material_common_2.0.fxsub"));
@@ -805,7 +805,7 @@ mod tests {
 
     #[test]
     fn test_resolve_include_path_relative_fallback() {
-        // 相対パスでも失敗せずフォールバックする
+        // Should still fall back gracefully when relative paths are involved
         let root = Path::new(".");
         let output = Path::new("E:/output/mme");
         let result = resolve_include_path(root, output);
@@ -814,7 +814,7 @@ mod tests {
             .contains("material_common_2.0.fxsub"));
     }
 
-    // ===== Step 7-32: カテゴリ推定テスト拡充 =====
+    // ===== Step 7-32: expanded category-inference tests =====
 
     #[test]
     fn test_guess_cloth() {
@@ -843,7 +843,7 @@ mod tests {
     #[test]
     fn test_guess_prefixed_name() {
         let mut mat = IrMaterial::default();
-        // プレフィックス付きでもキーワードが含まれれば検出
+        // Detected even with a prefix as long as the keyword is present
         mat.name = "mat_02_face_blush".to_string();
         assert_eq!(guess_ray_mmd_kind(&mat), RayMmdMaterialKind::Skin);
     }
@@ -864,7 +864,7 @@ mod tests {
 
     #[test]
     fn test_guess_priority_skin_over_cloth() {
-        // "skin" と "dress" 両方含む場合、skin が先（優先順位順）
+        // When both "skin" and "dress" are present, skin wins (priority order)
         let mut mat = IrMaterial::default();
         mat.name = "skin_dress_overlay".to_string();
         assert_eq!(guess_ray_mmd_kind(&mat), RayMmdMaterialKind::Skin);
@@ -872,14 +872,14 @@ mod tests {
 
     #[test]
     fn test_guess_emissive_only_when_no_keyword() {
-        // キーワードが先に一致すれば emissive にはならない
+        // If a keyword matches first, the result is not emissive
         let mut mat = IrMaterial::default();
         mat.name = "hair_glow".to_string();
         mat.emissive_factor = Vec3::new(1.0, 1.0, 1.0);
         assert_eq!(guess_ray_mmd_kind(&mat), RayMmdMaterialKind::HairAniso);
     }
 
-    // ===== Step 7-32: custom_enable 値の検証 =====
+    // ===== Step 7-32: validate custom_enable values =====
 
     #[test]
     fn test_custom_enable_values() {
@@ -892,7 +892,7 @@ mod tests {
         assert_eq!(RayMmdMaterialKind::Emissive.custom_enable(), None);
     }
 
-    // ===== Step 7-34: generate_fx 出力検証 =====
+    // ===== Step 7-34: validate generate_fx output =====
 
     #[test]
     fn test_generate_fx_contains_all_sections() {
@@ -902,7 +902,7 @@ mod tests {
         let fx = generate_fx(&mat, RayMmdMaterialKind::Standard, include, &support);
         let content = encoding_rs::SHIFT_JIS.decode(&fx).0;
 
-        // 全セクションヘッダが含まれること
+        // Every section header must be present
         assert!(content.contains("// ----- Albedo -----"));
         assert!(content.contains("// ----- SubAlbedo -----"));
         assert!(content.contains("// ----- Alpha -----"));
@@ -925,9 +925,9 @@ mod tests {
         let support = std::collections::HashMap::new();
         let fx = generate_fx(&mat, RayMmdMaterialKind::Standard, include, &support);
 
-        // CR+LF が含まれること
+        // CR+LF must be present
         assert!(fx.windows(2).any(|w| w == b"\r\n"));
-        // 孤立 LF がないこと（全 LF は CR+LF の一部）
+        // No bare LF (every LF must be part of CR+LF)
         for (i, &b) in fx.iter().enumerate() {
             if b == b'\n' {
                 assert!(i > 0 && fx[i - 1] == b'\r', "bare LF at byte {}", i);
@@ -958,7 +958,7 @@ mod tests {
     fn test_make_fx_filename_sanitize_special_chars() {
         let mut used = HashSet::new();
         let name = make_fx_filename("体/肌@テスト", &mut used);
-        // 非 ASCII 英数字は除去される
+        // Non-ASCII alphanumerics are stripped
         assert!(name.starts_with("material_"));
         assert!(name.ends_with(".fx"));
     }
