@@ -4,6 +4,7 @@ use crate::intermediate::types::{
     SourceFormat, TextureData,
 };
 use glam::{Mat4, Vec2, Vec3, Vec4};
+use rust_i18n::t;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -328,7 +329,7 @@ fn build_ir_model(
     // No meshes -> empty file
     if ir_meshes.is_empty() {
         return Err(PoponeError::ObjParse(
-            "メッシュが見つかりません（空の OBJ ファイル）".into(),
+            t!("error.obj.empty_mesh").to_string(),
         ));
     }
 

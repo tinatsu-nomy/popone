@@ -193,6 +193,10 @@ error:
     compressed_unsupported: "Compressed .x format is not supported"
     text_decode_failed: "Failed to decode text (neither UTF-8 nor Shift_JIS)"
     no_mesh: "No Mesh found (empty .x file)"
+    skin_unsupported: ".x files containing SkinWeights (skinning data) are not supported. Only static meshes (accessories, stages, etc.) are supported."
+    no_convertible_mesh: "No convertible mesh found"
+  obj:
+    empty_mesh: "No mesh found (empty OBJ file)"
   uvmap:
     group_range_reversed: "Group '%{name}' has reversed range: %{start}..%{end}"
     group_range_out_of_bounds: "Group '%{name}' range exceeds material count %{count}: %{start}..%{end}"

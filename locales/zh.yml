@@ -193,6 +193,10 @@ error:
     compressed_unsupported: "不支持压缩 .x 文件"
     text_decode_failed: "文本解码失败（既非 UTF-8 也非 Shift_JIS）"
     no_mesh: "未找到 Mesh（空 .x 文件）"
+    skin_unsupported: "不支持包含 SkinWeights（蒙皮信息）的 .x 文件。仅支持静态网格（饰品、舞台等）。"
+    no_convertible_mesh: "未找到可转换的网格"
+  obj:
+    empty_mesh: "未找到网格（空 OBJ 文件）"
   uvmap:
     group_range_reversed: "组 '%{name}' 范围反序: %{start}..%{end}"
     group_range_out_of_bounds: "组 '%{name}' 的范围超过材质数 %{count}: %{start}..%{end}"

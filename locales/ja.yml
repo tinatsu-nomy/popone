@@ -193,6 +193,10 @@ error:
     compressed_unsupported: "圧縮形式の .x ファイルは未対応です"
     text_decode_failed: "テキストデコード失敗（UTF-8/Shift_JIS いずれでもない）"
     no_mesh: "Mesh が見つかりません（空の .x ファイル）"
+    skin_unsupported: "SkinWeights（スキニング情報）を含む .x ファイルは未対応です。静的メッシュ（アクセサリ・ステージ等）のみ対応しています"
+    no_convertible_mesh: "変換可能なメッシュがありません"
+  obj:
+    empty_mesh: "メッシュが見つかりません（空の OBJ ファイル）"
   uvmap:
     group_range_reversed: "グループ '%{name}' の範囲が逆順です: %{start}..%{end}"
     group_range_out_of_bounds: "グループ '%{name}' の範囲が材質数 %{count} を超えています: %{start}..%{end}"

@@ -4,6 +4,7 @@ use crate::intermediate::types::{
     SourceFormat, TextureData,
 };
 use glam::{Mat4, Vec2, Vec3, Vec4};
+use rust_i18n::t;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -137,9 +138,7 @@ fn x_to_ir(
     // Reject .x files containing skinning data
     if model.meshes.iter().any(|m| m.has_skin_weights) {
         return Err(PoponeError::DirectXParse(
-            "SkinWeights（スキニング情報）を含む .x ファイルは未対応です。\
-             静的メッシュ（アクセサリ・ステージ等）のみ対応しています"
-                .into(),
+            t!("error.directx.skin_unsupported").to_string(),
         ));
     }
 
@@ -547,7 +546,7 @@ fn x_to_ir(
 
     if ir_meshes.is_empty() {
         return Err(PoponeError::DirectXParse(
-            "変換可能なメッシュがありません".into(),
+            t!("error.directx.no_convertible_mesh").to_string(),
         ));
     }
 
