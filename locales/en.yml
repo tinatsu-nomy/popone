@@ -269,6 +269,8 @@ viewer:
     reset_tooltip: "Reset camera"
     fit: "Fit (F)"
     fit_tooltip: "Fit to model"
+    panel_resizable_label: "Resizable"
+    panel_resizable_hover: "The right tool panel width is preserved at its last value regardless of ON/OFF (and across sessions).\nON: drag the border to change width within 280–600 px.\nOFF (default): width is locked at the current value (no dragging).\nIn either mode, the panel never auto-resizes to fit content."
   statusbar:
     cached_suffix: " (cached)"
     no_model: "Please load a VRM/FBX file"

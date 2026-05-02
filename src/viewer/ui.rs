@@ -57,10 +57,57 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
         .stroke(dark_border)
         .inner_margin(egui::Margin::same(4));
 
+    // 表示タブのトグルでリサイズ可否を切り替える。
+    // - OFF（既定）: 280 px に完全固定。
+    // - ON         : 280..=600 px の範囲でユーザーがドラッグして変更可能。
+    //
+    // egui 0.31 の SidePanel は内部で「コンテンツ描画後の min_rect」を
+    // PanelState として `id` ごとに永続化し、次フレームでそれを width として採用する。
+    // このため width_range が広がっている ON 時、子ウィジェットの min_rect が
+    // パネル幅を超えると毎フレーム幅が膨張していく（＝ 自動リサイズ問題）。
+    //
+    // 対策: 毎フレーム show 直前に PanelState を「アプリ側で管理する target_w」で
+    // 強制上書きし、show 直後に「`__resize` ID が drag された場合のみ」新幅を
+    // 取り込む。これによりコンテンツ駆動の幅変化を遮断し、ユーザーのドラッグだけ
+    // を panel_width に反映する。
+    let panel_resizable = app.display.panel_resizable;
+    // 表示幅は ON/OFF どちらでも永続化された `panel_width` を使う。
+    // ON/OFF の違いは「ユーザーがドラッグで変更できるか」のみ。
+    //  - ON  : width_range(280..=600) でドラッグ可、新幅は post-show で取り込み保存
+    //  - OFF : width_range(target_w..=target_w) で現在の幅にロック（ドラッグ不可）
+    // 初回起動時は `panel_width` の既定値 280 px から始まる。
+    let clamped = app.display.panel_width.clamp(280.0, 600.0);
+    if (clamped - app.display.panel_width).abs() > f32::EPSILON {
+        app.display.panel_width = clamped;
+    }
+    let target_w = clamped;
+    let (min_w, max_w) = if panel_resizable {
+        (280.0, 600.0)
+    } else {
+        (target_w, target_w)
+    };
+
+    let panel_id_obj = egui::Id::new("info_panel");
+
+    // 直前フレームに egui が膨張させた PanelState.width を target_w で潰す。
+    ctx.data_mut(|d| {
+        let new_rect = match d.get_persisted::<egui::containers::panel::PanelState>(panel_id_obj) {
+            Some(mut s) => {
+                s.rect.set_width(target_w);
+                s.rect
+            }
+            None => egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::new(target_w, 1.0)),
+        };
+        d.insert_persisted(
+            panel_id_obj,
+            egui::containers::panel::PanelState { rect: new_rect },
+        );
+    });
+
     egui::SidePanel::right("info_panel")
-        .default_width(280.0)
-        .width_range(280.0..=280.0)
-        .resizable(false)
+        .default_width(target_w)
+        .width_range(min_w..=max_w)
+        .resizable(panel_resizable)
         .frame(panel_frame)
         .show(ctx, |ui| {
             // サイドパネル内テキストを白に統一
@@ -80,7 +127,11 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     (SidePanelTab::Display, t!("viewer.tab.display")),
                     (SidePanelTab::Export, t!("viewer.tab.export")),
                 ];
-                let tab_width = (panel_w / tabs.len() as f32).min(70.0);
+                // タブ幅はパネル幅に追従して均等割り。
+                // パネルの最小幅 280 px では panel_w / 4 ≈ 68 px となり、これが
+                // タブの実質的な最小サイズ（= 既存 UI のサイズ）。パネルが広がれば
+                // タブも 1/4 ずつ拡大し、右側の空白が生じない。
+                let tab_width = panel_w / tabs.len() as f32;
                 for (tab, label) in tabs {
                     let is_active = app.side_panel_tab == tab;
                     let text = egui::RichText::new(label).size(11.0);
@@ -110,6 +161,24 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                 SidePanelTab::Export => show_tab_export(ui, app),
             });
         });
+
+    // ユーザーがリサイズハンドルをドラッグした場合のみ panel_width を更新。
+    // egui SidePanel は resize handle に `id.with("__resize")` を割り当てる
+    // (egui 0.31 panel.rs:257)。このレスポンスの dragged() を見れば、
+    // 「コンテンツ膨張による幅変化」と「ユーザーのドラッグによる幅変化」を判別できる。
+    if panel_resizable {
+        let resize_id = panel_id_obj.with("__resize");
+        let dragged = ctx.read_response(resize_id).is_some_and(|r| r.dragged());
+        if dragged {
+            let stored_w = ctx.data_mut(|d| {
+                d.get_persisted::<egui::containers::panel::PanelState>(panel_id_obj)
+                    .map(|s| s.rect.width())
+            });
+            if let Some(w) = stored_w {
+                app.display.panel_width = w.clamp(280.0, 600.0);
+            }
+        }
+    }
 
     // テクスチャ割り当て（借用解放後に処理）
     match tex_assign_request {

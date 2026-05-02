@@ -269,6 +269,8 @@ viewer:
     reset_tooltip: "重置相机"
     fit: "适配 (F)"
     fit_tooltip: "适配到模型"
+    panel_resizable_label: "宽度可变"
+    panel_resizable_hover: "右侧工具面板的宽度在 ON/OFF 切换下都保留为最后设置的值（也跨会话保留）。\nON: 拖动边界可在 280–600 px 范围内调整宽度。\nOFF（默认）: 锁定为当前宽度（无法拖动）。\n两种模式下，面板都不会根据内容自动调整宽度。"
   statusbar:
     cached_suffix: "（已缓存）"
     no_model: "请加载 VRM/FBX 文件"

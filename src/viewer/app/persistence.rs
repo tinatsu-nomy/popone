@@ -93,11 +93,23 @@ pub struct DisplayConfig {
     /// true = 白（色被りを避ける、既定）。false = マゼンタ（欠落を目立たせる）。
     #[serde(default = "DisplayConfig::default_true")]
     pub white_texture_fallback: bool,
+    /// 右ツールパネルのリサイズ可否。true でユーザーがドラッグで幅を変更可能。
+    /// false（既定）は 280 px に固定。コンテンツ量による自動リサイズは行わない。
+    #[serde(default)]
+    pub panel_resizable: bool,
+    /// 右ツールパネルの幅 (px)。ユーザーがドラッグで変更した値をセッション越しに保持。
+    /// 範囲は [280, 600]。`panel_resizable = false` のときは未使用。
+    #[serde(default = "DisplayConfig::default_panel_width")]
+    pub panel_width: f32,
 }
 
 impl DisplayConfig {
     fn default_true() -> bool {
         true
+    }
+
+    fn default_panel_width() -> f32 {
+        280.0
     }
 }
 
@@ -105,6 +117,8 @@ impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             white_texture_fallback: true,
+            panel_resizable: false,
+            panel_width: 280.0,
         }
     }
 }

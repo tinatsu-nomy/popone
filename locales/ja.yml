@@ -269,6 +269,8 @@ viewer:
     reset_tooltip: "カメラをリセット"
     fit: "フィット(F)"
     fit_tooltip: "モデルにフィット"
+    panel_resizable_label: "幅可変"
+    panel_resizable_hover: "右ツールパネルの幅は ON/OFF に関わらず、最後に設定した値で表示されます (次回起動時にも復元)。\nON: 境界をドラッグして 280〜600 px の範囲で幅を変更できます。\nOFF (既定): 現在の幅でロック (ドラッグ不可)。\nどちらの場合も、表示内容に応じた自動リサイズは行いません。"
   statusbar:
     cached_suffix: " (キャッシュ済み)"
     no_model: "VRM/FBX ファイルを読み込んでください"

@@ -270,6 +270,14 @@ pub struct DisplaySettings {
     /// テクスチャデコード失敗時のフォールバックを白にするか（既定 true）。
     /// false の場合は従来どおり 1×1 マゼンタで欠落を目立たせる。
     pub white_texture_fallback: bool,
+    /// 右ツールパネルのリサイズ可否（既定 false=固定幅 280 px）。
+    /// true でユーザーがドラッグで幅を変更可能（280..=600 px）。
+    /// コンテンツ量に応じた自動リサイズは行わない。
+    pub panel_resizable: bool,
+    /// 右ツールパネルの現在幅 (px)。`panel_resizable = true` のときユーザーの
+    /// ドラッグで更新される。`false` のときは 280 px 固定で実値は保持される。
+    /// 範囲は [280, 600]。
+    pub panel_width: f32,
 }
 
 impl Default for DisplaySettings {
@@ -307,6 +315,8 @@ impl Default for DisplaySettings {
             bloom_threshold: 0.0,
             bloom_radius: super::bloom::DEFAULT_BLOOM_RADIUS,
             white_texture_fallback: true,
+            panel_resizable: false,
+            panel_width: 280.0,
         }
     }
 }
@@ -789,6 +799,8 @@ impl ViewerApp {
 
         let display = DisplaySettings {
             white_texture_fallback: app_config.display.white_texture_fallback,
+            panel_resizable: app_config.display.panel_resizable,
+            panel_width: app_config.display.panel_width.clamp(280.0, 600.0),
             ..DisplaySettings::default()
         };
 
@@ -2319,7 +2331,7 @@ impl eframe::App for ViewerApp {
                         }
                     }
 
-                    // 右端にフィット/リセットボタン
+                    // 右端にフィット/リセットボタン + 右パネル幅可変トグル
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if menu_btn(ui, &t!("viewer.topbar.reset"))
                             .on_hover_text(t!("viewer.topbar.reset_tooltip"))
@@ -2332,6 +2344,22 @@ impl eframe::App for ViewerApp {
                             .clicked()
                         {
                             self.camera_fit_to_model();
+                        }
+                        // 右ツールパネルの幅をユーザードラッグでリサイズ可能にするトグル。
+                        // ON: 280..=600 px をドラッグで可変。OFF: 280 px に固定。
+                        // 現在の状態を `selected()` でハイライトして視覚化。
+                        let resizable_label =
+                            egui::RichText::new(t!("viewer.topbar.panel_resizable_label"))
+                                .color(egui::Color32::WHITE)
+                                .size(12.0);
+                        let resizable_btn = egui::Button::new(resizable_label)
+                            .selected(self.display.panel_resizable);
+                        if ui
+                            .add(resizable_btn)
+                            .on_hover_text(t!("viewer.topbar.panel_resizable_hover"))
+                            .clicked()
+                        {
+                            self.display.panel_resizable = !self.display.panel_resizable;
                         }
                     });
                 });
@@ -2816,6 +2844,8 @@ impl eframe::App for ViewerApp {
 
         // 表示オプション（永続化対象のみ）を config に反映
         self.app_config.display.white_texture_fallback = self.display.white_texture_fallback;
+        self.app_config.display.panel_resizable = self.display.panel_resizable;
+        self.app_config.display.panel_width = self.display.panel_width;
 
         persistence::save_config(&self.data_dir, &self.app_config);
     }
