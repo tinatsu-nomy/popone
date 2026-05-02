@@ -660,6 +660,15 @@ viewer:
     pmx_converting: "Converting to PMX..."
     uvmap_exporting: "Exporting UV map..."
     cancel: "Cancel"
+  log_viewer:
+    follow_tail: "Auto-tail"
+    follow_tail_hover: "Automatically scroll to bottom when new logs arrive"
+    open_folder: "Open folder"
+    open_folder_hover: "Open log directory in Explorer"
+    save_log: "Save log"
+    save_log_hover: "Save in-memory log as a .log file"
+    line_count: "%{shown} shown / %{total} total%{suffix}"
+    limit_reached: "(limit reached)"
   export_tab:
     output_dir_label: "Output:"
     output_dir_default: "(same as source)"

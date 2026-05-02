@@ -660,6 +660,15 @@ viewer:
     pmx_converting: "PMX 转换中..."
     uvmap_exporting: "UV 贴图导出中..."
     cancel: "中止"
+  log_viewer:
+    follow_tail: "自动追踪"
+    follow_tail_hover: "新日志到达时自动滚动到底部"
+    open_folder: "打开文件夹"
+    open_folder_hover: "在资源管理器中打开日志目录"
+    save_log: "保存日志"
+    save_log_hover: "将内存中的日志保存为 .log 文件"
+    line_count: "显示 %{shown} 条 / 共 %{total} 条%{suffix}"
+    limit_reached: "（达到上限）"
   export_tab:
     output_dir_label: "输出目录:"
     output_dir_default: "(与源相同位置)"

@@ -12,6 +12,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use eframe::egui;
+use rust_i18n::t;
 
 use crate::SharedLogBuffer;
 
@@ -360,19 +361,19 @@ impl LogViewerModel {
                     self.rebuild_filter_indices();
                 }
                 ui.separator();
-                ui.checkbox(&mut self.follow_tail, "自動追尾")
-                    .on_hover_text("新しいログが来たら自動で最下部へスクロール");
+                ui.checkbox(&mut self.follow_tail, t!("viewer.log_viewer.follow_tail"))
+                    .on_hover_text(t!("viewer.log_viewer.follow_tail_hover"));
                 ui.separator();
                 if ui
-                    .button("フォルダを開く")
-                    .on_hover_text("ログディレクトリをエクスプローラで開く")
+                    .button(t!("viewer.log_viewer.open_folder"))
+                    .on_hover_text(t!("viewer.log_viewer.open_folder_hover"))
                     .clicked()
                 {
                     open_logs_directory(logs_dir);
                 }
                 if ui
-                    .button("ログ保存")
-                    .on_hover_text("現在のメモリ上のログを .log ファイルとして保存")
+                    .button(t!("viewer.log_viewer.save_log"))
+                    .on_hover_text(t!("viewer.log_viewer.save_log_hover"))
                     .clicked()
                 {
                     save_log_to_file(log_buffer, logs_dir);
@@ -385,15 +386,16 @@ impl LogViewerModel {
             ui.horizontal(|ui| {
                 let total = self.lines.len();
                 let shown = self.filter_indices.len();
-                ui.small(format!(
-                    "{} 件表示 / 全 {} 件{}",
-                    shown,
-                    total,
-                    if total >= LINE_LIMIT {
-                        "（上限到達）"
-                    } else {
-                        ""
-                    }
+                let suffix: std::borrow::Cow<'static, str> = if total >= LINE_LIMIT {
+                    t!("viewer.log_viewer.limit_reached")
+                } else {
+                    std::borrow::Cow::Borrowed("")
+                };
+                ui.small(t!(
+                    "viewer.log_viewer.line_count",
+                    shown = shown,
+                    total = total,
+                    suffix = suffix,
                 ));
             });
 

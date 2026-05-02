@@ -660,6 +660,15 @@ viewer:
     pmx_converting: "PMX変換中..."
     uvmap_exporting: "UVマップ出力中..."
     cancel: "中止"
+  log_viewer:
+    follow_tail: "自動追尾"
+    follow_tail_hover: "新しいログが来たら自動で最下部へスクロール"
+    open_folder: "フォルダを開く"
+    open_folder_hover: "ログディレクトリをエクスプローラで開く"
+    save_log: "ログ保存"
+    save_log_hover: "現在のメモリ上のログを .log ファイルとして保存"
+    line_count: "%{shown} 件表示 / 全 %{total} 件%{suffix}"
+    limit_reached: "（上限到達）"
   export_tab:
     output_dir_label: "出力先:"
     output_dir_default: "(ソースと同じ場所)"
