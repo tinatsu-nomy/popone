@@ -314,3 +314,17 @@ viewer:
       apply: "Apply"
       skip: "Skip"
       applied_msg: "Manual texture assignment: applied to %{count} materials"
+  toast:
+    cancel:
+      reload: "Reload cancelled"
+      load: "Load cancelled"
+      gpu_build: "GPU build cancelled"
+      pmx_export: "PMX export cancelled"
+    bg_failure:
+      pmx_export_thread_panic: "PMX export thread panicked"
+    precondition:
+      no_model_loaded: "No model is loaded"
+      load_model_first: "Please load a model first"
+      busy_loading: "Cannot open animation while a model is loading. Wait for it to finish, then retry."
+      vrma_needs_vrm: "Please load a VRM model first to load VRMA"
+      anim_needs_model: "Please load a model first to load an animation"

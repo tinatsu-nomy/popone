@@ -314,3 +314,17 @@ viewer:
       apply: "应用"
       skip: "跳过"
       applied_msg: "手动分配纹理: 应用至 %{count} 个材质"
+  toast:
+    cancel:
+      reload: "已取消重新加载"
+      load: "已取消加载"
+      gpu_build: "已取消 GPU 构建"
+      pmx_export: "已取消 PMX 转换"
+    bg_failure:
+      pmx_export_thread_panic: "PMX 转换线程异常终止"
+    precondition:
+      no_model_loaded: "未加载模型"
+      load_model_first: "请先加载模型"
+      busy_loading: "模型加载中无法打开动画。请在加载完成后再试。"
+      vrma_needs_vrm: "请先加载 VRM 模型再加载 VRMA"
+      anim_needs_model: "请先加载模型再加载动画"

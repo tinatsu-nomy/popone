@@ -314,3 +314,17 @@ viewer:
       apply: "適用"
       skip: "スキップ"
       applied_msg: "テクスチャ手動割当: %{count}材質に適用"
+  toast:
+    cancel:
+      reload: "再読み込みを中止しました"
+      load: "読み込みを中止しました"
+      gpu_build: "GPU構築を中止しました"
+      pmx_export: "PMX変換を中止しました"
+    bg_failure:
+      pmx_export_thread_panic: "PMX変換スレッドが異常終了しました"
+    precondition:
+      no_model_loaded: "モデルが読み込まれていません"
+      load_model_first: "先にモデルを読み込んでください"
+      busy_loading: "モデル読み込み中はアニメーションを開けません。完了してから再試行してください。"
+      vrma_needs_vrm: "VRMAを読み込むには先にVRMモデルを読み込んでください"
+      anim_needs_model: "アニメーションを読み込むには先にモデルを読み込んでください"

@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use eframe::egui;
+use rust_i18n::t;
 
 use crate::unitypackage::UnityPackageIndex;
 
@@ -834,7 +835,7 @@ impl ViewerApp {
         if let Some(snap) = self.reload_snapshot.take() {
             self.restore_snapshot_on_failure(snap);
             self.convert_message = Some(ConvertMessage::success(
-                "再読み込みを中止しました".to_string(),
+                t!("viewer.toast.cancel.reload").into_owned(),
             ));
             return;
         }
@@ -864,7 +865,7 @@ impl ViewerApp {
         }
 
         self.convert_message = Some(ConvertMessage::success(
-            "読み込みを中止しました".to_string(),
+            t!("viewer.toast.cancel.load").into_owned(),
         ));
     }
 
@@ -879,7 +880,7 @@ impl ViewerApp {
         if let Some(snap) = self.reload_snapshot.take() {
             self.restore_snapshot_on_failure(snap);
             self.convert_message = Some(ConvertMessage::success(
-                "再読み込みを中止しました".to_string(),
+                t!("viewer.toast.cancel.reload").into_owned(),
             ));
             return;
         }
@@ -907,7 +908,9 @@ impl ViewerApp {
             renderer.invalidate_normal_cache();
         }
 
-        self.convert_message = Some(ConvertMessage::success("GPU構築を中止しました".to_string()));
+        self.convert_message = Some(ConvertMessage::success(
+            t!("viewer.toast.cancel.gpu_build").into_owned(),
+        ));
     }
 
     /// バックグラウンド PMX 変換をキャンセルする
@@ -919,7 +922,9 @@ impl ViewerApp {
             log::info!("User cancelled background PMX conversion");
         }
         self.pending.convert_bg = None;
-        self.convert_message = Some(ConvertMessage::success("PMX変換を中止しました".to_string()));
+        self.convert_message = Some(ConvertMessage::success(
+            t!("viewer.toast.cancel.pmx_export").into_owned(),
+        ));
     }
 
     /// プログレスフラグ更新（次フレームで処理を実行するためのトリガー）
@@ -1364,7 +1369,7 @@ impl ViewerApp {
                         self.export.pending_uv_bg = Some(PendingUvBgExport { rx });
                     } else {
                         self.convert_message = Some(ConvertMessage::failure(
-                            "モデルが読み込まれていません".to_string(),
+                            t!("viewer.toast.precondition.no_model_loaded").into_owned(),
                         ));
                     }
                 } else {
@@ -1453,7 +1458,7 @@ impl ViewerApp {
             } else if !alive {
                 self.pending.convert_bg = None;
                 self.convert_message = Some(ConvertMessage::failure(
-                    "PMX変換スレッドが異常終了しました".to_string(),
+                    t!("viewer.toast.bg_failure.pmx_export_thread_panic").into_owned(),
                 ));
             }
         }

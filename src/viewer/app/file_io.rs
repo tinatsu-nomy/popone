@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use eframe::egui;
+use rust_i18n::t;
 
 use crate::intermediate::types::{IrModel, TextureData};
 use crate::unitypackage::UnityPackageIndex;
@@ -1468,8 +1469,7 @@ impl ViewerApp {
                     path.display()
                 );
                 self.convert_message = Some(ConvertMessage::failure(
-                    "モデル読み込み中はアニメーションを開けません。完了してから再試行してください。"
-                        .to_string(),
+                    t!("viewer.toast.precondition.busy_loading").into_owned(),
                 ));
                 // prior Loading を bg_state に戻して現行ロードを保護
                 self.pending.bg_state = BackgroundLoadState::Loading(prior);
@@ -1551,9 +1551,9 @@ impl ViewerApp {
                 if self.loaded.is_some() {
                     self.try_load_fbx_animation(&path);
                 } else {
-                    self.convert_message = Some(ConvertMessage::failure(String::from(
-                        "先にモデルを読み込んでください",
-                    )));
+                    self.convert_message = Some(ConvertMessage::failure(
+                        t!("viewer.toast.precondition.load_model_first").into_owned(),
+                    ));
                 }
                 return;
             }
@@ -2254,9 +2254,9 @@ impl ViewerApp {
                 if self.loaded.is_some() {
                     self.try_load_fbx_animation(&path);
                 } else {
-                    self.convert_message = Some(ConvertMessage::failure(String::from(
-                        "先にモデルを読み込んでください",
-                    )));
+                    self.convert_message = Some(ConvertMessage::failure(
+                        t!("viewer.toast.precondition.load_model_first").into_owned(),
+                    ));
                 }
                 return;
             }
@@ -3546,7 +3546,7 @@ impl ViewerApp {
     pub fn try_load_vrma(&mut self, path: &std::path::Path) {
         if self.loaded.is_none() {
             self.convert_message = Some(ConvertMessage::failure(
-                "VRMAを読み込むには先にVRMモデルを読み込んでください".to_string(),
+                t!("viewer.toast.precondition.vrma_needs_vrm").into_owned(),
             ));
             return;
         }
@@ -3596,7 +3596,7 @@ impl ViewerApp {
     pub fn try_load_fbx_animation(&mut self, path: &std::path::Path) {
         if self.loaded.is_none() {
             self.convert_message = Some(ConvertMessage::failure(
-                "アニメーションを読み込むには先にモデルを読み込んでください".to_string(),
+                t!("viewer.toast.precondition.anim_needs_model").into_owned(),
             ));
             return;
         }
@@ -3656,7 +3656,7 @@ impl ViewerApp {
     pub fn try_load_unity_animation(&mut self, path: &std::path::Path) {
         if self.loaded.is_none() {
             self.convert_message = Some(ConvertMessage::failure(
-                "アニメーションを読み込むには先にモデルを読み込んでください".to_string(),
+                t!("viewer.toast.precondition.anim_needs_model").into_owned(),
             ));
             return;
         }
@@ -3697,7 +3697,7 @@ impl ViewerApp {
     pub fn try_load_gltf_animation(&mut self, path: &std::path::Path) {
         if self.loaded.is_none() {
             self.convert_message = Some(ConvertMessage::failure(
-                "アニメーションを読み込むには先にモデルを読み込んでください".to_string(),
+                t!("viewer.toast.precondition.anim_needs_model").into_owned(),
             ));
             return;
         }
