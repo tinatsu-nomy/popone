@@ -706,7 +706,10 @@ mod tests {
         m.poll(&buf);
         assert_eq!(m.lines.len(), 2);
         assert_eq!(m.lines[1].message, "second");
-        assert!(m.last_offset > offset_after_first, "last_offset は単調増加");
+        assert!(
+            m.last_offset > offset_after_first,
+            "last_offset should be monotonically increasing"
+        );
     }
 
     #[test]

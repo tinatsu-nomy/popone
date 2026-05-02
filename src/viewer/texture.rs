@@ -188,8 +188,8 @@ pub fn upload_rgba_to_gpu_with_mips(
         let scale = (max_dim as f64 / width as f64).min(max_dim as f64 / height as f64);
         let new_w = ((width as f64 * scale) as u32).max(1);
         let new_h = ((height as f64 * scale) as u32).max(1);
-        let src =
-            image::RgbaImage::from_raw(width, height, rgba.to_vec()).expect("RgbaImage 構築失敗");
+        let src = image::RgbaImage::from_raw(width, height, rgba.to_vec())
+            .expect("RgbaImage construction failed");
         let resized = resize_srgb(&src, new_w, new_h, image::imageops::FilterType::Triangle);
         (Some(resized.into_raw()), new_w, new_h)
     } else {
@@ -249,7 +249,7 @@ pub fn upload_rgba_to_gpu_with_mips(
         // リサイズ後の場合（GPU 上限超過）は事前生成ミップを無視して新規生成
         let use_prebuilt = mip_chain.is_some() && upload_owned.is_none();
         if use_prebuilt {
-            let chain = mip_chain.expect("use_prebuilt で確認済み");
+            let chain = mip_chain.expect("verified by use_prebuilt");
             for (level_idx, (mip_w, mip_h, mip_data)) in chain.iter().enumerate() {
                 let level = (level_idx + 1) as u32;
                 queue.write_texture(

@@ -1049,7 +1049,7 @@ impl ViewerApp {
                         dispatch,
                         prior_loading,
                     } => (dispatch, prior_loading),
-                    _ => unreachable!("dispatch_ready で PendingDispatch 確認済み"),
+                    _ => unreachable!("PendingDispatch verified by dispatch_ready"),
                 };
             self.route_load_dispatch(dispatch, prior_loading);
         }
@@ -1100,7 +1100,7 @@ impl ViewerApp {
                 .pending
                 .pkg_load
                 .take()
-                .expect("pending_pkg_load は shown 確認済み");
+                .expect("pending_pkg_load verified by shown");
             self.spawn_bg_pkg_load(p);
         }
 
@@ -1145,7 +1145,7 @@ impl ViewerApp {
                 .pending
                 .archive_load
                 .take()
-                .expect("pending_archive_load は shown 確認済み");
+                .expect("pending_archive_load verified by shown");
             self.spawn_bg_archive_load(p);
         }
     }

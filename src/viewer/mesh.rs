@@ -592,7 +592,7 @@ impl GpuModel {
             bytemuck::cast_slice(
                 self.animated_vertices
                     .as_ref()
-                    .expect("animated_vertices は apply_morphs 内で必ず Some に設定済み"),
+                    .expect("animated_vertices is always set to Some inside apply_morphs"),
             ),
         );
 
@@ -1529,7 +1529,7 @@ pub(crate) fn gpu_finalize_model(
             gpu_textures_dual.get(ti).map(|(srgb_view, _)| {
                 let sampler = sampler_cache
                     .get(&plan.base_sampler)
-                    .expect("ensure_sampler で登録済み");
+                    .expect("already registered by ensure_sampler");
                 gpu::create_texture_bind_group(device, &texture_bgl, srgb_view, sampler)
             })
         });
@@ -1572,7 +1572,7 @@ pub(crate) fn gpu_finalize_model(
             ] {
                 ensure_sampler(&mut sampler_cache, device, si);
             }
-            let expect_msg = "ensure_sampler で登録済み";
+            let expect_msg = "already registered by ensure_sampler";
             let matcap_sampler = sampler_cache.get(&aux.matcap.sampler).expect(expect_msg);
             let shade_sampler = sampler_cache.get(&aux.shade.sampler).expect(expect_msg);
             let shift_sampler = sampler_cache.get(&aux.shift.sampler).expect(expect_msg);

@@ -902,13 +902,13 @@ impl ViewerApp {
         let proportional = fonts
             .families
             .get_mut(&egui::FontFamily::Proportional)
-            .expect("Proportional フォントファミリーは常に存在");
+            .expect("Proportional font family always exists");
         proportional.insert(0, "noto_sc".to_owned());
         proportional.insert(0, "noto_jp".to_owned());
         let monospace = fonts
             .families
             .get_mut(&egui::FontFamily::Monospace)
-            .expect("Monospace フォントファミリーは常に存在");
+            .expect("Monospace font family always exists");
         monospace.push("noto_jp".to_owned());
         monospace.push("noto_sc".to_owned());
         ctx.set_fonts(fonts);
@@ -2223,7 +2223,7 @@ impl eframe::App for ViewerApp {
         if now.duration_since(self.fps_last_update).as_secs_f32() >= 0.5 {
             if self.frame_times.len() >= 2 {
                 let span = now
-                    .duration_since(*self.frame_times.front().expect("len >= 2 確認済み"))
+                    .duration_since(*self.frame_times.front().expect("len >= 2 verified"))
                     .as_secs_f32();
                 if span > 0.0 {
                     self.fps_display = (self.frame_times.len() - 1) as f32 / span;

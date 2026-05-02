@@ -366,7 +366,7 @@ fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             .pending
             .fbx_choice
             .take()
-            .expect("pending_fbx_choice は Some 確認済み");
+            .expect("pending_fbx_choice confirmed Some");
         app.execute_fbx_choice(choice);
     } else if cancelled || !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.pending.fbx_choice = None;
@@ -444,7 +444,7 @@ fn show_import_options_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             .pending
             .import_options
             .take()
-            .expect("pending.import_options は Some 確認済み");
+            .expect("pending.import_options confirmed Some");
         app.execute_import_with_options(opts);
     } else if cancelled || !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.pending.import_options = None;
@@ -520,7 +520,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             .pending
             .unity_pkg
             .take()
-            .expect("pending_unity_pkg は Some 確認済み");
+            .expect("pending_unity_pkg confirmed Some");
         app.pending.pkg_load = Some(super::app::PendingPkgModelLoad {
             assets: std::sync::Arc::new(pending.assets),
             fbx_index: idx,
@@ -541,7 +541,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             .pending
             .unity_pkg
             .take()
-            .expect("pending_unity_pkg は Some 確認済み");
+            .expect("pending_unity_pkg confirmed Some");
         let checked_indices: Vec<usize> = pending
             .checked
             .iter()
@@ -659,7 +659,7 @@ fn show_archive_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             .pending
             .archive
             .take()
-            .expect("pending_archive は Some 確認済み");
+            .expect("pending_archive confirmed Some");
         app.pending.archive_load = Some(super::app::PendingArchiveLoad {
             archive_data: pending.archive_data,
             format: pending.format,
@@ -982,7 +982,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             .tex
             .pending_match
             .take()
-            .expect("pending_match は apply フラグで Some 確認済み");
+            .expect("pending_match confirmed Some by apply flag");
         // プレビュー中の bind group を復元（正式割り当てで上書きされるため）
         if let Some(ref mut loaded) = app.loaded {
             for (draw_idx, (orig_tex, orig_mmd)) in pending.saved_binds.into_iter() {
@@ -2844,7 +2844,7 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
     let loaded = app
         .loaded
         .as_ref()
-        .expect("loaded は has_model チェック済み");
+        .expect("loaded already verified by has_model check");
 
     // 可視材質フィルタリング
     let convert_ir = if app.export.export_visible_only {

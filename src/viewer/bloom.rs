@@ -595,7 +595,7 @@ impl BloomPass {
             let level0_view = &self
                 .textures
                 .as_ref()
-                .expect("ensure_textures で初期化済み")
+                .expect("already initialized by ensure_textures")
                 .levels[0]
                 .1;
             self.cached_composite_bind_group =
@@ -623,7 +623,7 @@ impl BloomPass {
         let textures = self
             .textures
             .as_ref()
-            .expect("ensure_textures で初期化済み");
+            .expect("already initialized by ensure_textures");
 
         // Uniform 更新
         let extract_params = BloomParams {
@@ -721,7 +721,7 @@ impl BloomPass {
         &self
             .textures
             .as_ref()
-            .expect("execute 内で ensure_textures 呼び出し済み")
+            .expect("ensure_textures already called inside execute")
             .composite_view
     }
 

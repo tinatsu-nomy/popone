@@ -1375,7 +1375,7 @@ impl ViewerApp {
         if let Some(ref pl) = self.preloaded {
             if pl.path == path {
                 // preloaded から aux_files を移動（HashMap の再割り当て回避）
-                let pl = self.preloaded.take().expect("preloaded は Some 確認済み");
+                let pl = self.preloaded.take().expect("preloaded confirmed Some");
                 self.preloaded = Some(PreloadedData {
                     path: pl.path,
                     main_bytes: pl.main_bytes,
@@ -3576,7 +3576,7 @@ impl ViewerApp {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
-                let loaded = self.loaded.as_ref().expect("loaded は is_some 分岐内");
+                let loaded = self.loaded.as_ref().expect("loaded inside is_some branch");
                 let state = AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
                 log::info!("VRMALoad success: {}", path.display());
 
@@ -3628,7 +3628,7 @@ impl ViewerApp {
                 log::debug!("FBX animation: empty (skipped)");
             }
             Ok(anims) => {
-                let loaded = self.loaded.as_ref().expect("loaded は is_some 分岐内");
+                let loaded = self.loaded.as_ref().expect("loaded inside is_some branch");
                 let path_buf = path.to_path_buf();
                 let file_name = path
                     .file_name()
@@ -3679,7 +3679,7 @@ impl ViewerApp {
 
         match crate::unity::animation::load_unity_anim(path, self.anim.muscle_scale) {
             Ok(anim) => {
-                let loaded = self.loaded.as_ref().expect("loaded は is_some 分岐内");
+                let loaded = self.loaded.as_ref().expect("loaded inside is_some branch");
                 let path_buf = path.to_path_buf();
                 let file_name = path
                     .file_name()
@@ -3719,7 +3719,7 @@ impl ViewerApp {
 
         match vrm::animation::load_gltf_animation(path) {
             Ok(anims) => {
-                let loaded = self.loaded.as_ref().expect("loaded は is_some 分岐内");
+                let loaded = self.loaded.as_ref().expect("loaded inside is_some branch");
                 let path_buf = path.to_path_buf();
                 let file_name = path
                     .file_name()
@@ -6501,7 +6501,10 @@ impl ViewerApp {
 
             if !image_files.is_empty() && has_loaded_model {
                 if image_files.len() == 1 {
-                    let path = image_files.into_iter().next().expect("image_files は非空");
+                    let path = image_files
+                        .into_iter()
+                        .next()
+                        .expect("image_files is non-empty");
                     self.open_texture_preview(path);
                 } else {
                     self.auto_assign_textures(image_files);

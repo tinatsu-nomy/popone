@@ -3479,7 +3479,7 @@ impl GpuRenderer {
         let offscreen = self
             .offscreen
             .as_ref()
-            .expect("ensure_offscreen で初期化済み");
+            .expect("already initialized by ensure_offscreen");
 
         // カメラユニフォーム更新（再利用バッファで heap allocation 回避）
         let cam_uniform = Self::build_camera_uniform(params);
@@ -3906,7 +3906,7 @@ impl GpuRenderer {
                     pass.set_pipeline(
                         ps.pipeline_wireframe
                             .as_ref()
-                            .expect("wireframe パイプラインは supports_wireframe チェック済み"),
+                            .expect("wireframe pipeline already verified by supports_wireframe"),
                     );
                 } else {
                     match (draw.render_queue, draw.cull_mode) {
@@ -4064,7 +4064,7 @@ impl GpuRenderer {
             let wire_pl = ps
                 .pipeline_wire_overlay
                 .as_ref()
-                .expect("wire_overlay パイプラインは supports_wireframe チェック済み");
+                .expect("wire_overlay pipeline already verified by supports_wireframe");
             pass.set_pipeline(wire_pl);
             pass.set_bind_group(0, camera_bind_group, &[]);
             for (draw_idx, draw) in model.draws.iter().enumerate() {
@@ -4132,7 +4132,7 @@ impl GpuRenderer {
                 pass.set_pipeline(
                     ps.pipeline_wireframe
                         .as_ref()
-                        .expect("wireframe パイプラインは supports_wireframe チェック済み"),
+                        .expect("wireframe pipeline already verified by supports_wireframe"),
                 );
             } else {
                 let is_no_cull = draw.cull_mode != CullMode::Back;
@@ -5310,12 +5310,8 @@ fn generate_shared_toon_textures(
     }
 
     (
-        views_srgb
-            .try_into()
-            .expect("10個のトゥーンテクスチャ(srgb)"),
-        views_unorm
-            .try_into()
-            .expect("10個のトゥーンテクスチャ(unorm)"),
+        views_srgb.try_into().expect("10 toon textures (srgb)"),
+        views_unorm.try_into().expect("10 toon textures (unorm)"),
     )
 }
 

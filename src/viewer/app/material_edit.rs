@@ -715,10 +715,17 @@ mod tests {
         current.mtoon = None;
 
         let diff = MaterialParamOverride::diff_from(&pristine, &current);
-        assert!(diff.is_some(), "shader_family の変更で diff が出るべき");
+        assert!(
+            diff.is_some(),
+            "diff should appear when shader_family changes"
+        );
 
         let diff = diff.unwrap();
-        assert_eq!(diff.enable_mtoon, Some(false), "MToon 無効化を記録すべき");
+        assert_eq!(
+            diff.enable_mtoon,
+            Some(false),
+            "MToon disable should be recorded"
+        );
 
         // apply: pristine に diff を適用 → current と同じ状態になるべき
         let mut restored = pristine.clone();
@@ -863,8 +870,11 @@ mod tests {
         }
 
         let diff = MaterialParamOverride::diff_from(&pristine, &current)
-            .expect("UV 変更があるので diff は Some");
-        let uv = diff.base_color_uv.as_ref().expect("base_color_uv が Some");
+            .expect("diff should be Some because of UV changes");
+        let uv = diff
+            .base_color_uv
+            .as_ref()
+            .expect("base_color_uv should be Some");
         assert_eq!(uv.offset, Some([0.25, -0.5]));
         assert_eq!(uv.scale, Some([2.0, 0.5]));
         assert_eq!(uv.rotation, Some(std::f32::consts::FRAC_PI_4));
@@ -900,7 +910,7 @@ mod tests {
         }
 
         let diff = MaterialParamOverride::diff_from(&pristine, &current).unwrap();
-        let uv = diff.shade_uv.as_ref().expect("shade_uv が Some");
+        let uv = diff.shade_uv.as_ref().expect("shade_uv should be Some");
         assert_eq!(uv.offset, Some([0.1, 0.2]));
         assert_eq!(uv.scale, Some([1.5, 1.5]));
 
@@ -1002,7 +1012,7 @@ mod tests {
         current.base_color_tex_info = Some(ti);
 
         let diff =
-            MaterialParamOverride::diff_from(&pristine, &current).expect("UV 差分があるので Some");
+            MaterialParamOverride::diff_from(&pristine, &current).expect("Some because of UV diff");
         let uv = diff
             .base_color_uv
             .as_ref()
