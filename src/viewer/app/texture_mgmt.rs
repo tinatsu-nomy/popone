@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use eframe::egui;
 use eframe::wgpu;
+use rust_i18n::t;
 
 /// PSD→PNG バックグラウンド変換の結果型
 type PsdConversionResult = anyhow::Result<Vec<u8>>;
@@ -400,9 +401,9 @@ impl ViewerApp {
             Ok(d) => d,
             Err(e) => {
                 log::error!("File read failed: {e}");
-                self.convert_message = Some(ConvertMessage::failure(format!(
-                    "テクスチャ読み込み失敗: {e}"
-                )));
+                self.convert_message = Some(ConvertMessage::failure(
+                    t!("viewer.toast.tex.load_failed", error = e.to_string()).into_owned(),
+                ));
                 return;
             }
         };
@@ -456,9 +457,9 @@ impl ViewerApp {
                     Ok(d) => d,
                     Err(e) => {
                         log::error!("File read failed: {e}");
-                        self.convert_message = Some(ConvertMessage::failure(format!(
-                            "テクスチャ読み込み失敗: {e}"
-                        )));
+                        self.convert_message = Some(ConvertMessage::failure(
+                            t!("viewer.toast.tex.load_failed", error = e.to_string()).into_owned(),
+                        ));
                         return;
                     }
                 };
@@ -553,9 +554,9 @@ impl ViewerApp {
                 Ok(views) => views,
                 Err(e) => {
                     log::error!("Texture upload failed: {e}");
-                    self.convert_message = Some(ConvertMessage::failure(format!(
-                        "テクスチャ読み込み失敗: {e}"
-                    )));
+                    self.convert_message = Some(ConvertMessage::failure(
+                        t!("viewer.toast.tex.load_failed", error = e.to_string()).into_owned(),
+                    ));
                     return false;
                 }
             };
@@ -869,9 +870,9 @@ impl ViewerApp {
         let data = match std::fs::read(&path) {
             Ok(d) => d,
             Err(e) => {
-                self.convert_message = Some(ConvertMessage::failure(format!(
-                    "テクスチャ読み込み失敗: {e}"
-                )));
+                self.convert_message = Some(ConvertMessage::failure(
+                    t!("viewer.toast.tex.load_failed", error = e.to_string()).into_owned(),
+                ));
                 return;
             }
         };
@@ -904,9 +905,9 @@ impl ViewerApp {
                 });
             }
             Err(e) => {
-                self.convert_message = Some(ConvertMessage::failure(format!(
-                    "テクスチャ読み込み失敗: {e}"
-                )));
+                self.convert_message = Some(ConvertMessage::failure(
+                    t!("viewer.toast.tex.load_failed", error = e.to_string()).into_owned(),
+                ));
             }
         }
     }
@@ -965,17 +966,23 @@ impl ViewerApp {
         }
 
         // 結果メッセージ
-        let mut msg = format!("テクスチャ自動割り当て: {}材質に適用", assigned);
+        let mut msg = t!("viewer.toast.tex.auto_assigned", count = assigned).into_owned();
         if !unmatched.is_empty() {
-            msg += &format!("\nマッチなし: {}", unmatched.join(", "));
+            msg += &t!(
+                "viewer.toast.tex.no_match_suffix",
+                names = unmatched.join(", ")
+            );
         }
         if assigned > 0 {
             self.convert_message = Some(ConvertMessage::success(msg));
         } else {
-            self.convert_message = Some(ConvertMessage::failure(format!(
-                "マッチする材質が見つかりませんでした\nファイル: {}",
-                unmatched.join(", ")
-            )));
+            self.convert_message = Some(ConvertMessage::failure(
+                t!(
+                    "viewer.toast.tex.no_match_failure",
+                    names = unmatched.join(", ")
+                )
+                .into_owned(),
+            ));
         }
     }
 
@@ -1511,9 +1518,9 @@ impl ViewerApp {
         let uv_entries: Vec<super::persistence::VertexUvOverrideEntry> = self.uv_edit.to_entries();
 
         if entries.is_empty() && param_entries.is_empty() && uv_entries.is_empty() {
-            self.convert_message = Some(ConvertMessage::failure(String::from(
-                "保存対象のテクスチャ割り当て・編集がありません",
-            )));
+            self.convert_message = Some(ConvertMessage::failure(
+                t!("viewer.toast.history.no_target").into_owned(),
+            ));
             return;
         }
 
@@ -1540,9 +1547,15 @@ impl ViewerApp {
             self.texture_history.vertex_uv_overrides.remove(&key);
         }
         super::persistence::save_texture_history(&self.data_dir, &self.texture_history);
-        self.convert_message = Some(ConvertMessage::success(format!(
-            "履歴を保存しました (テクスチャ{tex_count}件, パラメータ{param_count}件, UV頂点{uv_count}件)"
-        )));
+        self.convert_message = Some(ConvertMessage::success(
+            t!(
+                "viewer.toast.history.saved",
+                tex_count = tex_count,
+                param_count = param_count,
+                uv_count = uv_count
+            )
+            .into_owned(),
+        ));
     }
 
     /// 履歴からテクスチャ割り当てを呼び出し
@@ -1557,9 +1570,9 @@ impl ViewerApp {
         // v0.5.5: 頂点 UV 編集だけ保存したケースも呼び戻せるようにする
         let has_uv_entries = self.texture_history.vertex_uv_overrides.contains_key(&key);
         if !has_tex_entries && !has_param_entries && !has_uv_entries {
-            self.convert_message = Some(ConvertMessage::failure(String::from(
-                "このモデルの履歴がありません",
-            )));
+            self.convert_message = Some(ConvertMessage::failure(
+                t!("viewer.toast.history.no_history").into_owned(),
+            ));
             return;
         }
         let entries = self
@@ -1757,22 +1770,22 @@ impl ViewerApp {
         let msg = if skipped > 0 || param_applied > 0 || uv_applied > 0 {
             let parts: Vec<String> = [
                 if applied > 0 {
-                    Some(format!("テクスチャ{applied}件"))
+                    Some(t!("viewer.toast.history.tex_n", count = applied).into_owned())
                 } else {
                     None
                 },
                 if param_applied > 0 {
-                    Some(format!("パラメータ{param_applied}件"))
+                    Some(t!("viewer.toast.history.param_n", count = param_applied).into_owned())
                 } else {
                     None
                 },
                 if uv_applied > 0 {
-                    Some(format!("UV頂点{uv_applied}件"))
+                    Some(t!("viewer.toast.history.uv_n", count = uv_applied).into_owned())
                 } else {
                     None
                 },
                 if skipped > 0 {
-                    Some(format!("スキップ{skipped}件"))
+                    Some(t!("viewer.toast.history.skip_n", count = skipped).into_owned())
                 } else {
                     None
                 },
@@ -1780,11 +1793,15 @@ impl ViewerApp {
             .into_iter()
             .flatten()
             .collect();
-            format!("履歴呼出: {}", parts.join(", "))
+            t!(
+                "viewer.toast.history.recall_summary",
+                parts = parts.join(", ")
+            )
+            .into_owned()
         } else if applied > 0 {
-            format!("テクスチャ履歴: {applied}件適用")
+            t!("viewer.toast.history.tex_applied", count = applied).into_owned()
         } else {
-            "履歴がありません".to_string()
+            t!("viewer.toast.history.empty").into_owned()
         };
         self.convert_message = Some(if applied > 0 || param_applied > 0 || uv_applied > 0 {
             ConvertMessage::success(msg)

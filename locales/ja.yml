@@ -352,3 +352,19 @@ viewer:
     uvmap:
       exported: "UVマップ出力完了: %{path}"
       failed: "UVマップ出力失敗: %{error}"
+    tex:
+      load_failed: "テクスチャ読み込み失敗: %{error}"
+      auto_assigned: "テクスチャ自動割り当て: %{count}材質に適用"
+      no_match_suffix: "\nマッチなし: %{names}"
+      no_match_failure: "マッチする材質が見つかりませんでした\nファイル: %{names}"
+    history:
+      no_target: "保存対象のテクスチャ割り当て・編集がありません"
+      saved: "履歴を保存しました (テクスチャ%{tex_count}件, パラメータ%{param_count}件, UV頂点%{uv_count}件)"
+      no_history: "このモデルの履歴がありません"
+      tex_n: "テクスチャ%{count}件"
+      param_n: "パラメータ%{count}件"
+      uv_n: "UV頂点%{count}件"
+      skip_n: "スキップ%{count}件"
+      recall_summary: "履歴呼出: %{parts}"
+      tex_applied: "テクスチャ履歴: %{count}件適用"
+      empty: "履歴がありません"

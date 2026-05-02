@@ -352,3 +352,19 @@ viewer:
     uvmap:
       exported: "UV map exported: %{path}"
       failed: "UV map export failed: %{error}"
+    tex:
+      load_failed: "Texture load failed: %{error}"
+      auto_assigned: "Texture auto-assignment: applied to %{count} materials"
+      no_match_suffix: "\nNo match: %{names}"
+      no_match_failure: "No matching material found\nFiles: %{names}"
+    history:
+      no_target: "No texture assignments or edits to save"
+      saved: "History saved (textures: %{tex_count}, params: %{param_count}, UV verts: %{uv_count})"
+      no_history: "No history for this model"
+      tex_n: "%{count} textures"
+      param_n: "%{count} params"
+      uv_n: "%{count} UV verts"
+      skip_n: "%{count} skipped"
+      recall_summary: "History recalled: %{parts}"
+      tex_applied: "Texture history: applied %{count}"
+      empty: "No history"

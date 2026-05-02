@@ -352,3 +352,19 @@ viewer:
     uvmap:
       exported: "UV 贴图导出完成: %{path}"
       failed: "UV 贴图导出失败: %{error}"
+    tex:
+      load_failed: "纹理加载失败: %{error}"
+      auto_assigned: "纹理自动分配: 应用至 %{count} 个材质"
+      no_match_suffix: "\n无匹配: %{names}"
+      no_match_failure: "未找到匹配的材质\n文件: %{names}"
+    history:
+      no_target: "没有需要保存的纹理分配或编辑"
+      saved: "历史已保存 (纹理: %{tex_count}, 参数: %{param_count}, UV 顶点: %{uv_count})"
+      no_history: "该模型没有历史记录"
+      tex_n: "%{count} 个纹理"
+      param_n: "%{count} 个参数"
+      uv_n: "%{count} 个 UV 顶点"
+      skip_n: "跳过 %{count} 个"
+      recall_summary: "历史已读取: %{parts}"
+      tex_applied: "纹理历史: 应用 %{count} 个"
+      empty: "没有历史记录"
