@@ -273,3 +273,44 @@ viewer:
   shortcut:
     camera: "左键拖动:旋转  右键拖动:平移  滚轮:缩放  双击:适配"
     toggles: "G:网格 B:骨骼 P:物理 W:线框 N:法线 L:光照"
+  dialog:
+    common:
+      ok: "确定"
+      cancel: "取消"
+    tex_history:
+      title: "覆盖纹理历史"
+      message1: "该模型的纹理历史已存在。"
+      message2: "是否覆盖保存？"
+      confirm: "覆盖保存"
+    fbx_choice:
+      title: "加载 FBX"
+      message: "同时包含模型和动画。"
+      load_model: "加载模型"
+      load_model_required: "首次加载需要载入模型"
+      load_animation: "加载动画"
+    import_options:
+      title: "%{format} 导入设置"
+      unit: "单位:"
+      z_up_convert: "Z-Up → Y-Up 转换"
+    pkg_select:
+      title: "选择模型"
+      message1: "在 .unitypackage 中发现多个模型。"
+      message2: "点击单独加载，勾选批量加载。"
+      batch_load: "批量加载 (%{count})"
+    archive_select:
+      title: "选择压缩包内模型"
+      message1: "在压缩包中发现多个模型。"
+      message2: "请选择要加载的文件。"
+    tex_match:
+      title: "手动分配纹理"
+      instruction: "请为未能自动匹配的材质指定纹理。"
+      pkg_tex_count: "包内纹理: %{count} 个"
+      link_same_name: "同名联动"
+      col_material: "材质名"
+      col_source_tex: "原纹理"
+      col_assigned_tex: "分配纹理"
+      none: "（无）"
+      filter_hint: "按纹理名称筛选…"
+      apply: "应用"
+      skip: "跳过"
+      applied_msg: "手动分配纹理: 应用至 %{count} 个材质"

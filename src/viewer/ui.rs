@@ -270,20 +270,20 @@ fn show_confirm_save_tex_history(ctx: &egui::Context, app: &mut ViewerApp) {
     }
     let mut confirmed = false;
     let mut cancelled = false;
-    egui::Window::new("テクスチャ履歴の上書き")
+    egui::Window::new(t!("viewer.dialog.tex_history.title"))
         .collapsible(false)
         .resizable(false)
         .default_pos(ctx.screen_rect().center())
         .pivot(egui::Align2::CENTER_CENTER)
         .show(ctx, |ui| {
-            ui.label("このモデルのテクスチャ履歴が既に存在します。");
-            ui.label("上書き保存しますか？");
+            ui.label(t!("viewer.dialog.tex_history.message1"));
+            ui.label(t!("viewer.dialog.tex_history.message2"));
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button("上書き保存").clicked() {
+                if ui.button(t!("viewer.dialog.tex_history.confirm")).clicked() {
                     confirmed = true;
                 }
-                if ui.button("キャンセル").clicked() {
+                if ui.button(t!("viewer.dialog.common.cancel")).clicked() {
                     cancelled = true;
                 }
             });
@@ -313,7 +313,7 @@ fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     let mut cancelled = false;
     let mut open = true;
 
-    egui::Window::new("FBX読み込み")
+    egui::Window::new(t!("viewer.dialog.fbx_choice.title"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
@@ -321,7 +321,7 @@ fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         .pivot(egui::Align2::CENTER_CENTER)
         .show(ctx, |ui| {
             ui.label(format!("\"{}\"", file_name));
-            ui.label("モデルとアニメーションの両方が含まれています。");
+            ui.label(t!("viewer.dialog.fbx_choice.message"));
             ui.separator();
             let no_model_loaded = app.loaded.is_none();
             if no_model_loaded {
@@ -329,20 +329,32 @@ fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                 pending.load_model = true;
                 ui.add_enabled(
                     false,
-                    egui::Checkbox::new(&mut pending.load_model, "モデルを読み込む"),
+                    egui::Checkbox::new(
+                        &mut pending.load_model,
+                        t!("viewer.dialog.fbx_choice.load_model"),
+                    ),
                 )
-                .on_disabled_hover_text("初回はモデルの読み込みが必要です");
+                .on_disabled_hover_text(t!("viewer.dialog.fbx_choice.load_model_required"));
             } else {
-                ui.checkbox(&mut pending.load_model, "モデルを読み込む");
+                ui.checkbox(
+                    &mut pending.load_model,
+                    t!("viewer.dialog.fbx_choice.load_model"),
+                );
             }
-            ui.checkbox(&mut pending.load_animation, "アニメーションを読み込む");
+            ui.checkbox(
+                &mut pending.load_animation,
+                t!("viewer.dialog.fbx_choice.load_animation"),
+            );
             ui.separator();
             ui.horizontal(|ui| {
                 let can_ok = pending.load_model || pending.load_animation;
-                if ui.add_enabled(can_ok, egui::Button::new("OK")).clicked() {
+                if ui
+                    .add_enabled(can_ok, egui::Button::new(t!("viewer.dialog.common.ok")))
+                    .clicked()
+                {
                     confirmed = true;
                 }
-                if ui.button("キャンセル").clicked() {
+                if ui.button(t!("viewer.dialog.common.cancel")).clicked() {
                     cancelled = true;
                 }
             });
@@ -385,40 +397,46 @@ fn show_import_options_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     let mut cancelled = false;
     let mut open = true;
 
-    egui::Window::new(format!("{format_label} インポート設定"))
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
-        .default_pos(ctx.screen_rect().center())
-        .pivot(egui::Align2::CENTER_CENTER)
-        .show(ctx, |ui| {
-            ui.label(format!("\"{}\"", file_name));
-            ui.separator();
+    egui::Window::new(t!(
+        "viewer.dialog.import_options.title",
+        format = format_label
+    ))
+    .open(&mut open)
+    .collapsible(false)
+    .resizable(false)
+    .default_pos(ctx.screen_rect().center())
+    .pivot(egui::Align2::CENTER_CENTER)
+    .show(ctx, |ui| {
+        ui.label(format!("\"{}\"", file_name));
+        ui.separator();
 
-            ui.horizontal(|ui| {
-                ui.label("単位:");
-                for unit in [
-                    ImportUnit::Mm,
-                    ImportUnit::Cm,
-                    ImportUnit::M,
-                    ImportUnit::Inch,
-                ] {
-                    ui.radio_value(&mut pending.unit, unit, unit.label());
-                }
-            });
-            ui.add_space(4.0);
-            ui.checkbox(&mut pending.z_up, "Z-Up → Y-Up 変換");
-            ui.separator();
-
-            ui.horizontal(|ui| {
-                if ui.button("OK").clicked() {
-                    confirmed = true;
-                }
-                if ui.button("キャンセル").clicked() {
-                    cancelled = true;
-                }
-            });
+        ui.horizontal(|ui| {
+            ui.label(t!("viewer.dialog.import_options.unit"));
+            for unit in [
+                ImportUnit::Mm,
+                ImportUnit::Cm,
+                ImportUnit::M,
+                ImportUnit::Inch,
+            ] {
+                ui.radio_value(&mut pending.unit, unit, unit.label());
+            }
         });
+        ui.add_space(4.0);
+        ui.checkbox(
+            &mut pending.z_up,
+            t!("viewer.dialog.import_options.z_up_convert"),
+        );
+        ui.separator();
+
+        ui.horizontal(|ui| {
+            if ui.button(t!("viewer.dialog.common.ok")).clicked() {
+                confirmed = true;
+            }
+            if ui.button(t!("viewer.dialog.common.cancel")).clicked() {
+                cancelled = true;
+            }
+        });
+    });
 
     if confirmed {
         let opts = app
@@ -443,15 +461,15 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     let mut cancelled = false;
     let mut open = true;
 
-    egui::Window::new("モデル選択")
+    egui::Window::new(t!("viewer.dialog.pkg_select.title"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
         .default_pos(ctx.screen_rect().center())
         .pivot(egui::Align2::CENTER_CENTER)
         .show(ctx, |ui| {
-            ui.label(".unitypackage 内に複数のモデルが見つかりました。");
-            ui.label("クリックで単体読み込み、チェックでまとめて読み込み。");
+            ui.label(t!("viewer.dialog.pkg_select.message1"));
+            ui.label(t!("viewer.dialog.pkg_select.message2"));
             ui.separator();
             let Some(pending) = app.pending.unity_pkg.as_mut() else {
                 return;
@@ -480,13 +498,16 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                 if ui
                     .add_enabled(
                         checked_count >= 1,
-                        egui::Button::new(format!("まとめて読み込み ({})", checked_count)),
+                        egui::Button::new(t!(
+                            "viewer.dialog.pkg_select.batch_load",
+                            count = checked_count
+                        )),
                     )
                     .clicked()
                 {
                     multi_selected = true;
                 }
-                if ui.button("キャンセル").clicked() {
+                if ui.button(t!("viewer.dialog.common.cancel")).clicked() {
                     cancelled = true;
                 }
             });
@@ -600,15 +621,15 @@ fn show_archive_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     let mut cancelled = false;
     let mut open = true;
 
-    egui::Window::new("アーカイブ内モデル選択")
+    egui::Window::new(t!("viewer.dialog.archive_select.title"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
         .default_pos(ctx.screen_rect().center())
         .pivot(egui::Align2::CENTER_CENTER)
         .show(ctx, |ui| {
-            ui.label("アーカイブ内に複数のモデルが見つかりました。");
-            ui.label("読み込むファイルを選択してください。");
+            ui.label(t!("viewer.dialog.archive_select.message1"));
+            ui.label(t!("viewer.dialog.archive_select.message2"));
             ui.separator();
             // クロージャ内で pending を再借用（PathBuf/String clone を回避）
             let Some(pending) = app.pending.archive.as_ref() else {
@@ -627,7 +648,7 @@ fn show_archive_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                     }
                 });
             ui.separator();
-            if ui.button("キャンセル").clicked() {
+            if ui.button(t!("viewer.dialog.common.cancel")).clicked() {
                 cancelled = true;
             }
         });
@@ -695,17 +716,23 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     let mut new_selections = pending.selections.clone();
     let mut open = true;
 
-    egui::Window::new("テクスチャ手動割当")
+    egui::Window::new(t!("viewer.dialog.tex_match.title"))
         .open(&mut open)
         .collapsible(true)
         .resizable(true)
         .default_width(450.0)
         .default_pos(egui::pos2(20.0, 60.0))
         .show(ctx, |ui| {
-            ui.label("自動割当できなかった材質にテクスチャを割り当ててください。");
+            ui.label(t!("viewer.dialog.tex_match.instruction"));
             ui.horizontal(|ui| {
-                ui.label(format!("パッケージ内テクスチャ: {}個", tex_names.len()));
-                let link_resp = ui.checkbox(&mut app.tex.link_same_name, "同名連動");
+                ui.label(t!(
+                    "viewer.dialog.tex_match.pkg_tex_count",
+                    count = tex_names.len()
+                ));
+                let link_resp = ui.checkbox(
+                    &mut app.tex.link_same_name,
+                    t!("viewer.dialog.tex_match.link_same_name"),
+                );
                 // 同名連動の ON/OFF 切り替え時にプレビューを全復元→再同期
                 if link_resp.changed() {
                     if let (Some(ref mut pending), Some(ref mut loaded)) =
@@ -774,9 +801,9 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                         .spacing([8.0, 4.0])
                         .striped(true)
                         .show(ui, |ui| {
-                            ui.strong("材質名");
-                            ui.strong("元テクスチャ");
-                            ui.strong("割当テクスチャ");
+                            ui.strong(t!("viewer.dialog.tex_match.col_material"));
+                            ui.strong(t!("viewer.dialog.tex_match.col_source_tex"));
+                            ui.strong(t!("viewer.dialog.tex_match.col_assigned_tex"));
                             ui.end_row();
 
                             for i in 0..mat_count {
@@ -803,10 +830,11 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                                             ));
                                         }
                                     }
+                                    let none_label = t!("viewer.dialog.tex_match.none");
                                     let current_label = new_selections[i]
                                         .and_then(|idx| tex_names.get(idx))
                                         .copied()
-                                        .unwrap_or("(なし)");
+                                        .unwrap_or(&none_label);
                                     let popup_id = ui.id().with(("tex_match_popup", i));
                                     let btn = ui.add_sized(
                                         [188.0, 20.0],
@@ -836,7 +864,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                                             if ui.selectable_value(
                                                 &mut new_selections[i],
                                                 None,
-                                                "(なし)",
+                                                t!("viewer.dialog.tex_match.none"),
                                             ).clicked() {
                                                 ui.memory_mut(|m| m.toggle_popup(popup_id));
                                                 tex_filter.clear();
@@ -845,7 +873,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                                             ui.add(
                                                 egui::TextEdit::singleline(&mut tex_filter)
                                                     .desired_width(ui.available_width())
-                                                    .hint_text("テクスチャ名で絞り込み…"),
+                                                    .hint_text(t!("viewer.dialog.tex_match.filter_hint")),
                                             );
                                             let tex_filter_lower = tex_filter.to_lowercase();
                                             egui::ScrollArea::vertical()
@@ -910,12 +938,15 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             ui.horizontal(|ui| {
                 let has_selection = new_selections.iter().any(|s| s.is_some());
                 if ui
-                    .add_enabled(has_selection, egui::Button::new("適用"))
+                    .add_enabled(
+                        has_selection,
+                        egui::Button::new(t!("viewer.dialog.tex_match.apply")),
+                    )
                     .clicked()
                 {
                     apply = true;
                 }
-                if ui.button("スキップ").clicked() {
+                if ui.button(t!("viewer.dialog.tex_match.skip")).clicked() {
                     cancelled = true;
                 }
             });
@@ -1017,10 +1048,9 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             count += 1;
         }
         if count > 0 {
-            app.convert_message = Some(ConvertMessage::success(format!(
-                "テクスチャ手動割当: {}材質に適用",
-                count
-            )));
+            app.convert_message = Some(ConvertMessage::success(
+                t!("viewer.dialog.tex_match.applied_msg", count = count).into_owned(),
+            ));
         }
     } else if cancelled || !open {
         app.cancel_tex_match_preview();

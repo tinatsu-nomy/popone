@@ -273,3 +273,44 @@ viewer:
   shortcut:
     camera: "LMB drag: Rotate  RMB drag: Pan  Wheel: Zoom  Double-click: Fit"
     toggles: "G: Grid  B: Bones  P: Physics  W: Wireframe  N: Normals  L: Light"
+  dialog:
+    common:
+      ok: "OK"
+      cancel: "Cancel"
+    tex_history:
+      title: "Overwrite Texture History"
+      message1: "Texture history for this model already exists."
+      message2: "Overwrite the saved data?"
+      confirm: "Overwrite"
+    fbx_choice:
+      title: "Load FBX"
+      message: "Both model and animation are included."
+      load_model: "Load model"
+      load_model_required: "Loading the model is required on first load"
+      load_animation: "Load animation"
+    import_options:
+      title: "%{format} Import Settings"
+      unit: "Unit:"
+      z_up_convert: "Convert Z-Up → Y-Up"
+    pkg_select:
+      title: "Select Model"
+      message1: "Multiple models found in the .unitypackage."
+      message2: "Click to load one, check to load multiple."
+      batch_load: "Load Selected (%{count})"
+    archive_select:
+      title: "Select Model in Archive"
+      message1: "Multiple models found in the archive."
+      message2: "Select a file to load."
+    tex_match:
+      title: "Manual Texture Assignment"
+      instruction: "Assign textures to materials that could not be auto-matched."
+      pkg_tex_count: "Textures in package: %{count}"
+      link_same_name: "Link same names"
+      col_material: "Material"
+      col_source_tex: "Source Texture"
+      col_assigned_tex: "Assigned Texture"
+      none: "(none)"
+      filter_hint: "Filter by texture name…"
+      apply: "Apply"
+      skip: "Skip"
+      applied_msg: "Manual texture assignment: applied to %{count} materials"

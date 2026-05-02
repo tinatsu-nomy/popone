@@ -273,3 +273,44 @@ viewer:
   shortcut:
     camera: "左ドラッグ:回転  右ドラッグ:パン  ホイール:ズーム  ダブルクリック:フィット"
     toggles: "G:グリッド B:ボーン P:物理 W:ワイヤー N:法線 L:ライト"
+  dialog:
+    common:
+      ok: "OK"
+      cancel: "キャンセル"
+    tex_history:
+      title: "テクスチャ履歴の上書き"
+      message1: "このモデルのテクスチャ履歴が既に存在します。"
+      message2: "上書き保存しますか？"
+      confirm: "上書き保存"
+    fbx_choice:
+      title: "FBX読み込み"
+      message: "モデルとアニメーションの両方が含まれています。"
+      load_model: "モデルを読み込む"
+      load_model_required: "初回はモデルの読み込みが必要です"
+      load_animation: "アニメーションを読み込む"
+    import_options:
+      title: "%{format} インポート設定"
+      unit: "単位:"
+      z_up_convert: "Z-Up → Y-Up 変換"
+    pkg_select:
+      title: "モデル選択"
+      message1: ".unitypackage 内に複数のモデルが見つかりました。"
+      message2: "クリックで単体読み込み、チェックでまとめて読み込み。"
+      batch_load: "まとめて読み込み (%{count})"
+    archive_select:
+      title: "アーカイブ内モデル選択"
+      message1: "アーカイブ内に複数のモデルが見つかりました。"
+      message2: "読み込むファイルを選択してください。"
+    tex_match:
+      title: "テクスチャ手動割当"
+      instruction: "自動割当できなかった材質にテクスチャを割り当ててください。"
+      pkg_tex_count: "パッケージ内テクスチャ: %{count}個"
+      link_same_name: "同名連動"
+      col_material: "材質名"
+      col_source_tex: "元テクスチャ"
+      col_assigned_tex: "割当テクスチャ"
+      none: "(なし)"
+      filter_hint: "テクスチャ名で絞り込み…"
+      apply: "適用"
+      skip: "スキップ"
+      applied_msg: "テクスチャ手動割当: %{count}材質に適用"
