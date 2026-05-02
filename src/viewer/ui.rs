@@ -1318,9 +1318,9 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
     let is_dirty_mat = has_param_override || has_slot_texture || has_base_texture;
 
     let window_title = if is_dirty_mat {
-        format!("材質編集: {} *", mat_name)
+        t!("viewer.material_edit.title_dirty", name = mat_name).into_owned()
     } else {
-        format!("材質編集: {}", mat_name)
+        t!("viewer.material_edit.title", name = mat_name).into_owned()
     };
     let mut is_open = true;
     let mut dirty = false;
@@ -1357,1154 +1357,1189 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
             // ヘッダ行: タイトル + 右端 [×] 閉じるボタン + UV 編集ボタン (v0.5.5)
             ui.horizontal(|ui| {
                 ui.heading(&window_title);
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        if ui.small_button("✕").on_hover_text("編集パネルを閉じる").clicked() {
-                            is_open = false;
-                        }
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "mat_idx: {} / {}",
-                                mat_idx, mat_count
-                            ))
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("✕")
+                        .on_hover_text(t!("viewer.material_edit.close_panel_tooltip"))
+                        .clicked()
+                    {
+                        is_open = false;
+                    }
+                    ui.label(
+                        egui::RichText::new(format!("mat_idx: {} / {}", mat_idx, mat_count))
                             .small(),
-                        );
-                        // v0.5.5: UV 編集ウィンドウを開く（現在編集中の材質をアクティブにセット）
-                        if ui
-                            .small_button("UV 編集")
-                            .on_hover_text("頂点単位 UV 編集ウィンドウを開く (v0.5.5 Phase 1)")
-                            .clicked()
-                        {
-                            app.uv_edit.active_material = mat_idx;
-                            app.uv_edit_window_open = true;
-                        }
-                    },
-                );
+                    );
+                    // v0.5.5: UV 編集ウィンドウを開く（現在編集中の材質をアクティブにセット）
+                    if ui
+                        .small_button(t!("viewer.material_edit.open_uv_edit_button"))
+                        .on_hover_text(t!("viewer.material_edit.open_uv_edit_tooltip"))
+                        .clicked()
+                    {
+                        app.uv_edit.active_material = mat_idx;
+                        app.uv_edit_window_open = true;
+                    }
+                });
             });
             ui.separator();
             // パネル全体をスクロール可能に
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-
-            let Some(loaded) = app.loaded.as_mut() else {
-                return;
-            };
-            let Some(mat) = loaded.ir.materials.get_mut(mat_idx) else {
-                return;
-            };
-
-            // ==================== 材質名編集 (v0.5.3) ====================
-            // 材質名を直接編集できる。変更は `MaterialParamOverride.name` に記録され、
-            // reload 後も apply_to で復元される。`update_mat_cache` で UI 側キャッシュも追従。
-            ui.horizontal(|ui| {
-                ui.label("材質名:");
-                let resp = ui.add(
-                    egui::TextEdit::singleline(&mut mat.name)
-                        .desired_width(ui.available_width() - 4.0),
-                );
-                if resp.changed() {
-                    pending_override.name = Some(mat.name.clone());
-                    dirty = true;
-                }
-            });
-            ui.separator();
-
-            // ==================== MToon 有効化チェックボックス (§G / Step 2-10) ====================
-            //
-            // 材質の `shader_family` を明示的に `Mtoon` / `Other` に切替えるトグル。
-            // これにより PMX 変換の `shader_family` 主軸判定 (Step 2-9) と UI の意味が
-            // 1:1 で一致する。ユーザーがこのチェックを触らない限り、影・アウトライン等の
-            // セクションを展開・編集しても `shader_family` は変わらず、PMX 変換の挙動も
-            // 従来通りの非 MToon 経路を通る（review_005 [P1] の要件）。
-            //
-            // ON  → `shader_family = Mtoon` + `mtoon = Some(default)`（既存 mtoon は維持）
-            // OFF → `shader_family = Other` + `mtoon = None`（MToon セクションの編集値は失われる）
-            {
-                let mut mtoon_enabled = mat.shader_family == ShaderFamily::Mtoon;
-                ui.horizontal(|ui| {
-                    if ui.checkbox(&mut mtoon_enabled, "MToon 有効化").changed() {
-                        if mtoon_enabled {
-                            mat.shader_family = ShaderFamily::Mtoon;
-                            if mat.mtoon.is_none() {
-                                mat.mtoon = Some(MtoonParams::default());
-                            }
-                            pending_override.enable_mtoon = Some(true);
-                        } else {
-                            mat.shader_family = ShaderFamily::Other;
-                            mat.mtoon = None;
-                            pending_override.enable_mtoon = Some(false);
-                        }
-                        dirty = true;
-                    }
-                    ui.small(match mat.shader_family {
-                        ShaderFamily::Mtoon => "(MToon として扱う)",
-                        ShaderFamily::Uts2 => "(UTS2 として扱う)",
-                        ShaderFamily::LilToon => "(lilToon として扱う)",
-                        ShaderFamily::Poiyomi => "(Poiyomi として扱う)",
-                        ShaderFamily::Other => "(非 MToon)",
-                    });
-                });
-                ui.small(
-                    "※ OFF→ON で既定値の MtoonParams が挿入されます。ON→OFF で MToon セクションの編集値は失われます。",
-                );
-            }
-
-            // ==================== 初期値に戻す + プリセット (§H / §J / Step 5) ====================
-            ui.horizontal(|ui| {
-                // 初期値に戻す
-                // review_019 [P2-2]: tex.assignments と slot_texture_paths も消去して
-                // reload 後のテクスチャ復活を防ぐ。
-                if mat_idx < app.pristine_materials.len()
-                    && ui.button("初期値に戻す").clicked()
-                {
-                    *mat = app.pristine_materials[mat_idx].clone();
-                    app.material_overrides.remove(&mat_idx);
-                    app.tex.assignments.remove(&mat_idx);
-                    app.tex.pkg_assignments.remove(&mat_idx); // review_020 [P2]
-                    app.slot_texture_paths.retain(|&(idx, _), _| idx != mat_idx);
-                    dirty = true;
-                }
-
-                // プリセット ComboBox + 適用ボタン
-                use super::app::material_presets::MaterialPreset;
-                // egui の ComboBox は外部状態を持たないため、ラベル表示用に毎フレーム計算
-                ui.label("|");
-                let preset_id = ui.id().with("preset_combo");
-                let mut selected_preset: Option<MaterialPreset> = None;
-                egui::ComboBox::from_id_salt(preset_id)
-                    .selected_text("プリセット選択")
-                    .width(140.0)
-                    .show_ui(ui, |ui| {
-                        for p in MaterialPreset::ALL {
-                            if ui.selectable_label(false, p.label()).clicked() {
-                                selected_preset = Some(p);
-                            }
-                        }
-                    });
-                if let Some(preset) = selected_preset {
-                    let patch = preset.to_override();
-                    patch.apply_to(mat);
-                    // review_019 [P2-1]: merge_from ではなく diff_from で override を再計算。
-                    // プリセットに含まれない古い override（UV アニメ等）が積み残されるのを防ぐ。
-                    if mat_idx < app.pristine_materials.len() {
-                        let new_override = super::app::material_edit::MaterialParamOverride::diff_from(
-                            &app.pristine_materials[mat_idx],
-                            mat,
-                        );
-                        match new_override {
-                            Some(o) => { app.material_overrides.insert(mat_idx, o); }
-                            None => { app.material_overrides.remove(&mat_idx); }
-                        }
-                    }
-                    dirty = true;
-                    log::info!(
-                        "Preset applied: mat[{}] '{}' <- {}",
-                        mat_idx,
-                        mat.name,
-                        preset.label()
-                    );
-                }
-
-                // M6 Step 6.4: 材質パラメータのコピー/ペースト
-                ui.label("|");
-                if ui
-                    .button("コピー")
-                    .on_hover_text("この材質のカラー/スカラー値をクリップボードにコピー")
-                    .clicked()
-                    && mat_idx < app.pristine_materials.len()
-                {
-                    let diff = super::app::material_edit::MaterialParamOverride::diff_from(
-                        &app.pristine_materials[mat_idx],
-                        mat,
-                    );
-                    app.clipboard_material = diff;
-                    log::info!(
-                        "Material params copied: mat[{}] '{}'",
-                        mat_idx,
-                        mat.name,
-                    );
-                }
-                let can_paste = app.clipboard_material.is_some();
-                if ui
-                    .add_enabled(can_paste, egui::Button::new("ペースト"))
-                    .on_hover_text("クリップボードのパラメータを適用（テクスチャ割当は除く）")
-                    .clicked()
-                {
-                    if let Some(clip) = app.clipboard_material.clone() {
-                        clip.apply_to(mat);
-                        if mat_idx < app.pristine_materials.len() {
-                            let new_override =
-                                super::app::material_edit::MaterialParamOverride::diff_from(
-                                    &app.pristine_materials[mat_idx],
-                                    mat,
-                                );
-                            match new_override {
-                                Some(o) => {
-                                    app.material_overrides.insert(mat_idx, o);
-                                }
-                                None => {
-                                    app.material_overrides.remove(&mat_idx);
-                                }
-                            }
-                        }
-                        dirty = true;
-                        log::info!(
-                            "Material params pasted: mat[{}] '{}'",
-                            mat_idx,
-                            mat.name,
-                        );
-                    }
-                }
-            });
-            ui.separator();
-
-            // ==================== §E-1 基本セクション ====================
-            egui::CollapsingHeader::new("基本")
-                .default_open(true)
-                .show(ui, |ui| {
-                    // v0.5.2: BaseColor テクスチャのサムネイル + 割当UI
-                    let (assign, reset) = texture_slot_widget(
-                        ui,
-                        "BaseColor",
-                        mat.texture_index,
-                        &loaded.ir.textures,
-                        &ir_thumb_ids,
-                    );
-                    if assign {
-                        pending_tex_request =
-                            Some(crate::intermediate::types::TextureSlot::BaseColor);
-                    }
-                    if reset {
-                        pending_tex_clear =
-                            Some(crate::intermediate::types::TextureSlot::BaseColor);
-                    }
-                    // v0.5.4: BaseColor UV 編集（テクスチャ有り時のみ表示）
-                    if let Some(ti) = mat.base_color_tex_info.as_mut() {
-                        if uv_transform_widget(ui, "base_color", ti) {
-                            record_uv_override(&mut pending_override.base_color_uv, ti);
-                            dirty = true;
-                        }
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label("diffuse:");
-                        let mut rgb = [mat.diffuse.x, mat.diffuse.y, mat.diffuse.z];
-                        if ui.color_edit_button_rgb(&mut rgb).changed() {
-                            mat.diffuse.x = rgb[0];
-                            mat.diffuse.y = rgb[1];
-                            mat.diffuse.z = rgb[2];
-                            pending_override.diffuse = Some(mat.diffuse);
-                            dirty = true;
-                        }
-                    });
-                });
-
-            // ==================== §E-2 影 (Shade) セクション ====================
-            //
-            // **重要 (review_005 [P1] 対応)**: 読み取りには `mat.mtoon()` を使い、
-            // ユーザーが実際に値を変更した瞬間にだけ `mat.mtoon_mut()` を呼んで副作用を
-            // 発生させる。`mat.mtoon_mut()` は `mtoon == None` のときに `MtoonParams::default()`
-            // を即座に挿入するため、「セクションを展開しただけ」で非 MToon 材質が MToon 扱いに
-            // 変わり、PMX 変換結果にまで影響してしまう問題があった（§G の主軸判定切替
-            // とセットで修正済み）。
-            egui::CollapsingHeader::new("影 (Shade)")
-                .default_open(false)
-                .show(ui, |ui| {
-                    // v0.5.2: Shade / ShadingShift テクスチャのサムネイル + 割当UI
-                    {
-                        let mp = mat.mtoon();
-                        let shade_idx = mp.shade_texture.as_ref().map(|t| t.index);
-                        let shift_idx = mp.shading_shift_texture.as_ref().map(|t| t.index);
-                        let (a1, r1) = texture_slot_widget(
-                            ui,
-                            "shade テクスチャ",
-                            shade_idx,
-                            &loaded.ir.textures,
-                            &ir_thumb_ids,
-                        );
-                        if a1 {
-                            pending_tex_request =
-                                Some(crate::intermediate::types::TextureSlot::ShadeMultiply);
-                        }
-                        if r1 {
-                            pending_tex_clear =
-                                Some(crate::intermediate::types::TextureSlot::ShadeMultiply);
-                        }
-                        let (a2, r2) = texture_slot_widget(
-                            ui,
-                            "shading_shift テクスチャ",
-                            shift_idx,
-                            &loaded.ir.textures,
-                            &ir_thumb_ids,
-                        );
-                        if a2 {
-                            pending_tex_request =
-                                Some(crate::intermediate::types::TextureSlot::ShadingShift);
-                        }
-                        if r2 {
-                            pending_tex_clear =
-                                Some(crate::intermediate::types::TextureSlot::ShadingShift);
-                        }
-                    }
-                    // v0.5.4: Shade / ShadingShift UV 編集（mtoon 既存かつスロット割当有時のみ）
-                    if let Some(mp) = mat.mtoon.as_mut() {
-                        if let Some(ti) = mp.shade_texture.as_mut() {
-                            if uv_transform_widget(ui, "shade", ti) {
-                                record_uv_override(&mut pending_override.shade_uv, ti);
-                                dirty = true;
-                            }
-                        }
-                        if let Some(ti) = mp.shading_shift_texture.as_mut() {
-                            if uv_transform_widget(ui, "shading_shift", ti) {
-                                record_uv_override(&mut pending_override.shading_shift_uv, ti);
-                                dirty = true;
-                            }
-                        }
-                    }
-
-                    // 読み取り: `mat.mtoon()` はデフォルト値参照なので副作用なし
-                    let (mut shade_color_rgb, mut shading_toony, mut shading_shift, mut gi_eq) = {
-                        let mp = mat.mtoon();
-                        (
-                            mp.shade_color.unwrap_or(glam::Vec3::ZERO).to_array(),
-                            mp.shading_toony_factor,
-                            mp.shading_shift_factor,
-                            mp.gi_equalization_factor,
-                        )
+                    let Some(loaded) = app.loaded.as_mut() else {
+                        return;
+                    };
+                    let Some(mat) = loaded.ir.materials.get_mut(mat_idx) else {
+                        return;
                     };
 
-                    // ウィジェット（ここでは IR を触らない）
-                    let mut shade_changed = false;
-                    let mut toony_changed = false;
-                    let mut shift_changed = false;
-                    let mut gi_changed = false;
-
+                    // ==================== 材質名編集 (v0.5.3) ====================
+                    // 材質名を直接編集できる。変更は `MaterialParamOverride.name` に記録され、
+                    // reload 後も apply_to で復元される。`update_mat_cache` で UI 側キャッシュも追従。
                     ui.horizontal(|ui| {
-                        ui.label("shade_color:");
-                        if ui.color_edit_button_rgb(&mut shade_color_rgb).changed() {
-                            shade_changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("shading_toony:");
-                        if ui
-                            .add(
-                                egui::Slider::new(&mut shading_toony, 0.0..=1.0)
-                                    .fixed_decimals(3),
-                            )
-                            .changed()
-                        {
-                            toony_changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("shading_shift:");
-                        if ui
-                            .add(
-                                egui::Slider::new(&mut shading_shift, -1.0..=1.0)
-                                    .fixed_decimals(3),
-                            )
-                            .changed()
-                        {
-                            shift_changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("gi_equalization:");
-                        if ui
-                            .add(
-                                egui::Slider::new(&mut gi_eq, 0.0..=1.0).fixed_decimals(3),
-                            )
-                            .changed()
-                        {
-                            gi_changed = true;
-                        }
-                    });
-
-                    // 変更があった場合のみ `mat.mtoon_mut()` を呼んで書き込む。
-                    // これにより非 MToon 材質で展開しただけでは mtoon が挿入されない。
-                    if shade_changed || toony_changed || shift_changed || gi_changed {
-                        let mp = mat.mtoon_mut();
-                        if shade_changed {
-                            let v = glam::Vec3::from_array(shade_color_rgb);
-                            mp.shade_color = Some(v);
-                            pending_override.shade_color = Some(v);
-                        }
-                        if toony_changed {
-                            mp.shading_toony_factor = shading_toony;
-                            pending_override.shading_toony_factor = Some(shading_toony);
-                        }
-                        if shift_changed {
-                            mp.shading_shift_factor = shading_shift;
-                            pending_override.shading_shift_factor = Some(shading_shift);
-                        }
-                        if gi_changed {
-                            mp.gi_equalization_factor = gi_eq;
-                            pending_override.gi_equalization_factor = Some(gi_eq);
-                        }
-                        dirty = true;
-                    }
-
-                    if !matches!(mat.shader_family, ShaderFamily::Mtoon | ShaderFamily::Uts2 | ShaderFamily::LilToon | ShaderFamily::Poiyomi) {
-                        ui.small("※ 「MToon 有効化」チェックで描画と出力に反映されます。");
-                    }
-                });
-
-            // ==================== §E-3 アウトラインセクション ====================
-            //
-            // - `edge_color` / `edge_size` は IrMaterial 直接フィールド（非 MToon）
-            // - `outline_width_mode` / `outline_width_factor` / `outline_lighting_mix` は
-            //   MtoonParams フィールドのため、読み取りは `mat.mtoon()`、変更時のみ
-            //   `mat.mtoon_mut()` を呼ぶ止血パターン（review_005 [P1] 対応）を踏襲する。
-            egui::CollapsingHeader::new("アウトライン")
-                .default_open(false)
-                .show(ui, |ui| {
-                    use crate::intermediate::types::OutlineWidthMode;
-
-                    // v0.5.2: OutlineWidth テクスチャのサムネイル + 割当UI
-                    {
-                        let outline_idx =
-                            mat.mtoon().outline_width_texture.as_ref().map(|t| t.index);
-                        let (a, r) = texture_slot_widget(
-                            ui,
-                            "outline_width テクスチャ",
-                            outline_idx,
-                            &loaded.ir.textures,
-                            &ir_thumb_ids,
+                        ui.label(t!("viewer.material_edit.material_name_label"));
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut mat.name)
+                                .desired_width(ui.available_width() - 4.0),
                         );
-                        if a {
-                            pending_tex_request =
-                                Some(crate::intermediate::types::TextureSlot::OutlineWidth);
+                        if resp.changed() {
+                            pending_override.name = Some(mat.name.clone());
+                            dirty = true;
                         }
-                        if r {
-                            pending_tex_clear =
-                                Some(crate::intermediate::types::TextureSlot::OutlineWidth);
-                        }
-                    }
-                    // v0.5.4: OutlineWidth UV 編集
-                    if let Some(mp) = mat.mtoon.as_mut() {
-                        if let Some(ti) = mp.outline_width_texture.as_mut() {
-                            if uv_transform_widget(ui, "outline_width", ti) {
-                                record_uv_override(&mut pending_override.outline_width_uv, ti);
+                    });
+                    ui.separator();
+
+                    // ==================== MToon 有効化チェックボックス (§G / Step 2-10) ====================
+                    //
+                    // 材質の `shader_family` を明示的に `Mtoon` / `Other` に切替えるトグル。
+                    // これにより PMX 変換の `shader_family` 主軸判定 (Step 2-9) と UI の意味が
+                    // 1:1 で一致する。ユーザーがこのチェックを触らない限り、影・アウトライン等の
+                    // セクションを展開・編集しても `shader_family` は変わらず、PMX 変換の挙動も
+                    // 従来通りの非 MToon 経路を通る（review_005 [P1] の要件）。
+                    //
+                    // ON  → `shader_family = Mtoon` + `mtoon = Some(default)`（既存 mtoon は維持）
+                    // OFF → `shader_family = Other` + `mtoon = None`（MToon セクションの編集値は失われる）
+                    {
+                        let mut mtoon_enabled = mat.shader_family == ShaderFamily::Mtoon;
+                        ui.horizontal(|ui| {
+                            if ui
+                                .checkbox(
+                                    &mut mtoon_enabled,
+                                    t!("viewer.material_edit.mtoon_enable_checkbox"),
+                                )
+                                .changed()
+                            {
+                                if mtoon_enabled {
+                                    mat.shader_family = ShaderFamily::Mtoon;
+                                    if mat.mtoon.is_none() {
+                                        mat.mtoon = Some(MtoonParams::default());
+                                    }
+                                    pending_override.enable_mtoon = Some(true);
+                                } else {
+                                    mat.shader_family = ShaderFamily::Other;
+                                    mat.mtoon = None;
+                                    pending_override.enable_mtoon = Some(false);
+                                }
                                 dirty = true;
                             }
-                        }
+                            ui.small(match mat.shader_family {
+                                ShaderFamily::Mtoon => t!("viewer.material_edit.shader_kind.mtoon"),
+                                ShaderFamily::Uts2 => t!("viewer.material_edit.shader_kind.uts2"),
+                                ShaderFamily::LilToon => {
+                                    t!("viewer.material_edit.shader_kind.liltoon")
+                                }
+                                ShaderFamily::Poiyomi => {
+                                    t!("viewer.material_edit.shader_kind.poiyomi")
+                                }
+                                ShaderFamily::Other => t!("viewer.material_edit.shader_kind.other"),
+                            });
+                        });
+                        ui.small(t!("viewer.material_edit.mtoon_toggle_warning"));
                     }
 
-                    // edge_color: IrMaterial 直接 (RGBA)
+                    // ==================== 初期値に戻す + プリセット (§H / §J / Step 5) ====================
                     ui.horizontal(|ui| {
-                        ui.label("edge_color:");
-                        let mut rgba = mat.edge_color.to_array();
-                        if ui
-                            .color_edit_button_rgba_unmultiplied(&mut rgba)
-                            .changed()
+                        // 初期値に戻す
+                        // review_019 [P2-2]: tex.assignments と slot_texture_paths も消去して
+                        // reload 後のテクスチャ復活を防ぐ。
+                        if mat_idx < app.pristine_materials.len()
+                            && ui
+                                .button(t!("viewer.material_edit.reset_defaults"))
+                                .clicked()
                         {
-                            mat.edge_color = glam::Vec4::from_array(rgba);
-                            pending_override.edge_color = Some(mat.edge_color);
+                            *mat = app.pristine_materials[mat_idx].clone();
+                            app.material_overrides.remove(&mat_idx);
+                            app.tex.assignments.remove(&mat_idx);
+                            app.tex.pkg_assignments.remove(&mat_idx); // review_020 [P2]
+                            app.slot_texture_paths.retain(|&(idx, _), _| idx != mat_idx);
                             dirty = true;
                         }
-                    });
 
-                    // edge_size: IrMaterial 直接 (MMD エッジ用, PMX 書き出し時は 1.0 クランプ)
-                    ui.horizontal(|ui| {
-                        ui.label("edge_size:");
-                        if ui
-                            .add(
-                                egui::Slider::new(&mut mat.edge_size, 0.0..=2.0)
-                                    .fixed_decimals(3),
-                            )
-                            .changed()
-                        {
-                            pending_override.edge_size = Some(mat.edge_size);
-                            dirty = true;
-                        }
-                    });
-
-                    // MToon アウトライン系（読み取りは mat.mtoon() 経由で副作用なし）
-                    let (mut width_mode, mut width_factor, mut lighting_mix) = {
-                        let mp = mat.mtoon();
-                        (
-                            mp.outline_width_mode,
-                            mp.outline_width_factor,
-                            mp.outline_lighting_mix,
-                        )
-                    };
-                    let mut width_mode_changed = false;
-                    let mut width_factor_changed = false;
-                    let mut lighting_mix_changed = false;
-
-                    // outline_width_mode: ComboBox
-                    ui.horizontal(|ui| {
-                        ui.label("width_mode:");
-                        let label_of = |m: OutlineWidthMode| match m {
-                            OutlineWidthMode::None => "None",
-                            OutlineWidthMode::WorldCoordinates => "World",
-                            OutlineWidthMode::ScreenCoordinates => "Screen",
-                        };
-                        egui::ComboBox::from_id_salt("outline_width_mode_combo")
-                            .selected_text(label_of(width_mode))
+                        // プリセット ComboBox + 適用ボタン
+                        use super::app::material_presets::MaterialPreset;
+                        // egui の ComboBox は外部状態を持たないため、ラベル表示用に毎フレーム計算
+                        ui.label("|");
+                        let preset_id = ui.id().with("preset_combo");
+                        let mut selected_preset: Option<MaterialPreset> = None;
+                        egui::ComboBox::from_id_salt(preset_id)
+                            .selected_text(t!("viewer.material_edit.preset_select"))
+                            .width(140.0)
                             .show_ui(ui, |ui| {
-                                for m in [
-                                    OutlineWidthMode::None,
-                                    OutlineWidthMode::WorldCoordinates,
-                                    OutlineWidthMode::ScreenCoordinates,
-                                ] {
-                                    if ui
-                                        .selectable_label(width_mode == m, label_of(m))
-                                        .clicked()
-                                        && width_mode != m
-                                    {
-                                        width_mode = m;
-                                        width_mode_changed = true;
+                                for p in MaterialPreset::ALL {
+                                    if ui.selectable_label(false, p.label()).clicked() {
+                                        selected_preset = Some(p);
                                     }
                                 }
                             });
-                    });
-
-                    // outline_width_factor: DragValue (world=m, screen=比率)
-                    ui.horizontal(|ui| {
-                        ui.label("width_factor:");
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut width_factor)
-                                    .speed(0.001)
-                                    .range(0.0..=10.0),
-                            )
-                            .changed()
-                        {
-                            width_factor_changed = true;
-                        }
-                    });
-
-                    // outline_lighting_mix: Slider 0.0〜1.0
-                    ui.horizontal(|ui| {
-                        ui.label("lighting_mix:");
-                        if ui
-                            .add(
-                                egui::Slider::new(&mut lighting_mix, 0.0..=1.0)
-                                    .fixed_decimals(3),
-                            )
-                            .changed()
-                        {
-                            lighting_mix_changed = true;
-                        }
-                    });
-
-                    // MToon 系は変更時のみ mtoon_mut()
-                    if width_mode_changed || width_factor_changed || lighting_mix_changed {
-                        let mp = mat.mtoon_mut();
-                        if width_mode_changed {
-                            mp.outline_width_mode = width_mode;
-                            pending_override.outline_width_mode = Some(width_mode);
-                        }
-                        if width_factor_changed {
-                            mp.outline_width_factor = width_factor;
-                            pending_override.outline_width_factor = Some(width_factor);
-                        }
-                        if lighting_mix_changed {
-                            mp.outline_lighting_mix = lighting_mix;
-                            pending_override.outline_lighting_mix = Some(lighting_mix);
-                        }
-                        dirty = true;
-                    }
-                });
-
-            // ==================== §E-4 リムセクション ====================
-            //
-            // 全て MtoonParams フィールドなので、読み取りは `mat.mtoon()`、変更時のみ
-            // `mat.mtoon_mut()` を呼ぶパターン。
-            egui::CollapsingHeader::new("リム")
-                .default_open(false)
-                .show(ui, |ui| {
-                    pmx_unsupported_badge(ui);
-                    // v0.5.2: RimMultiply テクスチャのサムネイル + 割当UI
-                    {
-                        let rim_idx =
-                            mat.mtoon().rim_multiply_texture.as_ref().map(|t| t.index);
-                        let (a, r) = texture_slot_widget(
-                            ui,
-                            "rim_multiply テクスチャ",
-                            rim_idx,
-                            &loaded.ir.textures,
-                            &ir_thumb_ids,
-                        );
-                        if a {
-                            pending_tex_request =
-                                Some(crate::intermediate::types::TextureSlot::RimMultiply);
-                        }
-                        if r {
-                            pending_tex_clear =
-                                Some(crate::intermediate::types::TextureSlot::RimMultiply);
-                        }
-                    }
-                    // v0.5.4: RimMultiply UV 編集
-                    if let Some(mp) = mat.mtoon.as_mut() {
-                        if let Some(ti) = mp.rim_multiply_texture.as_mut() {
-                            if uv_transform_widget(ui, "rim_multiply", ti) {
-                                record_uv_override(&mut pending_override.rim_multiply_uv, ti);
-                                dirty = true;
+                        if let Some(preset) = selected_preset {
+                            let patch = preset.to_override();
+                            patch.apply_to(mat);
+                            // review_019 [P2-1]: merge_from ではなく diff_from で override を再計算。
+                            // プリセットに含まれない古い override（UV アニメ等）が積み残されるのを防ぐ。
+                            if mat_idx < app.pristine_materials.len() {
+                                let new_override =
+                                    super::app::material_edit::MaterialParamOverride::diff_from(
+                                        &app.pristine_materials[mat_idx],
+                                        mat,
+                                    );
+                                match new_override {
+                                    Some(o) => {
+                                        app.material_overrides.insert(mat_idx, o);
+                                    }
+                                    None => {
+                                        app.material_overrides.remove(&mat_idx);
+                                    }
+                                }
                             }
+                            dirty = true;
+                            log::info!(
+                                "Preset applied: mat[{}] '{}' <- {}",
+                                mat_idx,
+                                mat.name,
+                                preset.label()
+                            );
                         }
-                    }
-                    let (mut rim_rgb, mut fresnel_power, mut rim_lift, mut rim_mix) = {
-                        let mp = mat.mtoon();
-                        (
-                            mp.parametric_rim_color.to_array(),
-                            mp.parametric_rim_fresnel_power,
-                            mp.parametric_rim_lift,
-                            mp.rim_lighting_mix,
-                        )
-                    };
-                    let mut rim_color_changed = false;
-                    let mut fresnel_changed = false;
-                    let mut lift_changed = false;
-                    let mut mix_changed = false;
 
-                    ui.horizontal(|ui| {
-                        ui.label("rim_color:");
-                        if ui.color_edit_button_rgb(&mut rim_rgb).changed() {
-                            rim_color_changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("fresnel_power:");
+                        // M6 Step 6.4: 材質パラメータのコピー/ペースト
+                        ui.label("|");
                         if ui
-                            .add(
-                                egui::DragValue::new(&mut fresnel_power)
-                                    .speed(0.05)
-                                    .range(0.0..=100.0),
-                            )
-                            .changed()
+                            .button(t!("viewer.material_edit.copy"))
+                            .on_hover_text(t!("viewer.material_edit.copy_tooltip"))
+                            .clicked()
+                            && mat_idx < app.pristine_materials.len()
                         {
-                            fresnel_changed = true;
+                            let diff = super::app::material_edit::MaterialParamOverride::diff_from(
+                                &app.pristine_materials[mat_idx],
+                                mat,
+                            );
+                            app.clipboard_material = diff;
+                            log::info!("Material params copied: mat[{}] '{}'", mat_idx, mat.name,);
                         }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("rim_lift:");
+                        let can_paste = app.clipboard_material.is_some();
                         if ui
-                            .add(
-                                egui::Slider::new(&mut rim_lift, 0.0..=1.0)
-                                    .fixed_decimals(3),
+                            .add_enabled(
+                                can_paste,
+                                egui::Button::new(t!("viewer.material_edit.paste")),
                             )
-                            .changed()
+                            .on_hover_text(t!("viewer.material_edit.paste_tooltip"))
+                            .clicked()
                         {
-                            lift_changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("lighting_mix:");
-                        if ui
-                            .add(
-                                egui::Slider::new(&mut rim_mix, 0.0..=1.0)
-                                    .fixed_decimals(3),
-                            )
-                            .changed()
-                        {
-                            mix_changed = true;
-                        }
-                    });
-
-                    if rim_color_changed || fresnel_changed || lift_changed || mix_changed {
-                        let mp = mat.mtoon_mut();
-                        if rim_color_changed {
-                            let v = glam::Vec3::from_array(rim_rgb);
-                            mp.parametric_rim_color = v;
-                            pending_override.parametric_rim_color = Some(v);
-                        }
-                        if fresnel_changed {
-                            mp.parametric_rim_fresnel_power = fresnel_power;
-                            pending_override.parametric_rim_fresnel_power = Some(fresnel_power);
-                        }
-                        if lift_changed {
-                            mp.parametric_rim_lift = rim_lift;
-                            pending_override.parametric_rim_lift = Some(rim_lift);
-                        }
-                        if mix_changed {
-                            mp.rim_lighting_mix = rim_mix;
-                            pending_override.rim_lighting_mix = Some(rim_mix);
-                        }
-                        dirty = true;
-                    }
-                });
-
-            // ==================== §E-5 MatCap セクション ====================
-            egui::CollapsingHeader::new("MatCap")
-                .default_open(false)
-                .show(ui, |ui| {
-                    pmx_unsupported_badge(ui);
-                    // v0.5.2: Matcap テクスチャのサムネイル + 割当UI
-                    {
-                        let matcap_idx = mat.mtoon().matcap_texture.as_ref().map(|t| t.index);
-                        let (a, r) = texture_slot_widget(
-                            ui,
-                            "matcap テクスチャ",
-                            matcap_idx,
-                            &loaded.ir.textures,
-                            &ir_thumb_ids,
-                        );
-                        if a {
-                            pending_tex_request =
-                                Some(crate::intermediate::types::TextureSlot::Matcap);
-                        }
-                        if r {
-                            pending_tex_clear =
-                                Some(crate::intermediate::types::TextureSlot::Matcap);
-                        }
-                    }
-                    // v0.5.4: Matcap UV 編集
-                    if let Some(mp) = mat.mtoon.as_mut() {
-                        if let Some(ti) = mp.matcap_texture.as_mut() {
-                            if uv_transform_widget(ui, "matcap", ti) {
-                                record_uv_override(&mut pending_override.matcap_uv, ti);
+                            if let Some(clip) = app.clipboard_material.clone() {
+                                clip.apply_to(mat);
+                                if mat_idx < app.pristine_materials.len() {
+                                    let new_override =
+                                        super::app::material_edit::MaterialParamOverride::diff_from(
+                                            &app.pristine_materials[mat_idx],
+                                            mat,
+                                        );
+                                    match new_override {
+                                        Some(o) => {
+                                            app.material_overrides.insert(mat_idx, o);
+                                        }
+                                        None => {
+                                            app.material_overrides.remove(&mat_idx);
+                                        }
+                                    }
+                                }
                                 dirty = true;
-                            }
-                        }
-                    }
-                    let mut matcap_rgb = mat.mtoon().matcap_factor.to_array();
-                    let mut matcap_changed = false;
-
-                    ui.horizontal(|ui| {
-                        ui.label("matcap_factor:");
-                        if ui.color_edit_button_rgb(&mut matcap_rgb).changed() {
-                            matcap_changed = true;
-                        }
-                    });
-
-                    if matcap_changed {
-                        let v = glam::Vec3::from_array(matcap_rgb);
-                        mat.mtoon_mut().matcap_factor = v;
-                        pending_override.matcap_factor = Some(v);
-                        dirty = true;
-                    }
-                });
-
-            // ==================== §E-6 UV アニメセクション ====================
-            egui::CollapsingHeader::new("UV アニメ")
-                .default_open(false)
-                .show(ui, |ui| {
-                    pmx_unsupported_badge(ui);
-                    // v0.5.2: UvAnimMask テクスチャのサムネイル + 割当UI
-                    {
-                        let mask_idx = mat
-                            .mtoon()
-                            .uv_animation_mask_texture
-                            .as_ref()
-                            .map(|t| t.index);
-                        let (a, r) = texture_slot_widget(
-                            ui,
-                            "uv_animation_mask テクスチャ",
-                            mask_idx,
-                            &loaded.ir.textures,
-                            &ir_thumb_ids,
-                        );
-                        if a {
-                            pending_tex_request =
-                                Some(crate::intermediate::types::TextureSlot::UvAnimMask);
-                        }
-                        if r {
-                            pending_tex_clear =
-                                Some(crate::intermediate::types::TextureSlot::UvAnimMask);
-                        }
-                    }
-                    // v0.5.4: UvAnimMask UV 編集（スクロール/回転の動的アニメと併用可）
-                    if let Some(mp) = mat.mtoon.as_mut() {
-                        if let Some(ti) = mp.uv_animation_mask_texture.as_mut() {
-                            if uv_transform_widget(ui, "uv_anim_mask", ti) {
-                                record_uv_override(
-                                    &mut pending_override.uv_animation_mask_uv,
-                                    ti,
+                                log::info!(
+                                    "Material params pasted: mat[{}] '{}'",
+                                    mat_idx,
+                                    mat.name,
                                 );
-                                dirty = true;
                             }
                         }
-                    }
-                    let (mut scroll_x, mut scroll_y, mut rotation) = {
-                        let mp = mat.mtoon();
-                        (
-                            mp.uv_animation_scroll_x_speed,
-                            mp.uv_animation_scroll_y_speed,
-                            mp.uv_animation_rotation_speed,
-                        )
-                    };
-                    let mut scroll_x_changed = false;
-                    let mut scroll_y_changed = false;
-                    let mut rotation_changed = false;
-
-                    ui.horizontal(|ui| {
-                        ui.label("scroll_x_speed:");
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut scroll_x)
-                                    .speed(0.01)
-                                    .range(-100.0..=100.0),
-                            )
-                            .changed()
-                        {
-                            scroll_x_changed = true;
-                        }
                     });
-                    ui.horizontal(|ui| {
-                        ui.label("scroll_y_speed:");
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut scroll_y)
-                                    .speed(0.01)
-                                    .range(-100.0..=100.0),
-                            )
-                            .changed()
-                        {
-                            scroll_y_changed = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("rotation_speed:");
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut rotation)
-                                    .speed(0.01)
-                                    .range(-100.0..=100.0),
-                            )
-                            .changed()
-                        {
-                            rotation_changed = true;
-                        }
-                    });
+                    ui.separator();
 
-                    if scroll_x_changed || scroll_y_changed || rotation_changed {
-                        let mp = mat.mtoon_mut();
-                        if scroll_x_changed {
-                            mp.uv_animation_scroll_x_speed = scroll_x;
-                            pending_override.uv_animation_scroll_x_speed = Some(scroll_x);
-                        }
-                        if scroll_y_changed {
-                            mp.uv_animation_scroll_y_speed = scroll_y;
-                            pending_override.uv_animation_scroll_y_speed = Some(scroll_y);
-                        }
-                        if rotation_changed {
-                            mp.uv_animation_rotation_speed = rotation;
-                            pending_override.uv_animation_rotation_speed = Some(rotation);
-                        }
-                        dirty = true;
-                    }
-                });
+                    // ==================== §E-1 基本セクション ====================
+                    egui::CollapsingHeader::new(t!("viewer.material_edit.section.basic"))
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            // v0.5.2: BaseColor テクスチャのサムネイル + 割当UI
+                            let (assign, reset) = texture_slot_widget(
+                                ui,
+                                "BaseColor",
+                                mat.texture_index,
+                                &loaded.ir.textures,
+                                &ir_thumb_ids,
+                            );
+                            if assign {
+                                pending_tex_request =
+                                    Some(crate::intermediate::types::TextureSlot::BaseColor);
+                            }
+                            if reset {
+                                pending_tex_clear =
+                                    Some(crate::intermediate::types::TextureSlot::BaseColor);
+                            }
+                            // v0.5.4: BaseColor UV 編集（テクスチャ有り時のみ表示）
+                            if let Some(ti) = mat.base_color_tex_info.as_mut() {
+                                if uv_transform_widget(ui, "base_color", ti) {
+                                    record_uv_override(&mut pending_override.base_color_uv, ti);
+                                    dirty = true;
+                                }
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label("diffuse:");
+                                let mut rgb = [mat.diffuse.x, mat.diffuse.y, mat.diffuse.z];
+                                if ui.color_edit_button_rgb(&mut rgb).changed() {
+                                    mat.diffuse.x = rgb[0];
+                                    mat.diffuse.y = rgb[1];
+                                    mat.diffuse.z = rgb[2];
+                                    pending_override.diffuse = Some(mat.diffuse);
+                                    dirty = true;
+                                }
+                            });
+                        });
 
-            // ==================== §E-7 エミッシブ / 法線セクション ====================
-            //
-            // どちらも IrMaterial 直接フィールドなので、MToon 系の読み書き分離は不要。
-            //
-            // **review_006 [P2] 対応**: `emissive_factor` は HDR 値（> 1.0）を保持する必要がある
-            // （VRM の `KHR_materials_emissive_strength` で強度倍率が乗じられる）。しかし
-            // `color_edit_button_rgb` は内部的に 0..1 の線形 `Rgba` にクランプしてしまうので、
-            // 既存の HDR emissive を一度触っただけで発光が弱まってしまっていた。
-            //
-            // **採用案**: 色と強度を分離した UI。
-            // - 色 (0..1 の base_color): ColorPicker で直感的に選択
-            // - 強度 (0..100 の multiplier): DragValue で HDR レンジを扱える
-            // - 内部で `emissive_factor = base_color * intensity` を再計算
-            egui::CollapsingHeader::new("エミッシブ / 法線")
-                .default_open(false)
-                .show(ui, |ui| {
-                    // v0.5.2: Emissive / Normal テクスチャのサムネイル + 割当UI
-                    {
-                        let emissive_idx = mat.emissive_texture.as_ref().map(|t| t.index);
-                        let normal_idx = mat.normal_texture.as_ref().map(|t| t.index);
-                        let (a1, r1) = texture_slot_widget(
-                            ui,
-                            "emissive テクスチャ",
-                            emissive_idx,
-                            &loaded.ir.textures,
-                            &ir_thumb_ids,
-                        );
-                        if a1 {
-                            pending_tex_request =
-                                Some(crate::intermediate::types::TextureSlot::Emissive);
-                        }
-                        if r1 {
-                            pending_tex_clear =
-                                Some(crate::intermediate::types::TextureSlot::Emissive);
-                        }
-                        let (a2, r2) = texture_slot_widget(
-                            ui,
-                            "normal テクスチャ",
-                            normal_idx,
-                            &loaded.ir.textures,
-                            &ir_thumb_ids,
-                        );
-                        if a2 {
-                            pending_tex_request =
-                                Some(crate::intermediate::types::TextureSlot::Normal);
-                        }
-                        if r2 {
-                            pending_tex_clear =
-                                Some(crate::intermediate::types::TextureSlot::Normal);
-                        }
-                    }
-                    // v0.5.4: Emissive / Normal UV 編集（IrMaterial 直下スロット）
-                    if let Some(ti) = mat.emissive_texture.as_mut() {
-                        if uv_transform_widget(ui, "emissive", ti) {
-                            record_uv_override(&mut pending_override.emissive_uv, ti);
-                            dirty = true;
-                        }
-                    }
-                    if let Some(ti) = mat.normal_texture.as_mut() {
-                        if uv_transform_widget(ui, "normal", ti) {
-                            record_uv_override(&mut pending_override.normal_uv, ti);
-                            dirty = true;
-                        }
-                    }
+                    // ==================== §E-2 影 (Shade) セクション ====================
+                    //
+                    // **重要 (review_005 [P1] 対応)**: 読み取りには `mat.mtoon()` を使い、
+                    // ユーザーが実際に値を変更した瞬間にだけ `mat.mtoon_mut()` を呼んで副作用を
+                    // 発生させる。`mat.mtoon_mut()` は `mtoon == None` のときに `MtoonParams::default()`
+                    // を即座に挿入するため、「セクションを展開しただけ」で非 MToon 材質が MToon 扱いに
+                    // 変わり、PMX 変換結果にまで影響してしまう問題があった（§G の主軸判定切替
+                    // とセットで修正済み）。
+                    egui::CollapsingHeader::new(t!("viewer.material_edit.section.shade"))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            // v0.5.2: Shade / ShadingShift テクスチャのサムネイル + 割当UI
+                            {
+                                let mp = mat.mtoon();
+                                let shade_idx = mp.shade_texture.as_ref().map(|t| t.index);
+                                let shift_idx = mp.shading_shift_texture.as_ref().map(|t| t.index);
+                                let (a1, r1) = texture_slot_widget(
+                                    ui,
+                                    "shade テクスチャ",
+                                    shade_idx,
+                                    &loaded.ir.textures,
+                                    &ir_thumb_ids,
+                                );
+                                if a1 {
+                                    pending_tex_request = Some(
+                                        crate::intermediate::types::TextureSlot::ShadeMultiply,
+                                    );
+                                }
+                                if r1 {
+                                    pending_tex_clear = Some(
+                                        crate::intermediate::types::TextureSlot::ShadeMultiply,
+                                    );
+                                }
+                                let (a2, r2) = texture_slot_widget(
+                                    ui,
+                                    "shading_shift テクスチャ",
+                                    shift_idx,
+                                    &loaded.ir.textures,
+                                    &ir_thumb_ids,
+                                );
+                                if a2 {
+                                    pending_tex_request =
+                                        Some(crate::intermediate::types::TextureSlot::ShadingShift);
+                                }
+                                if r2 {
+                                    pending_tex_clear =
+                                        Some(crate::intermediate::types::TextureSlot::ShadingShift);
+                                }
+                            }
+                            // v0.5.4: Shade / ShadingShift UV 編集（mtoon 既存かつスロット割当有時のみ）
+                            if let Some(mp) = mat.mtoon.as_mut() {
+                                if let Some(ti) = mp.shade_texture.as_mut() {
+                                    if uv_transform_widget(ui, "shade", ti) {
+                                        record_uv_override(&mut pending_override.shade_uv, ti);
+                                        dirty = true;
+                                    }
+                                }
+                                if let Some(ti) = mp.shading_shift_texture.as_mut() {
+                                    if uv_transform_widget(ui, "shading_shift", ti) {
+                                        record_uv_override(
+                                            &mut pending_override.shading_shift_uv,
+                                            ti,
+                                        );
+                                        dirty = true;
+                                    }
+                                }
+                            }
 
-                    // 現在の emissive_factor を (base_color, intensity) に分解
-                    let current = mat.emissive_factor;
-                    let intensity = current.max_element().max(0.0);
-                    let base_rgb_vec = if intensity > 1e-6 {
-                        current / intensity
-                    } else {
-                        glam::Vec3::ZERO
-                    };
-                    let mut base_rgb = base_rgb_vec.to_array();
-                    let mut intensity_edit = intensity;
-                    let mut color_changed = false;
-                    let mut intensity_changed = false;
-
-                    ui.horizontal(|ui| {
-                        ui.label("emissive:");
-                        if ui.color_edit_button_rgb(&mut base_rgb).changed() {
-                            color_changed = true;
-                        }
-                        ui.label("強度:");
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut intensity_edit)
-                                    .speed(0.05)
-                                    .range(0.0..=100.0),
-                            )
-                            .changed()
-                        {
-                            intensity_changed = true;
-                        }
-                    });
-                    ui.small("※ 強度は HDR 倍率（1.0 超も可）。色のみ変更時に強度が 0 なら自動的に 1.0 へ。");
-
-                    if color_changed || intensity_changed {
-                        // 色を変えたが強度が 0 のままだと結果が [0,0,0] になって反映されない。
-                        // そこで「色を変えた かつ 強度が 0」の場合は強度を 1.0 にフォールバック。
-                        let effective_intensity =
-                            if color_changed && intensity_edit <= 1e-6 {
-                                1.0
-                            } else {
-                                intensity_edit
+                            // 読み取り: `mat.mtoon()` はデフォルト値参照なので副作用なし
+                            let (
+                                mut shade_color_rgb,
+                                mut shading_toony,
+                                mut shading_shift,
+                                mut gi_eq,
+                            ) = {
+                                let mp = mat.mtoon();
+                                (
+                                    mp.shade_color.unwrap_or(glam::Vec3::ZERO).to_array(),
+                                    mp.shading_toony_factor,
+                                    mp.shading_shift_factor,
+                                    mp.gi_equalization_factor,
+                                )
                             };
-                        let new_v = glam::Vec3::from_array(base_rgb) * effective_intensity;
-                        mat.emissive_factor = new_v;
-                        pending_override.emissive_factor = Some(new_v);
-                        dirty = true;
-                    }
 
-                    // normal_texture_scale: f32 (デフォルト 1.0)
-                    ui.horizontal(|ui| {
-                        ui.label("normal_scale:");
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut mat.normal_texture_scale)
-                                    .speed(0.01)
-                                    .range(0.0..=10.0),
-                            )
-                            .changed()
-                        {
-                            pending_override.normal_texture_scale =
-                                Some(mat.normal_texture_scale);
-                            dirty = true;
-                        }
-                    });
-                });
+                            // ウィジェット（ここでは IR を触らない）
+                            let mut shade_changed = false;
+                            let mut toony_changed = false;
+                            let mut shift_changed = false;
+                            let mut gi_changed = false;
 
-            // ==================== MMD テクスチャ (Sphere / Toon) ====================
-            //
-            // v0.5.2: BaseColor/Emissive/Normal 等の汎用スロットは各パラメタセクション
-            // （基本 / 影 / アウトライン / リム / MatCap / UV アニメ / エミッシブ/法線）
-            // に直接統合したため、ここには MMD/PMX 固有の Sphere / Toon だけを残す。
-            egui::CollapsingHeader::new("MMD テクスチャ (Sphere / Toon)")
-                .default_open(false)
-                .show(ui, |ui| {
-                    use crate::intermediate::types::TextureSlot;
-                    let (a1, r1) = texture_slot_widget(
-                        ui,
-                        "sphere テクスチャ",
-                        mat.sphere_texture_index,
-                        &loaded.ir.textures,
-                        &ir_thumb_ids,
-                    );
-                    if a1 {
-                        pending_tex_request = Some(TextureSlot::Sphere);
-                    }
-                    if r1 {
-                        pending_tex_clear = Some(TextureSlot::Sphere);
-                    }
-                    let (a2, r2) = texture_slot_widget(
-                        ui,
-                        "toon テクスチャ",
-                        mat.toon_texture_index,
-                        &loaded.ir.textures,
-                        &ir_thumb_ids,
-                    );
-                    if a2 {
-                        pending_tex_request = Some(TextureSlot::Toon);
-                    }
-                    if r2 {
-                        pending_tex_clear = Some(TextureSlot::Toon);
-                    }
-                });
-
-            // ==================== §E-8 その他セクション ====================
-            //
-            // - `alpha_mode` / `alpha_cutoff` / `cull_mode` は IrMaterial 直接
-            // - `render_queue_offset` は MtoonParams フィールド（読み書き分離パターン）
-            egui::CollapsingHeader::new("その他")
-                .default_open(false)
-                .show(ui, |ui| {
-                    use crate::intermediate::types::{AlphaMode, CullMode};
-
-                    // alpha_mode: ComboBox (Opaque / Mask / BlendWithZWrite / Blend)
-                    ui.horizontal(|ui| {
-                        ui.label("alpha_mode:");
-                        let label_of = |m: AlphaMode| match m {
-                            AlphaMode::Opaque => "Opaque",
-                            AlphaMode::Mask => "Mask",
-                            AlphaMode::BlendWithZWrite => "BlendWithZWrite",
-                            AlphaMode::Blend => "Blend",
-                        };
-                        egui::ComboBox::from_id_salt("alpha_mode_combo")
-                            .selected_text(label_of(mat.alpha_mode))
-                            .show_ui(ui, |ui| {
-                                for m in [
-                                    AlphaMode::Opaque,
-                                    AlphaMode::Mask,
-                                    AlphaMode::BlendWithZWrite,
-                                    AlphaMode::Blend,
-                                ] {
-                                    if ui
-                                        .selectable_label(mat.alpha_mode == m, label_of(m))
-                                        .clicked()
-                                        && mat.alpha_mode != m
-                                    {
-                                        mat.alpha_mode = m;
-                                        pending_override.alpha_mode = Some(m);
-                                        dirty = true;
-                                    }
+                            ui.horizontal(|ui| {
+                                ui.label("shade_color:");
+                                if ui.color_edit_button_rgb(&mut shade_color_rgb).changed() {
+                                    shade_changed = true;
                                 }
                             });
-                    });
-
-                    // alpha_cutoff: Slider 0.0〜1.0 (Mask モード時のみ実効)
-                    ui.horizontal(|ui| {
-                        ui.label("alpha_cutoff:");
-                        if ui
-                            .add(
-                                egui::Slider::new(&mut mat.alpha_cutoff, 0.0..=1.0)
-                                    .fixed_decimals(3),
-                            )
-                            .changed()
-                        {
-                            pending_override.alpha_cutoff = Some(mat.alpha_cutoff);
-                            dirty = true;
-                        }
-                    });
-
-                    // cull_mode: ComboBox (Back / None / Front)
-                    ui.horizontal(|ui| {
-                        ui.label("cull_mode:");
-                        let label_of = |m: CullMode| match m {
-                            CullMode::Back => "Back (片面)",
-                            CullMode::None => "None (両面)",
-                            CullMode::Front => "Front",
-                        };
-                        egui::ComboBox::from_id_salt("cull_mode_combo")
-                            .selected_text(label_of(mat.cull_mode))
-                            .show_ui(ui, |ui| {
-                                for m in [CullMode::Back, CullMode::None, CullMode::Front] {
-                                    if ui
-                                        .selectable_label(mat.cull_mode == m, label_of(m))
-                                        .clicked()
-                                        && mat.cull_mode != m
-                                    {
-                                        mat.cull_mode = m;
-                                        pending_override.cull_mode = Some(m);
-                                        dirty = true;
-                                    }
+                            ui.horizontal(|ui| {
+                                ui.label("shading_toony:");
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut shading_toony, 0.0..=1.0)
+                                            .fixed_decimals(3),
+                                    )
+                                    .changed()
+                                {
+                                    toony_changed = true;
                                 }
                             });
-                    });
-
-                    // render_queue_offset: MtoonParams フィールド (BLEND 内ソート用)
-                    let mut rqo = mat.mtoon().render_queue_offset;
-                    let mut rqo_changed = false;
-                    ui.horizontal(|ui| {
-                        ui.label("render_queue_offset:");
-                        if ui
-                            .add(egui::DragValue::new(&mut rqo).speed(1).range(-9..=9))
-                            .changed()
-                        {
-                            rqo_changed = true;
-                        }
-                    });
-                    if rqo_changed {
-                        mat.mtoon_mut().render_queue_offset = rqo;
-                        pending_override.render_queue_offset = Some(rqo);
-                        dirty = true;
-                    }
-                });
-
-            // ==================== MME 出力プレビュー (§K.3 / Step 6) ====================
-            egui::CollapsingHeader::new("MME 出力 (ray-mmd)")
-                .default_open(false)
-                .show(ui, |ui| {
-                    use crate::convert::mme::ray_mmd::{guess_ray_mmd_kind, RayMmdMaterialKind};
-
-                    let estimated = guess_ray_mmd_kind(mat);
-                    let current_override = app
-                        .material_overrides
-                        .get(&mat_idx)
-                        .and_then(|o| o.mme_kind);
-                    let current = current_override.unwrap_or(estimated);
-
-                    ui.horizontal(|ui| {
-                        ui.label("カテゴリ:");
-                        egui::ComboBox::from_id_salt("mme_kind_combo")
-                            .selected_text(current.label())
-                            .show_ui(ui, |ui| {
-                                for kind in RayMmdMaterialKind::ALL {
-                                    if ui
-                                        .selectable_label(current == kind, kind.label())
-                                        .clicked()
-                                        && current != kind
-                                    {
-                                        pending_override.mme_kind = Some(kind);
-                                        dirty = true;
-                                    }
+                            ui.horizontal(|ui| {
+                                ui.label("shading_shift:");
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut shading_shift, -1.0..=1.0)
+                                            .fixed_decimals(3),
+                                    )
+                                    .changed()
+                                {
+                                    shift_changed = true;
                                 }
                             });
-                        if current_override.is_some() && current != estimated {
-                            ui.small("※ 手動上書き中");
-                            if ui.small_button("推定に戻す").clicked() {
-                                // review_024 [P2]: merge_from は Some しか上書きしないので、
-                                // mme_kind を消すには closure 外で直接 None に設定する。
-                                pending_mme_reset = true;
+                            ui.horizontal(|ui| {
+                                ui.label("gi_equalization:");
+                                if ui
+                                    .add(egui::Slider::new(&mut gi_eq, 0.0..=1.0).fixed_decimals(3))
+                                    .changed()
+                                {
+                                    gi_changed = true;
+                                }
+                            });
+
+                            // 変更があった場合のみ `mat.mtoon_mut()` を呼んで書き込む。
+                            // これにより非 MToon 材質で展開しただけでは mtoon が挿入されない。
+                            if shade_changed || toony_changed || shift_changed || gi_changed {
+                                let mp = mat.mtoon_mut();
+                                if shade_changed {
+                                    let v = glam::Vec3::from_array(shade_color_rgb);
+                                    mp.shade_color = Some(v);
+                                    pending_override.shade_color = Some(v);
+                                }
+                                if toony_changed {
+                                    mp.shading_toony_factor = shading_toony;
+                                    pending_override.shading_toony_factor = Some(shading_toony);
+                                }
+                                if shift_changed {
+                                    mp.shading_shift_factor = shading_shift;
+                                    pending_override.shading_shift_factor = Some(shading_shift);
+                                }
+                                if gi_changed {
+                                    mp.gi_equalization_factor = gi_eq;
+                                    pending_override.gi_equalization_factor = Some(gi_eq);
+                                }
+                                dirty = true;
                             }
-                        }
-                    });
 
-                    ui.small(format!("推定: {}", estimated.label()));
+                            if !matches!(
+                                mat.shader_family,
+                                ShaderFamily::Mtoon
+                                    | ShaderFamily::Uts2
+                                    | ShaderFamily::LilToon
+                                    | ShaderFamily::Poiyomi
+                            ) {
+                                ui.small(t!("viewer.material_edit.shade_mtoon_note"));
+                            }
+                        });
 
-                    // ray-mmd ルート表示
-                    let root_label = app
-                        .app_config
-                        .ray_mmd_root
-                        .as_deref()
-                        .unwrap_or(".\\");
-                    ui.small(format!("ray-mmd: {}", root_label));
-                });
-            }); // ScrollArea::vertical().show
+                    // ==================== §E-3 アウトラインセクション ====================
+                    //
+                    // - `edge_color` / `edge_size` は IrMaterial 直接フィールド（非 MToon）
+                    // - `outline_width_mode` / `outline_width_factor` / `outline_lighting_mix` は
+                    //   MtoonParams フィールドのため、読み取りは `mat.mtoon()`、変更時のみ
+                    //   `mat.mtoon_mut()` を呼ぶ止血パターン（review_005 [P1] 対応）を踏襲する。
+                    egui::CollapsingHeader::new(t!("viewer.material_edit.section.outline"))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            use crate::intermediate::types::OutlineWidthMode;
+
+                            // v0.5.2: OutlineWidth テクスチャのサムネイル + 割当UI
+                            {
+                                let outline_idx =
+                                    mat.mtoon().outline_width_texture.as_ref().map(|t| t.index);
+                                let (a, r) = texture_slot_widget(
+                                    ui,
+                                    "outline_width テクスチャ",
+                                    outline_idx,
+                                    &loaded.ir.textures,
+                                    &ir_thumb_ids,
+                                );
+                                if a {
+                                    pending_tex_request =
+                                        Some(crate::intermediate::types::TextureSlot::OutlineWidth);
+                                }
+                                if r {
+                                    pending_tex_clear =
+                                        Some(crate::intermediate::types::TextureSlot::OutlineWidth);
+                                }
+                            }
+                            // v0.5.4: OutlineWidth UV 編集
+                            if let Some(mp) = mat.mtoon.as_mut() {
+                                if let Some(ti) = mp.outline_width_texture.as_mut() {
+                                    if uv_transform_widget(ui, "outline_width", ti) {
+                                        record_uv_override(
+                                            &mut pending_override.outline_width_uv,
+                                            ti,
+                                        );
+                                        dirty = true;
+                                    }
+                                }
+                            }
+
+                            // edge_color: IrMaterial 直接 (RGBA)
+                            ui.horizontal(|ui| {
+                                ui.label("edge_color:");
+                                let mut rgba = mat.edge_color.to_array();
+                                if ui.color_edit_button_rgba_unmultiplied(&mut rgba).changed() {
+                                    mat.edge_color = glam::Vec4::from_array(rgba);
+                                    pending_override.edge_color = Some(mat.edge_color);
+                                    dirty = true;
+                                }
+                            });
+
+                            // edge_size: IrMaterial 直接 (MMD エッジ用, PMX 書き出し時は 1.0 クランプ)
+                            ui.horizontal(|ui| {
+                                ui.label("edge_size:");
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut mat.edge_size, 0.0..=2.0)
+                                            .fixed_decimals(3),
+                                    )
+                                    .changed()
+                                {
+                                    pending_override.edge_size = Some(mat.edge_size);
+                                    dirty = true;
+                                }
+                            });
+
+                            // MToon アウトライン系（読み取りは mat.mtoon() 経由で副作用なし）
+                            let (mut width_mode, mut width_factor, mut lighting_mix) = {
+                                let mp = mat.mtoon();
+                                (
+                                    mp.outline_width_mode,
+                                    mp.outline_width_factor,
+                                    mp.outline_lighting_mix,
+                                )
+                            };
+                            let mut width_mode_changed = false;
+                            let mut width_factor_changed = false;
+                            let mut lighting_mix_changed = false;
+
+                            // outline_width_mode: ComboBox
+                            ui.horizontal(|ui| {
+                                ui.label("width_mode:");
+                                let label_of = |m: OutlineWidthMode| match m {
+                                    OutlineWidthMode::None => "None",
+                                    OutlineWidthMode::WorldCoordinates => "World",
+                                    OutlineWidthMode::ScreenCoordinates => "Screen",
+                                };
+                                egui::ComboBox::from_id_salt("outline_width_mode_combo")
+                                    .selected_text(label_of(width_mode))
+                                    .show_ui(ui, |ui| {
+                                        for m in [
+                                            OutlineWidthMode::None,
+                                            OutlineWidthMode::WorldCoordinates,
+                                            OutlineWidthMode::ScreenCoordinates,
+                                        ] {
+                                            if ui
+                                                .selectable_label(width_mode == m, label_of(m))
+                                                .clicked()
+                                                && width_mode != m
+                                            {
+                                                width_mode = m;
+                                                width_mode_changed = true;
+                                            }
+                                        }
+                                    });
+                            });
+
+                            // outline_width_factor: DragValue (world=m, screen=比率)
+                            ui.horizontal(|ui| {
+                                ui.label("width_factor:");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut width_factor)
+                                            .speed(0.001)
+                                            .range(0.0..=10.0),
+                                    )
+                                    .changed()
+                                {
+                                    width_factor_changed = true;
+                                }
+                            });
+
+                            // outline_lighting_mix: Slider 0.0〜1.0
+                            ui.horizontal(|ui| {
+                                ui.label("lighting_mix:");
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut lighting_mix, 0.0..=1.0)
+                                            .fixed_decimals(3),
+                                    )
+                                    .changed()
+                                {
+                                    lighting_mix_changed = true;
+                                }
+                            });
+
+                            // MToon 系は変更時のみ mtoon_mut()
+                            if width_mode_changed || width_factor_changed || lighting_mix_changed {
+                                let mp = mat.mtoon_mut();
+                                if width_mode_changed {
+                                    mp.outline_width_mode = width_mode;
+                                    pending_override.outline_width_mode = Some(width_mode);
+                                }
+                                if width_factor_changed {
+                                    mp.outline_width_factor = width_factor;
+                                    pending_override.outline_width_factor = Some(width_factor);
+                                }
+                                if lighting_mix_changed {
+                                    mp.outline_lighting_mix = lighting_mix;
+                                    pending_override.outline_lighting_mix = Some(lighting_mix);
+                                }
+                                dirty = true;
+                            }
+                        });
+
+                    // ==================== §E-4 リムセクション ====================
+                    //
+                    // 全て MtoonParams フィールドなので、読み取りは `mat.mtoon()`、変更時のみ
+                    // `mat.mtoon_mut()` を呼ぶパターン。
+                    egui::CollapsingHeader::new(t!("viewer.material_edit.section.rim"))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            pmx_unsupported_badge(ui);
+                            // v0.5.2: RimMultiply テクスチャのサムネイル + 割当UI
+                            {
+                                let rim_idx =
+                                    mat.mtoon().rim_multiply_texture.as_ref().map(|t| t.index);
+                                let (a, r) = texture_slot_widget(
+                                    ui,
+                                    "rim_multiply テクスチャ",
+                                    rim_idx,
+                                    &loaded.ir.textures,
+                                    &ir_thumb_ids,
+                                );
+                                if a {
+                                    pending_tex_request =
+                                        Some(crate::intermediate::types::TextureSlot::RimMultiply);
+                                }
+                                if r {
+                                    pending_tex_clear =
+                                        Some(crate::intermediate::types::TextureSlot::RimMultiply);
+                                }
+                            }
+                            // v0.5.4: RimMultiply UV 編集
+                            if let Some(mp) = mat.mtoon.as_mut() {
+                                if let Some(ti) = mp.rim_multiply_texture.as_mut() {
+                                    if uv_transform_widget(ui, "rim_multiply", ti) {
+                                        record_uv_override(
+                                            &mut pending_override.rim_multiply_uv,
+                                            ti,
+                                        );
+                                        dirty = true;
+                                    }
+                                }
+                            }
+                            let (mut rim_rgb, mut fresnel_power, mut rim_lift, mut rim_mix) = {
+                                let mp = mat.mtoon();
+                                (
+                                    mp.parametric_rim_color.to_array(),
+                                    mp.parametric_rim_fresnel_power,
+                                    mp.parametric_rim_lift,
+                                    mp.rim_lighting_mix,
+                                )
+                            };
+                            let mut rim_color_changed = false;
+                            let mut fresnel_changed = false;
+                            let mut lift_changed = false;
+                            let mut mix_changed = false;
+
+                            ui.horizontal(|ui| {
+                                ui.label("rim_color:");
+                                if ui.color_edit_button_rgb(&mut rim_rgb).changed() {
+                                    rim_color_changed = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("fresnel_power:");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut fresnel_power)
+                                            .speed(0.05)
+                                            .range(0.0..=100.0),
+                                    )
+                                    .changed()
+                                {
+                                    fresnel_changed = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("rim_lift:");
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut rim_lift, 0.0..=1.0)
+                                            .fixed_decimals(3),
+                                    )
+                                    .changed()
+                                {
+                                    lift_changed = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("lighting_mix:");
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut rim_mix, 0.0..=1.0)
+                                            .fixed_decimals(3),
+                                    )
+                                    .changed()
+                                {
+                                    mix_changed = true;
+                                }
+                            });
+
+                            if rim_color_changed || fresnel_changed || lift_changed || mix_changed {
+                                let mp = mat.mtoon_mut();
+                                if rim_color_changed {
+                                    let v = glam::Vec3::from_array(rim_rgb);
+                                    mp.parametric_rim_color = v;
+                                    pending_override.parametric_rim_color = Some(v);
+                                }
+                                if fresnel_changed {
+                                    mp.parametric_rim_fresnel_power = fresnel_power;
+                                    pending_override.parametric_rim_fresnel_power =
+                                        Some(fresnel_power);
+                                }
+                                if lift_changed {
+                                    mp.parametric_rim_lift = rim_lift;
+                                    pending_override.parametric_rim_lift = Some(rim_lift);
+                                }
+                                if mix_changed {
+                                    mp.rim_lighting_mix = rim_mix;
+                                    pending_override.rim_lighting_mix = Some(rim_mix);
+                                }
+                                dirty = true;
+                            }
+                        });
+
+                    // ==================== §E-5 MatCap セクション ====================
+                    egui::CollapsingHeader::new("MatCap")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            pmx_unsupported_badge(ui);
+                            // v0.5.2: Matcap テクスチャのサムネイル + 割当UI
+                            {
+                                let matcap_idx =
+                                    mat.mtoon().matcap_texture.as_ref().map(|t| t.index);
+                                let (a, r) = texture_slot_widget(
+                                    ui,
+                                    "matcap テクスチャ",
+                                    matcap_idx,
+                                    &loaded.ir.textures,
+                                    &ir_thumb_ids,
+                                );
+                                if a {
+                                    pending_tex_request =
+                                        Some(crate::intermediate::types::TextureSlot::Matcap);
+                                }
+                                if r {
+                                    pending_tex_clear =
+                                        Some(crate::intermediate::types::TextureSlot::Matcap);
+                                }
+                            }
+                            // v0.5.4: Matcap UV 編集
+                            if let Some(mp) = mat.mtoon.as_mut() {
+                                if let Some(ti) = mp.matcap_texture.as_mut() {
+                                    if uv_transform_widget(ui, "matcap", ti) {
+                                        record_uv_override(&mut pending_override.matcap_uv, ti);
+                                        dirty = true;
+                                    }
+                                }
+                            }
+                            let mut matcap_rgb = mat.mtoon().matcap_factor.to_array();
+                            let mut matcap_changed = false;
+
+                            ui.horizontal(|ui| {
+                                ui.label("matcap_factor:");
+                                if ui.color_edit_button_rgb(&mut matcap_rgb).changed() {
+                                    matcap_changed = true;
+                                }
+                            });
+
+                            if matcap_changed {
+                                let v = glam::Vec3::from_array(matcap_rgb);
+                                mat.mtoon_mut().matcap_factor = v;
+                                pending_override.matcap_factor = Some(v);
+                                dirty = true;
+                            }
+                        });
+
+                    // ==================== §E-6 UV アニメセクション ====================
+                    egui::CollapsingHeader::new("UV アニメ")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            pmx_unsupported_badge(ui);
+                            // v0.5.2: UvAnimMask テクスチャのサムネイル + 割当UI
+                            {
+                                let mask_idx = mat
+                                    .mtoon()
+                                    .uv_animation_mask_texture
+                                    .as_ref()
+                                    .map(|t| t.index);
+                                let (a, r) = texture_slot_widget(
+                                    ui,
+                                    "uv_animation_mask テクスチャ",
+                                    mask_idx,
+                                    &loaded.ir.textures,
+                                    &ir_thumb_ids,
+                                );
+                                if a {
+                                    pending_tex_request =
+                                        Some(crate::intermediate::types::TextureSlot::UvAnimMask);
+                                }
+                                if r {
+                                    pending_tex_clear =
+                                        Some(crate::intermediate::types::TextureSlot::UvAnimMask);
+                                }
+                            }
+                            // v0.5.4: UvAnimMask UV 編集（スクロール/回転の動的アニメと併用可）
+                            if let Some(mp) = mat.mtoon.as_mut() {
+                                if let Some(ti) = mp.uv_animation_mask_texture.as_mut() {
+                                    if uv_transform_widget(ui, "uv_anim_mask", ti) {
+                                        record_uv_override(
+                                            &mut pending_override.uv_animation_mask_uv,
+                                            ti,
+                                        );
+                                        dirty = true;
+                                    }
+                                }
+                            }
+                            let (mut scroll_x, mut scroll_y, mut rotation) = {
+                                let mp = mat.mtoon();
+                                (
+                                    mp.uv_animation_scroll_x_speed,
+                                    mp.uv_animation_scroll_y_speed,
+                                    mp.uv_animation_rotation_speed,
+                                )
+                            };
+                            let mut scroll_x_changed = false;
+                            let mut scroll_y_changed = false;
+                            let mut rotation_changed = false;
+
+                            ui.horizontal(|ui| {
+                                ui.label("scroll_x_speed:");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut scroll_x)
+                                            .speed(0.01)
+                                            .range(-100.0..=100.0),
+                                    )
+                                    .changed()
+                                {
+                                    scroll_x_changed = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("scroll_y_speed:");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut scroll_y)
+                                            .speed(0.01)
+                                            .range(-100.0..=100.0),
+                                    )
+                                    .changed()
+                                {
+                                    scroll_y_changed = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("rotation_speed:");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut rotation)
+                                            .speed(0.01)
+                                            .range(-100.0..=100.0),
+                                    )
+                                    .changed()
+                                {
+                                    rotation_changed = true;
+                                }
+                            });
+
+                            if scroll_x_changed || scroll_y_changed || rotation_changed {
+                                let mp = mat.mtoon_mut();
+                                if scroll_x_changed {
+                                    mp.uv_animation_scroll_x_speed = scroll_x;
+                                    pending_override.uv_animation_scroll_x_speed = Some(scroll_x);
+                                }
+                                if scroll_y_changed {
+                                    mp.uv_animation_scroll_y_speed = scroll_y;
+                                    pending_override.uv_animation_scroll_y_speed = Some(scroll_y);
+                                }
+                                if rotation_changed {
+                                    mp.uv_animation_rotation_speed = rotation;
+                                    pending_override.uv_animation_rotation_speed = Some(rotation);
+                                }
+                                dirty = true;
+                            }
+                        });
+
+                    // ==================== §E-7 エミッシブ / 法線セクション ====================
+                    //
+                    // どちらも IrMaterial 直接フィールドなので、MToon 系の読み書き分離は不要。
+                    //
+                    // **review_006 [P2] 対応**: `emissive_factor` は HDR 値（> 1.0）を保持する必要がある
+                    // （VRM の `KHR_materials_emissive_strength` で強度倍率が乗じられる）。しかし
+                    // `color_edit_button_rgb` は内部的に 0..1 の線形 `Rgba` にクランプしてしまうので、
+                    // 既存の HDR emissive を一度触っただけで発光が弱まってしまっていた。
+                    //
+                    // **採用案**: 色と強度を分離した UI。
+                    // - 色 (0..1 の base_color): ColorPicker で直感的に選択
+                    // - 強度 (0..100 の multiplier): DragValue で HDR レンジを扱える
+                    // - 内部で `emissive_factor = base_color * intensity` を再計算
+                    egui::CollapsingHeader::new(t!("viewer.material_edit.section.emissive_normal"))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            // v0.5.2: Emissive / Normal テクスチャのサムネイル + 割当UI
+                            {
+                                let emissive_idx = mat.emissive_texture.as_ref().map(|t| t.index);
+                                let normal_idx = mat.normal_texture.as_ref().map(|t| t.index);
+                                let (a1, r1) = texture_slot_widget(
+                                    ui,
+                                    "emissive テクスチャ",
+                                    emissive_idx,
+                                    &loaded.ir.textures,
+                                    &ir_thumb_ids,
+                                );
+                                if a1 {
+                                    pending_tex_request =
+                                        Some(crate::intermediate::types::TextureSlot::Emissive);
+                                }
+                                if r1 {
+                                    pending_tex_clear =
+                                        Some(crate::intermediate::types::TextureSlot::Emissive);
+                                }
+                                let (a2, r2) = texture_slot_widget(
+                                    ui,
+                                    "normal テクスチャ",
+                                    normal_idx,
+                                    &loaded.ir.textures,
+                                    &ir_thumb_ids,
+                                );
+                                if a2 {
+                                    pending_tex_request =
+                                        Some(crate::intermediate::types::TextureSlot::Normal);
+                                }
+                                if r2 {
+                                    pending_tex_clear =
+                                        Some(crate::intermediate::types::TextureSlot::Normal);
+                                }
+                            }
+                            // v0.5.4: Emissive / Normal UV 編集（IrMaterial 直下スロット）
+                            if let Some(ti) = mat.emissive_texture.as_mut() {
+                                if uv_transform_widget(ui, "emissive", ti) {
+                                    record_uv_override(&mut pending_override.emissive_uv, ti);
+                                    dirty = true;
+                                }
+                            }
+                            if let Some(ti) = mat.normal_texture.as_mut() {
+                                if uv_transform_widget(ui, "normal", ti) {
+                                    record_uv_override(&mut pending_override.normal_uv, ti);
+                                    dirty = true;
+                                }
+                            }
+
+                            // 現在の emissive_factor を (base_color, intensity) に分解
+                            let current = mat.emissive_factor;
+                            let intensity = current.max_element().max(0.0);
+                            let base_rgb_vec = if intensity > 1e-6 {
+                                current / intensity
+                            } else {
+                                glam::Vec3::ZERO
+                            };
+                            let mut base_rgb = base_rgb_vec.to_array();
+                            let mut intensity_edit = intensity;
+                            let mut color_changed = false;
+                            let mut intensity_changed = false;
+
+                            ui.horizontal(|ui| {
+                                ui.label("emissive:");
+                                if ui.color_edit_button_rgb(&mut base_rgb).changed() {
+                                    color_changed = true;
+                                }
+                                ui.label(t!("viewer.material_edit.intensity_label"));
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut intensity_edit)
+                                            .speed(0.05)
+                                            .range(0.0..=100.0),
+                                    )
+                                    .changed()
+                                {
+                                    intensity_changed = true;
+                                }
+                            });
+                            ui.small(t!("viewer.material_edit.intensity_note"));
+
+                            if color_changed || intensity_changed {
+                                // 色を変えたが強度が 0 のままだと結果が [0,0,0] になって反映されない。
+                                // そこで「色を変えた かつ 強度が 0」の場合は強度を 1.0 にフォールバック。
+                                let effective_intensity = if color_changed && intensity_edit <= 1e-6
+                                {
+                                    1.0
+                                } else {
+                                    intensity_edit
+                                };
+                                let new_v = glam::Vec3::from_array(base_rgb) * effective_intensity;
+                                mat.emissive_factor = new_v;
+                                pending_override.emissive_factor = Some(new_v);
+                                dirty = true;
+                            }
+
+                            // normal_texture_scale: f32 (デフォルト 1.0)
+                            ui.horizontal(|ui| {
+                                ui.label("normal_scale:");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut mat.normal_texture_scale)
+                                            .speed(0.01)
+                                            .range(0.0..=10.0),
+                                    )
+                                    .changed()
+                                {
+                                    pending_override.normal_texture_scale =
+                                        Some(mat.normal_texture_scale);
+                                    dirty = true;
+                                }
+                            });
+                        });
+
+                    // ==================== MMD テクスチャ (Sphere / Toon) ====================
+                    //
+                    // v0.5.2: BaseColor/Emissive/Normal 等の汎用スロットは各パラメタセクション
+                    // （基本 / 影 / アウトライン / リム / MatCap / UV アニメ / エミッシブ/法線）
+                    // に直接統合したため、ここには MMD/PMX 固有の Sphere / Toon だけを残す。
+                    egui::CollapsingHeader::new("MMD テクスチャ (Sphere / Toon)")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            use crate::intermediate::types::TextureSlot;
+                            let (a1, r1) = texture_slot_widget(
+                                ui,
+                                "sphere テクスチャ",
+                                mat.sphere_texture_index,
+                                &loaded.ir.textures,
+                                &ir_thumb_ids,
+                            );
+                            if a1 {
+                                pending_tex_request = Some(TextureSlot::Sphere);
+                            }
+                            if r1 {
+                                pending_tex_clear = Some(TextureSlot::Sphere);
+                            }
+                            let (a2, r2) = texture_slot_widget(
+                                ui,
+                                "toon テクスチャ",
+                                mat.toon_texture_index,
+                                &loaded.ir.textures,
+                                &ir_thumb_ids,
+                            );
+                            if a2 {
+                                pending_tex_request = Some(TextureSlot::Toon);
+                            }
+                            if r2 {
+                                pending_tex_clear = Some(TextureSlot::Toon);
+                            }
+                        });
+
+                    // ==================== §E-8 その他セクション ====================
+                    //
+                    // - `alpha_mode` / `alpha_cutoff` / `cull_mode` は IrMaterial 直接
+                    // - `render_queue_offset` は MtoonParams フィールド（読み書き分離パターン）
+                    egui::CollapsingHeader::new(t!("viewer.material_edit.section.other"))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            use crate::intermediate::types::{AlphaMode, CullMode};
+
+                            // alpha_mode: ComboBox (Opaque / Mask / BlendWithZWrite / Blend)
+                            ui.horizontal(|ui| {
+                                ui.label("alpha_mode:");
+                                let label_of = |m: AlphaMode| match m {
+                                    AlphaMode::Opaque => "Opaque",
+                                    AlphaMode::Mask => "Mask",
+                                    AlphaMode::BlendWithZWrite => "BlendWithZWrite",
+                                    AlphaMode::Blend => "Blend",
+                                };
+                                egui::ComboBox::from_id_salt("alpha_mode_combo")
+                                    .selected_text(label_of(mat.alpha_mode))
+                                    .show_ui(ui, |ui| {
+                                        for m in [
+                                            AlphaMode::Opaque,
+                                            AlphaMode::Mask,
+                                            AlphaMode::BlendWithZWrite,
+                                            AlphaMode::Blend,
+                                        ] {
+                                            if ui
+                                                .selectable_label(mat.alpha_mode == m, label_of(m))
+                                                .clicked()
+                                                && mat.alpha_mode != m
+                                            {
+                                                mat.alpha_mode = m;
+                                                pending_override.alpha_mode = Some(m);
+                                                dirty = true;
+                                            }
+                                        }
+                                    });
+                            });
+
+                            // alpha_cutoff: Slider 0.0〜1.0 (Mask モード時のみ実効)
+                            ui.horizontal(|ui| {
+                                ui.label("alpha_cutoff:");
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut mat.alpha_cutoff, 0.0..=1.0)
+                                            .fixed_decimals(3),
+                                    )
+                                    .changed()
+                                {
+                                    pending_override.alpha_cutoff = Some(mat.alpha_cutoff);
+                                    dirty = true;
+                                }
+                            });
+
+                            // cull_mode: ComboBox (Back / None / Front)
+                            ui.horizontal(|ui| {
+                                ui.label("cull_mode:");
+                                let label_of = |m: CullMode| match m {
+                                    CullMode::Back => "Back (片面)",
+                                    CullMode::None => "None (両面)",
+                                    CullMode::Front => "Front",
+                                };
+                                egui::ComboBox::from_id_salt("cull_mode_combo")
+                                    .selected_text(label_of(mat.cull_mode))
+                                    .show_ui(ui, |ui| {
+                                        for m in [CullMode::Back, CullMode::None, CullMode::Front] {
+                                            if ui
+                                                .selectable_label(mat.cull_mode == m, label_of(m))
+                                                .clicked()
+                                                && mat.cull_mode != m
+                                            {
+                                                mat.cull_mode = m;
+                                                pending_override.cull_mode = Some(m);
+                                                dirty = true;
+                                            }
+                                        }
+                                    });
+                            });
+
+                            // render_queue_offset: MtoonParams フィールド (BLEND 内ソート用)
+                            let mut rqo = mat.mtoon().render_queue_offset;
+                            let mut rqo_changed = false;
+                            ui.horizontal(|ui| {
+                                ui.label("render_queue_offset:");
+                                if ui
+                                    .add(egui::DragValue::new(&mut rqo).speed(1).range(-9..=9))
+                                    .changed()
+                                {
+                                    rqo_changed = true;
+                                }
+                            });
+                            if rqo_changed {
+                                mat.mtoon_mut().render_queue_offset = rqo;
+                                pending_override.render_queue_offset = Some(rqo);
+                                dirty = true;
+                            }
+                        });
+
+                    // ==================== MME 出力プレビュー (§K.3 / Step 6) ====================
+                    egui::CollapsingHeader::new("MME 出力 (ray-mmd)")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            use crate::convert::mme::ray_mmd::{
+                                guess_ray_mmd_kind, RayMmdMaterialKind,
+                            };
+
+                            let estimated = guess_ray_mmd_kind(mat);
+                            let current_override = app
+                                .material_overrides
+                                .get(&mat_idx)
+                                .and_then(|o| o.mme_kind);
+                            let current = current_override.unwrap_or(estimated);
+
+                            ui.horizontal(|ui| {
+                                ui.label(t!("viewer.material_edit.category_label"));
+                                egui::ComboBox::from_id_salt("mme_kind_combo")
+                                    .selected_text(current.label())
+                                    .show_ui(ui, |ui| {
+                                        for kind in RayMmdMaterialKind::ALL {
+                                            if ui
+                                                .selectable_label(current == kind, kind.label())
+                                                .clicked()
+                                                && current != kind
+                                            {
+                                                pending_override.mme_kind = Some(kind);
+                                                dirty = true;
+                                            }
+                                        }
+                                    });
+                                if current_override.is_some() && current != estimated {
+                                    ui.small(t!("viewer.material_edit.manual_override_note"));
+                                    if ui
+                                        .small_button(t!("viewer.material_edit.reset_estimate"))
+                                        .clicked()
+                                    {
+                                        // review_024 [P2]: merge_from は Some しか上書きしないので、
+                                        // mme_kind を消すには closure 外で直接 None に設定する。
+                                        pending_mme_reset = true;
+                                    }
+                                }
+                            });
+
+                            ui.small(t!(
+                                "viewer.material_edit.estimated",
+                                kind = estimated.label()
+                            ));
+
+                            // ray-mmd ルート表示
+                            let root_label =
+                                app.app_config.ray_mmd_root.as_deref().unwrap_or(".\\");
+                            ui.small(format!("ray-mmd: {}", root_label));
+                        });
+                }); // ScrollArea::vertical().show
         });
 
     // v0.5.9: パネルの実 px 高（egui logical pt × pixels_per_point）を記録し、
@@ -2595,9 +2630,10 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
             let (tx, rx) = std::sync::mpsc::channel();
             let repaint = ctx.clone();
             let dir = app.tex.last_dir.clone();
+            let title = t!("viewer.material_edit.tex_picker_title").into_owned();
             std::thread::spawn(move || {
                 let mut dialog = rfd::FileDialog::new()
-                    .set_title("テクスチャ画像を選択")
+                    .set_title(title)
                     .add_filter("Image", &["png", "jpg", "jpeg", "tga", "bmp", "psd", "dds"]);
                 if let Some(ref d) = dir {
                     dialog = dialog.set_directory(d);
@@ -2634,7 +2670,7 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     let mut apply = false;
     let mut cancelled = false;
 
-    egui::Window::new("テクスチャ割り当て")
+    egui::Window::new(t!("viewer.tex_drop.title"))
         .collapsible(true)
         .resizable(true)
         .default_pos(egui::pos2(20.0, 60.0))
@@ -2649,20 +2685,23 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                     ));
                 }
                 ui.vertical(|ui| {
-                    ui.label(format!("画像: {}", file_name));
+                    ui.label(t!("viewer.tex_drop.image_label", name = file_name));
                     ui.add_space(2.0);
-                    ui.label("チェックでプレビュー、適用で確定");
+                    ui.label(t!("viewer.tex_drop.instruction"));
                 });
             });
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.small_button("全選択").clicked() {
+                if ui.small_button(t!("viewer.tex_drop.select_all")).clicked() {
                     preview.selection.iter_mut().for_each(|v| *v = true);
                 }
-                if ui.small_button("全解除").clicked() {
+                if ui
+                    .small_button(t!("viewer.tex_drop.deselect_all"))
+                    .clicked()
+                {
                     preview.selection.iter_mut().for_each(|v| *v = false);
                 }
-                if ui.small_button("未設定のみ").clicked() {
+                if ui.small_button(t!("viewer.tex_drop.unset_only")).clicked() {
                     for &(_draw_idx, mat_idx) in loaded.mat_cache.draw_indices.iter() {
                         if mat_idx < preview.selection.len() {
                             let has_tex = loaded
@@ -2739,12 +2778,15 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             let selected_count = preview.selection.iter().filter(|&&v| v).count();
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(selected_count > 0, egui::Button::new("適用"))
+                    .add_enabled(
+                        selected_count > 0,
+                        egui::Button::new(t!("viewer.dialog.common.apply")),
+                    )
                     .clicked()
                 {
                     apply = true;
                 }
-                if ui.button("キャンセル").clicked() {
+                if ui.button(t!("viewer.dialog.common.cancel")).clicked() {
                     cancelled = true;
                 }
             });
