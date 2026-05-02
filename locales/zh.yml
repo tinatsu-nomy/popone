@@ -416,6 +416,7 @@ viewer:
       rim: "边缘光"
       emissive_normal: "自发光 / 法线"
       other: "其他"
+      mmd_texture: "MMD 纹理 (Sphere / Toon)"
     shade_mtoon_note: "※ 仅在勾选「启用 MToon」时反映到渲染和导出。"
     intensity_label: "强度:"
     intensity_note: "※ 强度为 HDR 倍率（可超过 1.0）。仅更改颜色时若强度为 0，会自动设为 1.0。"
@@ -668,6 +669,11 @@ viewer:
     add_model_shift: "追加加载模型 (Shift)"
     load_model_file: "加载模型文件"
     unsupported_format: "不支持的格式 (支持 VRM/FBX/PMX/PMD/图像)"
+  file_tree:
+    animations: "动画 (%{count})"
+    pkg_textures: "pkg 纹理 (%{count})"
+    textures_group: "纹理: %{group} (%{count})"
+    textures_all: "纹理 (%{count})"
   log_viewer:
     follow_tail: "自动追踪"
     follow_tail_hover: "新日志到达时自动滚动到底部"

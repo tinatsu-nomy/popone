@@ -2359,7 +2359,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                     // v0.5.2: BaseColor/Emissive/Normal 等の汎用スロットは各パラメタセクション
                     // （基本 / 影 / アウトライン / リム / MatCap / UV アニメ / エミッシブ/法線）
                     // に直接統合したため、ここには MMD/PMX 固有の Sphere / Toon だけを残す。
-                    egui::CollapsingHeader::new("MMD テクスチャ (Sphere / Toon)")
+                    egui::CollapsingHeader::new(t!("viewer.material_edit.section.mmd_texture"))
                         .default_open(false)
                         .show(ui, |ui| {
                             use crate::intermediate::types::TextureSlot;
@@ -4503,30 +4503,41 @@ fn show_file_tree(ui: &mut egui::Ui, app: &ViewerApp) {
 
     // ── アニメーション ──
     if !app.anim.library.is_empty() {
-        let header = format!("アニメーション ({})", app.anim.library.len());
-        egui::CollapsingHeader::new(egui::RichText::new(&header).color(anim_color).strong())
-            .id_salt(ui.id().with("file_chain_anim"))
-            .default_open(false)
-            .show(ui, |ui| {
-                for (name, path, _) in &app.anim.library {
-                    ui.label(egui::RichText::new(name).color(file_color))
-                        .on_hover_text(path.to_string_lossy().to_string());
-                }
-            });
+        let header = t!(
+            "viewer.file_tree.animations",
+            count = app.anim.library.len()
+        );
+        egui::CollapsingHeader::new(
+            egui::RichText::new(header.as_ref())
+                .color(anim_color)
+                .strong(),
+        )
+        .id_salt(ui.id().with("file_chain_anim"))
+        .default_open(false)
+        .show(ui, |ui| {
+            for (name, path, _) in &app.anim.library {
+                ui.label(egui::RichText::new(name).color(file_color))
+                    .on_hover_text(path.to_string_lossy().to_string());
+            }
+        });
     }
 
     // ── パッケージテクスチャ ──
     if let Some(ref pkg) = app.tex.pkg_textures {
         if !pkg.is_empty() {
-            let header = format!("pkg テクスチャ ({})", pkg.len());
-            egui::CollapsingHeader::new(egui::RichText::new(&header).color(dir_color).strong())
-                .id_salt(ui.id().with("file_chain_pkg"))
-                .default_open(false)
-                .show(ui, |ui| {
-                    for (name, _) in pkg {
-                        ui.label(egui::RichText::new(name).color(tex_color));
-                    }
-                });
+            let header = t!("viewer.file_tree.pkg_textures", count = pkg.len());
+            egui::CollapsingHeader::new(
+                egui::RichText::new(header.as_ref())
+                    .color(dir_color)
+                    .strong(),
+            )
+            .id_salt(ui.id().with("file_chain_pkg"))
+            .default_open(false)
+            .show(ui, |ui| {
+                for (name, _) in pkg {
+                    ui.label(egui::RichText::new(name).color(tex_color));
+                }
+            });
         }
     }
 }
@@ -4605,29 +4616,41 @@ fn show_texture_subtree(
             if tex_indices.is_empty() {
                 continue;
             }
-            let header = format!("テクスチャ: {} ({})", group.name, tex_indices.len());
-            egui::CollapsingHeader::new(egui::RichText::new(&header).color(dir_color).strong())
-                .id_salt(ui.id().with(("file_chain_tex_group", gi)))
-                .default_open(false)
-                .show(ui, |ui| {
-                    for &ti in &tex_indices {
-                        if let Some(tex) = loaded.ir.textures.get(ti) {
-                            ui.label(egui::RichText::new(&tex.filename).color(tex_color));
-                        }
+            let header = t!(
+                "viewer.file_tree.textures_group",
+                group = group.name,
+                count = tex_indices.len(),
+            );
+            egui::CollapsingHeader::new(
+                egui::RichText::new(header.as_ref())
+                    .color(dir_color)
+                    .strong(),
+            )
+            .id_salt(ui.id().with(("file_chain_tex_group", gi)))
+            .default_open(false)
+            .show(ui, |ui| {
+                for &ti in &tex_indices {
+                    if let Some(tex) = loaded.ir.textures.get(ti) {
+                        ui.label(egui::RichText::new(&tex.filename).color(tex_color));
                     }
-                });
+                }
+            });
         }
     } else {
         // 単一グループ: フラット表示
-        let header = format!("テクスチャ ({})", tex_count);
-        egui::CollapsingHeader::new(egui::RichText::new(&header).color(dir_color).strong())
-            .id_salt(ui.id().with("file_chain_tex_all"))
-            .default_open(false)
-            .show(ui, |ui| {
-                for tex in &loaded.ir.textures {
-                    ui.label(egui::RichText::new(&tex.filename).color(tex_color));
-                }
-            });
+        let header = t!("viewer.file_tree.textures_all", count = tex_count);
+        egui::CollapsingHeader::new(
+            egui::RichText::new(header.as_ref())
+                .color(dir_color)
+                .strong(),
+        )
+        .id_salt(ui.id().with("file_chain_tex_all"))
+        .default_open(false)
+        .show(ui, |ui| {
+            for tex in &loaded.ir.textures {
+                ui.label(egui::RichText::new(&tex.filename).color(tex_color));
+            }
+        });
     }
 }
 

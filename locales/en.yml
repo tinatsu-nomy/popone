@@ -416,6 +416,7 @@ viewer:
       rim: "Rim"
       emissive_normal: "Emissive / Normal"
       other: "Other"
+      mmd_texture: "MMD textures (Sphere / Toon)"
     shade_mtoon_note: '* Reflects in rendering/export only when "Enable MToon" is checked.'
     intensity_label: "Intensity:"
     intensity_note: "* Intensity is an HDR multiplier (can exceed 1.0). When changing only the color while intensity is 0, it is automatically set to 1.0."
@@ -668,6 +669,11 @@ viewer:
     add_model_shift: "Add model (Shift)"
     load_model_file: "Load model file"
     unsupported_format: "Unsupported format (VRM/FBX/PMX/PMD/image supported)"
+  file_tree:
+    animations: "Animations (%{count})"
+    pkg_textures: "Pkg textures (%{count})"
+    textures_group: "Textures: %{group} (%{count})"
+    textures_all: "Textures (%{count})"
   log_viewer:
     follow_tail: "Auto-tail"
     follow_tail_hover: "Automatically scroll to bottom when new logs arrive"
