@@ -89,6 +89,8 @@ cli:
     viewer_launch_failed: "ビューア起動失敗: %{detail}"
 
 error:
+  archive_old_model_not_found: "アーカイブ内に以前のモデルが見つかりません: %{path}"
+  image_decode_failed: "画像デコード失敗: %{detail}"
   glb_file_load_failed: "GLB ファイルの読み込みに失敗: %{path}"
   glb_data_load_failed: "GLB データの読み込みに失敗"
   io_failed: "ファイル読み込み失敗"
@@ -278,6 +280,13 @@ viewer:
       ok: "OK"
       cancel: "キャンセル"
       apply: "適用"
+      filter_archive: "アーカイブ (.zip, .7z)"
+    open_model:
+      title: "3Dモデル / VRMAアニメーションを開く"
+      filter_supported: "対応形式"
+    append_model:
+      title: "モデルを追加読み込み"
+      filter_3d_model: "3Dモデル"
     tex_history:
       title: "テクスチャ履歴の上書き"
       message1: "このモデルのテクスチャ履歴が既に存在します。"
@@ -350,6 +359,7 @@ viewer:
     reload:
       failed: "リロード失敗: %{error}"
       load_failed: "読み込み失敗: %{error}"
+      file_not_loaded: "ファイルを読み込めませんでした。\nファイルが破損していないか、対応形式（VRM/FBX/PMX/PMD/ZIP/7z）であるか確認してください。\n詳細: %{detail}"
     uvmap:
       exported: "UVマップ出力完了: %{path}"
       failed: "UVマップ出力失敗: %{error}"

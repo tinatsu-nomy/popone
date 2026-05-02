@@ -89,6 +89,8 @@ cli:
     viewer_launch_failed: "启动查看器失败: %{detail}"
 
 error:
+  archive_old_model_not_found: "归档中未找到先前的模型: %{path}"
+  image_decode_failed: "图像解码失败: %{detail}"
   glb_file_load_failed: "读取 GLB 文件失败: %{path}"
   glb_data_load_failed: "读取 GLB 数据失败"
   io_failed: "读取文件失败"
@@ -278,6 +280,13 @@ viewer:
       ok: "确定"
       cancel: "取消"
       apply: "应用"
+      filter_archive: "归档 (.zip, .7z)"
+    open_model:
+      title: "打开 3D 模型 / VRMA 动画"
+      filter_supported: "支持的格式"
+    append_model:
+      title: "追加加载模型"
+      filter_3d_model: "3D 模型"
     tex_history:
       title: "覆盖纹理历史"
       message1: "该模型的纹理历史已存在。"
@@ -350,6 +359,7 @@ viewer:
     reload:
       failed: "重新加载失败: %{error}"
       load_failed: "加载失败: %{error}"
+      file_not_loaded: "无法加载文件。\n请检查文件是否损坏，或是否为支持的格式 (VRM/FBX/PMX/PMD/ZIP/7z)。\n详细: %{detail}"
     uvmap:
       exported: "UV 贴图导出完成: %{path}"
       failed: "UV 贴图导出失败: %{error}"

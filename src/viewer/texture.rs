@@ -5,6 +5,7 @@ use crate::color::{linear_f32_to_rgba8, rgba8_to_linear_f32};
 use crate::intermediate::types::IrModel;
 use anyhow::{Context, Result};
 use eframe::wgpu;
+use rust_i18n::t;
 
 /// テクスチャデコード失敗・参照先不在時のフォールバック色を白にするか。
 /// - true（既定）: 1×1 白 (255,255,255,255) — 乗算/加算系スロットで色被りしない
@@ -427,9 +428,15 @@ pub fn decode_image_to_rgba_with_hint(
     let img = if let Some(fmt) = format {
         image::load_from_memory_with_format(data, fmt)
             .or_else(|_| image::load_from_memory(data))
-            .map_err(|e| anyhow::anyhow!("画像デコード失敗: {}", e))?
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    t!("error.image_decode_failed", detail = format!("{e}")).into_owned()
+                )
+            })?
     } else {
-        image::load_from_memory(data).map_err(|e| anyhow::anyhow!("画像デコード失敗: {}", e))?
+        image::load_from_memory(data).map_err(|e| {
+            anyhow::anyhow!(t!("error.image_decode_failed", detail = format!("{e}")).into_owned())
+        })?
     };
 
     let img = img.to_rgba8();

@@ -89,6 +89,8 @@ cli:
     viewer_launch_failed: "Failed to launch viewer: %{detail}"
 
 error:
+  archive_old_model_not_found: "Previous model not found in archive: %{path}"
+  image_decode_failed: "Image decode failed: %{detail}"
   glb_file_load_failed: "Failed to read GLB file: %{path}"
   glb_data_load_failed: "Failed to read GLB data"
   io_failed: "Failed to read file"
@@ -278,6 +280,13 @@ viewer:
       ok: "OK"
       cancel: "Cancel"
       apply: "Apply"
+      filter_archive: "Archive (.zip, .7z)"
+    open_model:
+      title: "Open 3D model / VRMA animation"
+      filter_supported: "Supported formats"
+    append_model:
+      title: "Add model"
+      filter_3d_model: "3D model"
     tex_history:
       title: "Overwrite Texture History"
       message1: "Texture history for this model already exists."
@@ -350,6 +359,7 @@ viewer:
     reload:
       failed: "Reload failed: %{error}"
       load_failed: "Load failed: %{error}"
+      file_not_loaded: "Could not load the file.\nCheck whether the file is corrupted or in a supported format (VRM/FBX/PMX/PMD/ZIP/7z).\nDetails: %{detail}"
     uvmap:
       exported: "UV map exported: %{path}"
       failed: "UV map export failed: %{error}"

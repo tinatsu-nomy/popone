@@ -1277,7 +1277,7 @@ fn cpu_parse_source_inner(
 
             let ext = crate::path_ext_lower(&path);
             let format = crate::archive::archive_format_from_ext(&ext)
-                .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
+                .with_context(|| t!("error.unsupported_archive_format", ext = ext).into_owned())?;
 
             // アーカイブ内モデル一覧を取得
             let contents = crate::archive::list_models(&archive_data, format)?;
@@ -1798,11 +1798,12 @@ impl ViewerApp {
                             host_fmt.label(),
                             other_fmt.label()
                         );
-                        anyhow::bail!(
-                            "座標系が異なるモデルは追加できません。\nホスト: {}, 追加: {}",
-                            host_fmt.label(),
-                            other_fmt.label()
-                        );
+                        anyhow::bail!(t!(
+                            "viewer.toast.append.coord_mismatch",
+                            host = host_fmt.label(),
+                            other = other_fmt.label(),
+                        )
+                        .into_owned());
                     }
                 }
                 self.start_deferred_append_gpu_build(
@@ -1833,11 +1834,12 @@ impl ViewerApp {
                             host_fmt.label(),
                             other_fmt.label()
                         );
-                        anyhow::bail!(
-                            "座標系が異なるモデルは追加できません。\nホスト: {}, 追加: {}",
-                            host_fmt.label(),
-                            other_fmt.label()
-                        );
+                        anyhow::bail!(t!(
+                            "viewer.toast.append.coord_mismatch",
+                            host = host_fmt.label(),
+                            other = other_fmt.label(),
+                        )
+                        .into_owned());
                     }
                 }
                 self.start_deferred_append_gpu_build(
@@ -2031,7 +2033,7 @@ impl ViewerApp {
                 append,
             } => {
                 if contents.models.is_empty() {
-                    anyhow::bail!("アーカイブ内にモデルファイルが見つかりません");
+                    anyhow::bail!(t!("error.archive_no_models_found").into_owned());
                 }
 
                 if contents.models.len() == 1 {
@@ -2337,11 +2339,11 @@ impl ViewerApp {
             }
             Err(e) => {
                 log::error!("Load failed: {e}");
-                let user_msg = format!(
-                    "ファイルを読み込めませんでした。\n\
-                     ファイルが破損していないか、対応形式（VRM/FBX/PMX/PMD/ZIP/7z）であるか確認してください。\n\
-                     詳細: {e}"
-                );
+                let user_msg = t!(
+                    "viewer.toast.reload.file_not_loaded",
+                    detail = format!("{e}"),
+                )
+                .into_owned();
                 self.convert_message = Some(ConvertMessage::failure(user_msg));
             }
         }
@@ -2656,12 +2658,12 @@ impl ViewerApp {
 
         let ext = crate::path_ext_lower(path);
         let format = crate::archive::archive_format_from_ext(&ext)
-            .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
+            .with_context(|| t!("error.unsupported_archive_format", ext = ext).into_owned())?;
 
         let contents = crate::archive::list_models(&archive_data, format)?;
 
         if contents.models.is_empty() {
-            anyhow::bail!("アーカイブ内にモデルファイルが見つかりません");
+            anyhow::bail!(t!("error.archive_no_models_found").into_owned());
         }
 
         if contents.models.len() == 1 {
@@ -2867,7 +2869,7 @@ impl ViewerApp {
 
         let ext = crate::path_ext_lower(original_path);
         let format = crate::archive::archive_format_from_ext(&ext)
-            .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
+            .with_context(|| t!("error.unsupported_archive_format", ext = ext).into_owned())?;
 
         let contents = crate::archive::list_models(data, format)?;
 
@@ -2877,7 +2879,11 @@ impl ViewerApp {
             .iter()
             .position(|(_, p, _, _)| p.to_string_lossy() == selected_entry_path)
             .ok_or_else(|| {
-                anyhow::anyhow!("アーカイブ内に以前のモデルが見つかりません: {selected_entry_path}")
+                anyhow::anyhow!(t!(
+                    "error.archive_old_model_not_found",
+                    path = selected_entry_path
+                )
+                .into_owned())
             })?;
 
         let bundle = crate::archive::extract_model_bundle(data, format, contents, model_index)?;
@@ -2901,7 +2907,7 @@ impl ViewerApp {
 
         let ext = crate::path_ext_lower(original_path);
         let format = crate::archive::archive_format_from_ext(&ext)
-            .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
+            .with_context(|| t!("error.unsupported_archive_format", ext = ext).into_owned())?;
 
         let contents = crate::archive::list_models(data, format)?;
 
@@ -2910,7 +2916,11 @@ impl ViewerApp {
             .iter()
             .position(|(_, p, _, _)| p.to_string_lossy() == selected_entry_path)
             .ok_or_else(|| {
-                anyhow::anyhow!("アーカイブ内に以前のモデルが見つかりません: {selected_entry_path}")
+                anyhow::anyhow!(t!(
+                    "error.archive_old_model_not_found",
+                    path = selected_entry_path
+                )
+                .into_owned())
             })?;
 
         let bundle = crate::archive::extract_model_bundle(data, format, contents, model_index)?;
@@ -5400,7 +5410,7 @@ impl ViewerApp {
 
         let ext = crate::path_ext_lower(original_path);
         let format = crate::archive::archive_format_from_ext(&ext)
-            .with_context(|| format!("未対応のアーカイブ形式: {ext}"))?;
+            .with_context(|| t!("error.unsupported_archive_format", ext = ext).into_owned())?;
 
         let contents = crate::archive::list_models(data, format)?;
 
@@ -5409,7 +5419,11 @@ impl ViewerApp {
             .iter()
             .position(|(_, p, _, _)| p.to_string_lossy() == selected_entry_path)
             .ok_or_else(|| {
-                anyhow::anyhow!("アーカイブ内に以前のモデルが見つかりません: {selected_entry_path}")
+                anyhow::anyhow!(t!(
+                    "error.archive_old_model_not_found",
+                    path = selected_entry_path
+                )
+                .into_owned())
             })?;
 
         let bundle = crate::archive::extract_model_bundle(data, format, contents, model_index)?;
@@ -5596,13 +5610,16 @@ impl ViewerApp {
             return;
         }
         let initial_dir = self.last_model_dir.clone();
+        let dialog_title = t!("viewer.dialog.open_model.title").into_owned();
+        let filter_supported = t!("viewer.dialog.open_model.filter_supported").into_owned();
+        let filter_archive = t!("viewer.dialog.common.filter_archive").into_owned();
         let (tx, rx) = std::sync::mpsc::channel();
         let repaint = ctx.clone();
         std::thread::spawn(move || {
             let mut dialog = rfd::FileDialog::new()
-                .set_title("3Dモデル / VRMAアニメーションを開く")
+                .set_title(dialog_title)
                 .add_filter(
-                    "対応形式",
+                    filter_supported,
                     &[
                         "vrm",
                         "fbx",
@@ -5625,7 +5642,7 @@ impl ViewerApp {
                 .add_filter("STL (.stl)", &["stl"])
                 .add_filter("DirectX text (.x)", &["x"])
                 .add_filter("UnityPackage (.unitypackage)", &["unitypackage"])
-                .add_filter("アーカイブ (.zip, .7z)", &["zip", "7z"])
+                .add_filter(filter_archive, &["zip", "7z"])
                 .add_filter("VRMA (.vrma)", &["vrma"]);
             if let Some(ref dir) = initial_dir {
                 dialog = dialog.set_directory(dir);
@@ -5643,13 +5660,16 @@ impl ViewerApp {
             return;
         }
         let initial_dir = self.last_model_dir.clone();
+        let dialog_title = t!("viewer.dialog.append_model.title").into_owned();
+        let filter_3d_model = t!("viewer.dialog.append_model.filter_3d_model").into_owned();
+        let filter_archive = t!("viewer.dialog.common.filter_archive").into_owned();
         let (tx, rx) = std::sync::mpsc::channel();
         let repaint = ctx.clone();
         std::thread::spawn(move || {
             let mut dialog = rfd::FileDialog::new()
-                .set_title("モデルを追加読み込み")
+                .set_title(dialog_title)
                 .add_filter(
-                    "3Dモデル",
+                    filter_3d_model,
                     &[
                         "vrm",
                         "fbx",
@@ -5668,7 +5688,7 @@ impl ViewerApp {
                 .add_filter("PMX (.pmx)", &["pmx"])
                 .add_filter("PMD (.pmd)", &["pmd"])
                 .add_filter("UnityPackage (.unitypackage)", &["unitypackage"])
-                .add_filter("アーカイブ (.zip, .7z)", &["zip", "7z"]);
+                .add_filter(filter_archive, &["zip", "7z"]);
             if let Some(ref dir) = initial_dir {
                 dialog = dialog.set_directory(dir);
             }
