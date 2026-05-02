@@ -561,7 +561,7 @@ mod tests {
             // mesh2 の頂点1 → old 10, mesh1(3頂点)除外で -3 → new 7
             assert_eq!(entries[1].0, 7);
         } else {
-            panic!("頂点モーフであるべき");
+            panic!("should be a vertex morph");
         }
     }
 
@@ -687,7 +687,7 @@ mod tests {
             assert_eq!(entries[0].0, 0); // blink の new index = 0
             assert_eq!(entries[0].1, 1.0);
         } else {
-            panic!("グループモーフであるべき");
+            panic!("should be a group morph");
         }
     }
 
@@ -764,7 +764,7 @@ mod tests {
             assert_eq!(entries[0].0, 0); // vtx_alive の new index = 0
             assert_eq!(entries[0].1, 1.0);
         } else {
-            panic!("グループモーフであるべき");
+            panic!("should be a group morph");
         }
     }
 

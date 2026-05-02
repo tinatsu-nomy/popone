@@ -276,7 +276,7 @@ pub fn upload_rgba_to_gpu_with_mips(
             // sRGB→linear→縮小→sRGB で色空間的に正確なダウンサンプリング
             // (LUT で powf 呼び出しを排除済み)
             let base = image::RgbaImage::from_raw(upload_w, upload_h, upload_rgba.to_vec())
-                .expect("ミップ生成用 RgbaImage 構築失敗");
+                .expect("RgbaImage construction for mip generation failed");
             let mut current_linear = rgba8_to_linear_f32(&base);
             for level in 1..mip_level_count {
                 let mip_w = (upload_w >> level).max(1);

@@ -674,7 +674,7 @@ mod tests {
         assert_eq!(
             entry.slot,
             crate::intermediate::types::TextureSlot::Normal,
-            "明示的な slot 指定が反映される"
+            "explicit slot specification should be reflected"
         );
     }
 

@@ -574,7 +574,7 @@ mod tests {
         assert_eq!(
             m.lines.len(),
             1,
-            "マルチライン (バックトレース) は 1 件の LogLine に連結されるべき"
+            "multi-line (backtrace) should be concatenated into a single LogLine"
         );
         assert_eq!(m.lines[0].level, LogLevel::Error);
         assert_eq!(
@@ -591,12 +591,12 @@ mod tests {
         assert_eq!(
             m.lines.len(),
             1,
-            "初回 [HEADER] を見るまでの非ヘッダ行は捨てられるべき"
+            "non-header lines before the first [HEADER] should be discarded"
         );
         assert_eq!(m.lines[0].message, "real");
         assert!(
             !m.seeking_first_header,
-            "正規ヘッダ検出後は seeking_first_header が false"
+            "seeking_first_header should be false after canonical header detection"
         );
     }
 

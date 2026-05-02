@@ -679,7 +679,7 @@ mod tests {
         });
 
         let diff = MaterialParamOverride::diff_from(&pristine, &current);
-        assert!(diff.is_some(), "変更があるので diff は Some");
+        assert!(diff.is_some(), "diff should be Some when there are changes");
 
         // apply: pristine に diff を適用 → current と同じになるべき
         let mut restored = pristine.clone();
@@ -736,7 +736,10 @@ mod tests {
     fn test_diff_from_no_change() {
         let mat = IrMaterial::default();
         let diff = MaterialParamOverride::diff_from(&mat, &mat);
-        assert!(diff.is_none(), "変更なしなら None");
+        assert!(
+            diff.is_none(),
+            "diff should be None when there are no changes"
+        );
     }
 
     // ===== Step 7-35: diff_from/apply_to テスト拡充 =====
@@ -1003,7 +1006,7 @@ mod tests {
         let uv = diff
             .base_color_uv
             .as_ref()
-            .expect("新規割当スロットの UV 差分が保存されるべき");
+            .expect("UV diff for newly assigned slot should be saved");
         assert_eq!(uv.offset, Some([0.5, 0.0]));
         assert_eq!(uv.rotation, Some(0.25));
         // default scale = 1.0 のままなので scale は None
