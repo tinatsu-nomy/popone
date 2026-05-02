@@ -1,19 +1,20 @@
-//! メインスレッドの応答性を監視するウォッチドッグ。
+//! Watchdog for monitoring main-thread responsiveness.
 //!
-//! メインスレッドが毎フレーム [`Heartbeat::tick`] を呼び、ウォッチドッグスレッドが
-//! 定期的にハートビートを確認する。一定時間更新がなければ「応答なし」と判定しログに記録する。
+//! The main thread calls [`Heartbeat::tick`] every frame, and the watchdog thread
+//! checks the heartbeat periodically. If it is not updated for a given period,
+//! the main thread is considered "unresponsive" and a warning is logged.
 //!
-//! 最小化中など `update()` が呼ばれない状況では [`Heartbeat::pause`] で監視を一時停止し、
-//! 誤検知を防ぐ。
+//! When `update()` is not guaranteed to run (e.g. while minimized), call
+//! [`Heartbeat::pause`] to suspend monitoring and avoid false positives.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// pause 状態を示す番兵値（エポックミリ秒としてはあり得ない値）
+/// Sentinel value indicating the paused state (impossible as an epoch-millis value).
 const PAUSED: u64 = u64::MAX;
 
-/// メインスレッドのハートビート（エポックミリ秒を AtomicU64 で共有）
+/// Main-thread heartbeat (epoch milliseconds shared via AtomicU64).
 #[derive(Clone)]
 pub struct Heartbeat(Arc<AtomicU64>);
 
@@ -22,12 +23,12 @@ impl Heartbeat {
         Self(Arc::new(AtomicU64::new(epoch_millis())))
     }
 
-    /// 毎フレーム呼び出して現在時刻を記録する（監視有効化）
+    /// Call every frame to record the current time (enables monitoring).
     pub fn tick(&self) {
         self.0.store(epoch_millis(), Ordering::Relaxed);
     }
 
-    /// 監視を一時停止する（最小化時など `update()` が保証されない場面で使用）
+    /// Suspend monitoring (use when `update()` is not guaranteed, e.g. while minimized).
     pub fn pause(&self) {
         self.0.store(PAUSED, Ordering::Relaxed);
     }
@@ -44,10 +45,10 @@ fn epoch_millis() -> u64 {
         .as_millis() as u64
 }
 
-/// ウォッチドッグスレッドを起動し、[`Heartbeat`] を返す。
+/// Start the watchdog thread and return its [`Heartbeat`].
 ///
-/// - `threshold`: この時間ハートビートが更新されなければ警告を出す
-/// - `interval`: チェック間隔
+/// - `threshold`: warn if the heartbeat has not been updated within this duration
+/// - `interval`: check interval
 pub fn start(threshold: Duration, interval: Duration) -> Heartbeat {
     let heartbeat = Heartbeat::new();
     let hb = heartbeat.clone();
@@ -63,7 +64,7 @@ pub fn start(threshold: Duration, interval: Duration) -> Heartbeat {
                 std::thread::sleep(interval);
                 let last = hb.load();
 
-                // pause 中は監視スキップ（最小化・非アクティブ等）
+                // Skip monitoring while paused (window minimized / inactive, etc.).
                 if last == PAUSED {
                     if was_unresponsive {
                         log::info!("[watchdog] Monitoring paused (window minimized/inactive)");

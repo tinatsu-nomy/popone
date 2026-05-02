@@ -1,15 +1,15 @@
-//! 材質編集ドロワー用プリセット (§J / Step 5)
+//! Presets for the material edit drawer (§J / Step 5).
 //!
-//! 3 種のプリセットを `MaterialParamOverride` として定義する。ドロワーの ComboBox から
-//! 選択 → 「適用」で `apply_to(mat)` を呼び、名前・テクスチャインデックス・alpha_mode
-//! には触れずにカラー/スカラーパラメータだけを一括変更する。
+//! Defines three presets as `MaterialParamOverride`. Selected from the drawer's ComboBox
+//! and applied via the "Apply" button calling `apply_to(mat)`, which bulk-updates only
+//! color / scalar parameters without touching the name, texture indices, or alpha_mode.
 
 use glam::{Vec3, Vec4};
 
 use super::material_edit::MaterialParamOverride;
 use crate::intermediate::types::OutlineWidthMode;
 
-/// プリセット名の列挙
+/// Enumeration of preset names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaterialPreset {
     Mtoon10Default,
@@ -28,7 +28,7 @@ impl MaterialPreset {
         }
     }
 
-    /// プリセットの `MaterialParamOverride` を返す。`apply_to(mat)` で IR に適用する。
+    /// Return the preset as `MaterialParamOverride`. Apply to the IR via `apply_to(mat)`.
     pub fn to_override(self) -> MaterialParamOverride {
         match self {
             Self::Mtoon10Default => preset_mtoon10_default(),
@@ -38,7 +38,7 @@ impl MaterialPreset {
     }
 }
 
-/// MToon 1.0 の仕様書記載デフォルト値。
+/// MToon 1.0 spec-defined default values.
 /// <https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md>
 fn preset_mtoon10_default() -> MaterialParamOverride {
     MaterialParamOverride {
@@ -64,12 +64,12 @@ fn preset_mtoon10_default() -> MaterialParamOverride {
         emissive_factor: Some(Vec3::ZERO),
         normal_texture_scale: Some(1.0),
         render_queue_offset: Some(0),
-        // alpha_mode / alpha_cutoff / cull_mode は触らない
+        // Do not touch alpha_mode / alpha_cutoff / cull_mode.
         ..Default::default()
     }
 }
 
-/// lilToon の標準設定を模した値。影は MToon より柔らかめ、リムは控えめ。
+/// Values that mimic lilToon's standard settings. Softer shading than MToon, subtler rim.
 fn preset_liltoon_standard() -> MaterialParamOverride {
     MaterialParamOverride {
         enable_mtoon: Some(true),
@@ -95,7 +95,7 @@ fn preset_liltoon_standard() -> MaterialParamOverride {
     }
 }
 
-/// PMX 互換: 非 MToon の典型的なデフォルト値。MToon 有効化を OFF に戻す。
+/// PMX compatible: typical defaults for non-MToon materials. Turns MToon back off.
 fn preset_pmx_compat() -> MaterialParamOverride {
     MaterialParamOverride {
         enable_mtoon: Some(false),
@@ -104,7 +104,7 @@ fn preset_pmx_compat() -> MaterialParamOverride {
         edge_size: Some(1.0),
         emissive_factor: Some(Vec3::ZERO),
         normal_texture_scale: Some(1.0),
-        // MToon 系は触らない（enable_mtoon=false で無効化されるため意味がない）
+        // Skip MToon-specific fields (enable_mtoon=false disables them anyway).
         ..Default::default()
     }
 }
