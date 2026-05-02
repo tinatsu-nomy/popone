@@ -3753,14 +3753,23 @@ fn show_tab_display(
     ui.separator();
     let small = egui::TextStyle::Small;
     ui.horizontal(|ui| {
-        if ui.small_button("全表示").clicked() {
+        if ui
+            .small_button(t!("viewer.material_list.show_all"))
+            .clicked()
+        {
             app.material_visibility.iter_mut().for_each(|v| *v = true);
         }
-        if ui.small_button("全非表示").clicked() {
+        if ui
+            .small_button(t!("viewer.material_list.hide_all"))
+            .clicked()
+        {
             app.material_visibility.iter_mut().for_each(|v| *v = false);
         }
-        ui.checkbox(&mut app.tex.link_same_name, "同名連動")
-            .on_hover_text("同じ名前の材質にテクスチャを同時に割り当て");
+        ui.checkbox(
+            &mut app.tex.link_same_name,
+            t!("viewer.material_list.link_same_name"),
+        )
+        .on_hover_text(t!("viewer.material_list.link_same_name_hover"));
     });
     // 2行目: テクスチャリセット + 履歴ボタン（小フォント）
     let mut do_save_history = false;
@@ -3768,7 +3777,10 @@ fn show_tab_display(
     ui.horizontal(|ui| {
         if !app.tex.assignments.is_empty()
             && ui
-                .button(egui::RichText::new("テクスチャリセット").text_style(small.clone()))
+                .button(
+                    egui::RichText::new(t!("viewer.material_list.tex_reset"))
+                        .text_style(small.clone()),
+                )
                 .clicked()
         {
             app.tex.assignments.clear();
@@ -3778,7 +3790,10 @@ fn show_tab_display(
         if tex_history_key.is_some() {
             if (has_file_assignments || has_param_edits)
                 && ui
-                    .button(egui::RichText::new("履歴保存").text_style(small.clone()))
+                    .button(
+                        egui::RichText::new(t!("viewer.material_list.history_save"))
+                            .text_style(small.clone()),
+                    )
                     .clicked()
             {
                 // 既に履歴がある場合は確認フラグ、なければ即保存
@@ -3790,7 +3805,10 @@ fn show_tab_display(
             }
             if tex_history_has_entry
                 && ui
-                    .button(egui::RichText::new("履歴呼出").text_style(small.clone()))
+                    .button(
+                        egui::RichText::new(t!("viewer.material_list.history_recall"))
+                            .text_style(small.clone()),
+                    )
                     .clicked()
             {
                 do_recall_history = true;
@@ -3800,11 +3818,11 @@ fn show_tab_display(
     // フィルター（材質数が多い場合に便利）
     if num_draws > 10 {
         ui.horizontal(|ui| {
-            ui.label("検索:");
+            ui.label(t!("viewer.material_list.search_label"));
             ui.add(
                 egui::TextEdit::singleline(&mut app.material_filter)
                     .desired_width(ui.available_width())
-                    .hint_text("材質名で絞り込み…"),
+                    .hint_text(t!("viewer.material_list.material_filter_hint")),
             );
         });
     }
@@ -3919,7 +3937,7 @@ fn show_tab_display(
                         }
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
-                    resp.on_hover_text("法線平滑化（グループ一括）");
+                    resp.on_hover_text(t!("viewer.material_list.smooth_normals_group_hover"));
                 }
                 // [C] カスタム法線クリア（グループ一括）
                 {
@@ -3942,7 +3960,7 @@ fn show_tab_display(
                         }
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
-                    resp.on_hover_text("カスタム法線クリア（グループ一括）");
+                    resp.on_hover_text(t!("viewer.material_list.clear_normals_group_hover"));
                 }
                 // [N] ノーマルマップ ON/OFF（グループ一括）
                 {
@@ -3968,7 +3986,7 @@ fn show_tab_display(
                         }
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
-                    resp.on_hover_text("ノーマルマップ（グループ一括）");
+                    resp.on_hover_text(t!("viewer.material_list.normal_map_group_hover"));
                 }
                 // [B] エミッシブ ON/OFF（グループ一括）
                 {
@@ -3994,7 +4012,7 @@ fn show_tab_display(
                         }
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
-                    resp.on_hover_text("エミッシブ（グループ一括）");
+                    resp.on_hover_text(t!("viewer.material_list.emissive_group_hover"));
                 }
                 // [ ] 表示/非表示（グループ一括）
                 {
@@ -4062,11 +4080,15 @@ fn show_tab_display(
                         .and_then(|idx| loaded_ir_thumb_ids.get(idx).copied().flatten());
                     let src_name = mat_src_tex.get(mat_idx)
                         .and_then(|s: &Option<String>| s.as_deref());
-                    let tooltip = match (has_tex, src_name) {
-                        (true, Some(s)) => format!("テクスチャ設定済 ({})\nクリックで変更", s),
-                        (true, None) => "テクスチャ設定済\nクリックで変更".to_string(),
-                        (false, Some(s)) => format!("テクスチャ未設定 ({})\nクリックで割り当て", s),
-                        (false, None) => "テクスチャ未設定\nクリックで割り当て".to_string(),
+                    let tooltip: String = match (has_tex, src_name) {
+                        (true, Some(s)) => {
+                            t!("viewer.material_list.tex_set_with_src", src = s).into_owned()
+                        }
+                        (true, None) => t!("viewer.material_list.tex_set").into_owned(),
+                        (false, Some(s)) => {
+                            t!("viewer.material_list.tex_unset_with_src", src = s).into_owned()
+                        }
+                        (false, None) => t!("viewer.material_list.tex_unset").into_owned(),
                     };
                     // v0.5.3: ImageButton の枠分があるため、画像自体は 14px に抑えて
                     // 行全体の見た目サイズを絵文字アイコン列と揃える。
@@ -4128,7 +4150,7 @@ fn show_tab_display(
                         egui::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
                             ui.set_min_width(280.0);
                             // 「ファイルから選択」を先頭に配置
-                            if ui.button("ファイルから選択...").clicked() {
+                            if ui.button(t!("viewer.material_list.pkg_select_file")).clicked() {
                                 *tex_assign_request = Some(TexAssignRequest::FileDialog(mat_idx));
                                 ui.memory_mut(|m| m.toggle_popup(popup_id));
                                 app.tex.pkg_popup_filter.clear();
@@ -4137,7 +4159,7 @@ fn show_tab_display(
                             ui.add(
                                 egui::TextEdit::singleline(&mut app.tex.pkg_popup_filter)
                                     .desired_width(ui.available_width())
-                                    .hint_text("テクスチャ名で絞り込み…"),
+                                    .hint_text(t!("viewer.material_list.pkg_filter_hint")),
                             );
                             let filter_lower = app.tex.pkg_popup_filter.to_lowercase();
                             egui::ScrollArea::vertical().max_height(400.0)
@@ -4194,7 +4216,7 @@ fn show_tab_display(
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
                     if resp.hovered() { row_highlight = true; }
-                    resp.on_hover_text("法線平滑化");
+                    resp.on_hover_text(t!("viewer.material_list.smooth_normals_hover"));
                 }
                 if let Some(d) = app.material_display.get(mat_idx) {
                     let old = d.clear_normals;
@@ -4207,7 +4229,7 @@ fn show_tab_display(
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
                     if resp.hovered() { row_highlight = true; }
-                    resp.on_hover_text("カスタム法線クリア");
+                    resp.on_hover_text(t!("viewer.material_list.clear_normals_hover"));
                 }
                 // [N] ノーマルマップ ON/OFF
                 if let Some(d) = app.material_display.get(mat_idx) {
@@ -4221,7 +4243,7 @@ fn show_tab_display(
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
                     if resp.hovered() { row_highlight = true; }
-                    resp.on_hover_text("ノーマルマップ");
+                    resp.on_hover_text(t!("viewer.material_list.normal_map_hover"));
                 }
                 // [B] エミッシブ ON/OFF
                 if let Some(d) = app.material_display.get(mat_idx) {
@@ -4236,7 +4258,7 @@ fn show_tab_display(
                         app.pending.rebuild = Some(PendingOverlay::WaitingOverlay);
                     }
                     if resp.hovered() { row_highlight = true; }
-                    resp.on_hover_text("エミッシブ");
+                    resp.on_hover_text(t!("viewer.material_list.emissive_hover"));
                 }
 
                 // 材質編集パネル開閉（§A）。既存アイコン列とは別列として扱い、
@@ -4254,7 +4276,7 @@ fn show_tab_display(
                         };
                     }
                     if resp.hovered() { row_highlight = true; }
-                    resp.on_hover_text("材質編集パネルを開く");
+                    resp.on_hover_text(t!("viewer.material_list.edit_panel_hover"));
                 }
 
                 let cb = if let Some(tex_name) = display_tex {
@@ -4271,28 +4293,46 @@ fn show_tab_display(
                         let textures = &loaded.ir.textures;
                         let mut lines = Vec::new();
                         if let Some(idx) = mat.texture_index {
-                            if let Some(t) = textures.get(idx) {
-                                lines.push(format!("テクスチャ: {}", t.filename));
+                            if let Some(tex) = textures.get(idx) {
+                                lines.push(
+                                    t!("viewer.material_list.tex_slot_color", name = tex.filename)
+                                        .into_owned(),
+                                );
                             }
                         }
                         if let Some(idx) = mat.sphere_texture_index {
-                            if let Some(t) = textures.get(idx) {
-                                lines.push(format!("スフィア: {}", t.filename));
+                            if let Some(tex) = textures.get(idx) {
+                                lines.push(
+                                    t!("viewer.material_list.tex_slot_sphere", name = tex.filename)
+                                        .into_owned(),
+                                );
                             }
                         }
                         if let Some(idx) = mat.toon_texture_index {
-                            if let Some(t) = textures.get(idx) {
-                                lines.push(format!("トゥーン: {}", t.filename));
+                            if let Some(tex) = textures.get(idx) {
+                                lines.push(
+                                    t!("viewer.material_list.tex_slot_toon", name = tex.filename)
+                                        .into_owned(),
+                                );
                             }
                         }
                         if let Some(ref info) = mat.normal_texture {
-                            if let Some(t) = textures.get(info.index) {
-                                lines.push(format!("法線: {}", t.filename));
+                            if let Some(tex) = textures.get(info.index) {
+                                lines.push(
+                                    t!("viewer.material_list.tex_slot_normal", name = tex.filename)
+                                        .into_owned(),
+                                );
                             }
                         }
                         if let Some(ref info) = mat.emissive_texture {
-                            if let Some(t) = textures.get(info.index) {
-                                lines.push(format!("エミッシブ: {}", t.filename));
+                            if let Some(tex) = textures.get(info.index) {
+                                lines.push(
+                                    t!(
+                                        "viewer.material_list.tex_slot_emissive",
+                                        name = tex.filename
+                                    )
+                                    .into_owned(),
+                                );
                             }
                         }
                         if !lines.is_empty() {
