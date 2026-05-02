@@ -2972,12 +2972,20 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
         let bg_result = match result {
             Ok(stats) => {
                 use crate::intermediate::types::AStanceResult;
-                let mut msg = format!(
-                    "変換完了: {}\nボーン: {} / 頂点: {} / 材質: {} / モーフ: {}",
-                    stats.output_path, stats.bones, stats.vertices, stats.materials, stats.morphs,
-                );
+                let mut msg = t!(
+                    "viewer.toast.convert.complete",
+                    path = stats.output_path,
+                    bones = stats.bones,
+                    vertices = stats.vertices,
+                    materials = stats.materials,
+                    morphs = stats.morphs,
+                )
+                .into_owned();
                 if output_log {
-                    msg += &format!("\nログ: {}", log_path.display());
+                    msg += &t!(
+                        "viewer.toast.convert.log_appended",
+                        path = log_path.display().to_string(),
+                    );
                 }
 
                 // MME 出力
@@ -2993,18 +3001,19 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
                         ));
                         match emit_mme_files(&convert_ir, &mme_dir, root, &mme_kinds) {
                             Ok(result) => {
-                                msg += &format!(
-                                    "\nMME: {} 材質の .fx を {} に出力",
-                                    result.count,
-                                    mme_dir.display()
+                                msg += &t!(
+                                    "viewer.toast.convert.mme_summary",
+                                    count = result.count,
+                                    dir = mme_dir.display().to_string(),
                                 );
                                 if let Some(ref warn) = result.include_warning {
-                                    msg += &format!("\n⚠ {}", warn);
+                                    msg += &t!("viewer.toast.convert.mme_warn_prefix", warn = warn);
                                     mme_warning = true;
                                 }
                             }
                             Err(e) => {
-                                msg += &format!("\n⚠ MME 出力に失敗: {e}");
+                                msg +=
+                                    &t!("viewer.toast.convert.mme_failed", err = format!("{e}"),);
                                 mme_warning = true;
                             }
                         }
@@ -3013,14 +3022,17 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
 
                 let has_warning = match primary_astance_result {
                     AStanceResult::NotFound => {
-                        msg += &format!(
-                            "\n⚠ {}変換: 腕ボーンが見つからず変換できませんでした",
-                            stance_label_owned
+                        msg += &t!(
+                            "viewer.toast.convert.stance_not_found",
+                            label = stance_label_owned,
                         );
                         true
                     }
                     AStanceResult::AlreadyAStance => {
-                        msg += &format!("\n※ 既に{}に近いためスキップしました", stance_label_owned);
+                        msg += &t!(
+                            "viewer.toast.convert.stance_already",
+                            label = stance_label_owned,
+                        );
                         false
                     }
                     _ => false,
@@ -3033,9 +3045,7 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
                 }
             }
             Err(e) => super::app::pending::ConvertBgResult {
-                result: Err(format!(
-                    "変換失敗: {e}\n出力先のパスやディスク容量を確認してください。"
-                )),
+                result: Err(t!("viewer.toast.convert.failed", err = format!("{e}")).into_owned()),
                 log_written: output_log,
                 has_warning: false,
                 output_dir: None,
@@ -4694,13 +4704,13 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
 
     // 出力先ディレクトリ（converted_modelXX の作成場所）
     ui.horizontal(|ui| {
-        ui.label("出力先:");
+        ui.label(t!("viewer.export_tab.output_dir_label"));
         let dir_label = app
             .export
             .output_base_dir
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "(ソースと同じ場所)".to_string());
+            .unwrap_or_else(|| t!("viewer.export_tab.output_dir_default").into_owned());
         ui.label(
             egui::RichText::new(&dir_label)
                 .small()
@@ -4711,7 +4721,10 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         // ダイアログ表示中は重複起動しない
         let dialog_active = app.export.pending_folder_dialog.is_some();
         if ui
-            .add_enabled(!dialog_active, egui::Button::new("フォルダ選択...").small())
+            .add_enabled(
+                !dialog_active,
+                egui::Button::new(t!("viewer.export_tab.folder_select_button")).small(),
+            )
             .clicked()
         {
             let start_dir = app
@@ -4725,10 +4738,11 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 })
                 .unwrap_or_default();
             // フォルダ選択ダイアログを別スレッドで開く（UIをブロックしない）
+            let dialog_title = t!("viewer.export_tab.output_dir_dialog_title").into_owned();
             let (tx, rx) = std::sync::mpsc::channel();
             let repaint = ui.ctx().clone();
             std::thread::spawn(move || {
-                let mut dialog = rfd::FileDialog::new().set_title("PMX出力先フォルダを選択");
+                let mut dialog = rfd::FileDialog::new().set_title(dialog_title);
                 if start_dir.exists() {
                     dialog = dialog.set_directory(&start_dir);
                 }
@@ -4737,7 +4751,11 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             });
             app.export.pending_folder_dialog = Some(rx);
         }
-        if app.export.output_base_dir.is_some() && ui.small_button("リセット").clicked() {
+        if app.export.output_base_dir.is_some()
+            && ui
+                .small_button(t!("viewer.export_tab.reset_button"))
+                .clicked()
+        {
             app.export.output_base_dir = None;
         }
     });
@@ -4745,12 +4763,12 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     // モデル名編集（タイトルバー表示 + PMX 出力ファイル名の両方に反映）
     // モデル未ロード時はグレーアウト
     ui.horizontal(|ui| {
-        ui.label("モデル名:");
+        ui.label(t!("viewer.export_tab.model_name_label"));
         ui.add_enabled_ui(has_model && !is_processing, |ui| {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut app.export.model_display_name)
                     .desired_width(f32::INFINITY)
-                    .hint_text("(拡張子なし)"),
+                    .hint_text(t!("viewer.export_tab.model_name_hint")),
             );
             if response.changed() {
                 // TextEdit からの変更はユーザー入力のため、サニタイズはせずそのまま反映。
@@ -4763,15 +4781,16 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
 
     // PMX/PMD ロード時は PMX 変換関連をグレーアウト
     ui.add_enabled_ui(has_model && !is_processing && !is_pmx_pmd, |ui| {
+        let convert_disabled_hint = if is_pmx_pmd {
+            t!("viewer.export_tab.convert_disabled_pmx_pmd")
+        } else if is_processing {
+            t!("viewer.export_tab.convert_disabled_processing")
+        } else {
+            t!("viewer.export_tab.convert_disabled_no_model")
+        };
         if ui
-            .button("PMX 変換")
-            .on_disabled_hover_text(if is_pmx_pmd {
-                "PMX/PMD ファイルからの変換は不要です"
-            } else if is_processing {
-                "処理中です..."
-            } else {
-                "モデルを読み込んでください"
-            })
+            .button(t!("viewer.export_tab.pmx_convert_button"))
+            .on_disabled_hover_text(convert_disabled_hint)
             .clicked()
         {
             // 変換ごとに converted_modelXX を再採番（上書き防止）
@@ -4821,7 +4840,10 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         .is_some_and(|l| l.ir.source_format == crate::intermediate::types::SourceFormat::Fbx);
     if is_pmx_pmd {
         if ui
-            .checkbox(&mut app.normalize_pose, "Tスタンス変換")
+            .checkbox(
+                &mut app.normalize_pose,
+                t!("viewer.export_tab.pose_t_stance"),
+            )
             .changed()
         {
             app.pending.reload = Some(PendingOverlay::WaitingOverlay);
@@ -4829,8 +4851,11 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     } else {
         ui.add_enabled_ui(has_humanoid, |ui| {
             if ui
-                .checkbox(&mut app.normalize_pose, "Aスタンス変換")
-                .on_disabled_hover_text("ヒューマノイドボーンがありません")
+                .checkbox(
+                    &mut app.normalize_pose,
+                    t!("viewer.export_tab.pose_a_stance"),
+                )
+                .on_disabled_hover_text(t!("viewer.export_tab.pose_disabled_no_humanoid"))
                 .changed()
             {
                 // Aスタンス変換ONならTスタンス変換OFFに
@@ -4844,8 +4869,11 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         if is_fbx {
             ui.add_enabled_ui(has_humanoid, |ui| {
                 if ui
-                    .checkbox(&mut app.normalize_to_tstance, "Tスタンス変換")
-                    .on_disabled_hover_text("ヒューマノイドボーンがありません")
+                    .checkbox(
+                        &mut app.normalize_to_tstance,
+                        t!("viewer.export_tab.pose_t_stance"),
+                    )
+                    .on_disabled_hover_text(t!("viewer.export_tab.pose_disabled_no_humanoid"))
                     .changed()
                 {
                     // Tスタンス変換ONならAスタンス変換OFFに
@@ -4864,33 +4892,48 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         .show(ui, |ui| {
             ui.add_enabled(
                 has_physics && !is_pmx_pmd,
-                egui::Checkbox::new(&mut app.display.align_rigid_rotation, "剛体回転揃え"),
+                egui::Checkbox::new(
+                    &mut app.display.align_rigid_rotation,
+                    t!("viewer.export_tab.align_rigid"),
+                ),
             )
-            .on_disabled_hover_text("物理設定がないか、PMX/PMD形式です");
+            .on_disabled_hover_text(t!("viewer.export_tab.physics_disabled"));
             ui.add_enabled(
                 has_physics && !is_pmx_pmd,
-                egui::Checkbox::new(&mut app.export.no_physics, "物理なし出力"),
+                egui::Checkbox::new(
+                    &mut app.export.no_physics,
+                    t!("viewer.export_tab.no_physics"),
+                ),
             )
-            .on_disabled_hover_text("物理設定がないか、PMX/PMD形式です");
+            .on_disabled_hover_text(t!("viewer.export_tab.physics_disabled"));
             ui.end_row();
 
             ui.add_enabled(
                 has_model && !is_pmx_pmd,
-                egui::Checkbox::new(&mut app.export.raw_structure, "元ボーン構造"),
+                egui::Checkbox::new(
+                    &mut app.export.raw_structure,
+                    t!("viewer.export_tab.raw_structure"),
+                ),
             )
-            .on_disabled_hover_text("PMX/PMD形式では使用できません");
+            .on_disabled_hover_text(t!("viewer.export_tab.raw_structure_disabled"));
             ui.add_enabled(
                 has_model && !is_pmx_pmd,
-                egui::Checkbox::new(&mut app.export.export_visible_only, "表示材質のみ"),
+                egui::Checkbox::new(
+                    &mut app.export.export_visible_only,
+                    t!("viewer.export_tab.visible_only"),
+                ),
             );
             ui.end_row();
 
             ui.add_enabled(
                 !is_pmx_pmd,
-                egui::Checkbox::new(&mut app.export.output_log, "ログ出力"),
+                egui::Checkbox::new(
+                    &mut app.export.output_log,
+                    t!("viewer.export_tab.output_log"),
+                ),
             )
-            .on_disabled_hover_text("PMX/PMD形式ではログ出力はできません");
-            ui.label("倍率");
+            .on_disabled_hover_text(t!("viewer.export_tab.output_log_disabled"));
+            ui.label(t!("viewer.export_tab.scale_label"));
             ui.end_row();
 
             ui.add(
@@ -4908,13 +4951,16 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     // MME (ray-mmd) — PMX 変換のサブメニュー (§K.5 / Step 6)
     ui.add_enabled(
         has_model,
-        egui::Checkbox::new(&mut app.export.output_mme, "MME マテリアル (.fx) も出力"),
+        egui::Checkbox::new(
+            &mut app.export.output_mme,
+            t!("viewer.export_tab.mme_output"),
+        ),
     )
-    .on_disabled_hover_text("モデルがロードされていません");
+    .on_disabled_hover_text(t!("viewer.export_tab.mme_disabled_no_model"));
     if app.export.output_mme {
         ui.indent("mme_settings", |ui| {
             ui.horizontal(|ui| {
-                ui.label("ray-mmd ルート:");
+                ui.label(t!("viewer.export_tab.ray_mmd_root_label"));
                 let dir_label = app
                     .app_config
                     .ray_mmd_root
@@ -4929,7 +4975,10 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             ui.horizontal(|ui| {
                 let dialog_active = app.export.pending_ray_mmd_dialog.is_some();
                 if ui
-                    .add_enabled(!dialog_active, egui::Button::new("フォルダ選択...").small())
+                    .add_enabled(
+                        !dialog_active,
+                        egui::Button::new(t!("viewer.export_tab.folder_select_button")).small(),
+                    )
                     .clicked()
                 {
                     let start_dir = app
@@ -4938,11 +4987,11 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         .as_ref()
                         .map(std::path::PathBuf::from)
                         .unwrap_or_else(|| std::path::PathBuf::from("."));
+                    let dialog_title = t!("viewer.export_tab.ray_mmd_dialog_title").into_owned();
                     let (tx, rx) = std::sync::mpsc::channel();
                     let repaint = ui.ctx().clone();
                     std::thread::spawn(move || {
-                        let mut dialog =
-                            rfd::FileDialog::new().set_title("ray-mmd ルートフォルダを選択");
+                        let mut dialog = rfd::FileDialog::new().set_title(dialog_title);
                         if start_dir.exists() {
                             dialog = dialog.set_directory(&start_dir);
                         }
@@ -4951,7 +5000,10 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     });
                     app.export.pending_ray_mmd_dialog = Some(rx);
                 }
-                if app.app_config.ray_mmd_root.is_some() && ui.small_button("リセット").clicked()
+                if app.app_config.ray_mmd_root.is_some()
+                    && ui
+                        .small_button(t!("viewer.export_tab.reset_button"))
+                        .clicked()
                 {
                     app.app_config.ray_mmd_root = None;
                 }
@@ -4971,7 +5023,10 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         // ダイアログ表示中は重複起動しない
         let uv_dialog_active = app.export.pending_uv_dialog.is_some();
         if ui
-            .add_enabled(!uv_dialog_active, egui::Button::new("UVマップ出力"))
+            .add_enabled(
+                !uv_dialog_active,
+                egui::Button::new(t!("viewer.export_tab.uvmap_button")),
+            )
             .clicked()
         {
             // デフォルトディレクトリ: モデルをロードしたディレクトリ（ソースファイルの親）
@@ -5003,11 +5058,12 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 };
             let uv_map_size = app.export.uv_map_size;
             // 保存ダイアログを別スレッドで開く（UIをブロックしない）
+            let dialog_title = t!("viewer.export_tab.uvmap_dialog_title").into_owned();
             let (tx, rx) = std::sync::mpsc::channel();
             let repaint = ui.ctx().clone();
             std::thread::spawn(move || {
                 let mut dialog = rfd::FileDialog::new()
-                    .set_title("UVマップ出力先を選択")
+                    .set_title(dialog_title)
                     .add_filter("PSD", &["psd"]);
                 if let Some(dir) = default_dir.as_deref() {
                     dialog = dialog.set_directory(dir);
@@ -5026,7 +5082,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     });
     ui.horizontal(|ui| {
-        ui.label("解像度:");
+        ui.label(t!("viewer.export_tab.resolution_label"));
         egui::ComboBox::from_id_salt("uv_size")
             .selected_text(format!("{}", app.export.uv_map_size))
             .width(70.0)
@@ -6462,7 +6518,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
             }
             // モーフ編集時の挙動説明（編集中はウェイト 1.0 固定、終了時に元値復元）
             if app.uv_edit.active_morph.is_some() {
-                ui.small("（編集中はウェイト 1.0 固定、終了時に元値へ復元）");
+                ui.small(t!("viewer.uv_edit.morph_edit_weight_lock_hint"));
             }
         });
     }
@@ -7439,11 +7495,8 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
             .as_ref()
             .map(|l| morph_uv_entry_count(&l.ir, morph_idx))
             .unwrap_or(0);
-        ui.small(format!(
-            "（モーフ編集モード: オフセット {} 頂点記録中 — PMX 保存時のラウンドトリップは未対応）",
-            n
-        ));
+        ui.small(t!("viewer.uv_edit.morph_edit_mode_hint", count = n));
     } else {
-        ui.small("（ベース UV 編集モード — PMX UV モーフがあれば「編集対象」から選択して編集可）");
+        ui.small(t!("viewer.uv_edit.base_uv_mode_hint"));
     }
 }
