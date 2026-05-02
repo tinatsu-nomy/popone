@@ -238,3 +238,20 @@ error:
     rle_scanline_header_short: "PSD RLE: scanline header is incomplete"
     rle_channel_short: "PSD RLE: channel %{channel} data is incomplete"
     unsupported_compression: "PSD compression mode %{mode} is not supported (only Raw/RLE)"
+
+viewer:
+  tab:
+    info: "Info"
+    control: "Controls"
+    display: "View"
+    export: "Export"
+  section:
+    model_info: "Model Info"
+    comment: "Comment"
+    expression_morphs: "Expression Morphs"
+    display_settings: "Display Settings"
+    material_display: "Material View"
+    file_structure: "File Structure"
+    pmx_export: "PMX Export"
+    uvmap_export: "UV Map Export"
+    animation: "Animation"

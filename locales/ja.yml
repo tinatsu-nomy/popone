@@ -238,3 +238,20 @@ error:
     rle_scanline_header_short: "PSD RLE: スキャンラインヘッダが不足"
     rle_channel_short: "PSD RLE: チャンネル %{channel} のデータが不足"
     unsupported_compression: "PSD 圧縮方式 %{mode} は未対応です (Raw/RLE のみ対応)"
+
+viewer:
+  tab:
+    info: "情報"
+    control: "操作"
+    display: "表示"
+    export: "出力"
+  section:
+    model_info: "モデル情報"
+    comment: "コメント"
+    expression_morphs: "表情モーフ"
+    display_settings: "表示設定"
+    material_display: "材質表示"
+    file_structure: "ファイル構成"
+    pmx_export: "PMX 変換"
+    uvmap_export: "UVマップ出力"
+    animation: "アニメーション"

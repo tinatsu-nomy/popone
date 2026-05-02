@@ -238,3 +238,20 @@ error:
     rle_scanline_header_short: "PSD RLE: 扫描行头部数据不足"
     rle_channel_short: "PSD RLE: 通道 %{channel} 数据不足"
     unsupported_compression: "不支持 PSD 压缩方式 %{mode}（仅支持 Raw/RLE）"
+
+viewer:
+  tab:
+    info: "信息"
+    control: "操作"
+    display: "显示"
+    export: "导出"
+  section:
+    model_info: "模型信息"
+    comment: "备注"
+    expression_morphs: "表情变形"
+    display_settings: "显示设置"
+    material_display: "材质显示"
+    file_structure: "文件结构"
+    pmx_export: "PMX 导出"
+    uvmap_export: "UV 贴图导出"
+    animation: "动画"

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use eframe::egui;
 use egui::epaint::{Color32, Mesh, Vertex};
+use rust_i18n::t;
 
 use super::app::uv_edit::{
     material_has_uv1, mesh_global_offsets_of, morph_uv_entry_count, read_displayed_uv,
@@ -73,11 +74,11 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let panel_w = ui.available_width();
-                let tabs: [(SidePanelTab, &str); 4] = [
-                    (SidePanelTab::Info, "情報"),
-                    (SidePanelTab::Control, "操作"),
-                    (SidePanelTab::Display, "表示"),
-                    (SidePanelTab::Export, "出力"),
+                let tabs: [(SidePanelTab, std::borrow::Cow<'static, str>); 4] = [
+                    (SidePanelTab::Info, t!("viewer.tab.info")),
+                    (SidePanelTab::Control, t!("viewer.tab.control")),
+                    (SidePanelTab::Display, t!("viewer.tab.display")),
+                    (SidePanelTab::Export, t!("viewer.tab.export")),
                 ];
                 let tab_width = (panel_w / tabs.len() as f32).min(70.0);
                 for (tab, label) in tabs {
@@ -3065,7 +3066,9 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
     };
     let ir = &loaded.ir;
 
-    ui.heading(egui::RichText::new("モデル情報").color(egui::Color32::from_gray(0xD0)));
+    ui.heading(
+        egui::RichText::new(t!("viewer.section.model_info")).color(egui::Color32::from_gray(0xD0)),
+    );
     ui.separator();
     // 名前（単独行）
     egui::Grid::new("model_info_name")
@@ -3125,7 +3128,10 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
     if !ir.comment.is_empty() {
         if ir.source_format.is_pmx_pmd() {
             // PMX/PMD: 自由形式コメントをそのまま表示
-            ui.heading(egui::RichText::new("コメント").color(egui::Color32::from_gray(0xD0)));
+            ui.heading(
+                egui::RichText::new(t!("viewer.section.comment"))
+                    .color(egui::Color32::from_gray(0xD0)),
+            );
             ui.separator();
             egui::ScrollArea::vertical()
                 .max_height(200.0)
@@ -3175,7 +3181,10 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
         std::collections::HashSet::new()
     };
 
-    ui.heading(egui::RichText::new("表情モーフ").color(egui::Color32::from_gray(0xD0)));
+    ui.heading(
+        egui::RichText::new(t!("viewer.section.expression_morphs"))
+            .color(egui::Color32::from_gray(0xD0)),
+    );
     ui.separator();
     ui.horizontal(|ui| {
         ui.label("絞り込み:");
@@ -3260,7 +3269,10 @@ fn show_tab_display(
     tex_assign_request: &mut Option<TexAssignRequest>,
 ) {
     // 表示設定
-    ui.heading(egui::RichText::new("表示設定").color(egui::Color32::from_gray(0xD0)));
+    ui.heading(
+        egui::RichText::new(t!("viewer.section.display_settings"))
+            .color(egui::Color32::from_gray(0xD0)),
+    );
     ui.separator();
 
     if ui.small_button("ライト初期値").clicked() {
@@ -3624,7 +3636,10 @@ fn show_tab_display(
     let mat_src_tex = &loaded.mat_cache.source_tex_names;
     let num_draws = draw_info.len();
 
-    ui.heading(egui::RichText::new("材質表示").color(egui::Color32::from_gray(0xD0)));
+    ui.heading(
+        egui::RichText::new(t!("viewer.section.material_display"))
+            .color(egui::Color32::from_gray(0xD0)),
+    );
     ui.separator();
     let small = egui::TextStyle::Small;
     ui.horizontal(|ui| {
@@ -4212,7 +4227,10 @@ fn show_file_tree(ui: &mut egui::Ui, app: &ViewerApp) {
     let Some(ref loaded) = app.loaded else { return };
 
     ui.add_space(12.0);
-    ui.heading(egui::RichText::new("ファイル構成").color(egui::Color32::from_gray(0xD0)));
+    ui.heading(
+        egui::RichText::new(t!("viewer.section.file_structure"))
+            .color(egui::Color32::from_gray(0xD0)),
+    );
     ui.separator();
 
     let dir_color = egui::Color32::from_rgb(0xE0, 0xC0, 0x60);
@@ -4519,7 +4537,9 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         || app.pending.pkg_load.is_some()
         || app.export.pending_mkdir.is_some();
 
-    ui.heading(egui::RichText::new("PMX 変換").color(egui::Color32::from_gray(0xD0)));
+    ui.heading(
+        egui::RichText::new(t!("viewer.section.pmx_export")).color(egui::Color32::from_gray(0xD0)),
+    );
     ui.separator();
 
     // 出力先ディレクトリ（converted_modelXX の作成場所）
@@ -4792,7 +4812,10 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     ui.add_space(12.0);
 
     // UVマップ出力
-    ui.heading(egui::RichText::new("UVマップ出力").color(egui::Color32::from_gray(0xD0)));
+    ui.heading(
+        egui::RichText::new(t!("viewer.section.uvmap_export"))
+            .color(egui::Color32::from_gray(0xD0)),
+    );
     ui.separator();
     ui.add_enabled_ui(has_model && !is_processing, |ui| {
         // ダイアログ表示中は重複起動しない
@@ -5272,7 +5295,9 @@ fn write_convert_log(
 fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
     use super::animation::LoopMode;
 
-    ui.heading(egui::RichText::new("アニメーション").color(egui::Color32::from_gray(0xD0)));
+    ui.heading(
+        egui::RichText::new(t!("viewer.section.animation")).color(egui::Color32::from_gray(0xD0)),
+    );
     ui.separator();
 
     // VRMAライブラリ
