@@ -5448,34 +5448,34 @@ fn write_convert_log(
     let _ = writeln!(file, "Source format: {}", ir.source_format.label());
     let _ = writeln!(file);
 
-    // 入力モデル情報
-    let _ = writeln!(file, "=== 入力 VRM ===");
+    // Input model info
+    let _ = writeln!(file, "=== Input model ===");
     let _ = writeln!(file, "Model name: {}", ir.name);
-    let _ = writeln!(file, "ボーン数: {}", ir.bones.len());
-    let _ = writeln!(file, "頂点数: {}", ir.total_vertices());
-    let _ = writeln!(file, "面数: {}", ir.total_faces());
-    let _ = writeln!(file, "材質数: {}", ir.materials.len());
-    let _ = writeln!(file, "テクスチャ数: {}", ir.textures.len());
-    let _ = writeln!(file, "モーフ数: {}", ir.morphs.len());
-    let _ = writeln!(file, "剛体数: {}", ir.physics.rigid_bodies.len());
-    let _ = writeln!(file, "ジョイント数: {}", ir.physics.joints.len());
+    let _ = writeln!(file, "Bones: {}", ir.bones.len());
+    let _ = writeln!(file, "Vertices: {}", ir.total_vertices());
+    let _ = writeln!(file, "Faces: {}", ir.total_faces());
+    let _ = writeln!(file, "Materials: {}", ir.materials.len());
+    let _ = writeln!(file, "Textures: {}", ir.textures.len());
+    let _ = writeln!(file, "Morphs: {}", ir.morphs.len());
+    let _ = writeln!(file, "Rigid bodies: {}", ir.physics.rigid_bodies.len());
+    let _ = writeln!(file, "Joints: {}", ir.physics.joints.len());
 
-    // ボーン一覧
+    // Bone list
     let _ = writeln!(file);
-    let _ = writeln!(file, "--- ボーン一覧 ---");
+    let _ = writeln!(file, "--- Bone list ---");
     for (i, bone) in ir.bones.iter().enumerate() {
         let vrm_name = bone.vrm_bone_name.as_deref().unwrap_or("-");
         let _ = writeln!(file, "  [{:3}] {} (vrm: {})", i, bone.name, vrm_name);
     }
 
-    // モーフ一覧
+    // Morph list
     let _ = writeln!(file);
     let _ = writeln!(file, "--- Morph list ---");
     for morph in &ir.morphs {
         let _ = writeln!(file, "  [panel{}] {}", morph.panel, morph.name);
     }
 
-    // 材質一覧
+    // Material list
     let _ = writeln!(file);
     let _ = writeln!(file, "--- Material list ---");
     for (i, mat) in ir.materials.iter().enumerate() {
@@ -5490,36 +5490,36 @@ fn write_convert_log(
         );
     }
 
-    // メタ情報
+    // Meta info
     if !ir.comment.is_empty() {
         let _ = writeln!(file);
-        let _ = writeln!(file, "=== メタ情報 ===");
+        let _ = writeln!(file, "=== Meta info ===");
         let _ = writeln!(file, "{}", ir.comment.replace("\r\n", "\n"));
     }
 
-    // 変換結果
+    // Conversion result
     let _ = writeln!(file);
-    let _ = writeln!(file, "=== 変換結果 ===");
+    let _ = writeln!(file, "=== Conversion result ===");
     match result {
         Ok(stats) => {
-            let _ = writeln!(file, "出力: {}", stats.output_path);
-            let _ = writeln!(file, "テクスチャ: {}", stats.tex_dir);
-            let _ = writeln!(file, "PMXボーン: {}", stats.bones);
-            let _ = writeln!(file, "PMX頂点: {}", stats.vertices);
-            let _ = writeln!(file, "PMX面: {}", stats.faces);
-            let _ = writeln!(file, "PMX材質: {}", stats.materials);
-            let _ = writeln!(file, "PMXテクスチャ: {}", stats.textures);
-            let _ = writeln!(file, "PMXモーフ: {}", stats.morphs);
+            let _ = writeln!(file, "Output: {}", stats.output_path);
+            let _ = writeln!(file, "Texture dir: {}", stats.tex_dir);
+            let _ = writeln!(file, "PMX bones: {}", stats.bones);
+            let _ = writeln!(file, "PMX vertices: {}", stats.vertices);
+            let _ = writeln!(file, "PMX faces: {}", stats.faces);
+            let _ = writeln!(file, "PMX materials: {}", stats.materials);
+            let _ = writeln!(file, "PMX textures: {}", stats.textures);
+            let _ = writeln!(file, "PMX morphs: {}", stats.morphs);
         }
         Err(e) => {
-            let _ = writeln!(file, "変換失敗: {e}");
+            let _ = writeln!(file, "Conversion failed: {e}");
         }
     }
 
-    // デバッグログ追記
+    // Debug log appendix
     if let Some(logs) = debug_logs {
         let _ = writeln!(file);
-        let _ = writeln!(file, "=== デバッグログ ===");
+        let _ = writeln!(file, "=== Debug log ===");
         let _ = write!(file, "{}", logs);
     }
 }

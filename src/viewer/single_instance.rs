@@ -198,14 +198,14 @@ pub fn try_send_to_existing(file_path: Option<&Path>) -> InstanceCheck {
 
         if ok == 0 || written != payload.len() as u32 {
             eprintln!(
-                "パイプ書き込み失敗（written={written}, expected={}）",
+                "Pipe write failed (written={written}, expected={})",
                 payload.len()
             );
             return InstanceCheck::FallbackStart;
         }
 
         eprintln!(
-            "既存インスタンスにパスを送信: {}",
+            "Forwarded path to existing instance: {}",
             String::from_utf8_lossy(&payload)
         );
         InstanceCheck::Forwarded
