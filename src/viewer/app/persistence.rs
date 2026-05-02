@@ -127,17 +127,27 @@ impl Default for DisplayConfig {
 ///
 /// 全フィールド `#[serde(default)]` で後方互換性を担保している。既存の `popone.toml`
 /// に `[log_viewer]` セクションが無くてもデフォルト値で起動する。
+///
+/// 位置/サイズフィールドは `[window]` セクションと同じく `x/y/width/height` の
+/// 個別スカラーで保存する。toml のシリアライザは `[f32; 2]` を縦並びで出力する
+/// 仕様で、フォーマットが他と揃わなかった経緯への対応。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogViewerConfig {
     /// 起動時にログビュアーを自動表示するか。初期 false。
     #[serde(default)]
     pub visible: bool,
-    /// ウインドウ左上座標 (x, y)。None = OS 任せのデフォルト位置。
+    /// ウインドウ左上 X 座標。None = OS 任せのデフォルト位置。
     #[serde(default)]
-    pub position: Option<[f32; 2]>,
-    /// ウインドウ内寸 (width, height)。None = デフォルト 720x480。
+    pub x: Option<f32>,
+    /// ウインドウ左上 Y 座標。None = OS 任せのデフォルト位置。
     #[serde(default)]
-    pub size: Option<[f32; 2]>,
+    pub y: Option<f32>,
+    /// ウインドウ内寸 width。None = デフォルト 720。
+    #[serde(default)]
+    pub width: Option<f32>,
+    /// ウインドウ内寸 height。None = デフォルト 480。
+    #[serde(default)]
+    pub height: Option<f32>,
     #[serde(default = "LogViewerConfig::default_true")]
     pub show_error: bool,
     #[serde(default = "LogViewerConfig::default_true")]
@@ -160,8 +170,10 @@ impl Default for LogViewerConfig {
     fn default() -> Self {
         Self {
             visible: false,
-            position: None,
-            size: None,
+            x: None,
+            y: None,
+            width: None,
+            height: None,
             show_error: true,
             show_warn: true,
             show_info: true,
@@ -655,6 +667,74 @@ mod tests {
         let partial = "[directory]\nlast_model = 'C:\\\\Test'\n";
         let parsed2: AppConfig = toml::from_str(partial).unwrap();
         assert!(parsed2.window.is_none());
+    }
+
+    #[test]
+    fn test_log_viewer_geometry_uses_scalar_fields() {
+        // log_viewer セクションが [window] と同じく x/y/width/height のスカラー4
+        // フィールド形式で出力されることを確認する。旧 `position = [...]` /
+        // `size = [...]` の縦並び配列を排除した v0.5.9 の修正検証用。
+        let cfg = AppConfig {
+            log_viewer: LogViewerConfig {
+                visible: true,
+                x: Some(978.0),
+                y: Some(664.0),
+                width: Some(720.0),
+                height: Some(480.0),
+                ..LogViewerConfig::default()
+            },
+            ..Default::default()
+        };
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        // スカラー出力（[window] と同じスタイル）
+        assert!(
+            text.contains("x = 978"),
+            "x should be inline scalar:\n{text}"
+        );
+        assert!(
+            text.contains("y = 664"),
+            "y should be inline scalar:\n{text}"
+        );
+        assert!(
+            text.contains("width = 720"),
+            "width should be inline scalar:\n{text}"
+        );
+        assert!(
+            text.contains("height = 480"),
+            "height should be inline scalar:\n{text}"
+        );
+        // 旧形式の縦並び配列キーが残っていないこと
+        assert!(
+            !text.contains("position ="),
+            "position field should be removed:\n{text}"
+        );
+        assert!(
+            !text.contains("size ="),
+            "size field should be removed:\n{text}"
+        );
+    }
+
+    #[test]
+    fn test_log_viewer_legacy_position_size_ignored() {
+        // 旧形式の popone.toml（position = [...], size = [...]）に遭遇しても
+        // 解析がエラーにならず、x/y/width/height がデフォルト None に落ちることを確認。
+        let legacy = r#"
+            [log_viewer]
+            visible = true
+            position = [978.0, 664.0]
+            size = [720.0, 480.0]
+            show_error = true
+            show_warn = true
+            show_info = true
+            show_debug = false
+            follow_tail = true
+        "#;
+        let parsed: AppConfig = toml::from_str(legacy).expect("legacy should parse");
+        assert!(parsed.log_viewer.visible);
+        assert!(parsed.log_viewer.x.is_none());
+        assert!(parsed.log_viewer.y.is_none());
+        assert!(parsed.log_viewer.width.is_none());
+        assert!(parsed.log_viewer.height.is_none());
     }
 
     #[test]

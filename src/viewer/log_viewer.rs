@@ -259,8 +259,10 @@ impl LogViewerModel {
     /// アプリを終了したセッション」でも `export_config` が config 由来の位置を保ったまま
     /// 戻せるようになり、永続化が壊れない（P2 修正）。
     pub fn from_config(cfg: &crate::viewer::app::persistence::LogViewerConfig) -> Self {
-        let geometry = match (cfg.position, cfg.size) {
-            (Some(p), Some(s)) => Some((p, s)),
+        // 位置/サイズはスカラー4フィールドで保存される。4 個全て Some の時のみ
+        // ジオメトリとして採用し、ひとつでも欠けていればデフォルト扱い。
+        let geometry = match (cfg.x, cfg.y, cfg.width, cfg.height) {
+            (Some(x), Some(y), Some(w), Some(h)) => Some(([x, y], [w, h])),
             _ => None,
         };
         Self {
@@ -287,14 +289,16 @@ impl LogViewerModel {
     /// - 開いてから閉じた: 閉じる時点での実際の位置が返る
     /// - 起動時から表示中: 子 viewport の最新位置が返る
     pub fn export_config(&self) -> crate::viewer::app::persistence::LogViewerConfig {
-        let (position, size) = match self.last_geometry {
-            Some((p, s)) => (Some(p), Some(s)),
-            None => (None, None),
+        let (x, y, width, height) = match self.last_geometry {
+            Some(([gx, gy], [gw, gh])) => (Some(gx), Some(gy), Some(gw), Some(gh)),
+            None => (None, None, None, None),
         };
         crate::viewer::app::persistence::LogViewerConfig {
             visible: self.visible,
-            position,
-            size,
+            x,
+            y,
+            width,
+            height,
             show_error: self.filters.show_error,
             show_warn: self.filters.show_warn,
             show_info: self.filters.show_info,
@@ -744,8 +748,10 @@ mod tests {
     fn make_cfg(visible: bool) -> crate::viewer::app::persistence::LogViewerConfig {
         crate::viewer::app::persistence::LogViewerConfig {
             visible,
-            position: Some([100.0, 200.0]),
-            size: Some([800.0, 600.0]),
+            x: Some(100.0),
+            y: Some(200.0),
+            width: Some(800.0),
+            height: Some(600.0),
             show_error: true,
             show_warn: true,
             show_info: true,
@@ -771,8 +777,10 @@ mod tests {
         let m = LogViewerModel::from_config(&cfg);
         // ビュアーを一度も開かないまま export
         let exported = m.export_config();
-        assert_eq!(exported.position, Some([100.0, 200.0]));
-        assert_eq!(exported.size, Some([800.0, 600.0]));
+        assert_eq!(exported.x, Some(100.0));
+        assert_eq!(exported.y, Some(200.0));
+        assert_eq!(exported.width, Some(800.0));
+        assert_eq!(exported.height, Some(600.0));
         assert!(!exported.visible);
     }
 
@@ -845,7 +853,9 @@ mod tests {
         m.last_geometry = Some(([700.0, 800.0], [1100.0, 900.0]));
         m.hide();
         let exported = m.export_config();
-        assert_eq!(exported.position, Some([700.0, 800.0]));
-        assert_eq!(exported.size, Some([1100.0, 900.0]));
+        assert_eq!(exported.x, Some(700.0));
+        assert_eq!(exported.y, Some(800.0));
+        assert_eq!(exported.width, Some(1100.0));
+        assert_eq!(exported.height, Some(900.0));
     }
 }
