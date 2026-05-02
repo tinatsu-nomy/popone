@@ -5374,9 +5374,9 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
 
     // VRMAライブラリ
     if !app.anim.library.is_empty() {
-        ui.label(format!(
-            "アニメーションリスト ({}件):",
-            app.anim.library.len()
+        ui.label(t!(
+            "viewer.animation.library_count",
+            count = app.anim.library.len()
         ));
         let mut switch_to: Option<usize> = None;
         let mut remove_idx: Option<usize> = None;
@@ -5443,15 +5443,16 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
     let mut muscle_scale_changed = false;
 
     if let Some(ref mut anim) = app.anim.state {
-        ui.label(format!(
-            "{} ({:.1}秒)",
-            anim.animation.name, anim.animation.duration
+        ui.label(t!(
+            "viewer.animation.name_duration",
+            name = anim.animation.name,
+            duration = format!("{:.1}", anim.animation.duration)
         ));
 
         ui.horizontal(|ui| {
             if ui
                 .button("⏮")
-                .on_hover_text("前のアニメーション / 先頭に戻す")
+                .on_hover_text(t!("viewer.animation.prev_or_restart_tooltip"))
                 .clicked()
             {
                 let (lo, _) = anim.effective_range();
@@ -5467,11 +5468,15 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     !anim.playing,
                     egui::Button::new("|◀").min_size(egui::vec2(24.0, 0.0)),
                 )
-                .on_hover_text("コマ戻し");
+                .on_hover_text(t!("viewer.animation.step_back_tooltip"));
             if step_back.clicked() {
                 anim.step_frame(false);
             }
-            if ui.button("◀").on_hover_text("逆再生").clicked() {
+            if ui
+                .button("◀")
+                .on_hover_text(t!("viewer.animation.play_reverse_tooltip"))
+                .clicked()
+            {
                 anim.speed = -anim.speed.abs();
                 anim.playing = true;
             }
@@ -5487,14 +5492,14 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     !anim.playing,
                     egui::Button::new("▶|").min_size(egui::vec2(24.0, 0.0)),
                 )
-                .on_hover_text("コマ送り");
+                .on_hover_text(t!("viewer.animation.step_fwd_tooltip"));
             if step_fwd.clicked() {
                 anim.step_frame(true);
             }
             let has_next = app.anim.library.len() > 1;
             let next_btn = ui
                 .add_enabled(has_next, egui::Button::new("⏭"))
-                .on_hover_text("次のアニメーション");
+                .on_hover_text(t!("viewer.animation.next_tooltip"));
             if next_btn.clicked() {
                 switch_anim = Some(true);
             }
@@ -5520,7 +5525,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
 
         ui.horizontal(|ui| {
-            ui.label("速度");
+            ui.label(t!("viewer.animation.speed_label"));
             ui.add(
                 egui::DragValue::new(&mut anim.speed)
                     .range(-3.0..=3.0)
@@ -5533,7 +5538,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
         // Unity .anim の Muscle スケール調整（is_additive の場合のみ）
         if anim.animation.is_additive {
             ui.horizontal(|ui| {
-                ui.label("Muscle倍率");
+                ui.label(t!("viewer.animation.muscle_scale_label"));
                 let old_scale = app.anim.muscle_scale;
                 let response = ui.add(
                     egui::DragValue::new(&mut app.anim.muscle_scale)
@@ -5551,19 +5556,27 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
 
         ui.horizontal(|ui| {
-            ui.label("ループ");
+            ui.label(t!("viewer.animation.loop_label"));
+            let loop_label_none = t!("viewer.animation.loop_mode.none");
+            let loop_label_normal = t!("viewer.animation.loop_mode.normal");
+            let loop_label_ping_pong = t!("viewer.animation.loop_mode.ping_pong");
+            let selected_label: std::borrow::Cow<'static, str> = match anim.loop_mode {
+                LoopMode::None => loop_label_none.clone(),
+                LoopMode::Normal => loop_label_normal.clone(),
+                LoopMode::AB => std::borrow::Cow::Borrowed("A-B"),
+                LoopMode::PingPong => loop_label_ping_pong.clone(),
+            };
             egui::ComboBox::from_id_salt("loop_mode")
-                .selected_text(match anim.loop_mode {
-                    LoopMode::None => "なし",
-                    LoopMode::Normal => "ループ",
-                    LoopMode::AB => "A-B",
-                    LoopMode::PingPong => "ピンポン",
-                })
+                .selected_text(selected_label)
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut anim.loop_mode, LoopMode::None, "なし");
-                    ui.selectable_value(&mut anim.loop_mode, LoopMode::Normal, "ループ");
+                    ui.selectable_value(&mut anim.loop_mode, LoopMode::None, loop_label_none);
+                    ui.selectable_value(&mut anim.loop_mode, LoopMode::Normal, loop_label_normal);
                     ui.selectable_value(&mut anim.loop_mode, LoopMode::AB, "A-B");
-                    ui.selectable_value(&mut anim.loop_mode, LoopMode::PingPong, "ピンポン");
+                    ui.selectable_value(
+                        &mut anim.loop_mode,
+                        LoopMode::PingPong,
+                        loop_label_ping_pong,
+                    );
                 });
         });
 
@@ -5571,32 +5584,32 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
             ui.horizontal(|ui| {
                 if ui
                     .small_button("𝄆")
-                    .on_hover_text("リピート開始点を設定")
+                    .on_hover_text(t!("viewer.animation.ab_start_tooltip"))
                     .clicked()
                 {
                     anim.ab_start = Some(anim.current_time);
                 }
                 if ui
                     .small_button("𝄇")
-                    .on_hover_text("リピート終了点を設定")
+                    .on_hover_text(t!("viewer.animation.ab_end_tooltip"))
                     .clicked()
                 {
                     anim.ab_end = Some(anim.current_time);
                 }
-                if ui.small_button("クリア").clicked() {
+                if ui.small_button(t!("viewer.animation.ab_clear")).clicked() {
                     anim.ab_start = None;
                     anim.ab_end = None;
                 }
             });
         }
 
-        ui.label(format!(
-            "ボーン: {}ch / 表情: {}ch",
-            anim.animation.bone_channels.len(),
-            anim.animation.expression_channels.len(),
+        ui.label(t!(
+            "viewer.animation.bone_expr_stats",
+            bones = anim.animation.bone_channels.len(),
+            expressions = anim.animation.expression_channels.len()
         ));
 
-        if ui.small_button("アニメーション解除").clicked() {
+        if ui.small_button(t!("viewer.animation.unbind")).clicked() {
             // アニメーション制御中のモーフウェイトを 0 にリセット
             if let Some(ref mut loaded) = app.loaded {
                 for (i, morph) in loaded.ir.morphs.iter().enumerate() {
@@ -5618,11 +5631,18 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
             app.morph_dirty = true;
         }
     } else {
-        ui.label("アニメーションファイルをドロップして読み込み");
-        if app.loaded.is_some() && ui.small_button("アニメーションを開く...").clicked() {
+        ui.label(t!("viewer.animation.drop_to_load"));
+        if app.loaded.is_some()
+            && ui
+                .small_button(t!("viewer.animation.open_button"))
+                .clicked()
+        {
             let paths = rfd::FileDialog::new()
-                .set_title("アニメーションを開く（複数選択可）")
-                .add_filter("アニメーション", &["vrma", "glb", "gltf", "fbx"])
+                .set_title(t!("viewer.animation.open_dialog_title"))
+                .add_filter(
+                    t!("viewer.animation.filter_label"),
+                    &["vrma", "glb", "gltf", "fbx"],
+                )
                 .add_filter("VRMA (.vrma)", &["vrma"])
                 .add_filter("GLB (.glb)", &["glb"])
                 .add_filter("glTF (.gltf)", &["gltf"])
@@ -5686,11 +5706,16 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
 
     if app.loaded.is_some()
         && app.anim.state.is_some()
-        && ui.small_button("アニメーションを追加...").clicked()
+        && ui
+            .small_button(t!("viewer.animation.append_button"))
+            .clicked()
     {
         let paths = rfd::FileDialog::new()
-            .set_title("アニメーションを追加（複数選択可）")
-            .add_filter("アニメーション", &["vrma", "glb", "gltf", "fbx"])
+            .set_title(t!("viewer.animation.append_dialog_title"))
+            .add_filter(
+                t!("viewer.animation.filter_label"),
+                &["vrma", "glb", "gltf", "fbx"],
+            )
             .add_filter("VRMA (.vrma)", &["vrma"])
             .add_filter("GLB (.glb)", &["glb"])
             .add_filter("glTF (.gltf)", &["gltf"])
