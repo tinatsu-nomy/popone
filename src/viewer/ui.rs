@@ -6155,7 +6155,7 @@ pub fn show_uv_edit_window(ctx: &egui::Context, app: &mut ViewerApp) {
             .and_then(|l| l.mat_cache.names.get(app.uv_edit.active_material))
             .cloned()
             .unwrap_or_default();
-        format!("UV 編集: {}", name)
+        t!("viewer.uv_edit.title", name = name).into_owned()
     };
 
     if app.uv_edit.detached {
@@ -6199,11 +6199,11 @@ pub fn show_uv_edit_window(ctx: &egui::Context, app: &mut ViewerApp) {
 }
 
 fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
-    ui.small("頂点をクリックで選択し、ドラッグで UV を移動 (Phase 1)");
+    ui.small(t!("viewer.uv_edit.instruction"));
 
     if app.loaded.is_none() {
         ui.add_space(8.0);
-        ui.label("モデルを読み込んでください。");
+        ui.label(t!("viewer.uv_edit.no_model"));
         return;
     }
 
@@ -6215,7 +6215,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         .unwrap_or_default();
     let mat_count = mat_names.len();
     if mat_count == 0 {
-        ui.label("材質がありません。");
+        ui.label(t!("viewer.uv_edit.no_material"));
         return;
     }
 
@@ -6276,8 +6276,8 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
             app.uv_edit.drag_pivot = None;
         }
         if !has_uv1 {
-            ui.small("（UV1 なし）")
-                .on_hover_text("この材質に属するメッシュは UV1 (TEXCOORD_1) を持っていません");
+            ui.small(t!("viewer.uv_edit.no_uv1_label"))
+                .on_hover_text(t!("viewer.uv_edit.no_uv1_tooltip"));
         }
     });
 
@@ -6316,20 +6316,22 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
     }
     if !uv_morph_list.is_empty() {
         ui.horizontal(|ui| {
-            ui.label("編集対象:");
+            ui.label(t!("viewer.uv_edit.target_label"));
             let current_label: String = match app.uv_edit.active_morph {
-                None => "ベース UV".to_string(),
+                None => t!("viewer.uv_edit.base_uv").into_owned(),
                 Some(idx) => uv_morph_list
                     .iter()
                     .find(|(i, _, _)| *i == idx)
-                    .map(|(_, name, ch)| format!("モーフ「{}」(UV{})", name, ch))
-                    .unwrap_or_else(|| "モーフ (不明)".to_string()),
+                    .map(|(_, name, ch)| {
+                        t!("viewer.uv_edit.morph_label", name = name, ch = ch).into_owned()
+                    })
+                    .unwrap_or_else(|| t!("viewer.uv_edit.morph_unknown").into_owned()),
             };
             let mut new_morph = app.uv_edit.active_morph;
             egui::ComboBox::from_id_salt("uv_edit_morph_combo")
                 .selected_text(current_label)
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut new_morph, None, "ベース UV");
+                    ui.selectable_value(&mut new_morph, None, t!("viewer.uv_edit.base_uv"));
                     for (idx, name, ch) in &uv_morph_list {
                         ui.selectable_value(
                             &mut new_morph,
@@ -6393,26 +6395,30 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         .iter()
         .filter(|(_, _, c)| *c == active_chan)
         .count();
-    ui.small(format!(
-        "編集済み頂点: {}  /  選択中: {}  （現在セット）",
-        override_count, selected_count
+    ui.small(t!(
+        "viewer.uv_edit.vertex_stats",
+        edited = override_count,
+        selected = selected_count
     ));
 
     let mut select_all_trigger = false;
     ui.horizontal(|ui| {
         if ui
-            .small_button("全選択")
-            .on_hover_text("アクティブ材質の全頂点を選択に追加 (Ctrl+A)")
+            .small_button(t!("viewer.uv_edit.select_all"))
+            .on_hover_text(t!("viewer.uv_edit.select_all_tooltip"))
             .clicked()
         {
             select_all_trigger = true;
         }
-        if ui.small_button("選択解除").clicked() {
+        if ui
+            .small_button(t!("viewer.uv_edit.clear_selection"))
+            .clicked()
+        {
             app.uv_edit.selected.clear();
         }
         if ui
-            .small_button("編集をすべてクリア")
-            .on_hover_text("全頂点 UV 編集差分と undo/redo 履歴を破棄（元の UV には戻らないため、編集前の状態に戻すにはリロードが必要）")
+            .small_button(t!("viewer.uv_edit.clear_all_edits"))
+            .on_hover_text(t!("viewer.uv_edit.clear_all_edits_tooltip"))
             .clicked()
         {
             // review_result_03 [P2]: クリア直後の Ctrl+Z/Ctrl+Y で編集が復活しないよう
@@ -6427,8 +6433,8 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
             app.uv_edit.pristine_uvs.clear();
         }
         if ui
-            .small_button("表示リセット")
-            .on_hover_text("キャンバスのズーム/パンをリセット (Phase 2-3)")
+            .small_button(t!("viewer.uv_edit.view_reset"))
+            .on_hover_text(t!("viewer.uv_edit.view_reset_tooltip"))
             .clicked()
         {
             app.uv_edit.reset_view();
@@ -6438,26 +6444,26 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         // 描画先 (egui::Window vs show_viewport_immediate) が切り替わる。
         let (label, hover) = if app.uv_edit.detached {
             (
-                "⬓ 結合",
-                "独立 OS ウィンドウを閉じてメインウィンドウ内のフローティングに戻す (A-3)",
+                t!("viewer.uv_edit.dock_button"),
+                t!("viewer.uv_edit.dock_tooltip"),
             )
         } else {
             (
-                "⬈ 分離",
-                "この UV 編集を OS の独立ウィンドウとして分離する (A-3)",
+                t!("viewer.uv_edit.detach_button"),
+                t!("viewer.uv_edit.detach_tooltip"),
             )
         };
         if ui.small_button(label).on_hover_text(hover).clicked() {
             app.uv_edit.detached = !app.uv_edit.detached;
         }
     });
-    ui.small(format!(
-        "ズーム: {:.2}x  /  ホイール=ズーム, 中ドラッグ=パン",
-        app.uv_edit.view_zoom
+    ui.small(t!(
+        "viewer.uv_edit.zoom_status",
+        zoom = format!("{:.2}", app.uv_edit.view_zoom)
     ));
-    ui.small("頂点近くから: Shift=スナップ / Alt=回転 / Ctrl=スケール (ピボット=選択中心)");
-    ui.small("頂点から遠くから: 矩形選択 / Shift=加算選択 / Ctrl=除外選択");
-    ui.small("選択 bbox の角=スケール / 上辺外の青丸=回転（ハンドル経由は修飾キー不要）");
+    ui.small(t!("viewer.uv_edit.hint_modifiers"));
+    ui.small(t!("viewer.uv_edit.hint_select_modes"));
+    ui.small(t!("viewer.uv_edit.hint_handles"));
 
     // Phase 2-5: Undo / Redo ボタン行とキーショートカット（Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z）
     let can_undo = !app.uv_edit.undo_stack.is_empty();
@@ -6466,14 +6472,20 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
     let mut redo_trigger = false;
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(can_undo, egui::Button::new("⟲ 元に戻す").small())
+            .add_enabled(
+                can_undo,
+                egui::Button::new(t!("viewer.uv_edit.undo")).small(),
+            )
             .on_hover_text("Ctrl+Z")
             .clicked()
         {
             undo_trigger = true;
         }
         if ui
-            .add_enabled(can_redo, egui::Button::new("⟳ やり直す").small())
+            .add_enabled(
+                can_redo,
+                egui::Button::new(t!("viewer.uv_edit.redo")).small(),
+            )
             .on_hover_text("Ctrl+Y / Ctrl+Shift+Z")
             .clicked()
         {
