@@ -328,3 +328,27 @@ viewer:
       busy_loading: "モデル読み込み中はアニメーションを開けません。完了してから再試行してください。"
       vrma_needs_vrm: "VRMAを読み込むには先にVRMモデルを読み込んでください"
       anim_needs_model: "アニメーションを読み込むには先にモデルを読み込んでください"
+    progress:
+      loaded: "読み込み完了 (%{current}/%{total}): %{name}"
+    append:
+      loaded: "追加読み込み完了: %{name}\nボーン:%{bones} (統合:%{merged} + 新規:%{new}), メッシュ:%{meshes}, 材質:%{materials}"
+      failed: "追加読み込みに失敗しました。\n詳細: %{error}"
+      gpu_rebuild_failed: "追加読み込み後のGPU再構築に失敗しました。\n詳細: %{error}"
+      gpu_build_failed_reverted: "追加読み込みの GPU 構築に失敗しました。元のモデルに戻しました。\n詳細: %{error}"
+      cpu_prep_failed_reverted: "追加読み込みの CPU 処理に失敗しました。元のモデルに戻しました。\n詳細: %{error}"
+      coord_mismatch: "座標系が異なるモデルは追加できません。\nホスト: %{host}, 追加: %{other}"
+    anim:
+      vrma_loaded: "VRMA 読み込み成功: %{name}"
+      vrma_failed: "VRMA 読み込み失敗: %{error}"
+      fbx_loaded: "FBX アニメーション読み込み成功: %{name}"
+      fbx_failed: "FBX アニメーション読み込み失敗: %{error}"
+      unity_loaded: "Unity .anim 読み込み成功: %{name}"
+      unity_failed: "Unity .anim 読み込み失敗: %{error}"
+      generic_loaded: "アニメーション読み込み成功: %{name}"
+      generic_failed: "アニメーション読み込み失敗: %{error}"
+    reload:
+      failed: "リロード失敗: %{error}"
+      load_failed: "読み込み失敗: %{error}"
+    uvmap:
+      exported: "UVマップ出力完了: %{path}"
+      failed: "UVマップ出力失敗: %{error}"

@@ -1363,15 +1363,18 @@ impl ViewerApp {
             ai.added_materials,
         );
         if !ai.silent {
-            self.convert_message = Some(ConvertMessage::success(format!(
-                "追加読み込み完了: {}\nボーン:{} (統合:{} + 新規:{}), メッシュ:{}, 材質:{}",
-                ai.added_name,
-                ai.added_bones,
-                ai.merged_bones,
-                ai.new_bones,
-                ai.added_meshes,
-                ai.added_materials,
-            )));
+            self.convert_message = Some(ConvertMessage::success(
+                t!(
+                    "viewer.toast.append.loaded",
+                    name = ai.added_name,
+                    bones = ai.added_bones,
+                    merged = ai.merged_bones,
+                    new = ai.new_bones,
+                    meshes = ai.added_meshes,
+                    materials = ai.added_materials
+                )
+                .into_owned(),
+            ));
         }
 
         // PkgAppend 後処理（テクスチャリネーム・テクスチャマッチング等）
@@ -1466,10 +1469,15 @@ impl ViewerApp {
         // バッチ進捗トースト（成功メッセージを上書き）
         if let Some((current, total)) = payload.batch_progress {
             let name = payload.pkg_model_name.as_deref().unwrap_or("?");
-            self.convert_message = Some(ConvertMessage::success(format!(
-                "読み込み完了 ({}/{}): {}",
-                current, total, name
-            )));
+            self.convert_message = Some(ConvertMessage::success(
+                t!(
+                    "viewer.toast.progress.loaded",
+                    current = current,
+                    total = total,
+                    name = name
+                )
+                .into_owned(),
+            ));
         }
     }
 

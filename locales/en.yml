@@ -328,3 +328,27 @@ viewer:
       busy_loading: "Cannot open animation while a model is loading. Wait for it to finish, then retry."
       vrma_needs_vrm: "Please load a VRM model first to load VRMA"
       anim_needs_model: "Please load a model first to load an animation"
+    progress:
+      loaded: "Loaded (%{current}/%{total}): %{name}"
+    append:
+      loaded: "Append loaded: %{name}\nBones: %{bones} (merged: %{merged} + new: %{new}), Meshes: %{meshes}, Materials: %{materials}"
+      failed: "Append load failed.\nDetails: %{error}"
+      gpu_rebuild_failed: "GPU rebuild after append load failed.\nDetails: %{error}"
+      gpu_build_failed_reverted: "Append GPU build failed; reverted to the previous model.\nDetails: %{error}"
+      cpu_prep_failed_reverted: "Append CPU prep failed; reverted to the previous model.\nDetails: %{error}"
+      coord_mismatch: "Cannot append a model with a different coordinate system.\nHost: %{host}, Other: %{other}"
+    anim:
+      vrma_loaded: "VRMA loaded: %{name}"
+      vrma_failed: "VRMA load failed: %{error}"
+      fbx_loaded: "FBX animation loaded: %{name}"
+      fbx_failed: "FBX animation load failed: %{error}"
+      unity_loaded: "Unity .anim loaded: %{name}"
+      unity_failed: "Unity .anim load failed: %{error}"
+      generic_loaded: "Animation loaded: %{name}"
+      generic_failed: "Animation load failed: %{error}"
+    reload:
+      failed: "Reload failed: %{error}"
+      load_failed: "Load failed: %{error}"
+    uvmap:
+      exported: "UV map exported: %{path}"
+      failed: "UV map export failed: %{error}"

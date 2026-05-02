@@ -328,3 +328,27 @@ viewer:
       busy_loading: "模型加载中无法打开动画。请在加载完成后再试。"
       vrma_needs_vrm: "请先加载 VRM 模型再加载 VRMA"
       anim_needs_model: "请先加载模型再加载动画"
+    progress:
+      loaded: "加载完成 (%{current}/%{total}): %{name}"
+    append:
+      loaded: "追加加载完成: %{name}\n骨骼: %{bones} (合并: %{merged} + 新增: %{new}), 网格: %{meshes}, 材质: %{materials}"
+      failed: "追加加载失败。\n详情: %{error}"
+      gpu_rebuild_failed: "追加加载后 GPU 重建失败。\n详情: %{error}"
+      gpu_build_failed_reverted: "追加加载的 GPU 构建失败；已回退到原模型。\n详情: %{error}"
+      cpu_prep_failed_reverted: "追加加载的 CPU 预处理失败；已回退到原模型。\n详情: %{error}"
+      coord_mismatch: "无法添加坐标系不同的模型。\n主模型: %{host}, 附加: %{other}"
+    anim:
+      vrma_loaded: "VRMA 加载成功: %{name}"
+      vrma_failed: "VRMA 加载失败: %{error}"
+      fbx_loaded: "FBX 动画加载成功: %{name}"
+      fbx_failed: "FBX 动画加载失败: %{error}"
+      unity_loaded: "Unity .anim 加载成功: %{name}"
+      unity_failed: "Unity .anim 加载失败: %{error}"
+      generic_loaded: "动画加载成功: %{name}"
+      generic_failed: "动画加载失败: %{error}"
+    reload:
+      failed: "重新加载失败: %{error}"
+      load_failed: "加载失败: %{error}"
+    uvmap:
+      exported: "UV 贴图导出完成: %{path}"
+      failed: "UV 贴图导出失败: %{error}"

@@ -2180,10 +2180,15 @@ impl ViewerApp {
                 // バッチ進捗トースト
                 if let Some((current, total)) = payload.batch_progress {
                     let name = payload.fbx_name.as_deref().unwrap_or("?");
-                    self.convert_message = Some(ConvertMessage::success(format!(
-                        "読み込み完了 ({}/{}): {}",
-                        current, total, name
-                    )));
+                    self.convert_message = Some(ConvertMessage::success(
+                        t!(
+                            "viewer.toast.progress.loaded",
+                            current = current,
+                            total = total,
+                            name = name
+                        )
+                        .into_owned(),
+                    ));
                 } else {
                     self.convert_message = None;
                 }
@@ -2362,7 +2367,9 @@ impl ViewerApp {
             )),
         };
         if let Err(e) = result {
-            self.convert_message = Some(ConvertMessage::failure(format!("読み込み失敗: {e}")));
+            self.convert_message = Some(ConvertMessage::failure(
+                t!("viewer.toast.reload.load_failed", error = e.to_string()).into_owned(),
+            ));
         }
     }
 
@@ -3579,15 +3586,15 @@ impl ViewerApp {
                 }
 
                 self.anim.state = Some(state);
-                self.convert_message = Some(ConvertMessage::success(format!(
-                    "VRMA 読み込み成功: {}",
-                    name
-                )));
+                self.convert_message = Some(ConvertMessage::success(
+                    t!("viewer.toast.anim.vrma_loaded", name = name).into_owned(),
+                ));
             }
             Err(e) => {
                 log::error!("VRMALoad failed: {e}");
-                self.convert_message =
-                    Some(ConvertMessage::failure(format!("VRMA 読み込み失敗: {e}")));
+                self.convert_message = Some(ConvertMessage::failure(
+                    t!("viewer.toast.anim.vrma_failed", error = e.to_string()).into_owned(),
+                ));
             }
         }
     }
@@ -3638,16 +3645,15 @@ impl ViewerApp {
                 }
 
                 log::info!("FBX animation loaded: {}", path.display());
-                self.convert_message = Some(ConvertMessage::success(format!(
-                    "FBX アニメーション読み込み成功: {}",
-                    file_name
-                )));
+                self.convert_message = Some(ConvertMessage::success(
+                    t!("viewer.toast.anim.fbx_loaded", name = file_name).into_owned(),
+                ));
             }
             Err(e) => {
                 log::warn!("FBX animation load failed: {e}");
-                self.convert_message = Some(ConvertMessage::failure(format!(
-                    "FBX アニメーション読み込み失敗: {e}"
-                )));
+                self.convert_message = Some(ConvertMessage::failure(
+                    t!("viewer.toast.anim.fbx_failed", error = e.to_string()).into_owned(),
+                ));
             }
         }
     }
@@ -3679,16 +3685,15 @@ impl ViewerApp {
                 self.anim.state = Some(state);
 
                 log::info!("Unity .animLoad success: {}", path.display());
-                self.convert_message = Some(ConvertMessage::success(format!(
-                    "Unity .anim 読み込み成功: {}",
-                    file_name
-                )));
+                self.convert_message = Some(ConvertMessage::success(
+                    t!("viewer.toast.anim.unity_loaded", name = file_name).into_owned(),
+                ));
             }
             Err(e) => {
                 log::error!("Unity .animLoad failed: {e}");
-                self.convert_message = Some(ConvertMessage::failure(format!(
-                    "Unity .anim 読み込み失敗: {e}"
-                )));
+                self.convert_message = Some(ConvertMessage::failure(
+                    t!("viewer.toast.anim.unity_failed", error = e.to_string()).into_owned(),
+                ));
             }
         }
     }
@@ -3731,16 +3736,15 @@ impl ViewerApp {
                 }
 
                 log::info!("glTF animation loaded: {}", path.display());
-                self.convert_message = Some(ConvertMessage::success(format!(
-                    "アニメーション読み込み成功: {}",
-                    file_name
-                )));
+                self.convert_message = Some(ConvertMessage::success(
+                    t!("viewer.toast.anim.generic_loaded", name = file_name).into_owned(),
+                ));
             }
             Err(e) => {
                 log::error!("glTF animation load failed: {e}");
-                self.convert_message = Some(ConvertMessage::failure(format!(
-                    "アニメーション読み込み失敗: {e}"
-                )));
+                self.convert_message = Some(ConvertMessage::failure(
+                    t!("viewer.toast.anim.generic_failed", error = e.to_string()).into_owned(),
+                ));
             }
         }
     }
@@ -4408,7 +4412,9 @@ impl ViewerApp {
     fn finish_reload_sync(&mut self, result: anyhow::Result<()>, snap: ReloadSnapshot) {
         if let Err(e) = result {
             log::error!("Reload failed: {e}");
-            self.convert_message = Some(ConvertMessage::failure(format!("リロード失敗: {e}")));
+            self.convert_message = Some(ConvertMessage::failure(
+                t!("viewer.toast.reload.failed", error = e.to_string()).into_owned(),
+            ));
             self.restore_snapshot_on_failure(snap);
             return;
         }
@@ -4673,7 +4679,9 @@ impl ViewerApp {
         })();
         if let Err(ref e) = result {
             log::error!("reload_from_source failed: {e}");
-            self.convert_message = Some(ConvertMessage::failure(format!("リロード失敗: {e}")));
+            self.convert_message = Some(ConvertMessage::failure(
+                t!("viewer.toast.reload.failed", error = e.to_string()).into_owned(),
+            ));
         }
         result
     }
@@ -5681,9 +5689,9 @@ impl ViewerApp {
                 Ok(()) => {}
                 Err(e) => {
                     log::error!("Append load failed (pkg): {e}");
-                    self.convert_message = Some(ConvertMessage::failure(format!(
-                        "追加読み込みに失敗しました。\n詳細: {e}"
-                    )));
+                    self.convert_message = Some(ConvertMessage::failure(
+                        t!("viewer.toast.append.failed", error = e.to_string()).into_owned(),
+                    ));
                 }
             }
             return;
@@ -5693,9 +5701,9 @@ impl ViewerApp {
                 Ok(()) => {}
                 Err(e) => {
                     log::error!("Append load failed (archive): {e}");
-                    self.convert_message = Some(ConvertMessage::failure(format!(
-                        "追加読み込みに失敗しました。\n詳細: {e}"
-                    )));
+                    self.convert_message = Some(ConvertMessage::failure(
+                        t!("viewer.toast.append.failed", error = e.to_string()).into_owned(),
+                    ));
                 }
             }
             return;
@@ -5815,11 +5823,14 @@ impl ViewerApp {
                             host_fmt.label(),
                             other_fmt.label()
                         );
-                        self.convert_message = Some(ConvertMessage::failure(format!(
-                            "座標系が異なるモデルは追加できません。\nホスト: {}, 追加: {}",
-                            host_fmt.label(),
-                            other_fmt.label()
-                        )));
+                        self.convert_message = Some(ConvertMessage::failure(
+                            t!(
+                                "viewer.toast.append.coord_mismatch",
+                                host = host_fmt.label(),
+                                other = other_fmt.label()
+                            )
+                            .into_owned(),
+                        ));
                         return;
                     }
                 }
@@ -5901,9 +5912,9 @@ impl ViewerApp {
             }
             Err(e) => {
                 log::error!("Append load failed: {e}");
-                self.convert_message = Some(ConvertMessage::failure(format!(
-                    "追加読み込みに失敗しました。\n詳細: {e}"
-                )));
+                self.convert_message = Some(ConvertMessage::failure(
+                    t!("viewer.toast.append.failed", error = e.to_string()).into_owned(),
+                ));
             }
         }
     }
@@ -6186,9 +6197,9 @@ impl ViewerApp {
             }
             Err(e) => {
                 log::error!("Append load failed (pkg): {e}");
-                self.convert_message = Some(ConvertMessage::failure(format!(
-                    "追加読み込みに失敗しました。\n詳細: {e}"
-                )));
+                self.convert_message = Some(ConvertMessage::failure(
+                    t!("viewer.toast.append.failed", error = e.to_string()).into_owned(),
+                ));
                 return false;
             }
         }
@@ -6354,15 +6365,18 @@ impl ViewerApp {
                     added_materials,
                 );
                 if !silent {
-                    self.convert_message = Some(ConvertMessage::success(format!(
-                        "追加読み込み完了: {}\nボーン:{} (統合:{} + 新規:{}), メッシュ:{}, 材質:{}",
-                        added_name,
-                        added_bones,
-                        merged_bones,
-                        new_bones,
-                        added_meshes,
-                        added_materials,
-                    )));
+                    self.convert_message = Some(ConvertMessage::success(
+                        t!(
+                            "viewer.toast.append.loaded",
+                            name = added_name,
+                            bones = added_bones,
+                            merged = merged_bones,
+                            new = new_bones,
+                            meshes = added_meshes,
+                            materials = added_materials
+                        )
+                        .into_owned(),
+                    ));
                 }
             }
             Err(e) => {
@@ -6383,9 +6397,13 @@ impl ViewerApp {
                         bone.vrm_bone_name = saved_bone_meta[i].1.clone();
                     }
                 }
-                self.convert_message = Some(ConvertMessage::failure(format!(
-                    "追加読み込み後のGPU再構築に失敗しました。\n詳細: {e}"
-                )));
+                self.convert_message = Some(ConvertMessage::failure(
+                    t!(
+                        "viewer.toast.append.gpu_rebuild_failed",
+                        error = e.to_string()
+                    )
+                    .into_owned(),
+                ));
             }
         }
         // loaded の借用スコープ外でシェーダー状態を正規化（ユーザー選択維持）

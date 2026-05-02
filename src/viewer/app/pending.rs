@@ -1263,10 +1263,13 @@ impl ViewerApp {
                             if let Some(ai) = gb.append_info {
                                 log::error!("Append GPU rebuild failed, rolling back: {:#}", e);
                                 self.rollback_append(gb.ir, *ai);
-                                self.convert_message = Some(ConvertMessage::failure(format!(
-                                    "追加読み込みの GPU 構築に失敗しました。元のモデルに戻しました。\n詳細: {:#}",
-                                    e
-                                )));
+                                self.convert_message = Some(ConvertMessage::failure(
+                                    t!(
+                                        "viewer.toast.append.gpu_build_failed_reverted",
+                                        error = format!("{:#}", e)
+                                    )
+                                    .into_owned(),
+                                ));
                             } else {
                                 self.convert_message = Some(ConvertMessage::failure(format!(
                                     "GPU build failed: {:#}",
@@ -1281,10 +1284,13 @@ impl ViewerApp {
                     if let Some(ai) = gb.append_info {
                         log::error!("CPU prep failed, rolling back: {:#}", e);
                         self.rollback_append(gb.ir, *ai);
-                        self.convert_message = Some(ConvertMessage::failure(format!(
-                            "追加読み込みの CPU 処理に失敗しました。元のモデルに戻しました。\n詳細: {:#}",
-                            e
-                        )));
+                        self.convert_message = Some(ConvertMessage::failure(
+                            t!(
+                                "viewer.toast.append.cpu_prep_failed_reverted",
+                                error = format!("{:#}", e)
+                            )
+                            .into_owned(),
+                        ));
                     } else {
                         self.convert_message =
                             Some(ConvertMessage::failure(format!("CPU prep failed: {:#}", e)));
@@ -1388,14 +1394,18 @@ impl ViewerApp {
                 self.export.pending_uv_bg = None;
                 match result {
                     Ok(path) => {
-                        self.convert_message = Some(ConvertMessage::success(format!(
-                            "UVマップ出力完了: {}",
-                            path.display()
-                        )));
+                        self.convert_message = Some(ConvertMessage::success(
+                            t!(
+                                "viewer.toast.uvmap.exported",
+                                path = path.display().to_string()
+                            )
+                            .into_owned(),
+                        ));
                     }
                     Err(e) => {
-                        self.convert_message =
-                            Some(ConvertMessage::failure(format!("UVマップ出力失敗: {e}")));
+                        self.convert_message = Some(ConvertMessage::failure(
+                            t!("viewer.toast.uvmap.failed", error = e.to_string()).into_owned(),
+                        ));
                     }
                 }
             } else if !alive {
