@@ -660,6 +660,14 @@ viewer:
     pmx_converting: "PMX変換中..."
     uvmap_exporting: "UVマップ出力中..."
     cancel: "中止"
+  status_bar:
+    counts: "頂点:%{vertices} 面:%{faces} 材質:%{materials} テクスチャ:%{textures} ボーン:%{bones} モーフ:%{morphs}"
+  drop_overlay:
+    assign_texture: "テクスチャを割り当て"
+    load_model_first: "先にモデルを読み込んでください"
+    add_model_shift: "モデルを追加読み込み（Shift）"
+    load_model_file: "モデルファイルを読み込み"
+    unsupported_format: "非対応の形式です（VRM/FBX/PMX/PMD/画像に対応）"
   log_viewer:
     follow_tail: "自動追尾"
     follow_tail_hover: "新しいログが来たら自動で最下部へスクロール"

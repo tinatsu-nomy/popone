@@ -660,6 +660,14 @@ viewer:
     pmx_converting: "PMX 转换中..."
     uvmap_exporting: "UV 贴图导出中..."
     cancel: "中止"
+  status_bar:
+    counts: "顶点:%{vertices} 面:%{faces} 材质:%{materials} 纹理:%{textures} 骨骼:%{bones} 表情:%{morphs}"
+  drop_overlay:
+    assign_texture: "分配纹理"
+    load_model_first: "请先加载模型"
+    add_model_shift: "追加加载模型 (Shift)"
+    load_model_file: "加载模型文件"
+    unsupported_format: "不支持的格式 (支持 VRM/FBX/PMX/PMD/图像)"
   log_viewer:
     follow_tail: "自动追踪"
     follow_tail_hover: "新日志到达时自动滚动到底部"

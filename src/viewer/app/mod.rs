@@ -53,15 +53,16 @@ impl CachedStats {
     pub(super) fn new(ir: &IrModel) -> Self {
         let total_vertices = ir.total_vertices();
         let total_faces = ir.total_faces();
-        let status_text = format!(
-            "頂点:{} 面:{} 材質:{} テクスチャ:{} ボーン:{} モーフ:{}",
-            total_vertices,
-            total_faces,
-            ir.materials.len(),
-            ir.textures.len(),
-            ir.bones.len(),
-            ir.morphs.len(),
-        );
+        let status_text = t!(
+            "viewer.status_bar.counts",
+            vertices = total_vertices,
+            faces = total_faces,
+            materials = ir.materials.len(),
+            textures = ir.textures.len(),
+            bones = ir.bones.len(),
+            morphs = ir.morphs.len(),
+        )
+        .into_owned();
         Self {
             total_vertices,
             total_faces,
@@ -2566,33 +2567,36 @@ impl eframe::App for ViewerApp {
                 if self.drag_hovering {
                     let rect = response.rect;
                     let has_model = self.loaded.is_some();
-                    let (overlay_color, overlay_text) = if is_hover_image && has_model {
+                    let (overlay_color, overlay_text): (
+                        egui::Color32,
+                        std::borrow::Cow<'static, str>,
+                    ) = if is_hover_image && has_model {
                         (
                             egui::Color32::from_rgba_unmultiplied(0x40, 0xC0, 0x40, 0x60),
-                            "テクスチャを割り当て",
+                            t!("viewer.drop_overlay.assign_texture"),
                         )
                     } else if is_hover_image && !has_model {
                         (
                             egui::Color32::from_rgba_unmultiplied(0xD0, 0xA0, 0x40, 0x60),
-                            "先にモデルを読み込んでください",
+                            t!("viewer.drop_overlay.load_model_first"),
                         )
                     } else if is_hover_model {
                         let shift = ctx.input(|i| i.modifiers.shift);
                         if shift && has_model {
                             (
                                 egui::Color32::from_rgba_unmultiplied(0x40, 0xC0, 0xFF, 0x60),
-                                "モデルを追加読み込み（Shift）",
+                                t!("viewer.drop_overlay.add_model_shift"),
                             )
                         } else {
                             (
                                 egui::Color32::from_rgba_unmultiplied(0x40, 0x80, 0xFF, 0x60),
-                                "モデルファイルを読み込み",
+                                t!("viewer.drop_overlay.load_model_file"),
                             )
                         }
                     } else {
                         (
                             egui::Color32::from_rgba_unmultiplied(0x80, 0x80, 0x80, 0x60),
-                            "非対応の形式です（VRM/FBX/PMX/PMD/画像に対応）",
+                            t!("viewer.drop_overlay.unsupported_format"),
                         )
                     };
                     viewport.painter().rect_filled(rect, 0.0, overlay_color);

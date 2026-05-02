@@ -660,6 +660,14 @@ viewer:
     pmx_converting: "Converting to PMX..."
     uvmap_exporting: "Exporting UV map..."
     cancel: "Cancel"
+  status_bar:
+    counts: "Vertices:%{vertices} Faces:%{faces} Materials:%{materials} Textures:%{textures} Bones:%{bones} Morphs:%{morphs}"
+  drop_overlay:
+    assign_texture: "Assign texture"
+    load_model_first: "Please load a model first"
+    add_model_shift: "Add model (Shift)"
+    load_model_file: "Load model file"
+    unsupported_format: "Unsupported format (VRM/FBX/PMX/PMD/image supported)"
   log_viewer:
     follow_tail: "Auto-tail"
     follow_tail_hover: "Automatically scroll to bottom when new logs arrive"
