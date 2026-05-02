@@ -628,6 +628,25 @@ viewer:
     tex_slot_toon: "トゥーン: %{name}"
     tex_slot_normal: "法線: %{name}"
     tex_slot_emissive: "エミッシブ: %{name}"
+  model_info:
+    name: "名前"
+    format: "形式"
+    bones: "ボーン"
+    vertices: "頂点"
+    faces: "面"
+    materials: "材質"
+    textures: "テクスチャ"
+    morphs: "モーフ"
+    rig: "リグ"
+    humanoid_count: "%{count}本"
+    humanoid_unsupported: "非対応"
+  texture_picker:
+    title: "テクスチャ画像を選択 - %{name}"
+    unassigned_short: "(未割当)"
+    unassigned_hover: "テクスチャ未割当 (クリックで選択)"
+  pmx_unsupported:
+    badge: "⚠ PMX 非対応"
+    hover: "この項目は PMX 出力では反映されません。\nMME (.fx) 出力やビューアプレビューでは反映されます。"
   export_tab:
     output_dir_label: "出力先:"
     output_dir_default: "(ソースと同じ場所)"

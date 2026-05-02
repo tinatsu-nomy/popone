@@ -628,6 +628,25 @@ viewer:
     tex_slot_toon: "卡通: %{name}"
     tex_slot_normal: "法线: %{name}"
     tex_slot_emissive: "自发光: %{name}"
+  model_info:
+    name: "名称"
+    format: "格式"
+    bones: "骨骼"
+    vertices: "顶点"
+    faces: "面"
+    materials: "材质"
+    textures: "纹理"
+    morphs: "表情"
+    rig: "骨架"
+    humanoid_count: "%{count} 根"
+    humanoid_unsupported: "不支持"
+  texture_picker:
+    title: "选择纹理图片 - %{name}"
+    unassigned_short: "(未分配)"
+    unassigned_hover: "未分配纹理 (点击选择)"
+  pmx_unsupported:
+    badge: "⚠ PMX 不支持"
+    hover: "此项不会输出到 PMX。\n会反映到 MME (.fx) 输出和查看器预览。"
   export_tab:
     output_dir_label: "输出目录:"
     output_dir_default: "(与源相同位置)"

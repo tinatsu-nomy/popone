@@ -628,6 +628,25 @@ viewer:
     tex_slot_toon: "Toon: %{name}"
     tex_slot_normal: "Normal: %{name}"
     tex_slot_emissive: "Emissive: %{name}"
+  model_info:
+    name: "Name"
+    format: "Format"
+    bones: "Bones"
+    vertices: "Vertices"
+    faces: "Faces"
+    materials: "Materials"
+    textures: "Textures"
+    morphs: "Morphs"
+    rig: "Rig"
+    humanoid_count: "%{count} bones"
+    humanoid_unsupported: "Not supported"
+  texture_picker:
+    title: "Select texture image - %{name}"
+    unassigned_short: "(unassigned)"
+    unassigned_hover: "No texture assigned (click to select)"
+  pmx_unsupported:
+    badge: "⚠ Not in PMX"
+    hover: "This setting is not exported to PMX.\nIt is reflected in MME (.fx) output and viewer preview."
   export_tab:
     output_dir_label: "Output:"
     output_dir_default: "(same as source)"

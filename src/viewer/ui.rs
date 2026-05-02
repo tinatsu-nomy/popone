@@ -130,11 +130,12 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
             let initial_dir = app.tex.last_dir.clone();
 
             // ファイルダイアログを別スレッドで開く（UIをブロックしない）
+            let dialog_title = t!("viewer.texture_picker.title", name = mat_name).into_owned();
             let (tx, rx) = std::sync::mpsc::channel();
             let repaint = ctx.clone();
             std::thread::spawn(move || {
                 let mut dialog = rfd::FileDialog::new()
-                    .set_title(format!("テクスチャ画像を選択 - {}", mat_name))
+                    .set_title(dialog_title)
                     .add_filter("Image", &["png", "jpg", "jpeg", "tga", "bmp", "psd", "dds"]);
                 if let Some(ref name) = file_name {
                     dialog = dialog.set_file_name(name);
@@ -1075,12 +1076,11 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
 /// M6 Step 6.5: PMX 非対応セクションの先頭に表示する視覚的バッジ。
 /// plain text `(PMX非対応)` をセクションタイトルから切り離し、色付きで強調する。
 fn pmx_unsupported_badge(ui: &mut egui::Ui) {
-    let badge = egui::RichText::new("⚠ PMX 非対応")
+    let badge = egui::RichText::new(t!("viewer.pmx_unsupported.badge"))
         .small()
         .color(egui::Color32::from_rgb(230, 175, 90));
-    ui.label(badge).on_hover_text(
-        "この項目は PMX 出力では反映されません。\nMME (.fx) 出力やビューアプレビューでは反映されます。",
-    );
+    ui.label(badge)
+        .on_hover_text(t!("viewer.pmx_unsupported.hover"));
 }
 
 /// v0.5.2: 各材質セクションに埋め込むテクスチャスロット行ウィジェット。
@@ -1152,14 +1152,19 @@ fn texture_slot_widget(
                     ],
                     x_stroke,
                 );
-                resp.on_hover_text("テクスチャ未割当 (クリックで選択)")
+                resp.on_hover_text(t!("viewer.texture_picker.unassigned_hover"))
                     .clicked()
             }
         };
         if clicked {
             assign_clicked = true;
         }
-        ui.label(format!("{}: {}", label, tex_name.unwrap_or("(未割当)")));
+        let unassigned = t!("viewer.texture_picker.unassigned_short");
+        ui.label(format!(
+            "{}: {}",
+            label,
+            tex_name.unwrap_or(unassigned.as_ref())
+        ));
         if tex_idx_opt.is_some() && ui.small_button("×").clicked() {
             reset_clicked = true;
         }
@@ -3156,11 +3161,11 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
     egui::Grid::new("model_info_name")
         .num_columns(2)
         .show(ui, |ui| {
-            ui.label("名前");
+            ui.label(t!("viewer.model_info.name"));
             ui.label(&ir.name);
             ui.end_row();
 
-            ui.label("形式");
+            ui.label(t!("viewer.model_info.format"));
             ui.label(ir.source_format.label());
             ui.end_row();
         });
@@ -3169,21 +3174,21 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
         .num_columns(4)
         .spacing([4.0, 2.0])
         .show(ui, |ui| {
-            ui.label("ボーン");
+            ui.label(t!("viewer.model_info.bones"));
             ui.label(format_number(ir.bones.len()));
-            ui.label("頂点");
+            ui.label(t!("viewer.model_info.vertices"));
             ui.label(format_number(ir.total_vertices()));
             ui.end_row();
 
-            ui.label("面");
+            ui.label(t!("viewer.model_info.faces"));
             ui.label(format_number(ir.total_faces()));
-            ui.label("材質");
+            ui.label(t!("viewer.model_info.materials"));
             ui.label(format_number(ir.materials.len()));
             ui.end_row();
 
-            ui.label("テクスチャ");
+            ui.label(t!("viewer.model_info.textures"));
             ui.label(format_number(ir.textures.len()));
-            ui.label("モーフ");
+            ui.label(t!("viewer.model_info.morphs"));
             ui.label(format_number(ir.morphs.len()));
             ui.end_row();
         });
@@ -3192,13 +3197,19 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
             .num_columns(4)
             .spacing([4.0, 2.0])
             .show(ui, |ui| {
-                ui.label("リグ");
+                ui.label(t!("viewer.model_info.rig"));
                 ui.label(rig);
                 ui.label("Humanoid");
                 if ir.humanoid_bone_count > 0 {
-                    ui.label(format!("{}本", ir.humanoid_bone_count));
+                    ui.label(t!(
+                        "viewer.model_info.humanoid_count",
+                        count = ir.humanoid_bone_count,
+                    ));
                 } else {
-                    ui.colored_label(egui::Color32::GRAY, "非対応");
+                    ui.colored_label(
+                        egui::Color32::GRAY,
+                        t!("viewer.model_info.humanoid_unsupported"),
+                    );
                 }
                 ui.end_row();
             });
