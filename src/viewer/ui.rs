@@ -3259,13 +3259,13 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
     );
     ui.separator();
     ui.horizontal(|ui| {
-        ui.label("絞り込み:");
+        ui.label(t!("viewer.morph.filter_label"));
         ui.text_edit_singleline(&mut app.morph_filter);
         if !app.morph_filter.is_empty() && ui.small_button("✕").clicked() {
             app.morph_filter.clear();
         }
     });
-    if ui.small_button("全リセット").clicked() {
+    if ui.small_button(t!("viewer.morph.reset_all")).clicked() {
         // UV エディタで編集中のモーフは退避値を維持するためスキップする (v0.5.6)。
         let uv_locked_morph = app.uv_edit.active_morph;
         for (i, w) in app.morph_weights.iter_mut().enumerate() {
@@ -3327,7 +3327,7 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     ui.weak("(VRMA)");
                 }
                 if is_uv_morph_locked {
-                    ui.weak("(UV編集中)");
+                    ui.weak(t!("viewer.morph.uv_editing"));
                 }
             });
         }
@@ -3347,7 +3347,7 @@ fn show_tab_display(
     );
     ui.separator();
 
-    if ui.small_button("ライト初期値").clicked() {
+    if ui.small_button(t!("viewer.display.light_reset")).clicked() {
         let d = DisplaySettings::default();
         app.display.light_intensity = d.light_intensity;
         app.display.light_color = d.light_color;
@@ -3367,7 +3367,8 @@ fn show_tab_display(
                 !matches!(shader_sel, ShaderSelection::Unlit | ShaderSelection::Normal);
             ui.add_enabled(
                 light_enabled,
-                egui::Slider::new(&mut app.display.light_intensity, 0.0..=2.0).text("ライト"),
+                egui::Slider::new(&mut app.display.light_intensity, 0.0..=2.0)
+                    .text(t!("viewer.display.light_label")),
             );
             ui.add_enabled_ui(light_enabled, |ui| {
                 color_wheel_button_rgb(ui, "light_color", &mut app.display.light_color);
@@ -3378,7 +3379,8 @@ fn show_tab_display(
             let amb_enabled = light_enabled && !app.display.use_mmd_path;
             ui.add_enabled(
                 amb_enabled,
-                egui::Slider::new(&mut app.display.ambient_intensity, 0.0..=1.0).text("環境光"),
+                egui::Slider::new(&mut app.display.ambient_intensity, 0.0..=1.0)
+                    .text(t!("viewer.display.ambient_label")),
             );
             ui.add_enabled_ui(amb_enabled, |ui| {
                 color_wheel_button_rgb(ui, "ambient_sky", &mut app.display.ambient_sky_color);
@@ -3395,8 +3397,11 @@ fn show_tab_display(
             });
             ui.end_row();
         });
-    ui.add(egui::Slider::new(&mut app.display.bg_brightness, 0.0..=1.0).text("背景"));
-    ui.checkbox(&mut app.display.show_grid, "グリッド表示 (G)");
+    ui.add(
+        egui::Slider::new(&mut app.display.bg_brightness, 0.0..=1.0)
+            .text(t!("viewer.display.background_label")),
+    );
+    ui.checkbox(&mut app.display.show_grid, t!("viewer.display.show_grid"));
 
     let has_bones = app.loaded.as_ref().is_some_and(|l| !l.ir.bones.is_empty());
     let has_spring = app
@@ -3404,19 +3409,25 @@ fn show_tab_display(
         .as_ref()
         .is_some_and(|l| !l.ir.physics.rigid_bodies.is_empty());
     ui.add_enabled_ui(has_bones, |ui| {
-        ui.checkbox(&mut app.display.show_bones, "ボーン表示 (B)")
-            .on_disabled_hover_text("モデルにボーンがありません");
+        ui.checkbox(&mut app.display.show_bones, t!("viewer.display.show_bones"))
+            .on_disabled_hover_text(t!("viewer.display.bones_missing"));
         if app.display.show_bones {
-            ui.add(egui::Slider::new(&mut app.display.bone_opacity, 0.05..=1.0).text("ボーン濃度"));
+            ui.add(
+                egui::Slider::new(&mut app.display.bone_opacity, 0.05..=1.0)
+                    .text(t!("viewer.display.bone_opacity_label")),
+            );
         }
     });
     ui.add_enabled_ui(has_spring, |ui| {
-        ui.checkbox(&mut app.display.show_spring_bones, "物理表示 (P)")
-            .on_disabled_hover_text("モデルに物理設定がありません");
+        ui.checkbox(
+            &mut app.display.show_spring_bones,
+            t!("viewer.display.show_spring_bones"),
+        )
+        .on_disabled_hover_text(t!("viewer.display.spring_missing"));
         if app.display.show_spring_bones {
             ui.add(
                 egui::Slider::new(&mut app.display.spring_bone_opacity, 0.05..=1.0)
-                    .text("物理濃度"),
+                    .text(t!("viewer.display.spring_opacity_label")),
             );
         }
     });
@@ -3430,11 +3441,14 @@ fn show_tab_display(
         .as_ref()
         .is_some_and(|l| !l.ir.physics.joints.is_empty());
     if is_pmx_pmd_joints && has_joints {
-        ui.checkbox(&mut app.display.show_joints, "ジョイント表示");
+        ui.checkbox(
+            &mut app.display.show_joints,
+            t!("viewer.display.show_joints"),
+        );
         if app.display.show_joints {
             ui.add(
                 egui::Slider::new(&mut app.display.joint_opacity, 0.05..=1.0)
-                    .text("ジョイント濃度"),
+                    .text(t!("viewer.display.joint_opacity_label")),
             );
         }
     }
@@ -3446,7 +3460,7 @@ fn show_tab_display(
         .unwrap_or(false);
     if supports_wire {
         ui.horizontal(|ui| {
-            ui.label("描画 (W):");
+            ui.label(t!("viewer.display.draw_mode_label"));
             ui.selectable_value(&mut app.display.draw_mode, DrawMode::Solid, "Solid");
             ui.selectable_value(&mut app.display.draw_mode, DrawMode::Wireframe, "Wire");
             ui.selectable_value(&mut app.display.draw_mode, DrawMode::SolidWireframe, "S+W");
@@ -3454,13 +3468,17 @@ fn show_tab_display(
     }
     // ライトモード
     ui.horizontal(|ui| {
-        ui.label("ライト:");
+        ui.label(t!("viewer.display.light_mode_label"));
         ui.selectable_value(
             &mut app.display.light_mode,
             LightMode::CameraFollow,
-            "カメラ追従",
+            t!("viewer.display.light_mode_camera_follow"),
         );
-        ui.selectable_value(&mut app.display.light_mode, LightMode::Fixed, "固定 (L)");
+        ui.selectable_value(
+            &mut app.display.light_mode,
+            LightMode::Fixed,
+            t!("viewer.display.light_mode_fixed"),
+        );
     });
     // MMD リソース構築済みの draw があるかで判定
     let has_mmd_capability = app.loaded.as_ref().is_some_and(|l| {
@@ -3486,13 +3504,15 @@ fn show_tab_display(
         }
         v
     };
-    let shader_label = |s: ShaderSelection| match s {
-        ShaderSelection::Auto => "Auto",
-        ShaderSelection::Mtoon => "MToon/Lambert",
-        ShaderSelection::Unlit => "Unlit",
-        ShaderSelection::GgxPreview => "GGX Preview",
-        ShaderSelection::Normal => "法線",
-        ShaderSelection::Mmd => "MMD",
+    let shader_label = |s: ShaderSelection| -> std::borrow::Cow<'static, str> {
+        match s {
+            ShaderSelection::Auto => std::borrow::Cow::Borrowed("Auto"),
+            ShaderSelection::Mtoon => std::borrow::Cow::Borrowed("MToon/Lambert"),
+            ShaderSelection::Unlit => std::borrow::Cow::Borrowed("Unlit"),
+            ShaderSelection::GgxPreview => std::borrow::Cow::Borrowed("GGX Preview"),
+            ShaderSelection::Normal => t!("viewer.display.shader_normal"),
+            ShaderSelection::Mmd => std::borrow::Cow::Borrowed("MMD"),
+        }
     };
     let len = shader_choices.len();
     // 最長選択肢に合わせた固定幅を計算
@@ -3514,7 +3534,7 @@ fn show_tab_display(
         max_w + ui.spacing().button_padding.x * 2.0 + 8.0
     };
     ui.horizontal(|ui| {
-        ui.label("シェーダー:");
+        ui.label(t!("viewer.display.shader_label"));
         if ui.small_button("\u{25b2}").clicked() {
             if let Some(idx) = shader_choices.iter().position(|&s| s == sel) {
                 sel = shader_choices[(idx + len - 1) % len];
@@ -3553,34 +3573,36 @@ fn show_tab_display(
         has_outline_draws && matches!(sel, ShaderSelection::Auto | ShaderSelection::Mtoon);
     ui.add_enabled(
         outline_available,
-        egui::Checkbox::new(&mut app.display.outline_enabled, "アウトライン描画"),
+        egui::Checkbox::new(
+            &mut app.display.outline_enabled,
+            t!("viewer.display.outline_enable"),
+        ),
     );
 
     // MMD サブオプション（明示的 Mmd 選択時、または Auto で MMD パスが有効な場合）
     let show_mmd_options =
         sel == ShaderSelection::Mmd || (sel == ShaderSelection::Auto && app.display.use_mmd_path);
     if show_mmd_options {
-        ui.checkbox(&mut app.display.mmd_edge_enabled, "エッジ描画");
+        ui.checkbox(
+            &mut app.display.mmd_edge_enabled,
+            t!("viewer.display.edge_enable"),
+        );
         if app.display.mmd_edge_enabled {
             ui.add(
                 egui::Slider::new(&mut app.display.mmd_edge_thickness, 0.1..=3.0)
-                    .text("エッジ太さ"),
+                    .text(t!("viewer.display.edge_thickness_label")),
             );
         }
     }
 
     ui.separator();
-    ui.checkbox(&mut app.display.msaa, "MSAA (アンチエイリアス)");
+    ui.checkbox(&mut app.display.msaa, t!("viewer.display.msaa_label"));
     let white_fallback_resp = ui
         .checkbox(
             &mut app.display.white_texture_fallback,
-            "テクスチャ欠落時フォールバックを白に",
+            t!("viewer.display.white_fallback_label"),
         )
-        .on_hover_text(
-            "テクスチャのロード・デコードに失敗したとき、1×1 白 (既定) か\n\
-             1×1 マゼンタ (診断用) を使用します。\n\
-             切替は即時反映 — 共有テクスチャの色だけが書き換わります。",
-        );
+        .on_hover_text(t!("viewer.display.white_fallback_hover"));
     if white_fallback_resp.changed() {
         super::texture::set_white_texture_fallback_dynamic(
             app.display.white_texture_fallback,
@@ -3589,7 +3611,11 @@ fn show_tab_display(
     }
     ui.horizontal(|ui| {
         ui.checkbox(&mut app.display.bloom_enabled, "Bloom");
-        if app.display.bloom_enabled && ui.small_button("初期値").clicked() {
+        if app.display.bloom_enabled
+            && ui
+                .small_button(t!("viewer.display.bloom_default"))
+                .clicked()
+        {
             let d = DisplaySettings::default();
             app.display.bloom_intensity = d.bloom_intensity;
             app.display.bloom_threshold = d.bloom_threshold;
@@ -3597,17 +3623,29 @@ fn show_tab_display(
         }
     });
     if app.display.bloom_enabled {
-        ui.add(egui::Slider::new(&mut app.display.bloom_intensity, 0.0..=4.0).text("Bloom 強度"));
+        ui.add(
+            egui::Slider::new(&mut app.display.bloom_intensity, 0.0..=4.0)
+                .text(t!("viewer.display.bloom_intensity_label")),
+        );
         ui.add(
             egui::Slider::new(&mut app.display.bloom_threshold, 0.0..=1.0)
                 .max_decimals(2)
-                .text("Bloom 閾値"),
+                .text(t!("viewer.display.bloom_threshold_label")),
         );
-        ui.add(egui::Slider::new(&mut app.display.bloom_radius, 3..=6).text("Bloom 半径"));
+        ui.add(
+            egui::Slider::new(&mut app.display.bloom_radius, 3..=6)
+                .text(t!("viewer.display.bloom_radius_label")),
+        );
     }
-    ui.checkbox(&mut app.display.show_normals, "法線表示 (N)");
+    ui.checkbox(
+        &mut app.display.show_normals,
+        t!("viewer.display.show_normals"),
+    );
     if app.display.show_normals {
-        ui.add(egui::Slider::new(&mut app.display.normal_length, 0.1..=3.0).text("法線長さ"));
+        ui.add(
+            egui::Slider::new(&mut app.display.normal_length, 0.1..=3.0)
+                .text(t!("viewer.display.normal_length_label")),
+        );
     }
     let has_mmd_normals = app.loaded.as_ref().is_some_and(|l| {
         l.gpu_model
@@ -3619,7 +3657,7 @@ fn show_tab_display(
     ui.add_enabled_ui(!has_mmd_normals, |ui| {
         // 法線平滑化 一括
         ui.horizontal(|ui| {
-            ui.label("法線平滑化");
+            ui.label(t!("viewer.display.smooth_normals_label"));
             let on_resp = ui.small_button("on");
             let off_resp = ui.small_button("off");
             let mut new_val: Option<bool> = None;
@@ -3644,13 +3682,13 @@ fn show_tab_display(
                 }
             }
             if has_mmd_normals {
-                on_resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
-                off_resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
+                on_resp.on_disabled_hover_text(t!("viewer.display.pmx_normals_locked"));
+                off_resp.on_disabled_hover_text(t!("viewer.display.pmx_normals_locked"));
             }
         });
         // カスタム法線クリア 一括
         ui.horizontal(|ui| {
-            ui.label("カスタム法線クリア");
+            ui.label(t!("viewer.display.clear_normals_label"));
             let on_resp = ui.small_button("on");
             let off_resp = ui.small_button("off");
             let mut new_val: Option<bool> = None;
@@ -3674,8 +3712,8 @@ fn show_tab_display(
                 }
             }
             if has_mmd_normals {
-                on_resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
-                off_resp.on_disabled_hover_text("PMX/PMD の法線は変更できません");
+                on_resp.on_disabled_hover_text(t!("viewer.display.pmx_normals_locked"));
+                off_resp.on_disabled_hover_text(t!("viewer.display.pmx_normals_locked"));
             }
         });
     });
