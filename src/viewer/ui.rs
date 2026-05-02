@@ -5003,192 +5003,185 @@ impl MetaBadge {
     }
 }
 
-/// VRM メタ情報の値をカラーバッジ + ツールチップに整形
-/// 戻り値: (表示用 RichText, ツールチップ文字列 or None)
-fn format_meta_value(value: &str) -> (egui::RichText, Option<&'static str>) {
+/// Format a VRM meta value into a colored badge + tooltip.
+/// Returns (display RichText, optional tooltip text).
+fn format_meta_value(value: &str) -> (egui::RichText, Option<std::borrow::Cow<'static, str>>) {
     match value {
-        // VRM 1.0 bool フィールド
-        "true" => (MetaBadge::Allow.rich_text("allow"), Some("許可されている")),
+        // VRM 1.0 bool fields
+        "true" => (
+            MetaBadge::Allow.rich_text("allow"),
+            Some(t!("viewer.meta.value.bool_true")),
+        ),
         "false" => (
             MetaBadge::Deny.rich_text("disallow"),
-            Some("許可されていない"),
+            Some(t!("viewer.meta.value.bool_false")),
         ),
-        // VRM 0.0 usage 値
+        // VRM 0.0 usage values
         "Allow" => (
             MetaBadge::Allow.rich_text("Allow"),
-            Some("この用途での利用が許可されています"),
+            Some(t!("viewer.meta.value.allow")),
         ),
         "Disallow" => (
             MetaBadge::Deny.rich_text("Disallow"),
-            Some("この用途での利用は許可されていません"),
+            Some(t!("viewer.meta.value.disallow")),
         ),
         // VRM 0.0 / 1.0 avatar permission
         "OnlyAuthor" | "onlyAuthor" => (
             MetaBadge::Warn.rich_text("OnlyAuthor"),
-            Some("アバターとして操演できるのは作者のみ"),
+            Some(t!("viewer.meta.value.only_author")),
         ),
         "Everyone" | "everyone" => (
             MetaBadge::Allow.rich_text("Everyone"),
-            Some("誰でもアバターとして操演できる"),
+            Some(t!("viewer.meta.value.everyone")),
         ),
         "ExplicitlyLicensedPerson" | "onlySeparatelyLicensedPerson" => (
             MetaBadge::Warn.rich_text("SeparatelyLicensed"),
-            Some("別途許諾を得た人のみアバターとして操演できる"),
+            Some(t!("viewer.meta.value.explicitly_licensed")),
         ),
         // VRM 1.0 commercial usage
         "personalNonProfit" => (
             MetaBadge::Deny.rich_text("personalNonProfit"),
-            Some("個人の非営利目的のみ許可されています"),
+            Some(t!("viewer.meta.value.personal_non_profit")),
         ),
         "personalProfit" => (
             MetaBadge::Warn.rich_text("personalProfit"),
-            Some("個人の営利利用まで許可されています"),
+            Some(t!("viewer.meta.value.personal_profit")),
         ),
         "corporation" => (
             MetaBadge::Allow.rich_text("corporation"),
-            Some("法人を含む商用利用が許可されています"),
+            Some(t!("viewer.meta.value.corporation")),
         ),
         // VRM 1.0 credit notation
         "required" => (
             MetaBadge::Warn.rich_text("required"),
-            Some("クレジット表記が必須です"),
+            Some(t!("viewer.meta.value.required")),
         ),
         "unnecessary" => (
             MetaBadge::Neutral.rich_text("unnecessary"),
-            Some("クレジット表記は不要です"),
+            Some(t!("viewer.meta.value.unnecessary")),
         ),
         // VRM 1.0 modification
         "prohibited" => (
             MetaBadge::Deny.rich_text("prohibited"),
-            Some("改変は禁止されています"),
+            Some(t!("viewer.meta.value.prohibited")),
         ),
         "allowModification" => (
             MetaBadge::Allow.rich_text("allowModification"),
-            Some("改変が許可されています"),
+            Some(t!("viewer.meta.value.allow_modification")),
         ),
         "allowModificationRedistribution" => (
             MetaBadge::Allow.rich_text("allowModificationRedistribution"),
-            Some("改変および再配布が許可されています"),
+            Some(t!("viewer.meta.value.allow_modification_redistribution")),
         ),
         // VRM 0.0 license
         "Redistribution_Prohibited" => (
             MetaBadge::Deny.rich_text("Redistribution_Prohibited"),
-            Some("再配布は禁止されています"),
+            Some(t!("viewer.meta.value.redistribution_prohibited")),
         ),
         "CC0" => (
             MetaBadge::Allow.rich_text("CC0"),
-            Some("CC0: パブリックドメイン。制限なく自由に利用できます"),
+            Some(t!("viewer.meta.value.cc0")),
         ),
         "CC_BY" => (
             MetaBadge::Allow.rich_text("CC_BY"),
-            Some("CC BY: クレジット表記のみで自由に利用できます"),
+            Some(t!("viewer.meta.value.cc_by")),
         ),
         "CC_BY_NC" => (
             MetaBadge::Warn.rich_text("CC_BY_NC"),
-            Some("CC BY-NC: クレジット表記が必要、非営利目的のみ"),
+            Some(t!("viewer.meta.value.cc_by_nc")),
         ),
         "CC_BY_SA" => (
             MetaBadge::Allow.rich_text("CC_BY_SA"),
-            Some("CC BY-SA: クレジット表記が必要、同一ライセンスで継承"),
+            Some(t!("viewer.meta.value.cc_by_sa")),
         ),
         "CC_BY_NC_SA" => (
             MetaBadge::Warn.rich_text("CC_BY_NC_SA"),
-            Some("CC BY-NC-SA: クレジット表記が必要、非営利のみ、同一ライセンスで継承"),
+            Some(t!("viewer.meta.value.cc_by_nc_sa")),
         ),
         "CC_BY_ND" => (
             MetaBadge::Warn.rich_text("CC_BY_ND"),
-            Some("CC BY-ND: クレジット表記が必要、改変禁止"),
+            Some(t!("viewer.meta.value.cc_by_nd")),
         ),
         "CC_BY_NC_ND" => (
             MetaBadge::Deny.rich_text("CC_BY_NC_ND"),
-            Some("CC BY-NC-ND: クレジット表記が必要、非営利のみ、改変禁止"),
+            Some(t!("viewer.meta.value.cc_by_nc_nd")),
         ),
         "Other" => (
             MetaBadge::Neutral.rich_text("Other"),
-            Some("独自ライセンス。other license URL を参照してください"),
+            Some(t!("viewer.meta.value.other")),
         ),
         _ => (egui::RichText::new(value), None),
     }
 }
 
-/// 英語ラベルを日本語表示名に変換（セクションタイトル）
-fn meta_section_ja(title: &str) -> &str {
+/// Translate an English section title into the active locale.
+fn meta_section_ja(title: &str) -> std::borrow::Cow<'static, str> {
     match title {
-        "Model Info" => "モデル情報",
-        "Author" => "作者",
-        "Permissions" => "パーミッション",
-        "License" => "ライセンス",
-        _ => title,
+        "Model Info" => t!("viewer.meta.section.model_info"),
+        "Author" => t!("viewer.meta.section.author"),
+        "Permissions" => t!("viewer.meta.section.permissions"),
+        "License" => t!("viewer.meta.section.license"),
+        _ => std::borrow::Cow::Owned(title.to_string()),
     }
 }
 
-/// 英語ラベルを日本語表示名に変換（フィールドラベル）
-fn meta_label_ja(label: &str) -> &str {
+/// Translate an English field label into the active locale.
+fn meta_label_ja(label: &str) -> std::borrow::Cow<'static, str> {
     match label {
         // Model Info
-        "model name" => "モデル名",
-        "version" => "バージョン",
+        "model name" => t!("viewer.meta.label.model_name"),
+        "version" => t!("viewer.meta.label.version"),
         // Author
-        "author" => "作者",
-        "contact information" => "連絡先",
-        "reference" => "参考文献",
-        "copyright information" => "著作権",
-        "third party licenses" => "サードパーティ",
+        "author" => t!("viewer.meta.label.author"),
+        "contact information" => t!("viewer.meta.label.contact_information"),
+        "reference" => t!("viewer.meta.label.reference"),
+        "copyright information" => t!("viewer.meta.label.copyright_information"),
+        "third party licenses" => t!("viewer.meta.label.third_party_licenses"),
         // VRM 0.0 Permissions
-        "allowed user" => "使用許可対象",
-        "violent ussage" => "暴力表現",
-        "sexual ussage" => "性的表現",
-        "commercial ussage" | "commercial usage" => "商用利用",
-        "other permission" => "その他条件",
+        "allowed user" => t!("viewer.meta.label.allowed_user"),
+        "violent ussage" => t!("viewer.meta.label.violent_ussage"),
+        "sexual ussage" => t!("viewer.meta.label.sexual_ussage"),
+        "commercial ussage" | "commercial usage" => t!("viewer.meta.label.commercial_ussage"),
+        "other permission" => t!("viewer.meta.label.other_permission"),
         // VRM 1.0 Permissions
-        "avatar permission" => "アバター使用",
-        "violent usage" => "過度な暴力",
-        "sexual usage" => "過度な性的表現",
-        "political/religious" => "政治/宗教",
-        "antisocial/hate" => "反社会/ヘイト",
-        "credit notation" => "クレジット表記",
-        "redistribution" => "再配布",
-        "modification" => "改変",
+        "avatar permission" => t!("viewer.meta.label.avatar_permission"),
+        "violent usage" => t!("viewer.meta.label.violent_usage"),
+        "sexual usage" => t!("viewer.meta.label.sexual_usage"),
+        "political/religious" => t!("viewer.meta.label.political_religious"),
+        "antisocial/hate" => t!("viewer.meta.label.antisocial_hate"),
+        "credit notation" => t!("viewer.meta.label.credit_notation"),
+        "redistribution" => t!("viewer.meta.label.redistribution"),
+        "modification" => t!("viewer.meta.label.modification"),
         // License
-        "license" => "ライセンス",
-        "other license" => "その他",
-        _ => label,
+        "license" => t!("viewer.meta.label.license"),
+        "other license" => t!("viewer.meta.label.other_license"),
+        _ => std::borrow::Cow::Owned(label.to_string()),
     }
 }
 
-/// パーミッション・ライセンスのラベル（左列）に対するツールチップ
-fn meta_label_tooltip(label: &str) -> Option<&'static str> {
+/// Tooltip for permission / license labels (left column).
+fn meta_label_tooltip(label: &str) -> Option<std::borrow::Cow<'static, str>> {
     match label {
         // VRM 0.0 Permissions
-        "allowed user" => Some("このモデルをアバターとして使用できる人の範囲 (allowedUserName)"),
-        "violent ussage" => Some("暴力表現を伴うコンテンツでの利用の許可 (violentUssageName)"),
-        "sexual ussage" => Some("性的表現を伴うコンテンツでの利用の許可 (sexualUssageName)"),
+        "allowed user" => Some(t!("viewer.meta.label_tooltip.allowed_user")),
+        "violent ussage" => Some(t!("viewer.meta.label_tooltip.violent_ussage")),
+        "sexual ussage" => Some(t!("viewer.meta.label_tooltip.sexual_ussage")),
         "commercial ussage" | "commercial usage" => {
-            Some("商業目的での利用の許可範囲 (commercialUsage)")
+            Some(t!("viewer.meta.label_tooltip.commercial_ussage"))
         }
-        "other permission" => Some("その他の利用条件を記載した URL (otherPermissionUrl)"),
+        "other permission" => Some(t!("viewer.meta.label_tooltip.other_permission")),
         // License
-        "license" => Some("適用されるライセンスの種類"),
-        "other license" => Some("追加ライセンス情報の URL"),
+        "license" => Some(t!("viewer.meta.label_tooltip.license")),
+        "other license" => Some(t!("viewer.meta.label_tooltip.other_license")),
         // VRM 1.0 Permissions
-        "avatar permission" => {
-            Some("このモデルをアバターとして操演できる人の範囲 (avatarPermission)")
-        }
-        "violent usage" => {
-            Some("過度な暴力表現を伴うコンテンツでの利用の許可 (allowExcessivelyViolentUsage)")
-        }
-        "sexual usage" => {
-            Some("過度な性的表現を伴うコンテンツでの利用の許可 (allowExcessivelySexualUsage)")
-        }
-        "political/religious" => {
-            Some("政治的・宗教的なコンテンツでの利用の許可 (allowPoliticalOrReligiousUsage)")
-        }
-        "antisocial/hate" => {
-            Some("反社会的・ヘイト表現を伴うコンテンツでの利用の許可 (allowAntisocialOrHateUsage)")
-        }
-        "credit notation" => Some("利用時のクレジット表記の要否 (creditNotation)"),
-        "redistribution" => Some("モデルデータの再配布の許可 (allowRedistribution)"),
-        "modification" => Some("モデルデータの改変の許可範囲 (modification)"),
+        "avatar permission" => Some(t!("viewer.meta.label_tooltip.avatar_permission")),
+        "violent usage" => Some(t!("viewer.meta.label_tooltip.violent_usage")),
+        "sexual usage" => Some(t!("viewer.meta.label_tooltip.sexual_usage")),
+        "political/religious" => Some(t!("viewer.meta.label_tooltip.political_religious")),
+        "antisocial/hate" => Some(t!("viewer.meta.label_tooltip.antisocial_hate")),
+        "credit notation" => Some(t!("viewer.meta.label_tooltip.credit_notation")),
+        "redistribution" => Some(t!("viewer.meta.label_tooltip.redistribution")),
+        "modification" => Some(t!("viewer.meta.label_tooltip.modification")),
         _ => None,
     }
 }
