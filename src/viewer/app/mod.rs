@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use eframe::egui_wgpu;
+use rust_i18n::t;
 
 use crate::intermediate::types::{IrMaterial, IrModel};
 use crate::unitypackage::PkgModelLocator;
@@ -2266,20 +2267,20 @@ impl eframe::App for ViewerApp {
                         ui.add(btn)
                     };
 
-                    if menu_btn(ui, "開く").clicked() {
+                    if menu_btn(ui, &t!("viewer.topbar.open")).clicked() {
                         self.open_file_dialog(ctx);
                     }
 
                     if self.loaded.is_some()
-                        && menu_btn(ui, "追加")
-                            .on_hover_text("モデルを追加読み込み（Shift+D&Dでも可）")
+                        && menu_btn(ui, &t!("viewer.topbar.append"))
+                            .on_hover_text(t!("viewer.topbar.append_tooltip"))
                             .clicked()
                     {
                         self.open_append_dialog(ctx);
                     }
 
-                    if menu_btn(ui, "ログ")
-                        .on_hover_text("ログビュアーを別ウインドウで開く / 閉じる")
+                    if menu_btn(ui, &t!("viewer.topbar.log"))
+                        .on_hover_text(t!("viewer.topbar.log_tooltip"))
                         .clicked()
                     {
                         // toggle_visible は閉じる際に last_geometry を apply_geometry に
@@ -2293,7 +2294,7 @@ impl eframe::App for ViewerApp {
                     if self.loaded.is_some() {
                         ui.separator();
                         ui.label(
-                            egui::RichText::new("モデル名:")
+                            egui::RichText::new(t!("viewer.topbar.model_name_label"))
                                 .color(egui::Color32::from_gray(0xB0))
                                 .size(11.0),
                         );
@@ -2302,7 +2303,7 @@ impl eframe::App for ViewerApp {
                                 .desired_width(240.0)
                                 .text_color(egui::Color32::WHITE)
                                 .font(egui::FontId::proportional(12.0))
-                                .hint_text("(拡張子なし)"),
+                                .hint_text(t!("viewer.topbar.model_name_hint")),
                         );
                         if response.changed() {
                             self.refresh_derived_from_display_name();
@@ -2311,14 +2312,14 @@ impl eframe::App for ViewerApp {
 
                     // 右端にフィット/リセットボタン
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if menu_btn(ui, "リセット(R)")
-                            .on_hover_text("カメラをリセット")
+                        if menu_btn(ui, &t!("viewer.topbar.reset"))
+                            .on_hover_text(t!("viewer.topbar.reset_tooltip"))
                             .clicked()
                         {
                             self.camera_reset_to_model();
                         }
-                        if menu_btn(ui, "フィット(F)")
-                            .on_hover_text("モデルにフィット")
+                        if menu_btn(ui, &t!("viewer.topbar.fit"))
+                            .on_hover_text(t!("viewer.topbar.fit_tooltip"))
                             .clicked()
                         {
                             self.camera_fit_to_model();
@@ -2353,8 +2354,9 @@ impl eframe::App for ViewerApp {
 
                         let path_label = if loaded.source.is_snapshot() {
                             format!(
-                                "{} (キャッシュ済み)",
-                                loaded.source.display_path().to_string_lossy()
+                                "{}{}",
+                                loaded.source.display_path().to_string_lossy(),
+                                t!("viewer.statusbar.cached_suffix")
                             )
                         } else {
                             loaded.source.display_path().to_string_lossy().into_owned()
@@ -2384,7 +2386,7 @@ impl eframe::App for ViewerApp {
                         }
                     } else {
                         ui.label(
-                            egui::RichText::new("VRM/FBX ファイルを読み込んでください")
+                            egui::RichText::new(t!("viewer.statusbar.no_model"))
                                 .font(egui::FontId::proportional(11.0)),
                         );
                     }
@@ -2399,15 +2401,13 @@ impl eframe::App for ViewerApp {
                 let hint_font = egui::FontId::proportional(10.0);
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new(
-                            "左ドラッグ:回転  右ドラッグ:パン  ホイール:ズーム  ダブルクリック:フィット",
-                        )
-                        .font(hint_font.clone())
-                        .color(hint_color),
+                        egui::RichText::new(t!("viewer.shortcut.camera"))
+                            .font(hint_font.clone())
+                            .color(hint_color),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            egui::RichText::new("G:グリッド B:ボーン P:物理 W:ワイヤー N:法線 L:ライト")
+                            egui::RichText::new(t!("viewer.shortcut.toggles"))
                                 .font(hint_font)
                                 .color(hint_color),
                         );

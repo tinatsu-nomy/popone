@@ -255,3 +255,21 @@ viewer:
     pmx_export: "PMX Export"
     uvmap_export: "UV Map Export"
     animation: "Animation"
+  topbar:
+    open: "Open"
+    append: "Append"
+    append_tooltip: "Append a model (also Shift+drag-and-drop)"
+    log: "Log"
+    log_tooltip: "Open / close log viewer in a separate window"
+    model_name_label: "Model name:"
+    model_name_hint: "(no extension)"
+    reset: "Reset (R)"
+    reset_tooltip: "Reset camera"
+    fit: "Fit (F)"
+    fit_tooltip: "Fit to model"
+  statusbar:
+    cached_suffix: " (cached)"
+    no_model: "Please load a VRM/FBX file"
+  shortcut:
+    camera: "LMB drag: Rotate  RMB drag: Pan  Wheel: Zoom  Double-click: Fit"
+    toggles: "G: Grid  B: Bones  P: Physics  W: Wireframe  N: Normals  L: Light"

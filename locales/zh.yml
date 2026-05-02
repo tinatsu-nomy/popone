@@ -255,3 +255,21 @@ viewer:
     pmx_export: "PMX 导出"
     uvmap_export: "UV 贴图导出"
     animation: "动画"
+  topbar:
+    open: "打开"
+    append: "添加"
+    append_tooltip: "追加加载模型（也支持 Shift+拖放）"
+    log: "日志"
+    log_tooltip: "在独立窗口中打开 / 关闭日志查看器"
+    model_name_label: "模型名称:"
+    model_name_hint: "(无扩展名)"
+    reset: "重置 (R)"
+    reset_tooltip: "重置相机"
+    fit: "适配 (F)"
+    fit_tooltip: "适配到模型"
+  statusbar:
+    cached_suffix: "（已缓存）"
+    no_model: "请加载 VRM/FBX 文件"
+  shortcut:
+    camera: "左键拖动:旋转  右键拖动:平移  滚轮:缩放  双击:适配"
+    toggles: "G:网格 B:骨骼 P:物理 W:线框 N:法线 L:光照"

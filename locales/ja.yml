@@ -255,3 +255,21 @@ viewer:
     pmx_export: "PMX 変換"
     uvmap_export: "UVマップ出力"
     animation: "アニメーション"
+  topbar:
+    open: "開く"
+    append: "追加"
+    append_tooltip: "モデルを追加読み込み（Shift+D&Dでも可）"
+    log: "ログ"
+    log_tooltip: "ログビュアーを別ウインドウで開く / 閉じる"
+    model_name_label: "モデル名:"
+    model_name_hint: "(拡張子なし)"
+    reset: "リセット(R)"
+    reset_tooltip: "カメラをリセット"
+    fit: "フィット(F)"
+    fit_tooltip: "モデルにフィット"
+  statusbar:
+    cached_suffix: " (キャッシュ済み)"
+    no_model: "VRM/FBX ファイルを読み込んでください"
+  shortcut:
+    camera: "左ドラッグ:回転  右ドラッグ:パン  ホイール:ズーム  ダブルクリック:フィット"
+    toggles: "G:グリッド B:ボーン P:物理 W:ワイヤー N:法線 L:ライト"
