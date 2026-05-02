@@ -7,13 +7,14 @@ use anyhow::{Context, Result};
 use eframe::wgpu;
 use rust_i18n::t;
 
-/// テクスチャデコード失敗・参照先不在時のフォールバック色を白にするか。
-/// - true（既定）: 1×1 白 (255,255,255,255) — 乗算/加算系スロットで色被りしない
-/// - false: 1×1 マゼンタ (255,0,255,255) — 欠落を目立たせたい診断用
+/// Whether the fallback color (used when texture decode fails or the referenced
+/// texture is missing) is white.
+/// - true (default): 1x1 white (255,255,255,255) — avoids tinting in multiply / additive slots.
+/// - false: 1x1 magenta (255,0,255,255) — diagnostic mode that makes missing textures stand out.
 ///
-/// 値は単独で意味を持つ（デコード前に参照される）。既にアップロード済みの
-/// GPU 上の色は `SharedFallback` 側の `queue.write_texture` によって同期する
-/// （`set_white_texture_fallback_dynamic` を参照）。
+/// The value is meaningful on its own (consulted before decoding). Already
+/// uploaded GPU colors are kept in sync via `queue.write_texture` from the
+/// `SharedFallback` side (see `set_white_texture_fallback_dynamic`).
 static WHITE_FALLBACK: AtomicBool = AtomicBool::new(true);
 
 pub fn set_white_texture_fallback(enabled: bool) {
@@ -33,11 +34,12 @@ fn fallback_rgba() -> [u8; 4] {
     }
 }
 
-/// 失敗経路すべてで共有する 1×1 フォールバックテクスチャ。
+/// 1x1 fallback texture shared across every failure path.
 ///
-/// 個別に Texture を作らず、同一 `TextureView` を全材質の BindGroup に焼き込む
-/// ことで、色切替時に `queue.write_texture` で中身 1 バイトを書き換えるだけで
-/// 既に描画中のモデルにも即時反映できる（BindGroup 再構築不要）。
+/// Rather than creating a Texture per failure, the same `TextureView` is baked
+/// into every material's BindGroup. When the color is toggled, a single
+/// `queue.write_texture` (1 byte) instantly updates every model already being
+/// rendered (no BindGroup rebuild needed).
 struct SharedFallback {
     tex: wgpu::Texture,
     srgb_view: wgpu::TextureView,
@@ -104,10 +106,10 @@ impl SharedFallback {
 
 static SHARED_FALLBACK: Mutex<Option<SharedFallback>> = Mutex::new(None);
 
-/// 共有フォールバックテクスチャを（必要なら初期化したうえで）取得する。
+/// Return the shared fallback texture, initializing it on first use.
 ///
-/// テクスチャデコードに失敗した経路から呼ばれ、全呼び出し元で同一の
-/// `TextureView` ペアを共有する。
+/// Called from any path where texture decoding fails. Every caller shares the
+/// same `TextureView` pair.
 fn fallback_views(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -122,11 +124,12 @@ fn fallback_views(
         .views()
 }
 
-/// 色を切り替え、既に初期化済みなら GPU 上の 1×1 に `queue.write_texture` で
-/// 新色を書き込む（View は不変なので BindGroup 再構築不要）。
+/// Toggle the color and, if already initialized, write the new color to the GPU
+/// 1x1 via `queue.write_texture` (the View is unchanged so BindGroups need not
+/// be rebuilt).
 ///
-/// 未初期化の場合は何もしない — 次回 `fallback_views` 呼び出し時に現行色で
-/// 初期化される。
+/// If not yet initialized this is a no-op — the next `fallback_views` call will
+/// initialize with the current color.
 pub fn set_white_texture_fallback_dynamic(enabled: bool, queue: &wgpu::Queue) {
     WHITE_FALLBACK.store(enabled, Ordering::Relaxed);
     let guard = SHARED_FALLBACK.lock().unwrap_or_else(|p| p.into_inner());
@@ -135,7 +138,7 @@ pub fn set_white_texture_fallback_dynamic(enabled: bool, queue: &wgpu::Queue) {
     }
 }
 
-/// sRGB RGBA バイト列を linear 空間で縮小し、sRGB に戻して返す
+/// Resize an sRGB RGBA byte buffer in linear space and return it back in sRGB.
 fn resize_srgb(
     src: &image::RgbaImage,
     new_w: u32,
@@ -147,12 +150,12 @@ fn resize_srgb(
     linear_f32_to_rgba8(&resized)
 }
 
-// PSD 関連関数は crate::psd に移動済み — 後方互換のため re-export
+// PSD-related functions moved to crate::psd — re-exported for backward compatibility.
 pub use crate::psd::{decode_psd, is_psd_filename};
 
-/// RGBA データを GPU テクスチャにアップロード（共通処理）
-/// GPU の最大テクスチャサイズを超える場合は自動的に縮小する
-/// 戻り値: (sRGB ビュー, Unorm ビュー) — sRGB は標準描画用、Unorm は MMD 描画用
+/// Upload an RGBA buffer to a GPU texture (shared helper).
+/// Automatically downscales when the GPU max texture size is exceeded.
+/// Returns: (sRGB view, Unorm view) — sRGB for standard rendering, Unorm for MMD rendering.
 pub fn upload_rgba_to_gpu(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -164,8 +167,8 @@ pub fn upload_rgba_to_gpu(
     upload_rgba_to_gpu_with_mips(device, queue, rgba, width, height, label, None)
 }
 
-/// 事前生成されたミップチェーンを受け取る版。
-/// `mip_chain` が Some なら CPU ミップ生成をスキップし、直接 GPU アップロードする。
+/// Variant that accepts a pre-built mip chain.
+/// When `mip_chain` is Some, CPU mip generation is skipped and the chain is uploaded directly.
 #[allow(clippy::type_complexity)]
 pub fn upload_rgba_to_gpu_with_mips(
     device: &wgpu::Device,
@@ -197,7 +200,7 @@ pub fn upload_rgba_to_gpu_with_mips(
     };
     let upload_rgba: &[u8] = upload_owned.as_deref().unwrap_or(rgba);
 
-    // ミップレベル数を計算: floor(log2(max(w,h))) + 1
+    // Mip level count: floor(log2(max(w, h))) + 1
     let mip_level_count = {
         let max_side = upload_w.max(upload_h);
         if max_side <= 1 {
@@ -222,7 +225,7 @@ pub fn upload_rgba_to_gpu_with_mips(
         view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
     });
 
-    // レベル 0 をアップロード
+    // Upload level 0.
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture: &tex,
@@ -243,10 +246,10 @@ pub fn upload_rgba_to_gpu_with_mips(
         },
     );
 
-    // ミップチェーンをアップロード
-    // 事前生成済み（BGスレッドで生成）があればそれを使用、なければCPUで生成
+    // Upload the mip chain.
+    // Use the pre-built chain (built on the BG thread) when available, otherwise generate on CPU.
     if mip_level_count > 1 {
-        // リサイズ後の場合（GPU 上限超過）は事前生成ミップを無視して新規生成
+        // After resizing (because of GPU limit) we ignore any pre-built mip chain and regenerate.
         let use_prebuilt = mip_chain.is_some() && upload_owned.is_none();
         if use_prebuilt {
             let chain = mip_chain.expect("verified by use_prebuilt");
@@ -273,8 +276,8 @@ pub fn upload_rgba_to_gpu_with_mips(
                 );
             }
         } else {
-            // sRGB→linear→縮小→sRGB で色空間的に正確なダウンサンプリング
-            // (LUT で powf 呼び出しを排除済み)
+            // sRGB -> linear -> downscale -> sRGB for color-correct downsampling
+            // (powf calls are eliminated by a LUT).
             let base = image::RgbaImage::from_raw(upload_w, upload_h, upload_rgba.to_vec())
                 .expect("RgbaImage construction for mip generation failed");
             let mut current_linear = rgba8_to_linear_f32(&base);
@@ -319,8 +322,8 @@ pub fn upload_rgba_to_gpu_with_mips(
     (srgb_view, unorm_view)
 }
 
-/// IrModel のテクスチャを GPU にアップロード
-/// 戻り値: テクスチャインデックス → (sRGB TextureView, Unorm TextureView) のマッピング
+/// Upload IrModel textures to the GPU.
+/// Returns: mapping from texture index to (sRGB TextureView, Unorm TextureView).
 pub fn upload_textures(
     _ir: &IrModel,
     images: &[gltf::image::Data],
@@ -332,10 +335,10 @@ pub fn upload_textures(
     for (i, img) in images.iter().enumerate() {
         let (width, height) = (img.width, img.height);
 
-        // RGBA8 に変換
+        // Convert to RGBA8.
         let rgba_data = match img.format {
             gltf::image::Format::R8G8B8A8 => {
-                // RGBA8 はそのまま — clone せず参照で直接アップロード
+                // RGBA8 needs no conversion — upload by reference without cloning.
                 let label = format!("texture_{i}");
                 views.push(upload_rgba_to_gpu(
                     device,
@@ -379,7 +382,7 @@ pub fn upload_textures(
             }
             _ => {
                 log::warn!("Unsupported texture format: {:?} (index {})", img.format, i);
-                // 共有フォールバックに切替 — 動的に白/マゼンタへ書き換えられる
+                // Switch to the shared fallback — can be flipped between white and magenta dynamically.
                 views.push(fallback_views(device, queue));
                 continue;
             }
@@ -399,7 +402,7 @@ pub fn upload_textures(
     Ok(views)
 }
 
-/// バイト列から RGBA にデコード（PSD 対応）
+/// Decode a byte slice into RGBA (PSD supported).
 pub fn decode_image_to_rgba(data: &[u8], is_psd: bool) -> Result<(Vec<u8>, u32, u32)> {
     decode_image_to_rgba_with_hint(data, is_psd, None)
 }
@@ -413,7 +416,7 @@ pub fn decode_image_to_rgba_with_hint(
         return decode_psd(data);
     }
 
-    // MIME ヒントからフォーマットを明示指定（TGA 等はマジックナンバーがなく自動判定が失敗しうる）
+    // Pin the format from the MIME hint when available (TGA etc. lack a magic number, so auto-detect can fail).
     let format = match mime_hint {
         Some("image/tga") | Some("image/x-tga") => Some(image::ImageFormat::Tga),
         Some("image/bmp") => Some(image::ImageFormat::Bmp),
@@ -444,7 +447,7 @@ pub fn decode_image_to_rgba_with_hint(
     Ok((img.into_raw(), w, h))
 }
 
-/// バイト列からサムネイル RGBA を生成（デコード→縮小）
+/// Generate a thumbnail RGBA from a byte slice (decode -> downscale).
 pub fn create_thumbnail_rgba(data: &[u8], is_psd: bool, thumb_size: u32) -> Result<Vec<u8>> {
     let (rgba, w, h) = decode_image_to_rgba(data, is_psd)?;
     let img = image::RgbaImage::from_raw(w, h, rgba).context("RgbaImage構築失敗")?;
@@ -457,8 +460,8 @@ pub fn create_thumbnail_rgba(data: &[u8], is_psd: bool, thumb_size: u32) -> Resu
     Ok(resized.into_raw())
 }
 
-/// バイト列から RGBA にデコードして GPU テクスチャをアップロード（PSD 対応）
-/// 戻り値: (sRGB ビュー, Unorm ビュー)
+/// Decode a byte slice into RGBA and upload it to a GPU texture (PSD supported).
+/// Returns: (sRGB view, Unorm view).
 pub fn upload_texture_from_bytes(
     data: &[u8],
     is_psd: bool,
@@ -476,8 +479,8 @@ pub fn upload_texture_from_bytes(
     ))
 }
 
-/// IrTexture（PNG/JPEG データ）から GPU テクスチャをアップロード
-/// 戻り値: テクスチャインデックス → (sRGB TextureView, Unorm TextureView) のマッピング
+/// Upload IrTexture (PNG/JPEG bytes) to GPU textures.
+/// Returns: mapping from texture index to (sRGB TextureView, Unorm TextureView).
 pub fn upload_textures_from_ir(
     ir: &IrModel,
     device: &wgpu::Device,
@@ -490,7 +493,7 @@ pub fn upload_textures_from_ir(
     Ok(views)
 }
 
-/// 1 枚のテクスチャを GPU にアップロードする（フレーム分割用に公開）
+/// Upload a single texture to the GPU (exposed for frame splitting).
 pub fn upload_single_texture(
     tex: &crate::intermediate::types::IrTexture,
     index: usize,
@@ -500,10 +503,10 @@ pub fn upload_single_texture(
     let is_psd = is_psd_filename(&tex.filename);
     if tex.data.is_empty() {
         log::warn!("Texture '{}' data is empty (index {})", tex.filename, index);
-        // 共有フォールバックに切替 — 動的に白/マゼンタへ書き換えられる
+        // Switch to the shared fallback — can be flipped between white and magenta dynamically.
         return fallback_views(device, queue);
     }
-    // 生 RGBA バイパス（BG ロードパスで事前デコード済み）
+    // Raw RGBA bypass (already decoded on the BG load path).
     if let crate::intermediate::types::TextureData::RawRgba {
         ref pixels,
         width,
@@ -539,4 +542,4 @@ pub fn upload_single_texture(
     }
 }
 
-// decode_psd, is_psd_filename は上部で crate::psd から re-export 済み
+// decode_psd, is_psd_filename are re-exported from crate::psd above.

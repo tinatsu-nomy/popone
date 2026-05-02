@@ -1,14 +1,14 @@
-//! シングルインスタンス制御（Windows Named Mutex + Named Pipe IPC）
+//! Single-instance control (Windows Named Mutex + Named Pipe IPC).
 //!
-//! 起動時に既存インスタンスの有無を Named Mutex で検出し、
-//! 既存があれば Named Pipe 経由でファイルパスを送信して終了する。
+//! At startup, detect any existing instance via a Named Mutex; if one exists,
+//! send the file path through a Named Pipe and exit.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use eframe::egui;
 
-// --- Win32 API 定数 ---
+// --- Win32 API constants ---
 const ERROR_ALREADY_EXISTS: u32 = 183;
 const INVALID_HANDLE_VALUE: *mut std::ffi::c_void = -1isize as *mut std::ffi::c_void;
 const GENERIC_WRITE: u32 = 0x4000_0000;
@@ -79,7 +79,7 @@ extern "system" {
     ) -> i32;
 }
 
-/// Win32 ハンドルの RAII ラッパー（Drop で自動 CloseHandle）
+/// RAII wrapper around a Win32 handle (auto CloseHandle on Drop).
 struct WinHandle(*mut std::ffi::c_void);
 
 impl WinHandle {
@@ -102,22 +102,22 @@ impl Drop for WinHandle {
     }
 }
 
-/// &str → null 終端 UTF-16
+/// &str -> null-terminated UTF-16.
 fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// シングルインスタンス判定結果
+/// Result of single-instance detection.
 pub enum InstanceCheck {
-    /// 最初のインスタンス（ログローテーション可）
+    /// First instance (log rotation allowed).
     Primary,
-    /// 既存インスタンスへ転送成功（即座に終了してよい）
+    /// Forwarded successfully to the existing instance (safe to exit immediately).
     Forwarded,
-    /// 既存インスタンスを検出したが IPC 失敗（ログローテーション不可）
+    /// Existing instance detected but IPC failed (do not rotate logs).
     FallbackStart,
 }
 
-/// 既存インスタンスの有無を判定し、あればファイルパスを送信する。
+/// Detect whether another instance exists, and forward the file path if so.
 pub fn try_send_to_existing(file_path: Option<&Path>) -> InstanceCheck {
     let mutex_name = to_wide(MUTEX_NAME);
 
@@ -134,17 +134,17 @@ pub fn try_send_to_existing(file_path: Option<&Path>) -> InstanceCheck {
 
         let already_exists = GetLastError() == ERROR_ALREADY_EXISTS;
         if !already_exists {
-            // 最初のインスタンス — mutex ハンドルは意図的に close しない
-            // （プロセス生存中保持、終了時に OS が解放）
+            // First instance — intentionally do NOT close the mutex handle
+            // (kept alive for process lifetime; OS releases it on exit).
             return InstanceCheck::Primary;
         }
 
-        // 既存インスタンスあり — パイプ経由でファイルパスを送信
-        CloseHandle(h_mutex); // 自分の mutex は不要
+        // Existing instance found — forward the file path through the pipe.
+        CloseHandle(h_mutex); // our own mutex handle is no longer needed
 
         let pipe_name = to_wide(PIPE_NAME);
 
-        // パイプがまだ作成されていない場合に備えて最大3秒待機
+        // Wait up to 3 seconds in case the pipe is not yet created.
         if WaitNamedPipeW(pipe_name.as_ptr(), 3000) == 0 {
             eprintln!("WaitNamedPipeW timeout (existing instance pipe not ready)");
             return InstanceCheck::FallbackStart;
@@ -164,16 +164,16 @@ pub fn try_send_to_existing(file_path: Option<&Path>) -> InstanceCheck {
             return InstanceCheck::FallbackStart;
         }
 
-        // メッセージモードに切り替え
+        // Switch to message mode.
         let mode = PIPE_READMODE_MESSAGE;
         SetNamedPipeHandleState(h_pipe, &mode, std::ptr::null_mut(), std::ptr::null_mut());
 
-        // パスを絶対化して UTF-8 バイト列として送信
+        // Absolutize the path and send it as UTF-8 bytes.
         let payload = match file_path {
             Some(p) => {
                 let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
                 let s = abs.to_string_lossy();
-                // \\?\UNC\server\share → \\server\share, \\?\C:\... → C:\...
+                // \\?\UNC\server\share -> \\server\share, \\?\C:\... -> C:\...
                 let s = if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
                     std::borrow::Cow::Owned(format!(r"\\{rest}"))
                 } else if let Some(rest) = s.strip_prefix(r"\\?\") {
@@ -212,7 +212,7 @@ pub fn try_send_to_existing(file_path: Option<&Path>) -> InstanceCheck {
     }
 }
 
-/// パイプリッスンスレッドを起動。受信したパスを sender に送る。
+/// Spawn the pipe listener thread. Received paths are forwarded to `sender`.
 pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
     std::thread::spawn(move || {
         let pipe_name = to_wide(PIPE_NAME);
@@ -224,9 +224,9 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
                     pipe_name.as_ptr(),
                     PIPE_ACCESS_INBOUND,
                     PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-                    1,     // 最大インスタンス数
-                    65536, // 出力バッファ（長パス対応で 64KB に拡大）
-                    65536, // 入力バッファ
+                    1,     // max instances
+                    65536, // out buffer (64 KB to fit long paths)
+                    65536, // in buffer
                     0,
                     std::ptr::null_mut(),
                 )
@@ -239,21 +239,21 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
                 }
             };
 
-            // クライアント接続待ち（ブロッキング）
+            // Wait for a client to connect (blocking).
             // SAFETY: pipe is a valid named pipe handle (checked in WinHandle::new).
             let connected = unsafe { ConnectNamedPipe(pipe.as_raw(), std::ptr::null_mut()) };
             if connected == 0 {
-                // ERROR_PIPE_CONNECTED (535) は既に接続済みなので正常
+                // ERROR_PIPE_CONNECTED (535) means the client connected before our call — treat as success.
                 // SAFETY: GetLastError has no preconditions.
                 let err = unsafe { GetLastError() };
                 if err != 535 {
                     log::warn!("ConnectNamedPipe failed: error={err}");
-                    // pipe は Drop で自動 CloseHandle
+                    // pipe is auto-closed by Drop
                     continue;
                 }
             }
 
-            // メッセージ読み取り（ERROR_MORE_DATA 時はループで全データを取得）
+            // Read the message (loop on ERROR_MORE_DATA to gather the full payload).
             let mut accumulated = Vec::new();
             let mut buf = [0u8; 65536];
             let mut read_ok = false;
@@ -274,16 +274,16 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
                     accumulated.extend_from_slice(&buf[..bytes_read as usize]);
                 }
                 if ok != 0 {
-                    read_ok = true; // メッセージ全体を正常に受信完了
+                    read_ok = true; // full message received
                     break;
                 }
                 // SAFETY: GetLastError has no preconditions.
                 let err = unsafe { GetLastError() };
                 if err == ERROR_MORE_DATA {
-                    // メッセージの続きがある — 次の ReadFile で残りを取得
+                    // More data to read — loop and pick up the rest.
                     continue;
                 }
-                // その他のエラーは回復不能 — 部分データは破棄
+                // Any other error is unrecoverable — discard partial data.
                 log::warn!(
                     "ReadFile failed: error={err}, discarding {} partial bytes",
                     accumulated.len()
@@ -296,7 +296,7 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
                 let path = PathBuf::from(s.into_owned());
                 let _ = sender.send(path);
             } else if read_ok {
-                // 空メッセージ = 前面化のみ
+                // Empty message = bring-to-front signal only.
                 let _ = sender.send(PathBuf::new());
             }
 
@@ -307,7 +307,7 @@ pub fn start_pipe_listener(sender: mpsc::Sender<PathBuf>, ctx: egui::Context) {
             unsafe {
                 DisconnectNamedPipe(pipe.as_raw());
             }
-            // pipe は Drop で自動 CloseHandle
+            // pipe is auto-closed by Drop
         }
     });
 }
