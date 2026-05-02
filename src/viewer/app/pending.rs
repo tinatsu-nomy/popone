@@ -321,12 +321,12 @@ impl ImportUnit {
             ImportUnit::Inch => 0.0254,
         }
     }
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
-            ImportUnit::Mm => "ミリメートル (mm)",
-            ImportUnit::Cm => "センチメートル (cm)",
-            ImportUnit::M => "メートル (m)",
-            ImportUnit::Inch => "インチ (inch)",
+            ImportUnit::Mm => t!("viewer.import_unit.mm"),
+            ImportUnit::Cm => t!("viewer.import_unit.cm"),
+            ImportUnit::M => t!("viewer.import_unit.m"),
+            ImportUnit::Inch => t!("viewer.import_unit.inch"),
         }
     }
 }
@@ -719,18 +719,18 @@ impl ViewerApp {
             || self.pending.archive_load.is_some();
         let is_gpu_building = self.pending.gpu_build.is_some();
         let is_converting_bg = self.pending.convert_bg.is_some();
-        let msg = if is_bg_loading {
-            Some("読み込み中...")
+        let msg: Option<std::borrow::Cow<'static, str>> = if is_bg_loading {
+            Some(t!("viewer.overlay.loading"))
         } else if is_gpu_building {
-            Some("GPU構築中...")
+            Some(t!("viewer.overlay.gpu_building"))
         } else if self.pending.rebuild.is_some() || self.pending.reload.is_some() {
-            Some("処理中...")
+            Some(t!("viewer.overlay.processing"))
         } else if self.export.pending_mkdir.is_some() {
-            Some("ディレクトリ作成中...")
+            Some(t!("viewer.overlay.creating_directory"))
         } else if is_converting_bg || self.pending.convert.is_some() {
-            Some("PMX変換中...")
+            Some(t!("viewer.overlay.pmx_converting"))
         } else if self.export.pending_uv_bg.is_some() {
-            Some("UVマップ出力中...")
+            Some(t!("viewer.overlay.uvmap_exporting"))
         } else {
             None
         };
@@ -774,7 +774,7 @@ impl ViewerApp {
                     let btn = ui.add_sized(
                         [btn_w, btn_h],
                         egui::Button::new(
-                            egui::RichText::new("中止")
+                            egui::RichText::new(t!("viewer.overlay.cancel"))
                                 .color(egui::Color32::WHITE)
                                 .size(14.0),
                         )
@@ -972,7 +972,13 @@ impl ViewerApp {
         model_name: &str,
     ) {
         if let Some((current, total)) = *batch_progress {
-            let msg = format!("読み込み完了 ({}/{}): {}", current, total, model_name);
+            let msg = t!(
+                "viewer.toast.progress.loaded",
+                current = current,
+                total = total,
+                name = model_name,
+            )
+            .into_owned();
             self.convert_message = Some(ConvertMessage::success(msg));
         } else {
             self.convert_message = None;

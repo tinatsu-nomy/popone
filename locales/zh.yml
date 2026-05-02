@@ -647,6 +647,19 @@ viewer:
   pmx_unsupported:
     badge: "⚠ PMX 不支持"
     hover: "此项不会输出到 PMX。\n会反映到 MME (.fx) 输出和查看器预览。"
+  import_unit:
+    mm: "毫米 (mm)"
+    cm: "厘米 (cm)"
+    m: "米 (m)"
+    inch: "英寸 (inch)"
+  overlay:
+    loading: "加载中..."
+    gpu_building: "GPU 构建中..."
+    processing: "处理中..."
+    creating_directory: "创建目录中..."
+    pmx_converting: "PMX 转换中..."
+    uvmap_exporting: "UV 贴图导出中..."
+    cancel: "中止"
   export_tab:
     output_dir_label: "输出目录:"
     output_dir_default: "(与源相同位置)"

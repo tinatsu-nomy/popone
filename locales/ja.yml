@@ -647,6 +647,19 @@ viewer:
   pmx_unsupported:
     badge: "⚠ PMX 非対応"
     hover: "この項目は PMX 出力では反映されません。\nMME (.fx) 出力やビューアプレビューでは反映されます。"
+  import_unit:
+    mm: "ミリメートル (mm)"
+    cm: "センチメートル (cm)"
+    m: "メートル (m)"
+    inch: "インチ (inch)"
+  overlay:
+    loading: "読み込み中..."
+    gpu_building: "GPU構築中..."
+    processing: "処理中..."
+    creating_directory: "ディレクトリ作成中..."
+    pmx_converting: "PMX変換中..."
+    uvmap_exporting: "UVマップ出力中..."
+    cancel: "中止"
   export_tab:
     output_dir_label: "出力先:"
     output_dir_default: "(ソースと同じ場所)"

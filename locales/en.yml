@@ -647,6 +647,19 @@ viewer:
   pmx_unsupported:
     badge: "⚠ Not in PMX"
     hover: "This setting is not exported to PMX.\nIt is reflected in MME (.fx) output and viewer preview."
+  import_unit:
+    mm: "Millimeter (mm)"
+    cm: "Centimeter (cm)"
+    m: "Meter (m)"
+    inch: "Inch (inch)"
+  overlay:
+    loading: "Loading..."
+    gpu_building: "Building GPU..."
+    processing: "Processing..."
+    creating_directory: "Creating directory..."
+    pmx_converting: "Converting to PMX..."
+    uvmap_exporting: "Exporting UV map..."
+    cancel: "Cancel"
   export_tab:
     output_dir_label: "Output:"
     output_dir_default: "(same as source)"
