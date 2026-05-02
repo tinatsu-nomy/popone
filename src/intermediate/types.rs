@@ -1587,7 +1587,7 @@ mod tests {
     fn test_merge_morph_vertex_index_offset() {
         let mut host = IrModel {
             name: "Host".into(),
-            meshes: vec![mesh_with_weights("m", 0, &[0, 0, 0])], // 3頂点
+            meshes: vec![mesh_with_weights("m", 0, &[0, 0, 0])], // 3 vertices
             bones: vec![bone("Root", None, vec![])],
             materials: vec![IrMaterial::default()],
             morphs: vec![IrMorph {
@@ -1604,7 +1604,7 @@ mod tests {
         };
         let other = IrModel {
             name: "Other".into(),
-            meshes: vec![mesh_with_weights("m2", 0, &[0, 0])], // 2頂点
+            meshes: vec![mesh_with_weights("m2", 0, &[0, 0])], // 2 vertices
             bones: vec![bone("Root", None, vec![])],
             materials: vec![IrMaterial::default()],
             morphs: vec![IrMorph {

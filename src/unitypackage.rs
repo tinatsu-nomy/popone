@@ -2710,7 +2710,7 @@ Material:
         );
 
         assert_eq!(extract_guid_from_line("no guid here"), None);
-        assert_eq!(extract_guid_from_line("guid: abc"), None); // 短すぎ
+        assert_eq!(extract_guid_from_line("guid: abc"), None); // too short
     }
 
     #[test]
