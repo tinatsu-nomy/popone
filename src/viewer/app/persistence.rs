@@ -1,4 +1,4 @@
-//! セッション設定・テクスチャ履歴の永続化
+//! Persistence of session settings and texture history.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 // Application data directory
 // ---------------------------------------------------------------------------
 
-/// アプリケーションデータディレクトリを返す。
-/// Windows: `%LOCALAPPDATA%\popone`（書き込み可能なユーザー領域）
-/// それ以外: 実行ファイルの隣
+/// Return the application data directory.
+/// Windows: `%LOCALAPPDATA%\popone` (writable per-user area).
+/// Other platforms: next to the executable.
 pub fn data_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
@@ -28,8 +28,8 @@ pub fn data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// exe 隣接の設定ファイルを data_dir に移行する（初回のみ）。
-/// 移行元と移行先が同じディレクトリの場合は何もしない。
+/// Migrate config files next to the exe over to data_dir (one-time).
+/// Skip when source and destination resolve to the same directory.
 pub fn migrate_from_exe_dir(data_dir: &Path) {
     let exe_dir = match std::env::current_exe()
         .ok()
@@ -38,7 +38,7 @@ pub fn migrate_from_exe_dir(data_dir: &Path) {
         Some(d) => d,
         None => return,
     };
-    // 同一ディレクトリなら移行不要
+    // No migration needed when both directories are identical.
     if exe_dir == data_dir {
         return;
     }
@@ -77,28 +77,28 @@ pub struct AppConfig {
     pub log_viewer: LogViewerConfig,
     #[serde(default)]
     pub display: DisplayConfig,
-    /// ray-mmd ルートフォルダ（§K.2 / Step 6）。MME 出力時の `#include` 相対パス解決に使用。
-    /// 未設定（None）時はカレントディレクトリ `.\` をフォールバックとして使用する。
+    /// ray-mmd root folder (§K.2 / Step 6). Used when resolving `#include` relative
+    /// paths during MME export. When unset (None) the current directory `.\` is used as fallback.
     #[serde(default)]
     pub ray_mmd_root: Option<String>,
 }
 
-/// 表示オプションのうち、セッション越しに永続化する項目。
+/// Display options that survive across sessions.
 ///
-/// `DisplaySettings` 全体は serde 未対応で、多くはセッション限定の一時状態のため
-/// 永続化対象のものだけをこの構造体に分離する（`LogViewerConfig` と同様の方針）。
+/// `DisplaySettings` as a whole is not serde-aware and most fields are session-scoped,
+/// so the persisted ones are split out into this struct (same approach as `LogViewerConfig`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplayConfig {
-    /// テクスチャデコード失敗時のフォールバックを白にするか。
-    /// true = 白（色被りを避ける、既定）。false = マゼンタ（欠落を目立たせる）。
+    /// Whether the texture-decode-failure fallback color is white.
+    /// true = white (avoid color tinting; default). false = magenta (highlights missing textures).
     #[serde(default = "DisplayConfig::default_true")]
     pub white_texture_fallback: bool,
-    /// 右ツールパネルのリサイズ可否。true でユーザーがドラッグで幅を変更可能。
-    /// false（既定）は 280 px に固定。コンテンツ量による自動リサイズは行わない。
+    /// Whether the right tool panel is resizable. When true the user can drag the edge.
+    /// false (default) locks the panel at 280 px and disables content-driven auto-resize.
     #[serde(default)]
     pub panel_resizable: bool,
-    /// 右ツールパネルの幅 (px)。ユーザーがドラッグで変更した値をセッション越しに保持。
-    /// 範囲は [280, 600]。`panel_resizable = false` のときは未使用。
+    /// Width of the right tool panel (px). Persists the user's drag-resized width.
+    /// Range is [280, 600]. Unused while `panel_resizable = false`.
     #[serde(default = "DisplayConfig::default_panel_width")]
     pub panel_width: f32,
 }
@@ -123,29 +123,30 @@ impl Default for DisplayConfig {
     }
 }
 
-/// ログビュアーウインドウの設定（表示状態・位置・サイズ・レベルフィルタ）。
+/// Log viewer window settings (visibility / position / size / level filters).
 ///
-/// 全フィールド `#[serde(default)]` で後方互換性を担保している。既存の `popone.toml`
-/// に `[log_viewer]` セクションが無くてもデフォルト値で起動する。
+/// Every field is `#[serde(default)]` for backward compatibility. An existing
+/// `popone.toml` without a `[log_viewer]` section starts up with default values.
 ///
-/// 位置/サイズフィールドは `[window]` セクションと同じく `x/y/width/height` の
-/// 個別スカラーで保存する。toml のシリアライザは `[f32; 2]` を縦並びで出力する
-/// 仕様で、フォーマットが他と揃わなかった経緯への対応。
+/// Position / size fields are stored as the same `x/y/width/height` scalar form
+/// used by the `[window]` section. The toml serializer renders `[f32; 2]` as
+/// vertical arrays, which broke formatting consistency — this format keeps it
+/// aligned with the rest of the file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogViewerConfig {
-    /// 起動時にログビュアーを自動表示するか。初期 false。
+    /// Whether the log viewer is shown automatically at startup. Defaults to false.
     #[serde(default)]
     pub visible: bool,
-    /// ウインドウ左上 X 座標。None = OS 任せのデフォルト位置。
+    /// Window top-left X coordinate. None = let the OS pick a default position.
     #[serde(default)]
     pub x: Option<f32>,
-    /// ウインドウ左上 Y 座標。None = OS 任せのデフォルト位置。
+    /// Window top-left Y coordinate. None = let the OS pick a default position.
     #[serde(default)]
     pub y: Option<f32>,
-    /// ウインドウ内寸 width。None = デフォルト 720。
+    /// Window inner width. None = default 720.
     #[serde(default)]
     pub width: Option<f32>,
-    /// ウインドウ内寸 height。None = デフォルト 480。
+    /// Window inner height. None = default 480.
     #[serde(default)]
     pub height: Option<f32>,
     #[serde(default = "LogViewerConfig::default_true")]
@@ -183,26 +184,26 @@ impl Default for LogViewerConfig {
     }
 }
 
-/// GUI テーマカラー設定。値は 6 桁の 16 進数 (例: "4A90D9", "#4A90D9")。
-/// 未指定の項目はデフォルトのダークテーマ色にフォールバックする。
+/// GUI theme color settings. Values are 6-digit hex (e.g. "4A90D9", "#4A90D9").
+/// Unspecified entries fall back to the default dark-theme colors.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ThemeConfig {
-    /// パネル・ウィンドウ背景色 (デフォルト: "1D1D1D")
+    /// Panel / window background color (default: "1D1D1D")
     pub panel_bg: Option<String>,
-    /// ボーダー色 (デフォルト: "333333")
+    /// Border color (default: "333333")
     pub border: Option<String>,
-    /// アクセントカラー — ホバー・選択 (デフォルト: "4A90D9")
+    /// Accent color — hover / selected (default: "4A90D9")
     pub accent: Option<String>,
-    /// テキスト色 (デフォルト: "D0D0D0")
+    /// Text color (default: "D0D0D0")
     pub text: Option<String>,
-    /// ウィジェット背景色 (デフォルト: "252525")
+    /// Widget background color (default: "252525")
     pub widget_bg: Option<String>,
-    /// アクティブ（クリック中）色 (デフォルト: "2A5A8A")
+    /// Active (mouse-down) color (default: "2A5A8A")
     pub active: Option<String>,
 }
 
 impl ThemeConfig {
-    /// 16 進数カラー文字列 ("RRGGBB" or "#RRGGBB") を (r, g, b) に変換
+    /// Convert a hex color string ("RRGGBB" or "#RRGGBB") into (r, g, b).
     pub fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
         let s = s.trim().trim_start_matches('#');
         if s.len() != 6 {
@@ -215,16 +216,16 @@ impl ThemeConfig {
     }
 }
 
-/// ログ設定（現在は出力レベルのみ）。
+/// Log settings (currently only the output level).
 ///
-/// 旧バージョンには `keep`（古いログファイル保持数）フィールドがあったが、v0.4.0 で
-/// ログ出力が「ユーザ明示の手動エクスポート + パニック時のクラッシュダンプ」に集約され
-/// たため、自動ローテーションを廃止して `keep` フィールドも削除した。
-/// 既存 popone.toml に `keep = N` が残っていても serde が未知フィールドを無視するため
-/// 後方互換性は維持される。
+/// Older versions had a `keep` field (number of old log files to retain). v0.4.0
+/// consolidated log output into "user-triggered manual export + crash dump on panic"
+/// and dropped automatic rotation, so the `keep` field was removed too.
+/// `keep = N` left in an existing popone.toml is silently ignored by serde, so
+/// backward compatibility is preserved.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogConfig {
-    /// ログレベル (error, warn, info, debug)
+    /// Log level (error, warn, info, debug)
     #[serde(default = "LogConfig::default_level")]
     pub level: String,
 }
@@ -242,7 +243,7 @@ impl LogConfig {
         "debug".to_string()
     }
 
-    /// ログレベル文字列を `log::LevelFilter` に変換
+    /// Convert the log level string into `log::LevelFilter`.
     pub fn level_filter(&self) -> log::LevelFilter {
         self.level
             .parse::<log::LevelFilter>()
@@ -272,7 +273,7 @@ impl Default for WindowConfig {
 }
 
 impl WindowConfig {
-    /// 1px 以上の差がある場合のみ「変更あり」とみなす
+    /// Treat as "changed" only when the difference is at least 1 px.
     pub fn is_significantly_different(&self, x: f32, y: f32, width: f32, height: f32) -> bool {
         (self.x - x).abs() >= 1.0
             || (self.y - y).abs() >= 1.0
@@ -295,8 +296,8 @@ pub fn config_path(dir: &Path) -> PathBuf {
     dir.join("popone.toml")
 }
 
-/// 設定ファイルを読み込む。ファイルが存在しない・解析失敗の場合は None。
-/// 本体が存在せず `.bak` がある場合はバックアップから復旧する。
+/// Load the config file. Returns None if the file is missing or fails to parse.
+/// If the main file is missing but a `.bak` exists, recover from the backup.
 pub fn load_config(dir: &Path) -> Option<AppConfig> {
     let path = config_path(dir);
     recover_from_bak(&path);
@@ -337,23 +338,23 @@ pub struct TextureHistoryFile {
     pub version: u32,
     #[serde(default)]
     pub history: HashMap<String, Vec<TextureHistoryEntry>>,
-    /// v0.5.0 追加 (§I 最小永続化): 材質パラメータ編集差分。
-    /// `#[serde(default)]` により v1 の既存ファイル（このフィールドがない）も問題なく読み込める。
-    /// key は正規化モデルパス（`history` と同じキー）。
+    /// Added in v0.5.0 (§I minimal persistence): material parameter edit deltas.
+    /// `#[serde(default)]` lets v1 files (lacking this field) load without issues.
+    /// Keys are normalized model paths (same key as `history`).
     #[serde(default)]
     pub param_overrides: HashMap<String, Vec<MaterialParamOverrideEntry>>,
-    /// v0.5.5 追加 (Phase 1 頂点 UV 編集): 頂点単位 UV 編集差分。
-    /// `#[serde(default)]` により v0.5.4 以前のファイル（このフィールドがない）も読み込める。
-    /// key は正規化モデルパス（`history` と同じキー）。
+    /// Added in v0.5.5 (Phase 1 vertex UV editing): per-vertex UV edit deltas.
+    /// `#[serde(default)]` lets pre-v0.5.5 files (lacking this field) load.
+    /// Keys are normalized model paths (same key as `history`).
     #[serde(default)]
     pub vertex_uv_overrides: HashMap<String, Vec<VertexUvOverrideEntry>>,
 }
 
-/// 材質パラメータ編集差分の永続化エントリ (v0.5.0 / §I 最小永続化)。
+/// Persistent entry for material parameter edit deltas (v0.5.0 / §I minimal persistence).
 ///
-/// `TextureHistoryEntry` のテクスチャ保存と並行して、材質の色・スカラー値の編集差分を
-/// `MaterialParamOverride` として保存する。材質同定は `material_index + material_name` で
-/// `resolve_material()` を共用する。
+/// Stored alongside `TextureHistoryEntry` texture saves: edit deltas for material colors
+/// and scalar values are serialized as `MaterialParamOverride`. Material identity uses
+/// `material_index + material_name`, sharing `resolve_material()` with texture lookup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialParamOverrideEntry {
     pub material_index: usize,
@@ -362,16 +363,16 @@ pub struct MaterialParamOverrideEntry {
     pub overrides: super::material_edit::MaterialParamOverride,
 }
 
-/// 頂点単位 UV 編集の永続化エントリ (v0.5.5 / Phase 1 / Phase 3 A-1)。
+/// Persistent entry for per-vertex UV edits (v0.5.5 / Phase 1 / Phase 3 A-1).
 ///
-/// モデル全体に対して 1 エントリ。`uv_set` は 0 = UV0, 1 = UV1。
-/// `#[serde(default)]` で JSON 下位互換性を確保する: v0.5.5 Phase 1 で書き出された
-/// UV0 のみのエントリ (uv_set フィールドなし) は `uv_set = 0` として読み込まれる。
+/// One entry per (mesh, vertex). `uv_set` = 0 = UV0, 1 = UV1.
+/// `#[serde(default)]` provides JSON backward compatibility: entries written by
+/// v0.5.5 Phase 1 (UV0 only, no uv_set field) load with `uv_set = 0`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VertexUvOverrideEntry {
     pub mesh_index: u32,
     pub vertex_index: u32,
-    /// UV セット (0 = UV0, 1 = UV1)。Phase 3 A-1 で追加。既存ファイルは `0` になる。
+    /// UV set (0 = UV0, 1 = UV1). Added in Phase 3 A-1; existing files default to `0`.
     #[serde(default)]
     pub uv_set: u8,
     pub uv: [f32; 2],
@@ -397,9 +398,9 @@ pub struct TextureHistoryEntry {
     pub material_index: usize,
     pub material_name: String,
     pub texture_path: String,
-    /// v0.5.1 追加: テクスチャスロット種別。
-    /// `#[serde(default)]` により v0.5.0 以前の JSON（このフィールドがない）は
-    /// `TextureSlot::BaseColor` として解釈される（後方互換）。
+    /// Added in v0.5.1: texture slot kind.
+    /// `#[serde(default)]` lets pre-v0.5.1 JSON (lacking this field) be read as
+    /// `TextureSlot::BaseColor` (backward compatible).
     #[serde(default = "default_base_color_slot")]
     pub slot: crate::intermediate::types::TextureSlot,
 }
@@ -453,24 +454,24 @@ pub fn save_texture_history(dir: &Path, history: &TextureHistoryFile) {
 }
 
 // ---------------------------------------------------------------------------
-// 材質照合
+// Material matching
 // ---------------------------------------------------------------------------
 
-/// 履歴エントリの material_index + material_name で現在のモデルの材質を照合する。
-/// 1. index + name が一致 → そのまま
-/// 2. name が一意に一致 → フォールバック
-/// 3. いずれも不一致 → None
+/// Match a history entry's material_index + material_name to a material in the current model.
+/// 1. index + name both match -> use as-is
+/// 2. name matches uniquely -> fallback
+/// 3. neither -> None
 pub fn resolve_material(
     materials: &[crate::intermediate::types::IrMaterial],
     entry: &TextureHistoryEntry,
 ) -> Option<usize> {
-    // 1. index + name 完全一致
+    // 1. exact index + name match
     if let Some(mat) = materials.get(entry.material_index) {
         if mat.name == entry.material_name {
             return Some(entry.material_index);
         }
     }
-    // 2. name 一意一致フォールバック
+    // 2. name-uniqueness fallback
     let mut matched = materials
         .iter()
         .enumerate()
@@ -485,23 +486,23 @@ pub fn resolve_material(
 }
 
 // ---------------------------------------------------------------------------
-// 履歴キー・パス正規化
+// History key / path normalization
 // ---------------------------------------------------------------------------
 
-/// Windows パスを正規化して小文字にする（履歴キー用）
+/// Normalize a Windows path and lowercase it (used as a history key).
 pub fn normalize_path(path: &Path) -> String {
-    // 相対パスと絶対パスで同じモデルが別キーになる問題の修正:
-    // `dunce::canonicalize` で絶対パスに解決してから正規化する。
-    // ファイルが存在しない場合（テスト等）は元のパスにフォールバック。
+    // Fix for the issue where the same model under a relative path and an absolute path
+    // produced different history keys: resolve to an absolute path with `dunce::canonicalize`,
+    // then normalize. If the file does not exist (tests etc.), fall back to the original path.
     let abs = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     abs.to_string_lossy().to_lowercase().replace('/', "\\")
 }
 
 // ---------------------------------------------------------------------------
-// atomic write（Windows 対応）
+// atomic write (Windows-aware)
 // ---------------------------------------------------------------------------
 
-/// 本体ファイルが存在せず `.bak` がある場合、bak を本体にリネームして復旧する。
+/// If the main file is missing but a `.bak` exists, rename the bak back into place to recover.
 fn recover_from_bak(path: &Path) {
     if !path.exists() {
         let bak = path.with_extension("bak");
@@ -522,25 +523,25 @@ fn recover_from_bak(path: &Path) {
 fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, bytes)?;
-    // Windows: rename は既存ファイル上書きに失敗するため、
-    // バックアップ方式で安全に置換する（rename 失敗時も元ファイルを残す）
+    // Windows: rename fails when overwriting an existing file, so use a backup-based
+    // swap to replace safely (the original file is preserved even if rename fails).
     if path.exists() {
         let bak = path.with_extension("bak");
-        let _ = std::fs::remove_file(&bak); // 古い bak は無視
+        let _ = std::fs::remove_file(&bak); // ignore errors removing an old bak
         if let Err(e) = std::fs::rename(path, &bak) {
-            // バックアップ作成失敗 → tmp を直接上書き（元ファイルは残る）
+            // Backup creation failed -> overwrite tmp directly (the original file is kept).
             log::warn!("Backup creation failed (direct overwrite): {e}");
             return std::fs::copy(&tmp, path).map(|_| ()).map(|_| {
                 let _ = std::fs::remove_file(&tmp);
             });
         }
         if let Err(e) = std::fs::rename(&tmp, path) {
-            // tmp→path の rename 失敗 → bak を復元
+            // tmp -> path rename failed -> restore from bak.
             log::warn!("File replacement failed (restored from backup): {e}");
             let _ = std::fs::rename(&bak, path);
             return Err(e);
         }
-        let _ = std::fs::remove_file(&bak); // 成功したら bak を削除
+        let _ = std::fs::remove_file(&bak); // remove the bak once the swap succeeded
     } else {
         std::fs::rename(&tmp, path)?;
     }
@@ -548,7 +549,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// テスト
+// Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -563,9 +564,9 @@ mod tests {
             width: 1280.0,
             height: 720.0,
         };
-        // 微小な差 (< 1px) → 変更なし
+        // Sub-pixel difference (< 1 px) -> not changed.
         assert!(!cfg.is_significantly_different(100.5, 50.3, 1280.2, 720.1));
-        // 1px 以上の差 → 変更あり
+        // >= 1 px difference -> changed.
         assert!(cfg.is_significantly_different(102.0, 50.0, 1280.0, 720.0));
     }
 
@@ -602,7 +603,7 @@ mod tests {
                 ..Default::default()
             },
         ];
-        // index=5 は存在しないが name="body" は一意に一致
+        // index=5 does not exist, but name="body" matches uniquely.
         let entry = TextureHistoryEntry {
             material_index: 5,
             material_name: "body".into(),
@@ -630,7 +631,7 @@ mod tests {
             texture_path: "tex.png".into(),
             slot: crate::intermediate::types::TextureSlot::BaseColor,
         };
-        // 同名が複数 → None
+        // Multiple materials share the name -> None.
         assert_eq!(resolve_material(&materials, &entry), None);
     }
 
@@ -663,7 +664,7 @@ mod tests {
         assert!((win.x - 100.0).abs() < 0.01);
         assert_eq!(parsed.directory.last_model, Some("C:\\Test".into()));
 
-        // window セクションなしの部分設定 → window は None
+        // Partial config without a window section -> window is None.
         let partial = "[directory]\nlast_model = 'C:\\\\Test'\n";
         let parsed2: AppConfig = toml::from_str(partial).unwrap();
         assert!(parsed2.window.is_none());
@@ -671,9 +672,9 @@ mod tests {
 
     #[test]
     fn test_log_viewer_geometry_uses_scalar_fields() {
-        // log_viewer セクションが [window] と同じく x/y/width/height のスカラー4
-        // フィールド形式で出力されることを確認する。旧 `position = [...]` /
-        // `size = [...]` の縦並び配列を排除した v0.5.9 の修正検証用。
+        // Verify the log_viewer section is emitted with the same x/y/width/height scalar
+        // form as [window], not the old vertical `position = [...]` / `size = [...]` arrays.
+        // This is the v0.5.9 fix that dropped the array form.
         let cfg = AppConfig {
             log_viewer: LogViewerConfig {
                 visible: true,
@@ -686,7 +687,7 @@ mod tests {
             ..Default::default()
         };
         let text = toml::to_string_pretty(&cfg).unwrap();
-        // スカラー出力（[window] と同じスタイル）
+        // Scalar form (same style as [window]).
         assert!(
             text.contains("x = 978"),
             "x should be inline scalar:\n{text}"
@@ -703,7 +704,7 @@ mod tests {
             text.contains("height = 480"),
             "height should be inline scalar:\n{text}"
         );
-        // 旧形式の縦並び配列キーが残っていないこと
+        // The legacy vertical-array keys must be gone.
         assert!(
             !text.contains("position ="),
             "position field should be removed:\n{text}"
@@ -716,8 +717,8 @@ mod tests {
 
     #[test]
     fn test_log_viewer_legacy_position_size_ignored() {
-        // 旧形式の popone.toml（position = [...], size = [...]）に遭遇しても
-        // 解析がエラーにならず、x/y/width/height がデフォルト None に落ちることを確認。
+        // Even when the popone.toml uses the legacy form (position = [...], size = [...]),
+        // parsing must not error and x/y/width/height must fall back to the default None.
         let legacy = r#"
             [log_viewer]
             visible = true
@@ -739,7 +740,7 @@ mod tests {
 
     #[test]
     fn test_texture_history_slot_default_backward_compat() {
-        // v0.5.0 以前のフィールドなし JSON を v0.5.1 で読み込む後方互換テスト
+        // Backward-compatibility test: pre-v0.5.0 JSON (no slot field) loaded by v0.5.1.
         let legacy_json = r#"{
             "material_index": 0,
             "material_name": "body",
@@ -757,7 +758,7 @@ mod tests {
 
     #[test]
     fn test_texture_history_slot_explicit() {
-        // v0.5.1 の slot フィールド付き JSON
+        // v0.5.1 JSON with the slot field set.
         let json = r#"{
             "material_index": 1,
             "material_name": "face",
@@ -774,7 +775,7 @@ mod tests {
 
     #[test]
     fn test_texture_history_slot_roundtrip() {
-        // serde ラウンドトリップ: Emissive スロット
+        // Serde round-trip: Emissive slot.
         let original = TextureHistoryEntry {
             material_index: 2,
             material_name: "face".into(),

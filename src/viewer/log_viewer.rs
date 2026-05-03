@@ -1,12 +1,12 @@
-//! 別ウインドウで動作するログビュアー。
+//! Log viewer that runs in a separate window.
 //!
-//! `LogViewerModel` は `SharedLogBuffer` から差分読み取りしたログをパース済み行の
-//! リングバッファで保持し、UI 描画用に供する。`SharedLogViewer = Arc<Mutex<LogViewerModel>>`
-//! として `ViewerApp` から共有し、`show_viewport_deferred` のクロージャに `Arc::clone`
-//! で渡す設計。
+//! `LogViewerModel` reads incremental log data from `SharedLogBuffer` and keeps
+//! parsed lines in a ring buffer for UI rendering. It is shared from `ViewerApp`
+//! as `SharedLogViewer = Arc<Mutex<LogViewerModel>>` and `Arc::clone`'d into the
+//! `show_viewport_deferred` closure.
 //!
-//! Phase 1 の範囲: 型定義・パーサ・`ingest` / `poll` とそのテスト。UI 描画と永続化は
-//! Phase 2 / 3 で追加する。
+//! Phase 1 scope: type definitions, parser, `ingest` / `poll`, and their tests.
+//! UI rendering and persistence are added in Phase 2 / 3.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -16,13 +16,13 @@ use rust_i18n::t;
 
 use crate::SharedLogBuffer;
 
-/// インメモリに保持するパース済みログ行の上限。
+/// Upper bound on parsed log lines kept in memory.
 pub const LINE_LIMIT: usize = 20_000;
 
-/// `ViewerApp` と `show_viewport_deferred` クロージャ間で共有するモデル。
+/// Model shared between `ViewerApp` and the `show_viewport_deferred` closure.
 pub type SharedLogViewer = Arc<Mutex<LogViewerModel>>;
 
-/// ログレベル（UI フィルタと色分けに使用）。
+/// Log level (used for UI filters and color coding).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
     Error,
@@ -30,7 +30,7 @@ pub enum LogLevel {
     Info,
     Debug,
     Trace,
-    /// `[ts][LEVEL] msg` 形式を満たすがレベル文字列が未知（例: FATAL）。
+    /// Header `[ts][LEVEL] msg` matched but the level string is unknown (e.g. FATAL).
     Unknown,
 }
 
@@ -47,7 +47,7 @@ impl LogLevel {
     }
 }
 
-/// パース済みのログ 1 行。`message` はマルチライン連結済み（バックトレース等を `\n` で保持）。
+/// One parsed log line. `message` is multi-line concatenated (backtraces etc. kept with `\n`).
 #[derive(Debug, Clone)]
 pub struct LogLine {
     pub level: LogLevel,
@@ -55,7 +55,7 @@ pub struct LogLine {
     pub message: String,
 }
 
-/// レベル別表示フラグ。初期値は Debug のみ OFF。
+/// Per-level visibility flags. Default: only Debug is OFF.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LevelFilters {
     pub show_error: bool,
@@ -76,7 +76,7 @@ impl Default for LevelFilters {
 }
 
 impl LevelFilters {
-    /// 指定レベルがフィルタを通過するか。Unknown は常に表示、Trace は Debug フラグに追従。
+    /// Whether the given level passes the filter. Unknown is always shown; Trace tracks the Debug flag.
     pub fn matches(&self, level: LogLevel) -> bool {
         match level {
             LogLevel::Error => self.show_error,
@@ -89,31 +89,31 @@ impl LevelFilters {
     }
 }
 
-/// ログビュアーのコア状態。`Arc<Mutex<_>>` 経由で共有される。
+/// Core state of the log viewer. Shared via `Arc<Mutex<_>>`.
 pub struct LogViewerModel {
-    /// ログビュアーウインドウを表示するか。
+    /// Whether the log viewer window is visible.
     pub visible: bool,
-    /// `SharedLogBuffer::total_written` の前回読み取り位置。
+    /// Last read offset into `SharedLogBuffer::total_written`.
     last_offset: usize,
-    /// パース済みログ行のリングバッファ（上限 `LINE_LIMIT`）。
+    /// Ring buffer of parsed log lines (cap = `LINE_LIMIT`).
     pub lines: VecDeque<LogLine>,
-    /// フィルタを通過した `lines` のインデックス（仮想化スクロール用）。
+    /// Indices into `lines` that pass the filter (for virtualized scrolling).
     pub filter_indices: Vec<usize>,
-    /// trim 発生時やフィルタ変更時に true → 次回 `rebuild_filter_indices` を強制。
+    /// Set to true when a trim happens or filters change -> forces a `rebuild_filter_indices` next call.
     filters_dirty: bool,
-    /// レベル表示フラグ。
+    /// Per-level visibility flags.
     pub filters: LevelFilters,
-    /// 自動追尾（末尾スクロール）。
+    /// Auto-follow (stick to bottom).
     pub follow_tail: bool,
-    /// 次フレームの `ViewportBuilder` に渡す位置・サイズ（反映後 None）。
-    /// 起動時の復元値、および同セッション reopen 時の位置復元に使う。
+    /// Position / size to apply via `ViewportBuilder` next frame (cleared after apply).
+    /// Used for both startup restore and same-session reopen position restore.
     pub apply_geometry: Option<([f32; 2], [f32; 2])>,
-    /// 毎フレーム子 viewport から読み取った最新 geometry（on_exit 永続化用）。
+    /// Latest geometry read from the child viewport every frame (used by on_exit persistence).
     pub last_geometry: Option<([f32; 2], [f32; 2])>,
-    /// `\n` 未完了の末尾断片（次回 ingest の先頭に連結）。
+    /// Trailing fragment without a `\n` (prepended to the next ingest call).
     tail_buffer: String,
-    /// 初回 `[HEADER]` を見るまで `true`。`LogBuffer` のバイト単位 drain で先頭断片が
-    /// 欠損している可能性があるため、それを捨てるためのフラグ。
+    /// True until the first `[HEADER]` is seen. The byte-level drain in `LogBuffer` may
+    /// produce a leading fragment with a missing prefix, and this flag is used to discard it.
     seeking_first_header: bool,
 }
 
@@ -136,15 +136,15 @@ impl Default for LogViewerModel {
 }
 
 impl LogViewerModel {
-    /// `SharedLogBuffer` から差分を読み取り、`ingest` へ渡す。
+    /// Read incremental data from `SharedLogBuffer` and forward it to `ingest`.
     ///
-    /// ロック保持は `read_from_offset` の結果を取得する最短時間のみ。UI 描画中は
-    /// 呼ばないこと（`log::info!` 側スレッドをブロックしないため）。
+    /// The lock is held only long enough to call `read_from_offset`. Do not call
+    /// while UI is being drawn (so that `log::info!` callers are not blocked).
     pub fn poll(&mut self, log_buffer: &SharedLogBuffer) {
         let new_text = {
             let lb = match log_buffer.lock() {
                 Ok(g) => g,
-                // 他スレッド panic 耐性: poisoned でも中身は読む
+                // Resilient against panics in other threads: read even when poisoned.
                 Err(p) => p.into_inner(),
             };
             let text = lb.read_from_offset(self.last_offset);
@@ -156,31 +156,31 @@ impl LogViewerModel {
         }
     }
 
-    /// 生のログテキスト（複数行）をパースして `lines` に追加する。
+    /// Parse raw log text (multi-line) and append to `lines`.
     ///
-    /// - 改行未完了の末尾断片は `tail_buffer` に繰り越し、次回 ingest の先頭に連結する
-    /// - `seeking_first_header` の間は `[HEADER]` 形式が見つかるまで行を捨てる
-    /// - `[` で始まらない行で直前の `LogLine` が存在する場合は message にマルチライン連結
-    /// - `LINE_LIMIT` 超過時は先頭から drain し、`filter_indices` は全再構築
+    /// - A trailing fragment without `\n` is carried over via `tail_buffer` and prepended next call.
+    /// - While `seeking_first_header` is true, lines are dropped until a `[HEADER]` shape is seen.
+    /// - A line not starting with `[`, when a previous `LogLine` exists, is appended to its message as multiline.
+    /// - When `LINE_LIMIT` is exceeded, the front is drained and `filter_indices` is fully rebuilt.
     pub fn ingest(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
 
-        // 前回の tail_buffer と新規テキストを連結し、\n で分割
+        // Concatenate the previous tail_buffer with the new text and split on \n.
         let mut combined = std::mem::take(&mut self.tail_buffer);
         combined.push_str(text);
 
         let mut parts: Vec<&str> = combined.split('\n').collect();
-        // 最後の要素は次回までの繰越断片（text が \n で終わっていれば空文字列）
+        // The final element is the carried-over fragment (empty if the text ended in \n).
         let new_tail = parts.pop().unwrap_or("").to_string();
 
         for raw_line in parts {
-            // CRLF 対応
+            // Handle CRLF.
             let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
 
             if let Some((level, ts, msg)) = parse_line_header(line) {
-                // 正規ヘッダを検出 → 新しい LogLine として push
+                // Canonical header detected -> push as a new LogLine.
                 self.seeking_first_header = false;
                 self.push_line(LogLine {
                     level,
@@ -188,15 +188,15 @@ impl LogViewerModel {
                     message: msg.to_string(),
                 });
             } else if self.seeking_first_header {
-                // 初回ヘッダ未発見 → 先頭断片（バイト単位 drain で欠損した可能性）を捨てる
+                // Initial header not yet found -> discard the leading fragment (likely truncated by byte-level drain).
                 continue;
             } else if let Some(last) = self.lines.back_mut() {
-                // 直前行の継続（マルチラインメッセージ、バックトレース等）
+                // Continuation of the previous line (multi-line message, backtrace, etc.).
                 last.message.push('\n');
                 last.message.push_str(line);
             } else {
-                // 直前行が無いのに seeking_first_header が false の稀なケース
-                // → Unknown 独立行として扱い、情報欠落を防ぐ
+                // Rare: no previous line but seeking_first_header is false.
+                // Treat as an Unknown standalone line so we do not drop information.
                 self.push_line(LogLine {
                     level: LogLevel::Unknown,
                     timestamp: String::new(),
@@ -207,7 +207,7 @@ impl LogViewerModel {
 
         self.tail_buffer = new_tail;
 
-        // 上限超過時は先頭から drain し、filter_indices を全再構築
+        // When the cap is exceeded, drain from the front and rebuild filter_indices.
         let len = self.lines.len();
         if len > LINE_LIMIT {
             for _ in 0..(len - LINE_LIMIT) {
@@ -221,7 +221,7 @@ impl LogViewerModel {
         }
     }
 
-    /// LogLine を push し、フィルタ通過ならインクリメンタルに `filter_indices` を更新する。
+    /// Push a LogLine; if it passes the filter, update `filter_indices` incrementally.
     fn push_line(&mut self, line: LogLine) {
         let matches = self.filters.matches(line.level);
         self.lines.push_back(line);
@@ -230,7 +230,7 @@ impl LogViewerModel {
         }
     }
 
-    /// フィルタ通過インデックスを全再構築。trim 後またはフィルタ変更後に呼ぶ。
+    /// Fully rebuild the filter index. Called after a trim or after filters change.
     fn rebuild_filter_indices(&mut self) {
         self.filter_indices.clear();
         self.filter_indices
@@ -243,24 +243,24 @@ impl LogViewerModel {
             }));
     }
 
-    /// レベルフィルタ設定を差し替え、インデックスを即座に再構築する。
+    /// Replace the level filter and rebuild the index immediately.
     pub fn set_filters(&mut self, filters: LevelFilters) {
         self.filters = filters;
         self.rebuild_filter_indices();
         self.filters_dirty = false;
     }
 
-    /// `popone.toml` から読み込んだ `LogViewerConfig` で初期化する。
+    /// Initialize from the `LogViewerConfig` loaded out of `popone.toml`.
     ///
-    /// 位置/サイズの両方が Some の場合だけ `apply_geometry` を設定し、次フレームで
-    /// `ViewportBuilder` に渡される。片方だけ Some の半端な状態はデフォルト扱い。
+    /// `apply_geometry` is set only when both position and size are Some, so it is
+    /// passed to `ViewportBuilder` next frame. A half-set state is treated as default.
     ///
-    /// `last_geometry` も同じ値で初期化する。これにより「ビュアーを一度も開かずに
-    /// アプリを終了したセッション」でも `export_config` が config 由来の位置を保ったまま
-    /// 戻せるようになり、永続化が壊れない（P2 修正）。
+    /// `last_geometry` is initialized from the same value. Without this, a session
+    /// where the viewer is never opened would lose the configured position when
+    /// `export_config` runs (P2 fix).
     pub fn from_config(cfg: &crate::viewer::app::persistence::LogViewerConfig) -> Self {
-        // 位置/サイズはスカラー4フィールドで保存される。4 個全て Some の時のみ
-        // ジオメトリとして採用し、ひとつでも欠けていればデフォルト扱い。
+        // Position / size are persisted as four scalar fields. Adopt the geometry only
+        // when all four are Some; if any is missing, fall back to defaults.
         let geometry = match (cfg.x, cfg.y, cfg.width, cfg.height) {
             (Some(x), Some(y), Some(w), Some(h)) => Some(([x, y], [w, h])),
             _ => None,
@@ -280,14 +280,15 @@ impl LogViewerModel {
         }
     }
 
-    /// 現在の状態を `LogViewerConfig` にシリアライズする。`ViewerApp::on_exit` から呼ぶ。
+    /// Serialize the current state into `LogViewerConfig`. Called from `ViewerApp::on_exit`.
     ///
-    /// 位置/サイズは `last_geometry` から取得する。`last_geometry` は `from_config` で
-    /// config 由来の値で初期化され、ビュアーが表示されている間は子 viewport の入力から
-    /// 毎フレーム更新される。よって以下の全ケースで適切な値が返る:
-    /// - 一度も開いていない: from_config が入れた config 値がそのまま返る
-    /// - 開いてから閉じた: 閉じる時点での実際の位置が返る
-    /// - 起動時から表示中: 子 viewport の最新位置が返る
+    /// Position / size come from `last_geometry`. `last_geometry` is initialized in
+    /// `from_config` from config values and updated every frame from the child viewport
+    /// inputs while the viewer is visible. As a result, all of the following return
+    /// sensible values:
+    /// - never opened: the config value installed by from_config flows through
+    /// - opened then closed: the actual position at close time
+    /// - visible since startup: the latest position from the child viewport
     pub fn export_config(&self) -> crate::viewer::app::persistence::LogViewerConfig {
         let (x, y, width, height) = match self.last_geometry {
             Some(([gx, gy], [gw, gh])) => (Some(gx), Some(gy), Some(gw), Some(gh)),
@@ -307,10 +308,10 @@ impl LogViewerModel {
         }
     }
 
-    /// 表示を ON にする。前回 hide 時に保存した位置を次フレームで適用するため、
-    /// `apply_geometry` が None なら `last_geometry` から復元する。
+    /// Turn on visibility. To re-apply the position from the previous hide on the next
+    /// frame, restore from `last_geometry` when `apply_geometry` is None.
     ///
-    /// `apply_geometry` が既に Some の場合は上書きしない（複数回連続呼出への耐性）。
+    /// If `apply_geometry` is already Some, it is not overwritten (resilient against multiple show calls).
     pub fn show(&mut self) {
         self.visible = true;
         if self.apply_geometry.is_none() {
@@ -318,11 +319,11 @@ impl LogViewerModel {
         }
     }
 
-    /// 表示を OFF にする。次回 `show` 時に同じ位置で開けるよう、現在の `last_geometry`
-    /// を `apply_geometry` にスナップショットして保存する。
+    /// Turn off visibility. Snapshot the current `last_geometry` into `apply_geometry`
+    /// so the next `show` reopens at the same position.
     ///
-    /// トップバーのトグルボタン経由でも、× ボタン経由でも、両方の経路でこれを呼ぶことで
-    /// 「同セッション内で閉じてから再度開く」ケースの位置維持を実現する。
+    /// Both the top-bar toggle button and the X close button funnel through this,
+    /// so "close and reopen within the same session" preserves the position.
     pub fn hide(&mut self) {
         if self.visible {
             self.apply_geometry = self.last_geometry;
@@ -330,7 +331,7 @@ impl LogViewerModel {
         self.visible = false;
     }
 
-    /// 表示状態をトグルする（トップバーのボタン用）。
+    /// Toggle visibility (used by the top-bar button).
     pub fn toggle_visible(&mut self) {
         if self.visible {
             self.hide();
@@ -339,14 +340,14 @@ impl LogViewerModel {
         }
     }
 
-    /// ログビュアーウインドウの UI を描画する。`show_viewport_deferred` の
-    /// クロージャから `&mut LogViewerModel` に対して呼ぶ。
+    /// Render the log viewer UI. Called against `&mut LogViewerModel` from inside the
+    /// `show_viewport_deferred` closure.
     ///
-    /// - ツールバー: レベルチェックボックス / 自動追尾 / フォルダを開く / ログ保存
-    /// - 本体: 仮想化スクロール + レベル別カラーリング
+    /// - Toolbar: level checkboxes / auto-follow / open folder / save log
+    /// - Body: virtualized scroll + per-level coloring
     ///
-    /// `log_buffer` は「ログ保存」ボタンでバイト列スナップショットを取るために使う。
-    /// `logs_dir` は「フォルダを開く」ボタンと保存ダイアログの初期ディレクトリとして使う。
+    /// `log_buffer` is used by the "save log" button to take a byte snapshot.
+    /// `logs_dir` is the initial directory for both the "open folder" button and the save dialog.
     pub fn draw(
         &mut self,
         child_ctx: &egui::Context,
@@ -354,7 +355,7 @@ impl LogViewerModel {
         logs_dir: &std::path::Path,
     ) {
         egui::CentralPanel::default().show(child_ctx, |ui| {
-            // ツールバー
+            // Toolbar.
             ui.horizontal(|ui| {
                 let prev = self.filters;
                 ui.checkbox(&mut self.filters.show_error, "Error");
@@ -386,7 +387,7 @@ impl LogViewerModel {
 
             ui.separator();
 
-            // 行ヘッダ: 件数と非表示件数の表示
+            // Row header: total count and hidden count.
             ui.horizontal(|ui| {
                 let total = self.lines.len();
                 let shown = self.filter_indices.len();
@@ -405,7 +406,7 @@ impl LogViewerModel {
 
             ui.separator();
 
-            // 本体: 仮想化スクロール
+            // Body: virtualized scroll.
             let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
             let total_rows = self.filter_indices.len();
             egui::ScrollArea::vertical()
@@ -426,7 +427,8 @@ impl LogViewerModel {
     }
 }
 
-/// 1 行分の描画。マルチラインメッセージは先頭行のみ表示し、残りは hover ツールチップに出す。
+/// Draw a single row. For multi-line messages, only the first line is rendered;
+/// the rest is shown in the hover tooltip.
 fn draw_log_row(ui: &mut egui::Ui, line: &LogLine) {
     let color = match line.level {
         LogLevel::Error => egui::Color32::from_rgb(0xFF, 0x60, 0x60),
@@ -463,7 +465,7 @@ fn draw_log_row(ui: &mut egui::Ui, line: &LogLine) {
     }
 }
 
-/// `logs_dir` をエクスプローラ/Finder で開く。失敗は無視。
+/// Open `logs_dir` in Explorer / Finder. Failures are ignored.
 fn open_logs_directory(logs_dir: &std::path::Path) {
     #[cfg(target_os = "windows")]
     {
@@ -479,10 +481,10 @@ fn open_logs_directory(logs_dir: &std::path::Path) {
     }
 }
 
-/// 「ログ保存」ボタンのハンドラ。ロック最短化パターンで
-/// `log_buffer` のバイト列をスナップショットしてから `rfd::FileDialog` で保存先を尋ねる。
+/// Handler for the "save log" button. Take a byte snapshot of `log_buffer` under
+/// the lock-shortest pattern, then ask `rfd::FileDialog` for the destination.
 fn save_log_to_file(log_buffer: &SharedLogBuffer, logs_dir: &std::path::Path) {
-    // 1. ロック下ではスナップショットだけ取る
+    // 1. Only take a snapshot while the lock is held.
     let bytes: Vec<u8> = {
         let mut lb = match log_buffer.lock() {
             Ok(g) => g,
@@ -495,7 +497,7 @@ fn save_log_to_file(log_buffer: &SharedLogBuffer, logs_dir: &std::path::Path) {
         return;
     }
 
-    // 2. アンロック後にダイアログ（UI スレッドはブロックするが初版では許容）
+    // 2. Show the dialog after releasing the lock (it blocks the UI thread; acceptable for v1).
     let default_name = format!(
         "popone_{}.log",
         chrono::Local::now().format("%Y%m%d_%H%M%S")
@@ -514,11 +516,12 @@ fn save_log_to_file(log_buffer: &SharedLogBuffer, logs_dir: &std::path::Path) {
     }
 }
 
-/// `[HH:MM:SS.mmm][LEVEL] message` 形式を解析する。
+/// Parse the `[HH:MM:SS.mmm][LEVEL] message` form.
 ///
-/// 成功時は `(level, timestamp, message)` を返す。`LEVEL` が未知の文字列でも
-/// フォーマットが合っていれば `LogLevel::Unknown` で返す（継続行との区別のため）。
-/// 2 つの `[...]` を含まない行は `None`。
+/// On success returns `(level, timestamp, message)`. If the LEVEL string is not in
+/// the known set, the format is still accepted and `LogLevel::Unknown` is returned
+/// (so the line is distinguished from a continuation line).
+/// Lines without two `[...]` segments return None.
 fn parse_line_header(line: &str) -> Option<(LogLevel, &str, &str)> {
     let rest = line.strip_prefix('[')?;
     let close1 = rest.find(']')?;
@@ -528,7 +531,7 @@ fn parse_line_header(line: &str) -> Option<(LogLevel, &str, &str)> {
     let close2 = rest2.find(']')?;
     let level_str = &rest2[..close2];
     let tail = &rest2[close2 + 1..];
-    // main.rs の fern フォーマットは `] ` 後にメッセージが続く（半角スペース 1 つ）
+    // The fern formatter in main.rs follows `]` with a single space before the message.
     let message = tail.strip_prefix(' ').unwrap_or(tail);
     Some((LogLevel::from_level_str(level_str), timestamp, message))
 }
@@ -590,7 +593,7 @@ mod tests {
     #[test]
     fn parser_leading_fragment_discarded() {
         let mut m = make_model();
-        // LogBuffer がバイト単位で drain した結果、先頭断片が [HEADER] で始まっていないケース
+        // After byte-level drain in LogBuffer, the leading fragment may not start with [HEADER].
         m.ingest("garbage fragment\nanother garbage line\n[12:34:56.789][INFO] real\n");
         assert_eq!(
             m.lines.len(),
@@ -607,7 +610,7 @@ mod tests {
     #[test]
     fn parser_unknown_level() {
         let mut m = make_model();
-        // [ts][LEVEL] フォーマットは合っているがレベル文字列が既知集合に無いケース
+        // The [ts][LEVEL] format matches but the level string is not in the known set.
         m.ingest("[12:34:56.789][FATAL] boom\n");
         assert_eq!(m.lines.len(), 1);
         assert_eq!(m.lines[0].level, LogLevel::Unknown);
@@ -618,12 +621,12 @@ mod tests {
     #[test]
     fn parser_incomplete_trailing_fragment() {
         let mut m = make_model();
-        // \n 無しの断片は tail_buffer に繰り越し、lines には push されない
+        // A fragment without \n is carried over in tail_buffer; nothing is pushed to lines.
         m.ingest("[12:34:56.789][INFO] part");
         assert_eq!(m.lines.len(), 0);
         assert_eq!(m.tail_buffer, "[12:34:56.789][INFO] part");
 
-        // 次の ingest で結合され 1 行として完成する
+        // The next ingest concatenates and completes one line.
         m.ingest("ial\n");
         assert_eq!(m.lines.len(), 1);
         assert_eq!(m.lines[0].message, "partial");
@@ -641,9 +644,9 @@ mod tests {
     #[test]
     fn parser_drain_and_filter_indices_consistency() {
         let mut m = make_model();
-        m.filters.show_debug = true; // 全レベル通過させる
+        m.filters.show_debug = true; // let every level through
 
-        // LINE_LIMIT を超えて push
+        // Push past LINE_LIMIT.
         for i in 0..(LINE_LIMIT + 100) {
             m.ingest(&format!("[00:00:00.000][INFO] line {i}\n"));
         }
@@ -654,7 +657,7 @@ mod tests {
             "lines は LINE_LIMIT で cap される"
         );
 
-        // filter_indices に stale なインデックスが残っていないこと
+        // No stale indices remain in filter_indices.
         for &idx in &m.filter_indices {
             assert!(
                 idx < m.lines.len(),
@@ -663,7 +666,7 @@ mod tests {
                 m.lines.len()
             );
         }
-        // 全件フィルタ通過する前提なので、filter_indices は lines と同じ長さ
+        // Every line passes the filter, so filter_indices has the same length as lines.
         assert_eq!(m.filter_indices.len(), m.lines.len());
     }
 
@@ -675,7 +678,7 @@ mod tests {
             m.ingest(&format!("[00:00:00.000][INFO] line {i}\n"));
         }
         assert_eq!(m.lines.len(), LINE_LIMIT);
-        // 先頭に残っているのは 25000 - 20000 = 5000 番目以降
+        // The remaining front entry is the (25000 - 20000 = 5000)-th line.
         assert_eq!(m.lines[0].message, "line 5000");
         assert_eq!(m.lines.back().unwrap().message, "line 24999");
     }
@@ -685,7 +688,7 @@ mod tests {
         let buf: SharedLogBuffer = Arc::new(Mutex::new(LogBuffer::new()));
         let mut m = make_model();
 
-        // 初回ログを書き込み
+        // Write the initial log.
         {
             let mut lb = buf.lock().unwrap();
             let text = "[12:34:56.789][INFO] first\n";
@@ -699,7 +702,7 @@ mod tests {
         let offset_after_first = m.last_offset;
         assert!(offset_after_first > 0);
 
-        // 追加ログ
+        // Append more log data.
         {
             let mut lb = buf.lock().unwrap();
             let text = "[12:34:57.123][WARN] second\n";
@@ -728,13 +731,13 @@ mod tests {
         assert_eq!(m.filter_indices.len(), 2);
         assert_eq!(m.filter_indices, vec![0, 2]);
 
-        // Debug を有効化
+        // Enable Debug.
         let mut f = m.filters;
         f.show_debug = true;
         m.set_filters(f);
         assert_eq!(m.filter_indices, vec![0, 1, 2]);
 
-        // Info を無効化
+        // Disable Info.
         let mut f = m.filters;
         f.show_info = false;
         m.set_filters(f);
@@ -742,7 +745,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // P1 / P2 修正の回帰防止テスト
+    // Regression tests for the P1 / P2 fixes
     // ------------------------------------------------------------------
 
     fn make_cfg(visible: bool) -> crate::viewer::app::persistence::LogViewerConfig {
@@ -762,8 +765,8 @@ mod tests {
 
     #[test]
     fn from_config_initializes_last_geometry() {
-        // P2 修正検証: from_config は last_geometry も config 値で初期化する。
-        // これにより export_config が「一度も開いていない」セッションでも config を保持する。
+        // P2 fix verification: from_config initializes last_geometry from config too.
+        // This way export_config preserves the config even in a session where the viewer is never opened.
         let cfg = make_cfg(false);
         let m = LogViewerModel::from_config(&cfg);
         assert_eq!(m.apply_geometry, Some(([100.0, 200.0], [800.0, 600.0])));
@@ -772,10 +775,10 @@ mod tests {
 
     #[test]
     fn export_config_preserves_geometry_when_never_opened() {
-        // P2 修正検証: from_config → export_config の往復で position/size が消えない
+        // P2 fix verification: a from_config -> export_config round trip does not lose position/size.
         let cfg = make_cfg(false);
         let m = LogViewerModel::from_config(&cfg);
-        // ビュアーを一度も開かないまま export
+        // Export without ever opening the viewer.
         let exported = m.export_config();
         assert_eq!(exported.x, Some(100.0));
         assert_eq!(exported.y, Some(200.0));
@@ -786,58 +789,58 @@ mod tests {
 
     #[test]
     fn hidden_startup_then_show_keeps_apply_geometry() {
-        // P1 修正検証: visible=false のフレームで apply_geometry を消費しない。
-        // 隠したまま起動 → ボタンで開く、というシーケンスで apply_geometry が残ること。
+        // P1 fix verification: do not consume apply_geometry on a frame where visible=false.
+        // Start hidden -> open by button: apply_geometry must still be present.
         let cfg = make_cfg(false);
         let mut m = LogViewerModel::from_config(&cfg);
         assert!(!m.visible);
-        // 「show_log_viewer の visible-false 早期 return 後」と同じ状態
-        // → apply_geometry には触れていないので Some のまま
+        // Same state as after the visible-false early return inside show_log_viewer.
+        // -> apply_geometry was never touched, so it stays Some.
         assert!(m.apply_geometry.is_some());
 
-        // ユーザが「ログ」ボタンを押して show
+        // User clicks the "Log" button to show.
         m.show();
         assert!(m.visible);
-        // show は apply_geometry が Some の間は何も上書きしないので、config 値が残る
+        // show does not overwrite while apply_geometry is Some, so the config value remains.
         assert_eq!(m.apply_geometry, Some(([100.0, 200.0], [800.0, 600.0])));
     }
 
     #[test]
     fn hide_then_show_round_trip_preserves_geometry() {
-        // 同セッション reopen の位置維持: × 閉じ後 toggle 開きで last_geometry が復元される
+        // Same-session reopen position retention: after closing with X, toggling open restores last_geometry.
         let cfg = make_cfg(true);
         let mut m = LogViewerModel::from_config(&cfg);
-        // 1 回目の show_log_viewer 相当: apply_geometry を take して使う
+        // Equivalent to the first call to show_log_viewer: take and use apply_geometry.
         let _ = m.apply_geometry.take();
         assert!(m.apply_geometry.is_none());
-        // ユーザがウインドウを動かしたとして last_geometry を更新
+        // Pretend the user moved the window, updating last_geometry.
         m.last_geometry = Some(([300.0, 400.0], [900.0, 700.0]));
-        // × 閉じる
+        // X close.
         m.hide();
         assert!(!m.visible);
-        // hide は apply_geometry を last_geometry でスナップショットする
+        // hide snapshots last_geometry into apply_geometry.
         assert_eq!(m.apply_geometry, Some(([300.0, 400.0], [900.0, 700.0])));
-        // 再度開く
+        // Reopen.
         m.show();
         assert!(m.visible);
-        // 次の show_log_viewer で take される値はユーザが動かした位置
+        // The next show_log_viewer takes the value the user moved to.
         assert_eq!(m.apply_geometry, Some(([300.0, 400.0], [900.0, 700.0])));
     }
 
     #[test]
     fn toggle_close_then_toggle_open_preserves_geometry() {
-        // トップバートグル経由（× ではなく）でも閉じ→開きで位置が維持される
+        // Position is also preserved across close/reopen via the top-bar toggle (not just via X).
         let cfg = make_cfg(true);
         let mut m = LogViewerModel::from_config(&cfg);
         let _ = m.apply_geometry.take();
         m.last_geometry = Some(([500.0, 600.0], [1000.0, 800.0]));
 
-        // toggle_visible で閉じる
+        // Close via toggle_visible.
         m.toggle_visible();
         assert!(!m.visible);
         assert_eq!(m.apply_geometry, Some(([500.0, 600.0], [1000.0, 800.0])));
 
-        // toggle_visible で再度開く
+        // Reopen via toggle_visible.
         m.toggle_visible();
         assert!(m.visible);
         assert_eq!(m.apply_geometry, Some(([500.0, 600.0], [1000.0, 800.0])));
@@ -845,11 +848,11 @@ mod tests {
 
     #[test]
     fn export_after_session_uses_latest_geometry() {
-        // ビュアーを開いてユーザが動かしてから閉じた場合、export_config は最新位置を返す
+        // After the user moves the viewer and closes it, export_config returns the latest position.
         let cfg = make_cfg(true);
         let mut m = LogViewerModel::from_config(&cfg);
         let _ = m.apply_geometry.take();
-        // ユーザが動かした位置
+        // Position the user moved to.
         m.last_geometry = Some(([700.0, 800.0], [1100.0, 900.0]));
         m.hide();
         let exported = m.export_config();
