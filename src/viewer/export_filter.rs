@@ -8,12 +8,12 @@ use crate::intermediate::types::{
     IrTextureTransformBind, IrVertex,
 };
 
-/// 可視材質のみを含む IrModel を新規構築する。
+/// Build a fresh IrModel containing only the visible materials.
 ///
-/// `visible_mat_indices` に含まれる material_index のメッシュ・材質のみを残し、
-/// 頂点モーフ・グループモーフの index を正しくリマップする。
+/// Keep only meshes / materials whose material_index is in `visible_mat_indices`,
+/// and remap vertex-morph and group-morph indices accordingly.
 pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> IrModel {
-    // 全材質が非表示の場合は空 PMX を出力（ワーニング付き）
+    // If every material is hidden, emit an empty PMX (with a warning).
     if visible_mat_indices.is_empty() {
         log::warn!("All materials are hidden. Exporting empty PMX.");
         return IrModel {
@@ -29,7 +29,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
         };
     }
 
-    // ── Phase 1: 材質リマップ（old_mat_idx → new_mat_idx）──
+    // -- Phase 1: material remap (old_mat_idx -> new_mat_idx) --
     let mut mat_remap: HashMap<usize, usize> = HashMap::new();
     let mut new_materials: Vec<IrMaterial> = Vec::new();
     for (old_idx, mat) in ir.materials.iter().enumerate() {
@@ -39,8 +39,8 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
         }
     }
 
-    // ── Phase 2: メッシュフィルタ + 頂点リマップテーブル構築 ──
-    // 元メッシュのグローバル頂点オフセットを記録
+    // -- Phase 2: mesh filter + vertex remap table --
+    // Record the global vertex offset of each source mesh.
     let mut old_mesh_vtx_start: Vec<usize> = Vec::with_capacity(ir.meshes.len());
     let mut offset = 0usize;
     for mesh in &ir.meshes {
@@ -49,7 +49,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
     }
     let old_total_verts = offset;
 
-    // old_global_vtx → new_global_vtx のリマップ（None = 除外）
+    // old_global_vtx -> new_global_vtx remap (None = excluded).
     let mut vtx_remap: Vec<Option<usize>> = vec![None; old_total_verts];
     let mut new_meshes: Vec<IrMesh> = Vec::new();
     let mut new_vtx_offset = 0usize;
@@ -61,7 +61,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
         let new_mat_idx = mat_remap[&mesh.material_index];
         let old_start = old_mesh_vtx_start[mesh_i];
 
-        // 頂点リマップ登録
+        // Register the vertex remap entries.
         for local_i in 0..mesh.vertices.len() {
             vtx_remap[old_start + local_i] = Some(new_vtx_offset + local_i);
         }
@@ -92,14 +92,14 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
         new_vtx_offset += mesh.vertices.len();
     }
 
-    // ── Phase 3: モーフの有効性判定 ──
-    // 頂点モーフ: リマップ後に1エントリ以上残れば有効
-    // グループモーフ: 子モーフが1つ以上有効なら有効（再帰的に判定）
+    // -- Phase 3: morph liveness check --
+    // Vertex morph: alive if at least one entry survives the remap.
+    // Group morph: alive if at least one child morph is alive (resolved iteratively).
     let morph_count = ir.morphs.len();
     let mut morph_alive: Vec<bool> = vec![false; morph_count];
 
-    // まず頂点モーフの有効性を判定（checked access で範囲外は無視）
-    // positions / normals / tangents いずれかに有効な頂点があれば生存
+    // First, decide vertex-morph liveness (out-of-range entries are silently ignored via checked access).
+    // A morph survives if positions / normals / tangents has at least one live vertex.
     for (i, morph) in ir.morphs.iter().enumerate() {
         if let IrMorphKind::Vertex {
             ref positions,
@@ -113,10 +113,10 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
                 .chain(tangents.iter())
                 .any(|&(vi, _)| vtx_remap.get(vi).copied().flatten().is_some());
         }
-        // v0.5.1 レビュー 03 [P2] 対応: Material morph は「少なくとも 1 つの bind が
-        // 可視材質を参照しているとき」のみ生存。remap 後に bind が全て落ちる場合は
-        // 機能しない「死んだ表情」として除外する（Group から参照されても収束判定で
-        // 孤立した Material morph はそのまま死ぬ）。
+        // v0.5.1 review 03 [P2] fix: a Material morph is alive only when at least one bind
+        // references a visible material. If every bind drops out after remap, the morph is
+        // a dead expression and is removed (a Material morph that survives only because a
+        // Group references it stays dead after the convergence pass).
         if let IrMorphKind::Material {
             color_binds,
             uv_binds,
@@ -130,7 +130,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
                 .any(|b| mat_remap.contains_key(&b.material_index));
             morph_alive[i] = any_color || any_uv;
         }
-        // Phase 3 A-2: UV モーフは 1 頂点でも可視側に残っていれば生存
+        // Phase 3 A-2: a UV morph is alive if any single vertex remains on the visible side.
         if let IrMorphKind::Uv {
             channel: _,
             offsets,
@@ -142,7 +142,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
         }
     }
 
-    // グループモーフの有効性を収束するまで反復判定（ネスト対応）
+    // Iterate group-morph liveness until it converges (handles nesting).
     for iteration in 0..ir.morphs.len().max(1) {
         let mut changed = false;
         for (i, morph) in ir.morphs.iter().enumerate() {
@@ -167,7 +167,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
         }
     }
 
-    // 除外されるモーフのワーニングログ
+    // Warning log for excluded morphs.
     for (i, morph) in ir.morphs.iter().enumerate() {
         if !morph_alive[i] {
             let kind_label = match &morph.kind {
@@ -184,7 +184,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
         }
     }
 
-    // ── Phase 4: old_morph_idx → new_morph_idx リマップ構築 ──
+    // -- Phase 4: build the old_morph_idx -> new_morph_idx remap --
     let mut morph_remap: HashMap<usize, usize> = HashMap::new();
     let mut new_idx = 0usize;
     for (i, &alive) in morph_alive.iter().enumerate() {
@@ -194,7 +194,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
         }
     }
 
-    // モーフ構築
+    // Build morphs.
     let mut final_morphs: Vec<IrMorph> = Vec::new();
     for (old_idx, morph) in ir.morphs.iter().enumerate() {
         if !morph_alive[old_idx] {
@@ -238,10 +238,11 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
                 color_binds,
                 uv_binds,
             } => {
-                // v0.5.1 レビュー 02 [P2] 対応: material_index を mat_remap で再マップ。
-                // 旧実装は clone だけで old material_index が残留し、可視材質のみ export した
-                // IR で Material morph が新しい materials 配列と整合しない状態になっていた。
-                // 除外された材質を指す bind は filter_map で落とす。
+                // v0.5.1 review 02 [P2] fix: remap material_index via mat_remap.
+                // The previous implementation only cloned the binds, leaving stale
+                // old material_index values that did not match the new materials array
+                // when only visible materials were exported. filter_map drops binds
+                // that point to excluded materials.
                 let new_color_binds: Vec<IrMaterialColorBind> = color_binds
                     .iter()
                     .filter_map(|b| {
@@ -271,8 +272,8 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
                     uv_binds: new_uv_binds,
                 }
             }
-            // Phase 3 A-2: UV モーフは 頂点モーフと同様に vtx_remap で頂点Indexを再マップ。
-            // 除外された頂点を指すオフセットは filter_map で落とす。
+            // Phase 3 A-2: a UV morph remaps vertex indices through vtx_remap, just like a vertex morph.
+            // Offsets that point to excluded vertices are dropped via filter_map.
             IrMorphKind::Uv { channel, offsets } => {
                 let new_offsets: Vec<(usize, [f32; 4])> = offsets
                     .iter()
@@ -303,8 +304,8 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
         log::warn!("{} of {} morphs excluded.", morph_count, removed);
     }
 
-    // ── Phase 5: テクスチャ pruning ──
-    // フィルタ後の材質が参照するテクスチャのみ残す
+    // -- Phase 5: texture pruning --
+    // Keep only textures referenced by the post-filter materials.
     let used_tex_indices: HashSet<usize> = new_materials
         .iter()
         .filter_map(|m| m.texture_index)
@@ -367,7 +368,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
         }
     }
 
-    // 材質の texture_index をリマップ
+    // Remap texture_index on the materials.
     for mat in &mut new_materials {
         mat.texture_index = mat.texture_index.and_then(|i| tex_remap.get(&i).copied());
         mat.base_color_tex_info = mat
@@ -416,7 +417,7 @@ pub fn build_filtered_ir(ir: &IrModel, visible_mat_indices: &HashSet<usize>) -> 
             .and_then(|i| tex_remap.get(&i).copied());
     }
 
-    // ── Phase 6: IrModel 構築 ──
+    // -- Phase 6: build the final IrModel --
     IrModel {
         name: ir.name.clone(),
         comment: ir.comment.clone(),
@@ -495,16 +496,16 @@ mod tests {
         }
     }
 
-    /// 未使用材質を含むモデルで panic しないことを確認
+    /// Verify that a model with hidden materials does not panic.
     #[test]
     fn test_filter_with_hidden_material() {
         let ir = IrModel {
             name: "test".into(),
             bones: vec![make_bone("Root")],
             meshes: vec![
-                make_mesh("mesh0", 0, 6), // 材質0: 頂点 0..6
-                make_mesh("mesh1", 1, 3), // 材質1: 頂点 6..9
-                make_mesh("mesh2", 2, 4), // 材質2: 頂点 9..13
+                make_mesh("mesh0", 0, 6), // material 0: vertices 0..6
+                make_mesh("mesh1", 1, 3), // material 1: vertices 6..9
+                make_mesh("mesh2", 2, 4), // material 2: vertices 9..13
             ],
             materials: vec![
                 IrMaterial {
@@ -526,9 +527,9 @@ mod tests {
                 panel: 2,
                 kind: IrMorphKind::Vertex {
                     positions: vec![
-                        (1, Vec3::Y),  // mesh0 の頂点1
-                        (7, Vec3::X),  // mesh1 の頂点1（除外対象）
-                        (10, Vec3::Z), // mesh2 の頂点1
+                        (1, Vec3::Y),  // mesh0 vertex 1
+                        (7, Vec3::X),  // mesh1 vertex 1 (excluded)
+                        (10, Vec3::Z), // mesh2 vertex 1
                     ],
                     normals: Vec::new(),
                     tangents: Vec::new(),
@@ -537,35 +538,35 @@ mod tests {
             ..Default::default()
         };
 
-        // 材質1を非表示にする
+        // Hide material 1.
         let visible: HashSet<usize> = [0, 2].iter().copied().collect();
         let filtered = build_filtered_ir(&ir, &visible);
 
-        // 材質数: 2
+        // Materials: 2
         assert_eq!(filtered.materials.len(), 2);
         assert_eq!(filtered.materials[0].name, "mat0");
         assert_eq!(filtered.materials[1].name, "mat2");
 
-        // メッシュ数: 2（mesh1 が除外）
+        // Meshes: 2 (mesh1 dropped)
         assert_eq!(filtered.meshes.len(), 2);
-        assert_eq!(filtered.meshes[0].material_index, 0); // mat0 → new 0
-        assert_eq!(filtered.meshes[1].material_index, 1); // mat2 → new 1
+        assert_eq!(filtered.meshes[0].material_index, 0); // mat0 -> new 0
+        assert_eq!(filtered.meshes[1].material_index, 1); // mat2 -> new 1
 
-        // モーフ: mesh1 の頂点(7)が除外され、残り2エントリ
+        // Morph: mesh1 vertex (7) is dropped, leaving 2 entries.
         assert_eq!(filtered.morphs.len(), 1);
         if let IrMorphKind::Vertex { ref positions, .. } = filtered.morphs[0].kind {
             let entries = positions;
             assert_eq!(entries.len(), 2);
-            // mesh0 の頂点1 → new index 1（そのまま）
+            // mesh0 vertex 1 -> new index 1 (unchanged)
             assert_eq!(entries[0].0, 1);
-            // mesh2 の頂点1 → old 10, mesh1(3頂点)除外で -3 → new 7
+            // mesh2 vertex 1 -> old 10, minus 3 (mesh1 had 3 verts) -> new 7
             assert_eq!(entries[1].0, 7);
         } else {
             panic!("should be a vertex morph");
         }
     }
 
-    /// 除外メッシュの頂点のみを参照するモーフが削除されることを確認
+    /// Verify that morphs that only reference vertices in excluded meshes are removed.
     #[test]
     fn test_morph_fully_removed() {
         let ir = IrModel {
@@ -589,8 +590,8 @@ mod tests {
                     panel: 3,
                     kind: IrMorphKind::Vertex {
                         positions: vec![
-                            (3, Vec3::Y), // mesh1 の頂点0 のみ
-                            (4, Vec3::X), // mesh1 の頂点1 のみ
+                            (3, Vec3::Y), // mesh1 vertex 0 only
+                            (4, Vec3::X), // mesh1 vertex 1 only
                         ],
                         normals: Vec::new(),
                         tangents: Vec::new(),
@@ -602,7 +603,7 @@ mod tests {
                     panel: 2,
                     kind: IrMorphKind::Vertex {
                         positions: vec![
-                            (0, Vec3::Y), // mesh0 の頂点0（残る）
+                            (0, Vec3::Y), // mesh0 vertex 0 (kept)
                         ],
                         normals: Vec::new(),
                         tangents: Vec::new(),
@@ -612,17 +613,17 @@ mod tests {
             ..Default::default()
         };
 
-        // 材質1を非表示
+        // Hide material 1.
         let visible: HashSet<usize> = [0].iter().copied().collect();
         let filtered = build_filtered_ir(&ir, &visible);
 
-        // smile は mesh1 の頂点のみ → 削除
-        // blink は mesh0 の頂点 → 残る
+        // smile only references mesh1 vertices -> removed.
+        // blink references a mesh0 vertex -> kept.
         assert_eq!(filtered.morphs.len(), 1);
         assert_eq!(filtered.morphs[0].name, "blink");
     }
 
-    /// グループモーフの子参照が正しくリマップされることを確認
+    /// Verify that a group morph's child references are remapped correctly.
     #[test]
     fn test_group_morph_remap() {
         let ir = IrModel {
@@ -640,7 +641,7 @@ mod tests {
                 },
             ],
             morphs: vec![
-                // [0] smile: mesh1 のみ → 除外される
+                // [0] smile: mesh1 only -> excluded.
                 IrMorph {
                     name: "smile".into(),
                     name_en: String::new(),
@@ -651,7 +652,7 @@ mod tests {
                         tangents: Vec::new(),
                     },
                 },
-                // [1] blink: mesh0 → 残る（new index 0）
+                // [1] blink: mesh0 -> kept (new index 0).
                 IrMorph {
                     name: "blink".into(),
                     name_en: String::new(),
@@ -662,7 +663,7 @@ mod tests {
                         tangents: Vec::new(),
                     },
                 },
-                // [2] group: smile(0) + blink(1) → smile除外後 blink(new 0) のみ
+                // [2] group: smile(0) + blink(1) -> only blink(new 0) survives.
                 IrMorph {
                     name: "group".into(),
                     name_en: String::new(),
@@ -676,23 +677,23 @@ mod tests {
         let visible: HashSet<usize> = [0].iter().copied().collect();
         let filtered = build_filtered_ir(&ir, &visible);
 
-        // smile 除外 → blink(new 0), group(new 1)
+        // smile excluded -> blink(new 0), group(new 1).
         assert_eq!(filtered.morphs.len(), 2);
         assert_eq!(filtered.morphs[0].name, "blink");
         assert_eq!(filtered.morphs[1].name, "group");
 
         if let IrMorphKind::Group(ref entries) = filtered.morphs[1].kind {
-            // smile は除外されているので group の子は blink のみ
+            // smile is excluded so the group only has blink as a child.
             assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0].0, 0); // blink の new index = 0
+            assert_eq!(entries[0].0, 0); // blink new index = 0
             assert_eq!(entries[0].1, 1.0);
         } else {
             panic!("should be a group morph");
         }
     }
 
-    /// ネストしたグループモーフ（outer -> inner -> vertex）で
-    /// vertex が除外されると inner, outer ともに正しく除去されることを確認
+    /// Verify that with nested group morphs (outer -> inner -> vertex),
+    /// dropping the leaf vertex correctly removes both inner and outer.
     #[test]
     fn test_nested_group_morph_cascade_removal() {
         let ir = IrModel {
@@ -710,7 +711,7 @@ mod tests {
                 },
             ],
             morphs: vec![
-                // [0] vtx_alive: mesh0 → 残る
+                // [0] vtx_alive: mesh0 -> kept.
                 IrMorph {
                     name: "vtx_alive".into(),
                     name_en: String::new(),
@@ -721,7 +722,7 @@ mod tests {
                         tangents: Vec::new(),
                     },
                 },
-                // [1] vtx_dead: mesh1 のみ → 除外
+                // [1] vtx_dead: mesh1 only -> excluded.
                 IrMorph {
                     name: "vtx_dead".into(),
                     name_en: String::new(),
@@ -732,14 +733,14 @@ mod tests {
                         tangents: Vec::new(),
                     },
                 },
-                // [2] inner: vtx_dead(1) のみ → 子が全滅で除外
+                // [2] inner: only references vtx_dead(1) -> excluded once children die.
                 IrMorph {
                     name: "inner".into(),
                     name_en: String::new(),
                     panel: 4,
                     kind: IrMorphKind::Group(vec![(1, 1.0)]),
                 },
-                // [3] outer: inner(2) + vtx_alive(0) → inner除外後 vtx_alive のみ残る
+                // [3] outer: inner(2) + vtx_alive(0) -> only vtx_alive survives after inner is excluded.
                 IrMorph {
                     name: "outer".into(),
                     name_en: String::new(),
@@ -753,22 +754,22 @@ mod tests {
         let visible: HashSet<usize> = [0].iter().copied().collect();
         let filtered = build_filtered_ir(&ir, &visible);
 
-        // vtx_dead, inner は除外 → vtx_alive(new 0), outer(new 1)
+        // vtx_dead, inner are excluded -> vtx_alive(new 0), outer(new 1).
         assert_eq!(filtered.morphs.len(), 2);
         assert_eq!(filtered.morphs[0].name, "vtx_alive");
         assert_eq!(filtered.morphs[1].name, "outer");
 
         if let IrMorphKind::Group(ref entries) = filtered.morphs[1].kind {
-            // inner は除外、vtx_alive のみ残る
+            // inner excluded; only vtx_alive survives.
             assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0].0, 0); // vtx_alive の new index = 0
+            assert_eq!(entries[0].0, 0); // vtx_alive new index = 0
             assert_eq!(entries[0].1, 1.0);
         } else {
             panic!("should be a group morph");
         }
     }
 
-    /// 全材質非表示の場合、空モデルが返ることを確認
+    /// Verify that hiding every material returns an empty model.
     #[test]
     fn test_all_materials_hidden() {
         let ir = IrModel {
@@ -799,11 +800,11 @@ mod tests {
         assert_eq!(filtered.meshes.len(), 0);
         assert_eq!(filtered.morphs.len(), 0);
         assert_eq!(filtered.textures.len(), 0);
-        // ボーンは保持
+        // Bones are preserved.
         assert_eq!(filtered.bones.len(), 1);
     }
 
-    /// テクスチャ pruning: 非表示材質のテクスチャが除外されることを確認
+    /// Texture pruning: verify that textures of hidden materials are dropped.
     #[test]
     fn test_texture_pruning() {
         use crate::intermediate::types::IrTexture;
@@ -843,19 +844,19 @@ mod tests {
             ..Default::default()
         };
 
-        // 材質1を非表示
+        // Hide material 1.
         let visible: HashSet<usize> = [0].iter().copied().collect();
         let filtered = build_filtered_ir(&ir, &visible);
 
-        // テクスチャ: tex0 のみ残る
+        // Textures: only tex0 survives.
         assert_eq!(filtered.textures.len(), 1);
         assert_eq!(filtered.textures[0].filename, "tex0.png");
 
-        // 材質の texture_index がリマップされている
+        // The material's texture_index has been remapped.
         assert_eq!(filtered.materials[0].texture_index, Some(0));
     }
 
-    /// base_color_tex_info がフィルタ後にリマップされることを確認
+    /// Verify that base_color_tex_info is remapped after filtering.
     #[test]
     fn test_base_color_tex_info_remap() {
         use crate::intermediate::types::{IrSamplerInfo, IrTexture, IrTextureInfo};
@@ -904,18 +905,18 @@ mod tests {
             ..Default::default()
         };
 
-        // 材質0のみ表示（材質1のテクスチャ tex1 が除外される）
+        // Show material 0 only (material 1's texture tex1 is dropped).
         let visible: HashSet<usize> = [0].iter().copied().collect();
         let filtered = build_filtered_ir(&ir, &visible);
 
         assert_eq!(filtered.textures.len(), 1);
 
-        // texture_index と base_color_tex_info.index が一致してリマップされている
+        // texture_index and base_color_tex_info.index are remapped consistently.
         let mat = &filtered.materials[0];
         assert_eq!(mat.texture_index, Some(0));
         let ti = mat.base_color_tex_info.as_ref().unwrap();
         assert_eq!(ti.index, 0);
-        // UV transform 情報が維持されている
+        // UV transform info is preserved.
         assert_eq!(ti.tex_coord, 1);
         assert!((ti.offset.x - 0.1).abs() < 1e-6);
         assert!((ti.scale.x - 2.0).abs() < 1e-6);

@@ -1,7 +1,7 @@
 use eframe::egui;
 use glam::{Mat4, Vec3};
 
-/// カメラ操作感度定数
+/// Camera input sensitivity constants.
 const YAW_PITCH_SENSITIVITY: f32 = 0.005;
 const PAN_SPEED_FACTOR: f32 = 0.003;
 const ZOOM_SENSITIVITY_BASE: f32 = 0.0025;
@@ -23,14 +23,14 @@ const FIT_MARGIN: f32 = 1.15;
 pub struct OrbitCamera {
     pub target: Vec3,
     pub distance: f32,
-    pub yaw: f32,   // ラジアン
-    pub pitch: f32, // ラジアン
-    /// モデルのバウンディング球の半径（ズーム感度に使用）
+    pub yaw: f32,   // radians
+    pub pitch: f32, // radians
+    /// Bounding-sphere radius of the model (used for zoom sensitivity).
     pub model_radius: f32,
-    /// 透視投影（true）/ 正射影（false）
+    /// Perspective (true) / orthographic (false).
     pub perspective: bool,
-    /// 基準垂直 FOV（ラジアン）。レンダリング時にオーバーレイ高さに応じて
-    /// 内部で更に補正された effective FOV が計算される。
+    /// Base vertical FOV (radians). At render time an effective FOV is computed
+    /// from this value, additionally corrected for the overlay height.
     pub fov_y_radians: f32,
 }
 
@@ -49,16 +49,16 @@ impl Default for OrbitCamera {
 }
 
 impl OrbitCamera {
-    /// マウス操作を処理
+    /// Process mouse input.
     pub fn handle_input(&mut self, ctx: &egui::Context, response: &egui::Response) {
-        // Shift精密操作（1/3速度）
+        // Shift = fine control (1/3 speed).
         let fine = if ctx.input(|i| i.modifiers.shift) {
             1.0 / 3.0
         } else {
             1.0
         };
 
-        // 左ドラッグ: 回転
+        // Left drag: rotate.
         if response.dragged_by(egui::PointerButton::Primary) {
             let delta = response.drag_delta();
             self.yaw -= delta.x * YAW_PITCH_SENSITIVITY * fine;
@@ -69,7 +69,7 @@ impl OrbitCamera {
             );
         }
 
-        // 右ドラッグ / 中ボタンドラッグ: パン（ビュー空間の上・右方向を使用）
+        // Right drag / middle drag: pan (uses the view-space up and right axes).
         let is_pan = response.dragged_by(egui::PointerButton::Secondary)
             || response.dragged_by(egui::PointerButton::Middle);
         if is_pan {
@@ -80,11 +80,11 @@ impl OrbitCamera {
             self.target += -right * delta.x * speed + up * delta.y * speed;
         }
 
-        // ホイール: ズーム（モデルサイズに応じた感度）
+        // Wheel: zoom (sensitivity scales with model size).
         if response.hovered() {
             let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
-                // モデル半径に応じた感度調整
+                // Sensitivity adjustment based on the model radius.
                 let sensitivity = ZOOM_SENSITIVITY_BASE
                     * (self.model_radius / ZOOM_RADIUS_REF)
                         .clamp(ZOOM_SENSITIVITY_MIN, ZOOM_SENSITIVITY_MAX);
@@ -94,8 +94,8 @@ impl OrbitCamera {
         }
     }
 
-    /// カメラ位置
-    /// PMX 座標系ではモデルは +Z を向く。yaw=0 でカメラを -Z 側に置く。
+    /// Camera position.
+    /// In PMX coordinates the model faces +Z, so yaw=0 places the camera on the -Z side.
     pub fn eye(&self) -> Vec3 {
         let x = self.distance * self.pitch.cos() * self.yaw.sin();
         let y = self.distance * self.pitch.sin();
@@ -103,22 +103,22 @@ impl OrbitCamera {
         self.target + Vec3::new(x, y, z)
     }
 
-    /// ビュー空間の右方向と上方向を返す
+    /// Return view-space right and up vectors.
     fn view_axes(&self) -> (Vec3, Vec3) {
         let forward = (self.target - self.eye()).normalize();
         let world_up = self.up_vector();
         let right = forward.cross(world_up).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
-        // pitch ≈ ±90° で right がゼロになる場合のフォールバック
+        // Fallback when right collapses to zero near pitch ≈ ±90°.
         if right.length_squared() < 1e-6 {
             return (Vec3::X, Vec3::Z);
         }
         (right, up)
     }
 
-    /// pitch に応じた up ベクトル（360° チルト対応）
+    /// Up vector based on pitch (supports full 360° tilt).
     fn up_vector(&self) -> Vec3 {
-        // pitch が ±90° を超えると逆さまになるので、cos(pitch) の符号で up を反転
+        // Past pitch ±90° the view flips upside-down, so flip up by the sign of cos(pitch).
         if self.pitch.cos() >= 0.0 {
             Vec3::Y
         } else {
@@ -126,16 +126,16 @@ impl OrbitCamera {
         }
     }
 
-    /// ビュー行列（左手系）
+    /// View matrix (left-handed).
     pub fn view_matrix(&self) -> Mat4 {
         Mat4::look_at_lh(self.eye(), self.target, self.up_vector())
     }
 
-    /// オーバーレイ補正後の有効垂直 FOV（ラジアン）。
+    /// Effective vertical FOV (radians), corrected for the overlay.
     ///
-    /// 中央ビューポートが下部パネル（材質編集パネル等）で `overlay_h` ピクセル分
-    /// 縮められた状態でも、モデルのスクリーン上ピクセル単位サイズが
-    /// 「オーバーレイなし時」と一致するように FOV をスケールダウンする。
+    /// Even when the central viewport is shrunk by `overlay_h` pixels by a
+    /// bottom panel (such as the material edit panel), the FOV is scaled down
+    /// so that the model's on-screen pixel size matches the no-overlay case.
     ///
     /// `tan(fov_eff/2) = tan(fov_y/2) * viewport_h / (viewport_h + overlay_h)`
     pub fn effective_fov_y_radians(&self, viewport_h: f32, overlay_h: f32) -> f32 {
@@ -147,19 +147,19 @@ impl OrbitCamera {
         }
     }
 
-    /// 射影行列の [1][1] 成分（= 1/tan(fov_y/2)）
-    /// MToon ScreenCoordinates アウトラインの距離クランプ用。
-    /// `view_proj` と同じ effective FOV を用いてアウトライン太さの整合を保つ。
+    /// The [1][1] component of the projection matrix (= 1/tan(fov_y/2)).
+    /// Used by the MToon ScreenCoordinates outline distance clamp.
+    /// Uses the same effective FOV as `view_proj` so that outline thickness stays consistent.
     pub fn proj_11(&self, viewport_h: f32, overlay_h: f32) -> f32 {
         let fov_eff = self.effective_fov_y_radians(viewport_h, overlay_h);
         1.0 / (fov_eff * 0.5).tan()
     }
 
-    /// View-Projection 行列（左手系、Reverse-Z: near→1.0, far→0.0）
-    /// near/far はカメラ距離に応じて動的調整。
+    /// View-Projection matrix (left-handed, Reverse-Z: near→1.0, far→0.0).
+    /// near/far are adjusted dynamically based on camera distance.
     ///
-    /// `overlay_h` に下部オーバーレイパネルの実 px 高を渡すと、
-    /// モデルの画面上ピクセル単位サイズがパネル開閉前後で保持される。
+    /// Pass the actual pixel height of the bottom overlay panel as `overlay_h`
+    /// to keep the model's on-screen pixel size constant when the panel opens or closes.
     pub fn view_proj(&self, viewport_w: f32, viewport_h: f32, overlay_h: f32) -> Mat4 {
         let view = self.view_matrix();
         let near = (self.distance * NEAR_FACTOR).clamp(NEAR_MIN, NEAR_MAX);
@@ -167,10 +167,10 @@ impl OrbitCamera {
         let aspect = viewport_w.max(1.0) / viewport_h.max(1.0);
         let fov_eff = self.effective_fov_y_radians(viewport_h, overlay_h);
         let proj = if self.perspective {
-            // Reverse-Z: near と far を入れ替えて depth 0→far, 1→near にマッピング
+            // Reverse-Z: swap near and far so depth maps 0 → far, 1 → near.
             Mat4::perspective_lh(fov_eff, aspect, far, near)
         } else {
-            // 正射影 Reverse-Z: near/far を入れ替え
+            // Orthographic Reverse-Z: near/far are also swapped.
             let fov_half = fov_eff * 0.5;
             let half_h = self.distance * fov_half.tan();
             let half_w = half_h * aspect;
@@ -179,7 +179,7 @@ impl OrbitCamera {
         proj * view
     }
 
-    /// バウンディングボックスにフィットさせる（yaw/pitchをリセット）
+    /// Fit to the bounding box (resets yaw/pitch).
     pub fn fit_to_bbox(
         &mut self,
         bbox_min: Vec3,
@@ -196,7 +196,7 @@ impl OrbitCamera {
         self.model_radius = model_radius;
     }
 
-    /// フィット: 現在のyaw/pitchを保持し、距離とターゲットだけ調整
+    /// Fit: keep the current yaw/pitch and adjust only distance and target.
     pub fn fit_to_bbox_with_margin(
         &mut self,
         bbox_min: Vec3,
@@ -211,7 +211,7 @@ impl OrbitCamera {
         self.model_radius = model_radius;
     }
 
-    /// リセット: yaw/pitchを正面に戻してフィット
+    /// Reset: snap yaw/pitch to face front and fit.
     pub fn reset_to_bbox_with_margin(
         &mut self,
         bbox_min: Vec3,
@@ -228,8 +228,8 @@ impl OrbitCamera {
         self.model_radius = model_radius;
     }
 
-    /// bbox 8頂点を現在のview軸に投影し、投影半幅・半高・半奥行きを返す
-    /// half_depth は透視投影で手前面のスケーリングを考慮するために必要
+    /// Project the 8 bbox corners onto the current view axes and return half width / height / depth.
+    /// half_depth is required so that perspective projection accounts for near-plane scaling.
     fn projected_half_extents(&self, bbox_min: Vec3, bbox_max: Vec3) -> (f32, f32, f32) {
         let (right, up) = self.view_axes();
         let forward = (self.target - self.eye()).normalize();
@@ -254,7 +254,7 @@ impl OrbitCamera {
         (half_w, half_h, half_d)
     }
 
-    /// フィット計算の共通処理（視点依存: 現在のyaw/pitchでの投影幅・高を使用）
+    /// Shared core of the fit calculation (view-dependent: uses the projected width/height for the current yaw/pitch).
     fn compute_fit(
         &self,
         bbox_min: Vec3,
@@ -269,14 +269,14 @@ impl OrbitCamera {
         let aspect = viewport_w.max(1.0) / viewport_h.max(1.0);
         let fov_y_half = self.fov_y_radians * 0.5;
 
-        // 上部オーバーレイ + 下部ヒントで約60px分の余白が必要
+        // Reserve about 60 px for the top overlay + bottom hint margin.
         let margin_px = 60.0;
         let effective_h = (viewport_h - margin_px).max(100.0);
         let effective_fov_y_half = (effective_h / viewport_h.max(1.0)) * fov_y_half;
 
-        // 高さ基準・幅基準の距離
-        // 透視投影: 手前面が frustum 内に収まるよう half_depth を加算
-        // 正射影: 見かけの幅・高さは深度に依存しないため half_depth 不要
+        // Distance based on height vs. width.
+        // Perspective: add half_depth so the near plane stays inside the frustum.
+        // Orthographic: apparent width / height does not depend on depth, so half_depth is unnecessary.
         let depth_offset = if self.perspective { half_d } else { 0.0 };
         let dist_h = half_h / effective_fov_y_half.tan() + depth_offset;
         let fov_x_half = (fov_y_half.tan() * aspect).atan();
@@ -284,7 +284,7 @@ impl OrbitCamera {
 
         let distance = (dist_h.max(dist_w) * FIT_MARGIN).max(2.0);
 
-        // ターゲットを少し下げてオーバーレイ下にモデル中心を配置
+        // Slide the target down a bit so the model center sits below the overlay.
         let world_per_px = 2.0 * distance * fov_y_half.tan() / viewport_h.max(1.0);
         let mut target = center;
         target.y -= world_per_px * margin_px * 0.25;
@@ -292,7 +292,7 @@ impl OrbitCamera {
         (target, distance, model_radius)
     }
 
-    /// ライト方向 — カメラ追従モード（MMD風: やや左上から）
+    /// Light direction — camera-following mode (MMD-like, slightly upper-left).
     pub fn camera_following_light_dir(&self) -> Vec3 {
         let forward = (self.target - self.eye()).normalize();
         let world_up = self.up_vector();
@@ -301,9 +301,9 @@ impl OrbitCamera {
         (forward + right * (-0.3) + up * 0.7).normalize()
     }
 
-    /// ライト方向 — 固定モード（MMD準拠: (-0.5,-1.0,0.5) の反転）
+    /// Light direction — fixed mode (MMD compatible: negation of (-0.5,-1.0,0.5)).
     pub fn fixed_light_dir() -> Vec3 {
-        // -light_dir = (0.5, 1.0, -0.5) で正面法線(0,0,-1)が照らされる
+        // -light_dir = (0.5, 1.0, -0.5) lights the front-facing normal (0, 0, -1).
         Vec3::new(-0.5, -1.0, 0.5).normalize()
     }
 }
@@ -316,14 +316,14 @@ mod tests {
     fn fixed_light_dir_normalized_and_correct_sign() {
         let dir = OrbitCamera::fixed_light_dir();
         assert!((dir.length() - 1.0).abs() < 1e-5);
-        assert!(dir.y < 0.0); // -light_dir が上方を向く
+        assert!(dir.y < 0.0); // -light_dir points upward
     }
 
     #[test]
     fn camera_following_light_biases_left_up() {
         let cam = OrbitCamera::default();
         let dir = cam.camera_following_light_dir();
-        assert!(dir.y > 0.0); // 上方成分あり
+        assert!(dir.y > 0.0); // upward bias
     }
 
     #[test]
@@ -339,14 +339,14 @@ mod tests {
     #[test]
     fn compute_fit_accounts_for_forward_depth() {
         let cam = OrbitCamera::default();
-        // 正面視点で X/Y は小さく Z だけ大きい bbox
+        // Front-facing view: small X/Y, large Z bbox.
         let thin = Vec3::new(-1.0, 0.0, -1.0);
         let thin_max = Vec3::new(1.0, 5.0, 1.0);
         let deep = Vec3::new(-1.0, 0.0, -20.0);
         let deep_max = Vec3::new(1.0, 5.0, 20.0);
         let (_, dist_thin, _) = cam.compute_fit(thin, thin_max, 1920.0, 1080.0);
         let (_, dist_deep, _) = cam.compute_fit(deep, deep_max, 1920.0, 1080.0);
-        // 奥行きが大きい方がカメラを引く必要がある
+        // The deeper bbox needs the camera pulled back further.
         assert!(dist_deep > dist_thin);
     }
 
@@ -362,22 +362,22 @@ mod tests {
         let deep_max = Vec3::new(1.0, 5.0, 20.0);
         let (_, dist_thin, _) = cam.compute_fit(thin, thin_max, 1920.0, 1080.0);
         let (_, dist_deep, _) = cam.compute_fit(deep, deep_max, 1920.0, 1080.0);
-        // 正射影では奥行きが distance に影響しない
+        // Under orthographic, depth does not affect distance.
         assert!((dist_thin - dist_deep).abs() < 0.01);
     }
 
     #[test]
     fn compute_fit_side_view_uses_depth() {
         let mut cam = OrbitCamera {
-            yaw: std::f32::consts::FRAC_PI_2, // 側面ビュー
+            yaw: std::f32::consts::FRAC_PI_2, // side view
             ..Default::default()
         };
-        // Y高さを小さくし、Z奥行きを大きくして幅基準が支配的になるケース
+        // Small Y height, large Z depth — the width-driven distance dominates.
         let min = Vec3::new(-1.0, 0.0, -10.0);
         let max = Vec3::new(1.0, 5.0, 10.0);
         let (_, dist_side, _) = cam.compute_fit(min, max, 1920.0, 1080.0);
-        cam.yaw = 0.0; // 正面ビュー
+        cam.yaw = 0.0; // front view
         let (_, dist_front, _) = cam.compute_fit(min, max, 1920.0, 1080.0);
-        assert!(dist_side > dist_front); // 側面からはZ奥行き20が画面幅に映るため距離増
+        assert!(dist_side > dist_front); // From the side, Z depth = 20 fills the screen width, so distance grows.
     }
 }
