@@ -1,20 +1,23 @@
-//! 頂点単位 UV 編集の状態管理 (v0.5.5 / Phase 1 / Phase 3 A-1)。
+//! Per-vertex UV editing state (v0.5.5 / Phase 1 / Phase 3 A-1).
 //!
-//! 材質編集ドロワー（`material_edit.rs`）が「材質単位」の差分を持つのに対し、こちらは
-//! 「頂点単位」の UV 差分を持つ。キーは `(mesh_index, vertex_index_in_mesh, uv_set)` の
-//! 3 要素で、`uv_set` は 0 = UV0 (`IrVertex.uv`), 1 = UV1 (`IrMesh.uvs1`) を指す。
-//! UV セットが違えば overrides / selected / undo 履歴がすべて別空間として扱われるため、
-//! UV0 編集中の選択集合と UV1 編集中の選択集合が混線することはない。
+//! While the material edit drawer (`material_edit.rs`) carries per-material deltas,
+//! this module carries per-vertex UV deltas. The key is the 3-tuple
+//! `(mesh_index, vertex_index_in_mesh, uv_set)` where `uv_set = 0 = UV0
+//! (`IrVertex.uv`)`, `uv_set = 1 = UV1 (`IrMesh.uvs1`)`. Different UV sets keep
+//! their own overrides / selected / undo history, so the UV0 selection set never
+//! crosses with the UV1 selection set.
 //!
-//! ## 設計判断
+//! ## Design decisions
 //!
-//! - **IR を単一真実源とする**: `apply_to_ir` で直接 `IrMesh.vertices_mut()` に書き込み、
-//!   再エクスポート（PMX writer 等）が IR をそのまま読めば自動で編集結果が反映される。
-//! - **overrides は永続化専用**: 履歴ファイル (`popone_history.json`) への書き戻しと、
-//!   リロード時の復元に用いる。IR 側が既に編集済みでも、overrides にエントリが残って
-//!   いれば「編集された頂点」として PSD 出力・再計算の対象として扱える。
-//! - **pristine 不要**: Phase 1 では undo を提供しないため、編集前の UV を記憶しない。
-//!   Phase 2 で undo / リセット対応時に追加する。
+//! - **IR is the single source of truth**: `apply_to_ir` writes directly into
+//!   `IrMesh.vertices_mut()`, so a re-export (PMX writer etc.) automatically picks
+//!   up the edit just by reading the IR.
+//! - **`overrides` is for persistence only**: used to write back to the history
+//!   file (`popone_history.json`) and to restore on reload. Even when the IR is
+//!   already edited, an entry remaining in `overrides` flags the vertex as
+//!   "edited" so it can participate in PSD output / recomputation.
+//! - **No pristine snapshot**: Phase 1 does not provide undo, so the pre-edit
+//!   UV is not stored. Added in Phase 2 alongside undo / reset.
 
 use std::collections::{HashMap, HashSet};
 
@@ -22,134 +25,140 @@ use crate::intermediate::types::{IrModel, IrMorphKind};
 
 use super::persistence::VertexUvOverrideEntry;
 
-/// 頂点編集のキー: `(mesh_index, vertex_index_in_mesh, uv_set)`。
-/// `uv_set = 0` なら UV0 (`IrVertex.uv`)、`uv_set = 1` なら UV1 (`IrMesh.uvs1`) を指す。
-/// 将来 UV2/UV3 を足すなら同じ u8 スロットの 2..= を使う余地がある。
+/// Vertex-edit key: `(mesh_index, vertex_index_in_mesh, uv_set)`.
+/// `uv_set = 0` -> UV0 (`IrVertex.uv`), `uv_set = 1` -> UV1 (`IrMesh.uvs1`).
+/// If UV2 / UV3 are added later, the same u8 slot has 2..= available.
 pub type VertexKey = (u32, u32, u8);
 
-/// undo/redo の 1 コマンド (v0.5.5 Phase 2-5)。
+/// One undo / redo command (v0.5.5 Phase 2-5).
 ///
-/// ドラッグ 1 回単位で記録し、`before` (変更前) / `after` (変更後) の 2 つの
-/// UV マップを持つ。`before` のキーは 必ず `after` のキーと一致する（同じ頂点集合）。
+/// Recorded per drag, holding two UV maps: `before` (pre-change) and `after`
+/// (post-change). The keys in `before` always match those in `after` (same vertex set).
 #[derive(Debug, Clone)]
 pub struct UvUndoEntry {
     pub before: HashMap<VertexKey, [f32; 2]>,
     pub after: HashMap<VertexKey, [f32; 2]>,
 }
 
-/// undo スタックの最大エントリ数（古いものから破棄）。
+/// Maximum entries on the undo stack (oldest are dropped first).
 pub const UV_UNDO_MAX: usize = 50;
 
-/// ドラッグモード (v0.5.5 Phase 2-2)。
-/// `drag_started()` 時に決定し、`dragged()` の分岐で使う。
+/// Drag mode (v0.5.5 Phase 2-2).
+/// Decided in `drag_started()` and used by `dragged()` to branch.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum UvDragMode {
-    /// ドラッグ外
+    /// Not dragging.
     #[default]
     None,
-    /// 選択頂点を平行移動（プレス位置が頂点近傍 12 px 以内）
+    /// Translate selected vertices (the press position is within 12 px of a vertex).
     Move,
-    /// 矩形選択（プレス位置が頂点から遠い場合）
+    /// Rectangle select (the press position is far from any vertex).
     Rect,
 }
 
-/// 矩形選択の動作モード (v0.5.5 Phase 3 / A-4)。`drag_started()` 時の修飾キーで決定する。
-/// Alt は Move モードの「回転」と競合するため Rect モードでは使わず、除外は Ctrl を使う。
+/// Behavior of the rectangle selection (v0.5.5 Phase 3 / A-4). Decided in `drag_started()` from modifier keys.
+/// Alt would conflict with Move-mode rotation, so it is not used here; Ctrl handles subtraction.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum UvRectBehavior {
-    /// 既存選択をクリアして矩形内頂点で置換（無修飾、Phase 2-2 の挙動）
+    /// Replace the existing selection with the vertices inside the rectangle (no modifier; Phase 2-2 behavior).
     #[default]
     Replace,
-    /// 既存選択に矩形内頂点を追加（Shift+ドラッグ）
+    /// Add the vertices inside the rectangle to the existing selection (Shift + drag).
     Add,
-    /// 既存選択から矩形内頂点を除外（Ctrl+ドラッグ）
+    /// Remove the vertices inside the rectangle from the existing selection (Ctrl + drag).
     Subtract,
 }
 
-/// 2D ギズモハンドルによるドラッグ操作の種別 (v0.5.5 Phase 3 / A-5)。
-/// `drag_started()` 時に「press 位置がハンドル内か」を判定して決定する。
+/// Kind of drag operation triggered by a 2D gizmo handle (v0.5.5 Phase 3 / A-5).
+/// Decided in `drag_started()` based on whether the press position is inside a handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UvGizmoAction {
-    /// 選択 bbox の角ハンドルをドラッグ（スケール操作、ピボットは反対角）。
-    /// `sign_u`, `sign_v` は掴んだ角を示す: (1,1)=u_max/v_max、(-1,-1)=u_min/v_min
-    /// 反対角は `(-sign_u, -sign_v)` で求められる。
+    /// Drag a corner handle of the selection bbox (scale; the pivot is the opposite corner).
+    /// `sign_u`, `sign_v` indicate the grabbed corner: (1, 1) = u_max / v_max, (-1, -1) = u_min / v_min.
+    /// The opposite corner is `(-sign_u, -sign_v)`.
     ScaleCorner { sign_u: i8, sign_v: i8 },
-    /// 回転ハンドル（bbox 上辺外側）をドラッグ。ピボットは選択 bbox の中心。
+    /// Drag the rotation handle (above the bbox top edge). The pivot is the center of the selection bbox.
     Rotate,
 }
 
-/// 頂点単位 UV 編集の状態（ViewerApp に 1 つだけ保持）。
+/// Per-vertex UV editing state (one instance held by ViewerApp).
 ///
-/// `Default` は手書き（`view_zoom` の初期値を 1.0 にするため）。
+/// `Default` is hand-written so that `view_zoom` initializes to 1.0.
 #[derive(Debug)]
 pub struct UvEditState {
-    /// 編集された頂点の現在 UV。IR へ反映する前の保留中の差分と、既に反映済みの差分の
-    /// どちらも同じ経路で記録する（保存時に IR から読み直すのではなく、ここを信頼する）。
+    /// The current UV of edited vertices. Both pending deltas (not yet pushed
+    /// to the IR) and already-pushed deltas are recorded the same way (we trust
+    /// this map at save time rather than re-reading from the IR).
     pub overrides: HashMap<VertexKey, [f32; 2]>,
-    /// UI キャンバス上での選択頂点。
+    /// Selected vertices on the UI canvas.
     pub selected: HashSet<VertexKey>,
-    /// キャンバスで編集対象としている材質 Index（`ir.materials` のインデックス）。
+    /// Material index currently being edited on the canvas (an index into `ir.materials`).
     pub active_material: usize,
-    /// ドラッグ中フラグ（`true` の間は GPU 書き換えを遅延する）。
+    /// Drag-in-progress flag (defers GPU writes while true).
     pub dragging: bool,
-    /// 現在のドラッグモード (Phase 2-2 で追加)。
+    /// Current drag mode (added in Phase 2-2).
     pub drag_mode: UvDragMode,
-    /// ドラッグ開始時点での選択頂点の UV（`start_uv + cumulative_cursor_delta` 方式で
-    /// 過加算を防ぐため、review_result_02 [P1] 対応）。ドラッグ終了でクリア。
+    /// UV of selected vertices at drag start (used by the
+    /// `start_uv + cumulative_cursor_delta` scheme to avoid over-accumulation;
+    /// review_result_02 [P1] fix). Cleared at drag end.
     pub drag_start_uvs: HashMap<VertexKey, [f32; 2]>,
-    /// ドラッグ開始時のカーソル UV 位置（キャンバス座標から変換済み）。
-    /// `None` = ドラッグ外。
+    /// Cursor UV at drag start (already converted from canvas coordinates).
+    /// `None` = not dragging.
     pub drag_press_uv: Option<[f32; 2]>,
-    /// ドラッグ開始時に算出した選択頂点群の bbox 中心（Phase 2-4 の回転/スケールピボット）。
-    /// `None` = ピボット未設定（選択 0 件 or Rect モード等）。
+    /// Bbox center of the selected vertices at drag start (Phase 2-4 rotation / scale pivot).
+    /// `None` = no pivot set (selection is empty, or in Rect mode, etc.).
     pub drag_pivot: Option<[f32; 2]>,
-    /// ロード後に persistence 側から受け取った復元予定エントリ。
-    /// `apply_pending_restore` 呼び出し後は `None` に戻る。
+    /// Restoration entries received from the persistence side after load.
+    /// Cleared back to `None` once `apply_pending_restore` runs.
     pub pending_restore: Option<Vec<VertexUvOverrideEntry>>,
-    /// キャンバスの表示オフセット (UV 空間) — キャンバス左上端に置く UV 座標。
-    /// デフォルト `[0.0, 0.0]` で UV 原点がキャンバス左上に一致する (Phase 2-3)。
+    /// Display offset of the canvas (in UV space) — the UV coordinate placed at
+    /// the top-left of the canvas. Default `[0.0, 0.0]` matches UV origin to
+    /// the canvas top-left (Phase 2-3).
     pub view_offset: [f32; 2],
-    /// キャンバスのズーム倍率。`1.0` で UV [0,1] がちょうどキャンバスにフィットする。
-    /// ホイールでカーソル位置中心にスケーリング、0.1〜32.0 の範囲にクランプ (Phase 2-3)。
+    /// Zoom factor of the canvas. `1.0` fits UV [0, 1] exactly to the canvas.
+    /// Wheel zoom centers on the cursor position, clamped to 0.1..=32.0 (Phase 2-3).
     pub view_zoom: f32,
-    /// undo スタック（新しいほど末尾、Phase 2-5）。
+    /// Undo stack (newest at the back; Phase 2-5).
     pub undo_stack: Vec<UvUndoEntry>,
-    /// redo スタック（undo で捨てたエントリを保持、新しいほど末尾）。
-    /// 新しい編集が push_undo されると自動でクリアされる。
+    /// Redo stack (entries discarded by undo; newest at the back).
+    /// Cleared automatically when a new edit is push_undo'd.
     pub redo_stack: Vec<UvUndoEntry>,
-    /// 編集前（初回ドラッグ時点）の UV を頂点単位で記録する (review_result_05 [P2])。
-    /// `apply_undo` / `apply_redo` で「pristine に戻った頂点」を `overrides` から削除する
-    /// 判定に使う。メモリは「一度でも編集された頂点」分のみで済むため常に軽量。
+    /// Per-vertex UV at the time of the very first edit (review_result_05 [P2]).
+    /// Used in `apply_undo` / `apply_redo` to decide which vertices have
+    /// "returned to pristine" and should be removed from `overrides`. Memory is
+    /// limited to vertices that were ever edited, so it stays light.
     pub pristine_uvs: HashMap<VertexKey, [f32; 2]>,
-    /// 矩形選択の現在の動作モード (Phase 3 / A-4)。drag_started で決定、drag_stopped でリセット。
+    /// Current rectangle-selection behavior (Phase 3 / A-4). Set in drag_started, reset in drag_stopped.
     pub rect_behavior: UvRectBehavior,
-    /// 矩形選択開始時点の `selected` スナップショット (Phase 3 / A-4)。
-    /// Add/Subtract モードで「initial ± rect_inside」の再計算基点に使う。
+    /// Snapshot of `selected` at the moment the rectangle drag began (Phase 3 / A-4).
+    /// In Add / Subtract mode it is the base point for "initial ± rect_inside" recomputation.
     pub rect_initial_selected: HashSet<VertexKey>,
-    /// UV 編集ウィンドウを OS の独立ウィンドウとして分離する (Phase 3 / A-3)。
-    /// `true` = `ctx.show_viewport_immediate` で別ネイティブウィンドウ。
-    /// `false` = 従来通り `egui::Window` でメインウィンドウ内のフローティング。
-    /// セッション中のユーザー設定として維持し、リロード (`reset`) では変更しない。
+    /// Detach the UV edit window into a standalone OS window (Phase 3 / A-3).
+    /// `true` = `ctx.show_viewport_immediate` opens a separate native window.
+    /// `false` = legacy floating `egui::Window` inside the main window.
+    /// This is a per-session user preference and survives reload (`reset` does not touch it).
     pub detached: bool,
-    /// 現在編集対象の UV セット (Phase 3 / A-1)。`0 = UV0`, `1 = UV1`。
-    /// ComboBox から切り替え、キャンバス描画 / ピック / ドラッグ / Ctrl+A はすべて
-    /// この値に応じた頂点のみを対象とする。selected / overrides 自体は
-    /// `VertexKey` にチャネル情報を含むため、切り替えたときも別集合として温存される。
+    /// UV set currently being edited (Phase 3 / A-1). `0 = UV0`, `1 = UV1`.
+    /// Switched from a ComboBox; canvas drawing / picking / drag / Ctrl+A all
+    /// target the vertices on this UV set only. `selected` / `overrides`
+    /// themselves include the channel in `VertexKey`, so switching keeps the
+    /// other set's data intact as a separate space.
     pub active_uv_set: u8,
-    /// 2D ギズモハンドル経由でドラッグ中のアクション (Phase 3 / A-5)。
-    /// `drag_started()` 時に「press 位置がハンドル上か」を判定して Some にセット、
-    /// ドラッグ終了でクリア。`Some` の間は修飾キーよりも優先してスケール/回転を適用する。
+    /// Action being dragged via a 2D gizmo handle (Phase 3 / A-5).
+    /// Set to Some by `drag_started()` when the press is on a handle, cleared at drag end.
+    /// While Some, scale / rotate take priority over the modifier-key behavior.
     pub gizmo_action: Option<UvGizmoAction>,
-    /// 現在編集対象の UV モーフ (Phase 3 / A-2)。
-    /// `None` = ベース UV 編集（従来通り `IrVertex.uv` / `IrMesh.uvs1` を直接触る）。
-    /// `Some(idx)` = `ir.morphs[idx]` が `IrMorphKind::Uv` である前提で、そのモーフの
-    /// 頂点別オフセットを編集する。read/write は `read_displayed_uv` / `write_displayed_uv`
-    /// 経由で、キャンバスには「ベース + 現在のモーフオフセット (weight=1 相当)」が表示される。
+    /// UV morph currently being edited (Phase 3 / A-2).
+    /// `None` = base-UV edit (touches `IrVertex.uv` / `IrMesh.uvs1` directly, the legacy behavior).
+    /// `Some(idx)` = assumes `ir.morphs[idx]` is `IrMorphKind::Uv` and edits its
+    /// per-vertex offsets. Reads / writes go through `read_displayed_uv` /
+    /// `write_displayed_uv`, and the canvas shows "base + current morph offset (weight = 1)".
     pub active_morph: Option<usize>,
-    /// モーフ編集モード進入時に退避した `app.morph_weights[active_morph]` の元値 (v0.5.6)。
-    /// 編集モード中は対象モーフのウェイトが 1.0 に強制されるため、終了時にこの値で復元する。
-    /// 復元/再設定は `switch_active_morph` ヘルパー経由でのみ行うこと（呼び出し側が直接
-    /// `active_morph` を書き換えると退避値が消えて復元できなくなる）。
+    /// `app.morph_weights[active_morph]` saved when entering morph edit mode (v0.5.6).
+    /// While in edit mode the target morph weight is forced to 1.0; on exit we
+    /// restore from this saved value. Always restore / reseed via the
+    /// `switch_active_morph` helper (overwriting `active_morph` directly would
+    /// drop the saved value and break restore).
     pub morph_weight_saved: Option<f32>,
 }
 
@@ -182,8 +191,8 @@ impl Default for UvEditState {
 }
 
 impl UvEditState {
-    /// 新規ロード時にクリアする（履歴復元エントリは呼び出し側で別途セット）。
-    /// `detached` はユーザー設定としてリロード越しに維持するので、ここでは触らない。
+    /// Clear on a new model load (history restoration entries are seeded separately by the caller).
+    /// `detached` is a user preference and survives reload, so it is not touched here.
     pub fn reset(&mut self) {
         self.overrides.clear();
         self.selected.clear();
@@ -204,21 +213,21 @@ impl UvEditState {
         self.active_uv_set = 0;
         self.gizmo_action = None;
         self.active_morph = None;
-        // リロード時は `morph_weights` 自体が再構築されるため、退避値を保持しても
-        // 復元先が存在しない（古い IR の index）。確実に破棄する。
+        // On reload, `morph_weights` itself is rebuilt, so the saved value's
+        // restore target (the old IR's index) no longer exists. Discard it for sure.
         self.morph_weight_saved = None;
     }
 
-    /// `active_morph` を切り替え、ウェイトの退避/復元を行う (v0.5.6)。
+    /// Switch `active_morph` and save / restore the weight (v0.5.6).
     ///
-    /// - 旧 `active_morph` が `Some` だった場合、退避値で `weights` を復元する。
-    /// - 新 `active_morph` が `Some` の場合、現在のウェイトを退避した上で `1.0` にセットする。
-    /// - `new_morph == self.active_morph` の場合は何もせず `false` を返す。
+    /// - When the previous `active_morph` was Some, restore `weights` from the saved value.
+    /// - When the new `active_morph` is Some, save the current weight and set it to 1.0.
+    /// - If `new_morph == self.active_morph`, do nothing and return false.
     ///
-    /// 戻り値: モードが切り替わったかどうか（呼び出し側が `morph_dirty = true` や
-    /// 選択集合のクリア等の副作用を実行する判定に使う）。
-    /// `weights` の境界外 index は静かに無視する（履歴復元等で IR と weights が
-    /// 一時的にズレている可能性を考慮）。
+    /// Return value: whether the mode actually switched (the caller uses this to
+    /// decide side effects like `morph_dirty = true` or clearing the selection set).
+    /// Out-of-range indices in `weights` are silently ignored (the IR and weights
+    /// can be temporarily out of sync during history restoration etc.).
     pub fn switch_active_morph(&mut self, new_morph: Option<usize>, weights: &mut [f32]) -> bool {
         if new_morph == self.active_morph {
             return false;
@@ -238,20 +247,20 @@ impl UvEditState {
         true
     }
 
-    /// 頂点 UV の pristine を記録する（初回ドラッグ開始時に呼ぶ）。
-    /// 既に記録済みなら何もしない（`or_insert` セマンティクス）。
+    /// Record the pristine UV for a vertex (called on the first drag start).
+    /// If already recorded, do nothing (`or_insert` semantics).
     pub fn record_pristine(&mut self, key: VertexKey, uv: [f32; 2]) {
         self.pristine_uvs.entry(key).or_insert(uv);
     }
 
-    /// `uv` が pristine と一致するかを判定する（review_result_05 [P2]）。
-    /// pristine 未記録なら `false`（= 一度も編集していない扱いにはしないで安全側に倒す）。
+    /// Whether `uv` matches the pristine value (review_result_05 [P2]).
+    /// If pristine is not recorded, returns false (errs on the safe side: do not treat as never-edited).
     fn matches_pristine(&self, key: VertexKey, uv: [f32; 2]) -> bool {
         self.pristine_uvs.get(&key).is_some_and(|p| *p == uv)
     }
 
-    /// undo エントリを記録する。`before == after` の空操作なら何もしない。
-    /// 新規 push で redo スタックは破棄される (標準の undo/redo セマンティクス)。
+    /// Push an undo entry. If `before == after` (no-op), do nothing.
+    /// A new push clears the redo stack (standard undo / redo semantics).
     pub fn push_undo(
         &mut self,
         before: HashMap<VertexKey, [f32; 2]>,
@@ -268,9 +277,10 @@ impl UvEditState {
         self.redo_stack.clear();
     }
 
-    /// undo を適用する。IR の UV を `before` に書き戻し、`overrides` にも反映する。
-    /// pristine と一致した頂点は「未編集状態に戻った」として `overrides` から削除する
-    /// (review_result_05 [P2])。戻り値: 適用されたら `true`、スタックが空なら `false`。
+    /// Apply undo. Write `before` back to the IR UV and reflect into `overrides`.
+    /// Vertices that match pristine are removed from `overrides` as
+    /// "returned to the unedited state" (review_result_05 [P2]).
+    /// Returns true on success, false if the stack is empty.
     pub fn apply_undo(&mut self, ir: &mut IrModel) -> bool {
         let Some(entry) = self.undo_stack.pop() else {
             return false;
@@ -287,8 +297,8 @@ impl UvEditState {
         true
     }
 
-    /// redo を適用する。IR の UV を `after` に書き戻し、`overrides` にも反映する。
-    /// pristine と一致するケース（= 初期値への redo）は overrides から削除する。
+    /// Apply redo. Write `after` back to the IR UV and reflect into `overrides`.
+    /// When matching pristine (= redo back to the initial value) the entry is removed from overrides.
     pub fn apply_redo(&mut self, ir: &mut IrModel) -> bool {
         let Some(entry) = self.redo_stack.pop() else {
             return false;
@@ -305,18 +315,18 @@ impl UvEditState {
         true
     }
 
-    /// ビュー状態のみをリセットする（表示リセットボタン用）。編集差分は保持。
+    /// Reset only the view (the "reset view" button). Edit deltas are preserved.
     pub fn reset_view(&mut self) {
         self.view_offset = [0.0, 0.0];
         self.view_zoom = 1.0;
     }
 
-    /// 1 頂点の UV を記録する（IR の書き込みは別経路で `apply_to_ir` 経由）。
+    /// Record one vertex's UV (writes to the IR happen on a separate path through `apply_to_ir`).
     pub fn set_uv(&mut self, key: VertexKey, uv: [f32; 2]) {
         self.overrides.insert(key, uv);
     }
 
-    /// 永続化エントリ（JSON 出力用）を生成する。メッシュ / 頂点Index / UV セット昇順にソート。
+    /// Build persistence entries (for JSON output). Sorted by mesh / vertex index / UV set.
     pub fn to_entries(&self) -> Vec<VertexUvOverrideEntry> {
         let mut out: Vec<VertexUvOverrideEntry> = self
             .overrides
@@ -332,13 +342,13 @@ impl UvEditState {
         out
     }
 
-    /// 保存済みエントリを復元予定としてセットする。実際の IR 反映は次回 `apply_pending_restore` で。
+    /// Stage saved entries for restoration. The actual IR push happens on the next `apply_pending_restore`.
     pub fn stage_restore(&mut self, entries: Vec<VertexUvOverrideEntry>) {
         self.pending_restore = Some(entries);
     }
 
-    /// `stage_restore` で受け取ったエントリを IR へ反映しつつ `overrides` に取り込む。
-    /// IR 側のメッシュ/頂点数が変わっていた場合（リロード失敗など）は安全に無視する。
+    /// Push the entries received via `stage_restore` into the IR and into `overrides`.
+    /// If the IR's mesh / vertex count has changed (reload failure etc.), the entry is silently skipped.
     pub fn apply_pending_restore(&mut self, ir: &mut IrModel) {
         let Some(entries) = self.pending_restore.take() else {
             return;
@@ -363,8 +373,8 @@ impl UvEditState {
         }
     }
 
-    /// 現在の `overrides` をすべて IR に書き戻す（リロード後の再適用用）。
-    /// `apply_pending_restore` とは独立経路で、既に `overrides` に入っている分を反映する。
+    /// Write all current `overrides` back into the IR (used to re-apply after reload).
+    /// Independent of `apply_pending_restore`; reflects whatever is already in `overrides`.
     pub fn apply_to_ir(&self, ir: &mut IrModel) {
         for (&(mi, vi, chan), &uv) in &self.overrides {
             write_uv_to_ir(ir, mi, vi, uv, chan);
@@ -372,9 +382,10 @@ impl UvEditState {
     }
 }
 
-/// 各メッシュのグローバル頂点オフセットを返す (Phase 3 A-2 helper)。
-/// UV モーフは `(global_vertex_index, [f32; 4])` で頂点を指すため、`(mi, vi) ↔ global_vi`
-/// 変換のために使う。計算量は O(meshes.len()) で毎フレーム呼んでも実用上問題ない。
+/// Return the global vertex offset of each mesh (Phase 3 A-2 helper).
+/// UV morphs index vertices as `(global_vertex_index, [f32; 4])`, so this is
+/// used for `(mi, vi) <-> global_vi` conversion. Computed in O(meshes.len()),
+/// cheap enough to call every frame.
 pub fn mesh_global_offsets_of(ir: &IrModel) -> Vec<usize> {
     let mut offs = Vec::with_capacity(ir.meshes.len());
     let mut cum = 0usize;
@@ -385,10 +396,10 @@ pub fn mesh_global_offsets_of(ir: &IrModel) -> Vec<usize> {
     offs
 }
 
-/// UV 編集キャンバス上に表示する UV を返す (Phase 3 A-2 helper)。
-/// - `active_morph = None`: ベース UV (`IrVertex.uv` / `IrMesh.uvs1`) をそのまま返す
-/// - `active_morph = Some(idx)`: ベース + モーフのオフセット (weight=1 相当) を返す
-///   - モーフの `channel` が `chan` と不一致なら、そのモーフは対象外として base のみ返す
+/// Return the UV to display on the UV edit canvas (Phase 3 A-2 helper).
+/// - `active_morph = None`: returns the base UV (`IrVertex.uv` / `IrMesh.uvs1`) as-is.
+/// - `active_morph = Some(idx)`: returns base + the morph's offset (weight = 1).
+///   - If the morph's `channel` does not match `chan`, the morph is treated as out-of-scope and base alone is returned.
 pub fn read_displayed_uv(
     ir: &IrModel,
     mi: u32,
@@ -417,9 +428,9 @@ pub fn read_displayed_uv(
     }
 }
 
-/// 表示 UV を新しい値に更新する (Phase 3 A-2 helper)。
-/// - `active_morph = None`: `write_vertex_uv` にフォールバック（ベース UV を直接書き換え）
-/// - `active_morph = Some(idx)`: ベース UV は維持し、モーフオフセットを `new_uv - base` で更新
+/// Update the displayed UV to a new value (Phase 3 A-2 helper).
+/// - `active_morph = None`: falls back to `write_vertex_uv` (writes the base UV directly).
+/// - `active_morph = Some(idx)`: keeps the base UV unchanged and updates the morph offset to `new_uv - base`.
 pub fn write_displayed_uv(
     ir: &mut IrModel,
     mi: u32,
@@ -432,7 +443,7 @@ pub fn write_displayed_uv(
     let Some(morph_idx) = active_morph else {
         return write_vertex_uv(ir, mi, vi, new_uv, chan);
     };
-    // split borrow: base UV はメッシュの不変借用で先に取得 → morph の可変借用に進む
+    // Split borrow: read the base UV with an immutable borrow first, then advance to the mutable morph borrow.
     let base = {
         let Some(mesh) = ir.meshes.get(mi as usize) else {
             return false;
@@ -457,7 +468,7 @@ pub fn write_displayed_uv(
     }
     let du = new_uv[0] - base[0];
     let dv = new_uv[1] - base[1];
-    // PMX UV モーフは 4 成分。UV0/UV1 編集で実際に意味があるのは xy のみで、zw は 0 で固定。
+    // PMX UV morphs have 4 components. For UV0 / UV1 editing only xy is meaningful; zw stays 0.
     let entry = [du, dv, 0.0, 0.0];
     if let Some(e) = offsets.iter_mut().find(|(v, _)| *v == global_vi) {
         e.1 = entry;
@@ -467,8 +478,8 @@ pub fn write_displayed_uv(
     true
 }
 
-/// 指定 UV モーフの offsets エントリ数を返す (Phase 3 A-2 helper、UI ステータス表示用)。
-/// モーフが存在しないか `IrMorphKind::Uv` でない場合は `0`。
+/// Number of `offsets` entries on a UV morph (Phase 3 A-2 helper, for the UI status display).
+/// Returns 0 if the morph does not exist or is not `IrMorphKind::Uv`.
 pub fn morph_uv_entry_count(ir: &IrModel, morph_idx: usize) -> usize {
     ir.morphs
         .get(morph_idx)
@@ -479,8 +490,8 @@ pub fn morph_uv_entry_count(ir: &IrModel, morph_idx: usize) -> usize {
         .unwrap_or(0)
 }
 
-/// IR の指定メッシュ/頂点/UV セットから UV を読み取る (Phase 3 A-1 helper)。
-/// 存在しない場合 (範囲外、UV1 未所持メッシュ、unknown chan) は `None`。
+/// Read the UV from the given mesh / vertex / UV set in the IR (Phase 3 A-1 helper).
+/// Returns None if missing (out of range, mesh has no UV1, unknown chan).
 pub fn read_mesh_vertex_uv(
     mesh: &crate::intermediate::types::IrMesh,
     vi: usize,
@@ -489,8 +500,8 @@ pub fn read_mesh_vertex_uv(
     match chan {
         0 => mesh.vertices.get(vi).map(|v| v.uv.to_array()),
         1 => {
-            // UV1 を持つのは `uvs1.len() == vertices.len()` の時のみ。
-            // 空 (UV1 なし) / サイズ不一致はいずれも UV1 不在扱い。
+            // A mesh has UV1 only when `uvs1.len() == vertices.len()`.
+            // Empty (no UV1) and length mismatch are both treated as "no UV1".
             if mesh.uvs1.len() == mesh.vertices.len() {
                 mesh.uvs1.get(vi).copied()
             } else {
@@ -501,15 +512,15 @@ pub fn read_mesh_vertex_uv(
     }
 }
 
-/// 指定材質に属するメッシュのうち、少なくとも 1 つが UV1 を持つかを判定する
-/// (Phase 3 A-1 helper)。ComboBox で UV1 選択肢を enable/disable する判定に使う。
+/// Whether at least one of the meshes belonging to the material has UV1
+/// (Phase 3 A-1 helper). Used by the ComboBox to enable / disable the UV1 option.
 pub fn material_has_uv1(ir: &IrModel, material_index: usize) -> bool {
     ir.meshes.iter().any(|m| {
         m.material_index == material_index && !m.uvs1.is_empty() && m.uvs1.len() == m.vertices.len()
     })
 }
 
-/// UI から呼ぶ公開版の UV 書き込み関数 (`write_uv_to_ir` の薄いラップ、Phase 3 A-1)。
+/// Public UV write function for the UI (a thin wrapper over `write_uv_to_ir`, Phase 3 A-1).
 pub fn write_vertex_uv(
     ir: &mut IrModel,
     mesh_idx: u32,
@@ -520,9 +531,10 @@ pub fn write_vertex_uv(
     write_uv_to_ir(ir, mesh_idx, vert_idx, uv, chan)
 }
 
-/// IR の指定メッシュ/頂点に UV を書き込む。範囲外 / UV セット未存在なら `false` を返す。
-/// `chan = 0` → `IrVertex.uv` (UV0)、`chan = 1` → `IrMesh.uvs1[vi]` (UV1)。UV1 は
-/// メッシュが `uvs1.len() == vertices.len()` のときのみ書き込み可（空の場合は UV1 なし）。
+/// Write a UV into the IR at the given mesh / vertex. Returns false if out of range or the UV set is missing.
+/// `chan = 0` -> `IrVertex.uv` (UV0). `chan = 1` -> `IrMesh.uvs1[vi]` (UV1). UV1 is
+/// writable only when the mesh has `uvs1.len() == vertices.len()` (writes are
+/// rejected when uvs1 is empty).
 fn write_uv_to_ir(ir: &mut IrModel, mesh_idx: u32, vert_idx: u32, uv: [f32; 2], chan: u8) -> bool {
     let Some(mesh) = ir.meshes.get_mut(mesh_idx as usize) else {
         return false;
@@ -538,9 +550,10 @@ fn write_uv_to_ir(ir: &mut IrModel, mesh_idx: u32, vert_idx: u32, uv: [f32; 2], 
         }
         1 => {
             let vcount = mesh.vertices.len();
-            // UV1 が存在しない (空 or サイズ不一致) メッシュでは書き込みを諦める。
-            // 自動的に拡張してしまうと VRM エクスポート時に「もともと UV1 が無かったメッシュが
-            // UV1 持ちに変わる」という副作用が起きるため、書き込みは UV1 のある既存メッシュに限定。
+            // For meshes with no UV1 (empty or length mismatch), give up on the write.
+            // Auto-extending here would silently turn meshes that "did not have UV1"
+            // into UV1-bearing ones in the next VRM export, which is a side effect we
+            // do not want — writes are restricted to existing UV1 meshes.
             if mesh.uvs1.len() != vcount {
                 return false;
             }

@@ -10,101 +10,101 @@ use crate::intermediate::types::IrModel;
 
 use super::mesh::GpuModel;
 
-/// 1フレームの長さ（秒）
+/// One frame's duration in seconds.
 const FRAME_DURATION: f32 = 1.0 / 30.0;
 
-/// ループモード
+/// Loop mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopMode {
-    /// ループなし
+    /// No loop.
     None,
-    /// 通常ループ
+    /// Standard loop.
     Normal,
-    /// A-Bループ（区間リピート）
+    /// A-B loop (segment repeat).
     AB,
-    /// ピンポン（往復ループ）
+    /// Ping-pong (back-and-forth loop).
     PingPong,
 }
 
-/// ボーンごとのスキニングウェイト（GPU頂点単位）
+/// Skinning weights per bone (per GPU vertex).
 struct VertexSkinWeight {
-    /// (bone_index, weight) 最大4
+    /// (bone_index, weight), up to four entries.
     bones: [(usize, f32); 4],
 }
 
-/// アニメーション再生に必要なスキニングデータ
+/// Data needed to play an animation.
 struct SkinningData {
-    /// GPU頂点ごとのボーンウェイト
+    /// Bone weights per GPU vertex.
     vertex_weights: Vec<VertexSkinWeight>,
-    /// レストポーズのボーングローバル行列（glTF空間）
+    /// Rest-pose bone global matrices (glTF space).
     rest_global_mats: Vec<Mat4>,
-    /// レストポーズのボーングローバル逆行列（毎フレームの inverse() 回避用キャッシュ）
+    /// Inverse rest-pose global matrices (cached to avoid `inverse()` every frame).
     rest_global_inv_mats: Vec<Mat4>,
-    /// ボーンのローカル行列（レストポーズ、分解前の生行列）
+    /// Bone local matrices (rest pose, raw matrix before decomposition).
     rest_local_mats: Vec<Mat4>,
-    /// ボーンのローカル回転（レストポーズ）
+    /// Bone local rotations (rest pose).
     rest_local_rotations: Vec<Quat>,
-    /// ボーンのグローバル回転（レストポーズ、リターゲティング用）
+    /// Bone global rotations (rest pose, used for retargeting).
     rest_global_rotations: Vec<Quat>,
-    /// ボーンのローカル平行移動（レストポーズ）
+    /// Bone local translations (rest pose).
     rest_local_translations: Vec<Vec3>,
-    /// ボーンのローカルスケール（レストポーズ）
+    /// Bone local scales (rest pose).
     rest_local_scales: Vec<Vec3>,
-    /// ボーンの親インデックス
+    /// Parent index for each bone.
     bone_parents: Vec<Option<usize>>,
-    /// IrBone インデックス → VRM ヒューマノイドボーン名（逆引き）
+    /// Reverse map: IrBone index -> VRM humanoid bone name.
     bone_idx_to_name: HashMap<usize, String>,
-    /// VRM 表情名 → モーフインデックス
+    /// VRM expression name -> morph index.
     expr_name_to_morph: HashMap<String, usize>,
-    /// VRM 0.0 かどうか
+    /// Whether this is VRM 0.0.
     is_vrm0: bool,
-    /// 付与データ（PMX回転付与・移動付与）
+    /// Grant data (PMX rotation grant / translation grant).
     grants: Vec<Option<GrantInfo>>,
-    /// 付与処理順序（付与親が先に来るトポロジカル順、付与を持つボーンのみ）
+    /// Order in which grants are processed (topological so the parent comes first; only bones with grants).
     grant_order: Vec<usize>,
 }
 
-/// 付与情報（アニメーション用）
+/// Grant info (animation runtime).
 struct GrantInfo {
     parent_index: usize,
     ratio: f32,
     is_rotation: bool,
     is_move: bool,
-    /// ローカル付与フラグ（true: 子ボーンのローカル空間でデルタを適用）
+    /// Local-grant flag (true: apply the delta in the child bone's local space).
     is_local: bool,
 }
 
-/// アニメーション再生状態
+/// Animation playback state.
 pub struct AnimationState {
     pub animation: Arc<VrmaAnimation>,
     pub playing: bool,
     pub loop_mode: LoopMode,
     pub speed: f32,
     pub current_time: f32,
-    /// A-Bループ開始点（秒）
+    /// A-B loop start point (seconds).
     pub ab_start: Option<f32>,
-    /// A-Bループ終了点（秒）
+    /// A-B loop end point (seconds).
     pub ab_end: Option<f32>,
-    /// ピンポン再生方向（1.0: 順方向, -1.0: 逆方向）
+    /// Ping-pong direction (1.0: forward, -1.0: reverse).
     pub ping_pong_direction: f32,
     skin: SkinningData,
-    /// アニメーション済みグローバル行列キャッシュ（glTF空間）
+    /// Cached animated global matrices (glTF space).
     cached_animated_globals: Vec<Mat4>,
-    /// デルタ行列の作業バッファ（毎フレーム alloc 回避）
+    /// Working buffer for delta matrices (avoids per-frame allocation).
     work_deltas: Vec<Mat4>,
-    /// compute_animated_globals 用フラグバッファ（毎フレーム alloc 回避）
+    /// Flag buffer for compute_animated_globals (avoids per-frame allocation).
     work_computed: Vec<bool>,
-    /// ボーンローカル行列の作業バッファ（付与処理用、毎フレーム alloc 回避）
+    /// Working buffer for bone local matrices (used by grants; avoids per-frame allocation).
     work_local_mats: Vec<Mat4>,
-    /// 表情チャネル名 → モーフインデックスの事前マッピング（毎フレームの HashMap 走査回避）
+    /// Pre-built mapping from expression channel name to morph index (avoids HashMap lookup every frame).
     expr_mapping: Vec<(String, usize)>,
 }
 
 impl AnimationState {
-    /// IrModel と GpuModel からアニメーション再生状態を構築
+    /// Build the animation playback state from IrModel and GpuModel.
     pub fn new(animation: Arc<VrmaAnimation>, ir: &IrModel, gpu_model: &GpuModel) -> Self {
         let skin = build_skinning_data(ir, gpu_model, &animation);
-        // 表情チャネル名 → モーフインデックスの事前マッピングを構築（毎フレームの HashMap 走査回避）
+        // Pre-build the expression-channel-name -> morph-index map (avoids HashMap lookup every frame).
         let expr_mapping: Vec<(String, usize)> = animation
             .expression_channels
             .keys()
@@ -132,7 +132,7 @@ impl AnimationState {
         }
     }
 
-    /// 有効な再生範囲を返す
+    /// Return the effective playback range.
     pub fn effective_range(&self) -> (f32, f32) {
         match self.loop_mode {
             LoopMode::AB | LoopMode::PingPong => {
@@ -144,7 +144,7 @@ impl AnimationState {
         }
     }
 
-    /// アニメーション時間を進める
+    /// Advance the animation time.
     pub fn advance(&mut self, dt: f32) {
         if !self.playing {
             return;
@@ -190,7 +190,7 @@ impl AnimationState {
         }
     }
 
-    /// 1フレーム分進める/戻す（一時停止中に使用）
+    /// Step one frame forward / backward (used while paused).
     pub fn step_frame(&mut self, forward: bool) {
         let delta = if forward {
             FRAME_DURATION
@@ -202,8 +202,8 @@ impl AnimationState {
         self.current_time = self.current_time.clamp(lo, hi);
     }
 
-    /// 現在時刻の表情ウェイトをモーフウェイト配列に書き込む
-    /// 戻り値: 何か変更があったか
+    /// Write the current expression weights into the morph weight array.
+    /// Returns whether anything changed.
     pub fn apply_expressions(&self, morph_weights: &mut [f32]) -> bool {
         let mut changed = false;
         for (expr_name, morph_idx) in &self.expr_mapping {
@@ -221,17 +221,17 @@ impl AnimationState {
         changed
     }
 
-    /// アニメーション済みグローバル行列を取得（glTF空間）
+    /// Get the animated global matrices (glTF space).
     pub fn animated_globals(&self) -> &[Mat4] {
         &self.cached_animated_globals
     }
 
-    /// VRM 0.0 かどうか
+    /// Whether this is VRM 0.0.
     pub fn is_vrm0(&self) -> bool {
         self.skin.is_vrm0
     }
 
-    /// 現在時刻のボーンアニメーションを頂点バッファに適用
+    /// Apply the bone animation at the current time to the vertex buffer.
     pub fn apply_bone_animation(
         &mut self,
         gpu_model: &mut GpuModel,
@@ -239,15 +239,15 @@ impl AnimationState {
         morph_weights: &[f32],
         ir: &IrModel,
     ) {
-        // グローバル行列を in-place で計算（alloc 回避）
+        // Compute global matrices in-place (avoids alloc).
         self.compute_animated_globals_inplace(ir);
 
-        // 付与（grant）処理: 付与親の回転/移動をコピー
+        // Grant pass: copy rotation / translation from the grant parent.
         self.apply_grants();
 
-        // デルタ行列を作業バッファに計算し、PMX座標系に事前変換（alloc 回避）
-        // M * delta * M でPMX空間のデルタ行列を得る（M はミラー行列、M² = I）
-        // これにより頂点ループ内の pmx_pos_to_gltf / gltf_pos_to_pmx 変換を排除
+        // Compute delta matrices in the work buffer and convert to PMX space ahead of time (avoids alloc).
+        // M * delta * M yields the PMX-space delta matrix (M is the mirror matrix; M² = I),
+        // which removes the per-vertex pmx_pos_to_gltf / gltf_pos_to_pmx conversions inside the inner loop.
         let bone_count = self.skin.rest_global_mats.len();
         self.work_deltas.resize(bone_count, Mat4::IDENTITY);
         let is_vrm0 = self.skin.is_vrm0;
@@ -256,7 +256,7 @@ impl AnimationState {
             self.work_deltas[i] = conjugate_delta_to_pmx(delta, is_vrm0);
         }
 
-        // 頂点バッファを再利用（初回のみ alloc、以降は capacity 再利用）
+        // Reuse the vertex buffer (allocated only on the first call; subsequent calls reuse the capacity).
         gpu_model.reset_animated_to_base();
         {
             let work = gpu_model.animated_vertices_mut();
@@ -284,29 +284,29 @@ impl AnimationState {
                     blended *= 1.0 / total_w;
                 }
 
-                // デルタ行列はPMX空間に事前変換済み → 直接適用
+                // Delta matrices are pre-converted to PMX space, so they apply directly.
                 let pmx_pos = Vec3::from(work[vi].position);
                 work[vi].position = blended.transform_point3(pmx_pos).to_array();
 
-                // 法線（PMX空間で直接変換）
+                // Normal (transformed directly in PMX space).
                 let pmx_normal = Vec3::from(work[vi].normal);
                 let skinned_n = blended.transform_vector3(pmx_normal).normalize_or_zero();
                 work[vi].normal = skinned_n.to_array();
 
-                // 接線（tangent.w = handedness は変更しない、PMX空間で直接変換）
+                // Tangent (tangent.w = handedness is preserved; xyz transformed directly in PMX space).
                 let pmx_tangent = Vec3::from_slice(&work[vi].tangent[..3]);
                 let skinned_t = blended.transform_vector3(pmx_tangent).normalize_or_zero();
-                // Gram-Schmidt 再直交化: normal に対して tangent を直交射影
+                // Gram-Schmidt re-orthogonalization: project the tangent perpendicular to the normal.
                 let t_ortho =
                     (skinned_t - skinned_n * skinned_n.dot(skinned_t)).normalize_or_zero();
                 work[vi].tangent = [t_ortho.x, t_ortho.y, t_ortho.z, work[vi].tangent[3]];
             }
-        } // work の可変借用をここでドロップ
+        } // Drop the mutable borrow of `work` here.
 
-        // モーフを animated_vertices に直接適用（借用衝突回避）
+        // Apply morphs directly to animated_vertices (avoids borrow conflict).
         gpu_model.apply_morphs_to_animated(morph_weights);
 
-        // GPU バッファに書き込み
+        // Write to the GPU buffer.
         queue.write_buffer(
             &gpu_model.vertex_buf,
             0,
@@ -314,18 +314,18 @@ impl AnimationState {
         );
     }
 
-    /// PMX 付与（grant）処理: 付与親ボーンの回転/移動をコピー
+    /// PMX grant pass: copy rotation / translation from the grant parent bone.
     ///
-    /// PMX のボーンインデックス順に走査し、付与親の回転デルタ（レストからの差分）を
-    /// 付与率に基づいてローカル行列に適用する。
-    /// 適用後、グローバル行列をインデックス順に再計算して子孫に変更を伝播させる。
+    /// Walk in PMX bone-index order, take the grant parent's rotation delta (relative to rest)
+    /// and apply it to the local matrix scaled by the grant ratio.
+    /// Then recompute global matrices in index order so the change propagates to descendants.
     fn apply_grants(&mut self) {
         let bone_count = self.skin.grants.len();
         if bone_count == 0 || self.skin.grant_order.is_empty() {
             return;
         }
 
-        // フェーズ1: ローカル行列に付与デルタを適用（トポロジカル順で付与親が先に処理される）
+        // Phase 1: apply grant deltas to local matrices (topological order ensures the grant parent runs first).
         let mut grant_applied = false;
         for &i in &self.skin.grant_order {
             let Some(ref grant) = self.skin.grants[i] else {
@@ -336,7 +336,7 @@ impl AnimationState {
                 continue;
             }
 
-            // 付与親のローカル行列から回転/移動を取得
+            // Read rotation / translation from the grant parent's local matrix.
             let (_, gp_rot, gp_trans) = self.work_local_mats[gp].to_scale_rotation_translation();
             let (my_scale, mut my_rot, mut my_trans) =
                 self.work_local_mats[i].to_scale_rotation_translation();
@@ -352,12 +352,12 @@ impl AnimationState {
                     Quat::IDENTITY.slerp(delta, grant.ratio)
                 };
                 if grant.is_local {
-                    // ローカル付与: 子ボーンのレスト姿勢を基準にデルタを適用
+                    // Local grant: apply the delta on top of the child bone's rest pose.
                     // child_rot = child_rest_rot * slerp(IDENTITY, parent_delta, ratio)
                     let my_rest_rot = self.skin.rest_local_rotations[i];
                     my_rot = my_rest_rot * applied;
                 } else {
-                    // 非ローカル付与: 現在の回転にデルタを乗算（モデル空間）
+                    // Non-local grant: multiply the delta into the current rotation (model space).
                     my_rot *= applied;
                 }
                 changed = true;
@@ -367,12 +367,12 @@ impl AnimationState {
                 let gp_rest_trans = self.skin.rest_local_translations[gp];
                 let delta = gp_trans - gp_rest_trans;
                 if grant.is_local {
-                    // ローカル付与: デルタを子ボーンのローカル空間に変換して適用
+                    // Local grant: convert the delta into the child bone's local space and apply.
                     let my_rest_rot = self.skin.rest_local_rotations[i];
                     let local_delta = my_rest_rot.inverse() * delta;
                     my_trans = self.skin.rest_local_translations[i] + local_delta * grant.ratio;
                 } else {
-                    // 非ローカル付与: デルタを直接加算（モデル空間）
+                    // Non-local grant: add the delta directly (model space).
                     my_trans += delta * grant.ratio;
                 }
                 changed = true;
@@ -389,8 +389,8 @@ impl AnimationState {
             return;
         }
 
-        // フェーズ2: グローバル行列をインデックス順に再計算
-        // PMXはボーンインデックス順で親が先に来ることを保証するため、線形走査で正しく伝播する
+        // Phase 2: recompute global matrices in index order.
+        // PMX guarantees that parents come earlier in the bone index, so a linear scan propagates correctly.
         for i in 0..bone_count {
             let parent_global = self.skin.bone_parents[i]
                 .map(|pi| self.cached_animated_globals[pi])
@@ -399,7 +399,7 @@ impl AnimationState {
         }
     }
 
-    /// VRMA のキーフレームからボーンのグローバル行列を in-place 計算（alloc 回避）
+    /// Compute animated bone global matrices from the VRMA keyframes in-place (avoids alloc).
     fn compute_animated_globals_inplace(&mut self, ir: &IrModel) {
         let bone_count = self.skin.rest_global_mats.len();
         self.cached_animated_globals
@@ -412,7 +412,7 @@ impl AnimationState {
             self.work_local_mats[i] = self.skin.rest_local_mats[i];
         }
 
-        // ルートボーン（親なし）から階層を辿る
+        // Walk the hierarchy starting from root bones (no parent).
         for i in 0..bone_count {
             if self.skin.bone_parents[i].is_none() {
                 Self::compute_global_recursive_static(
@@ -447,7 +447,7 @@ impl AnimationState {
         }
         computed[bone_idx] = true;
 
-        // VRMA アニメーションが適用されるボーンかチェック
+        // Check whether this bone is animated by the VRMA.
         let mut animated = false;
         let mut local_rot = skin.rest_local_rotations[bone_idx];
         let mut local_trans = skin.rest_local_translations[bone_idx];
@@ -455,21 +455,21 @@ impl AnimationState {
         if let Some(bone_name) = skin.bone_idx_to_name.get(&bone_idx) {
             let is_humanoid = matches!(animation.match_mode, BoneMatchMode::Humanoid);
 
-            // 回転
+            // Rotation.
             if let Some(anim_rot) = animation.sample_bone_rotation(bone_name, current_time) {
                 animated = true;
                 if animation.is_additive {
                     if animation.is_bone_local_delta {
-                        // ボーンローカルデルタ（Unity Muscle SwingTwist）:
-                        // anim_rot = postQ × SwingTwist(sign×deg) × Inv(postQ)
-                        // 正規化スケルトン基準のデルタ（muscle=0で Identity）
-                        // 最終ローカル回転 = rest × anim_rot
+                        // Bone-local delta (Unity Muscle SwingTwist):
+                        // anim_rot = postQ × SwingTwist(sign × deg) × Inv(postQ)
+                        // Delta relative to the normalized skeleton (Identity at muscle = 0).
+                        // Final local rotation = rest × anim_rot
                         //   = (rest × postQ) × SwingTwist × Inv(postQ)
                         //   = preQ_model × SwingTwist × Inv(postQ)
                         local_rot = skin.rest_local_rotations[bone_idx] * anim_rot;
                     } else {
-                        // ワールド空間デルタ:
-                        // 親のレストグローバル回転で共役変換 → ローカル空間デルタに変換
+                        // World-space delta:
+                        // Conjugate by the parent's rest global rotation -> convert to local-space delta.
                         let parent_rest_rot = skin.bone_parents[bone_idx]
                             .map(|pi| skin.rest_global_rotations[pi])
                             .unwrap_or(Quat::IDENTITY);
@@ -477,7 +477,7 @@ impl AnimationState {
                         local_rot = local_delta * skin.rest_local_rotations[bone_idx];
                     }
                 } else if is_humanoid {
-                    // VRMA: リターゲティング公式適用
+                    // VRMA: apply the retargeting formula.
                     if let Some(vrma_rest) = animation.bone_rests.get(bone_name.as_str()) {
                         let w_vrma = vrma_rest.global_rotation;
                         let l_vrma = vrma_rest.local_rotation;
@@ -505,19 +505,19 @@ impl AnimationState {
                         };
                     }
                 } else {
-                    // NodeName: グローバル空間リターゲティング
+                    // NodeName: global-space retargeting.
                     if let Some(src_rest) = animation.bone_rests.get(bone_name.as_str()) {
                         let w_src = src_rest.global_rotation;
                         let l_src = src_rest.local_rotation;
                         let l_model = skin.rest_local_rotations[bone_idx];
                         let w_model = skin.rest_global_rotations[bone_idx];
 
-                        // ソースレストからのローカルデルタ → グローバル空間に変換（共役）
+                        // Local delta from the source rest -> conjugate into global space.
                         let local_delta = l_src.inverse() * anim_rot;
                         let mut normalized = w_src * local_delta * w_src.inverse();
 
-                        // ソースが+Z向き（VRMは-Z向き）の場合、Y軸180°補正
-                        // normalized の X,Z 成分を反転（= Y軸180°共役）
+                        // If the source faces +Z (VRM faces -Z), apply a 180° Y-axis correction.
+                        // Negate the X and Z components of `normalized` (= conjugation by 180° about Y).
                         if animation.facing_flip_y {
                             normalized = Quat::from_xyzw(
                                 -normalized.x,
@@ -527,21 +527,21 @@ impl AnimationState {
                             );
                         }
 
-                        // ターゲットモデルのローカル空間に変換
+                        // Convert into the target model's local space.
                         local_rot = l_model * w_model.inverse() * normalized * w_model;
                     } else {
                         local_rot = anim_rot;
                     }
                 }
             }
-            // 平行移動
+            // Translation.
             if let Some(raw_trans) = animation.sample_bone_translation(bone_name, current_time) {
                 animated = true;
                 if animation.is_additive {
-                    // Additive: デルタ値をレスト位置に加算
+                    // Additive: add the delta value to the rest position.
                     local_trans = skin.rest_local_translations[bone_idx] + raw_trans;
                 } else if is_humanoid {
-                    // VRMA: レスト位置からのデルタをワールド空間経由でモデルに適用
+                    // VRMA: apply the delta from the rest position to the model via world space.
                     if let Some(vrma_rest) = animation.bone_rests.get(bone_name.as_str()) {
                         let delta_local = raw_trans - vrma_rest.local_translation;
                         let vrma_parent_rot =
@@ -569,10 +569,10 @@ impl AnimationState {
                         };
                     }
                 } else {
-                    // NodeName: ソースレストからのデルタをスケーリングして適用
+                    // NodeName: scale and apply the delta from the source rest.
                     if let Some(src_rest) = animation.bone_rests.get(bone_name.as_str()) {
                         let mut delta = raw_trans - src_rest.local_translation;
-                        // ソースが+Z向きの場合、平行移動デルタのX,Zを反転（Y180補正）
+                        // If the source faces +Z, negate X and Z of the translation delta (Y180 correction).
                         if animation.facing_flip_y {
                             delta = Vec3::new(-delta.x, delta.y, -delta.z);
                         }
@@ -582,14 +582,14 @@ impl AnimationState {
                             let scale = model_len / src_len;
                             local_trans = skin.rest_local_translations[bone_idx] + delta * scale;
                         }
-                        // src_len が 0 に近い場合（ルートなど）はデルタをそのまま適用しない
+                        // When src_len ≈ 0 (root etc.), do not apply the delta as-is.
                     }
                 }
             }
         }
 
         if animated {
-            // アニメーション適用ボーン: スケールを保持して再構成
+            // Animated bone: keep the scale and recompose.
             let local_mat = Mat4::from_scale_rotation_translation(
                 skin.rest_local_scales[bone_idx],
                 local_rot,
@@ -598,12 +598,12 @@ impl AnimationState {
             local_mats[bone_idx] = local_mat;
             globals[bone_idx] = parent_global * local_mat;
         } else {
-            // 非アニメーションボーン: 生のローカル行列を使用（分解誤差を回避）
+            // Non-animated bone: use the raw local matrix (avoids decomposition error).
             local_mats[bone_idx] = skin.rest_local_mats[bone_idx];
             globals[bone_idx] = parent_global * skin.rest_local_mats[bone_idx];
         }
 
-        // 子ボーンを再帰処理
+        // Recurse into children.
         for &child_idx in &bones[bone_idx].children {
             Self::compute_global_recursive_static(
                 skin,
@@ -620,7 +620,7 @@ impl AnimationState {
     }
 }
 
-/// IrModel と GpuModel からスキニングデータを構築
+/// Build skinning data from IrModel and GpuModel.
 fn build_skinning_data(
     ir: &IrModel,
     gpu_model: &GpuModel,
@@ -629,7 +629,7 @@ fn build_skinning_data(
     let g2g = gpu_model.global_to_gpu_map();
     let gpu_vert_count = gpu_model.base_vertices().len();
 
-    // GPU頂点ごとのボーンウェイトを構築
+    // Build per-GPU-vertex bone weights.
     let mut vertex_weights: Vec<VertexSkinWeight> = (0..gpu_vert_count)
         .map(|_| VertexSkinWeight {
             bones: [(0, 0.0); 4],
@@ -642,7 +642,7 @@ fn build_skinning_data(
             if global_vi < g2g.len() {
                 let gpu_vi = g2g[global_vi] as usize;
                 if gpu_vi < gpu_vert_count {
-                    // まだウェイトが設定されていない場合のみ設定
+                    // Set only when the weight has not yet been set.
                     if vertex_weights[gpu_vi].bones[0].1 == 0.0 {
                         vertex_weights[gpu_vi] = VertexSkinWeight { bones: v.weights };
                     }
@@ -652,7 +652,7 @@ fn build_skinning_data(
         }
     }
 
-    // レストポーズのローカル変換を計算
+    // Compute rest-pose local transforms.
     let bone_count = ir.bones.len();
     let mut rest_local_mats = vec![Mat4::IDENTITY; bone_count];
     let mut rest_local_rotations = vec![Quat::IDENTITY; bone_count];
@@ -675,16 +675,16 @@ fn build_skinning_data(
         rest_local_translations[i] = trans;
         rest_local_scales[i] = scale;
 
-        // グローバル回転を抽出（リターゲティング用）
+        // Extract the global rotation (used for retargeting).
         let (_, global_rot, _) = bone.global_mat.to_scale_rotation_translation();
         rest_global_rotations[i] = global_rot;
     }
 
-    // ボーン名 → ボーンインデックスのマッピング（マッチモードに依存）
+    // Bone-name -> bone-index mapping (depends on the match mode).
     let mut bone_name_to_idx: HashMap<String, usize> = HashMap::new();
     match animation.match_mode {
         BoneMatchMode::Humanoid => {
-            // VRMA: ヒューマノイドボーン名でマッチ
+            // VRMA: match by humanoid bone name.
             for (i, bone) in ir.bones.iter().enumerate() {
                 if let Some(ref vrm_name) = bone.vrm_bone_name {
                     bone_name_to_idx.insert(vrm_name.clone(), i);
@@ -692,13 +692,13 @@ fn build_skinning_data(
             }
         }
         BoneMatchMode::NodeName => {
-            // GLB/glTF/FBX: ノード名で直接マッチ
-            // アニメーション内のチャネル名と IrBone の name/name_en を照合
+            // GLB / glTF / FBX: match directly by node name.
+            // Cross-reference the channel name in the animation against IrBone's name / name_en.
             let anim_bone_names: std::collections::HashSet<&str> =
                 animation.bone_channels.keys().map(|s| s.as_str()).collect();
 
             for (i, bone) in ir.bones.iter().enumerate() {
-                // 完全一致（name_en → name の優先順）
+                // Exact match (preferring name_en over name).
                 if anim_bone_names.contains(bone.name_en.as_str()) {
                     bone_name_to_idx.insert(bone.name_en.clone(), i);
                 } else if anim_bone_names.contains(bone.name.as_str()) {
@@ -706,7 +706,7 @@ fn build_skinning_data(
                 }
             }
 
-            // マッチしなかったチャネルをファジーマッチ（サフィックス一致）
+            // For unmatched channels, try a fuzzy match by suffix.
             let matched_names: std::collections::HashSet<String> =
                 bone_name_to_idx.keys().cloned().collect();
             let mut used_indices: std::collections::HashSet<usize> =
@@ -715,7 +715,7 @@ fn build_skinning_data(
                 if matched_names.contains(*anim_name) {
                     continue;
                 }
-                // "Armature_Hips" → "Hips" のようなサフィックスマッチ
+                // Suffix match such as "Armature_Hips" -> "Hips".
                 for (i, bone) in ir.bones.iter().enumerate() {
                     if used_indices.contains(&i) {
                         continue;
@@ -740,10 +740,10 @@ fn build_skinning_data(
         }
     }
 
-    // 表情名 → モーフインデックスのマッピング
+    // Expression-name -> morph-index mapping.
     let mut expr_name_to_morph: HashMap<String, usize> = HashMap::new();
     for (i, morph) in ir.morphs.iter().enumerate() {
-        // VRM表情名（英語名）とモーフ名の両方で照合
+        // Match against both VRM expression names (English) and morph names.
         if !morph.name_en.is_empty() {
             expr_name_to_morph.insert(morph.name_en.clone(), i);
         }
@@ -752,13 +752,13 @@ fn build_skinning_data(
         }
     }
 
-    // 逆引きマップ
+    // Reverse map.
     let bone_idx_to_name: HashMap<usize, String> = bone_name_to_idx
         .iter()
         .map(|(name, &idx)| (idx, name.clone()))
         .collect();
 
-    // 付与データ
+    // Grant data.
     let grants: Vec<Option<GrantInfo>> = ir
         .bones
         .iter()
@@ -773,18 +773,18 @@ fn build_skinning_data(
         })
         .collect();
 
-    // 付与処理順序をトポロジカルソートで事前計算
-    // PMX仕様では付与親が先のインデックスに来ることが期待されるが、
-    // 不正なPMXファイルに対する防御としてトポロジカル順序を保証する。
+    // Pre-compute the grant processing order via topological sort.
+    // The PMX spec expects the grant parent to come earlier in the bone index, but
+    // we still enforce a topological order as a defense against ill-formed PMX files.
     let grant_order = {
         let n = grants.len();
-        // 付与を持つボーンのインデックスを収集
+        // Collect indices of bones that have a grant.
         let has_grant: Vec<usize> = (0..n).filter(|&i| grants[i].is_some()).collect();
         if has_grant.is_empty() {
             Vec::new()
         } else {
-            // 付与依存グラフでトポロジカルソート（カーン法）
-            // 入次数: 付与親が付与を持つボーンなら、そのボーンへの辺がある
+            // Topological sort over the grant dependency graph (Kahn's algorithm).
+            // In-degree: an edge enters this bone if its grant parent itself has a grant.
             let grant_set: std::collections::HashSet<usize> = has_grant.iter().copied().collect();
             let mut in_degree: HashMap<usize, usize> = has_grant.iter().map(|&i| (i, 0)).collect();
             for &i in &has_grant {
@@ -804,7 +804,7 @@ fn build_skinning_data(
             let mut order = Vec::with_capacity(has_grant.len());
             while let Some(i) = queue.pop_front() {
                 order.push(i);
-                // i を付与親とするボーンの入次数を減らす
+                // Decrement in-degree for bones whose grant parent is i.
                 for &j in &has_grant {
                     if grants[j].as_ref().is_some_and(|g| g.parent_index == i) {
                         let Some(deg) = in_degree.get_mut(&j) else {
@@ -817,7 +817,7 @@ fn build_skinning_data(
                     }
                 }
             }
-            // 循環参照がある場合はフォールバック（残りをインデックス順で追加）
+            // Fall back if there is a cycle (append remaining bones in index order).
             if order.len() < has_grant.len() {
                 log::warn!(
                     "Grant dependency has circular reference: {} of {} bones unresolved",
@@ -853,30 +853,30 @@ fn build_skinning_data(
     }
 }
 
-/// デルタ行列を glTF 空間から PMX 空間に変換する。
+/// Convert a delta matrix from glTF space to PMX space.
 ///
-/// 元の変換: gltf_pos_to_pmx(delta.transform_point3(pmx_pos_to_gltf(pmx_pos)))
+/// The original transform: gltf_pos_to_pmx(delta.transform_point3(pmx_pos_to_gltf(pmx_pos)))
 /// = S * M * (R * M * p / S + t) = M * R * M * p + S * M * t
 ///
-/// ここで R = delta の 3x3 回転部分、t = delta の平行移動、
-/// M = ミラー行列（自己逆行列）、S = PMX_SCALE。
+/// Here R = the 3x3 rotation part of delta, t = the translation of delta,
+/// M = the mirror matrix (self-inverse), S = PMX_SCALE.
 ///
-/// PMX空間デルタ行列の構成:
-/// - 3x3 部分: M * R * M（共役変換、S と 1/S が打ち消し合う）
-/// - 平行移動: S * M * t（glTFメートル単位をPMXスケールに変換 + ミラー）
+/// PMX-space delta matrix structure:
+/// - 3x3 part: M * R * M (conjugation; the S and 1/S cancel out).
+/// - Translation: S * M * t (converts glTF meters to PMX scale and applies the mirror).
 ///
-/// 3x3 部分は符号反転のみ、平行移動は符号反転 + スケール乗算で計算できる。
-/// VRM 1.0: M = diag(1,1,-1), VRM 0.0: M = diag(-1,1,1)
+/// The 3x3 part is just sign flips, the translation is a sign flip plus a scale multiplication.
+/// VRM 1.0: M = diag(1, 1, -1). VRM 0.0: M = diag(-1, 1, 1).
 ///
-/// glam は列優先で `c[col][row]` のレイアウト。
-/// M*R*M の行i列j = mi * R[i][j] * mj（mi はミラー対角要素）
+/// glam uses column-major layout `c[col][row]`.
+/// (M * R * M) at row i, col j = mi * R[i][j] * mj (mi = mirror diagonal element).
 #[inline]
 fn conjugate_delta_to_pmx(delta: Mat4, is_vrm0: bool) -> Mat4 {
     let c = delta.to_cols_array_2d(); // c[col][row]
     if is_vrm0 {
         // M = diag(-1, 1, 1)
-        // 3x3: 行0と列0の符号反転（[0][0]は2回で戻る）
-        // 平行移動 (c[3][0..3]): M*t*S = (-tx*S, ty*S, tz*S)
+        // 3x3: flip the sign of row 0 and column 0 ([0][0] returns to original after two flips).
+        // Translation (c[3][0..3]): M * t * S = (-tx*S, ty*S, tz*S).
         let s = PMX_SCALE;
         Mat4::from_cols_array_2d(&[
             [c[0][0], -c[0][1], -c[0][2], c[0][3]],
@@ -886,8 +886,8 @@ fn conjugate_delta_to_pmx(delta: Mat4, is_vrm0: bool) -> Mat4 {
         ])
     } else {
         // M = diag(1, 1, -1)
-        // 3x3: 行2と列2の符号反転（[2][2]は2回で戻る）
-        // 平行移動 (c[3][0..3]): M*t*S = (tx*S, ty*S, -tz*S)
+        // 3x3: flip the sign of row 2 and column 2 ([2][2] returns to original after two flips).
+        // Translation (c[3][0..3]): M * t * S = (tx*S, ty*S, -tz*S).
         let s = PMX_SCALE;
         Mat4::from_cols_array_2d(&[
             [c[0][0], c[0][1], -c[0][2], c[0][3]],
