@@ -1,4 +1,4 @@
-//! 遅延タスク処理（PendingState, ExportState, process_pending_tasks 等）
+//! Deferred task processing (PendingState, ExportState, process_pending_tasks, etc.).
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -15,49 +15,49 @@ use super::file_io::FileFormat;
 use super::helpers::{PkgModelType, PreloadedData, ReloadableSource};
 use super::{ConvertMessage, ViewerApp};
 
-/// unitypackage 内に複数FBXがある場合の選択待ち状態
+/// Wait state when a unitypackage contains multiple FBXs (model selection pending).
 pub struct PendingUnityPackage {
     pub assets: Vec<crate::unitypackage::ExtractedAsset>,
-    /// (アセットIndex, ファイル名, モデル種別)
+    /// (asset index, file name, model kind)
     pub model_list: Vec<(usize, String, PkgModelType)>,
     pub source_path: PathBuf,
-    /// アペンドモード（既存モデルに追加）
+    /// Append mode (add to the existing model).
     pub append: bool,
-    /// 一時ファイルからの読み込み時、アーカイブデータのスナップショット
+    /// Snapshot of the archive data when loaded from a temp file.
     pub archive_snapshot: Option<Arc<[u8]>>,
-    /// アーカイブ(ZIP/7z)内 .unitypackage の場合、リロード用のソース情報
+    /// For .unitypackage inside an archive (ZIP / 7z): the source info used for reload.
     pub nested_archive_source: Option<ReloadableSource>,
-    /// Phase 3: パッケージインデックス（Prefab テクスチャ解決用）
+    /// Phase 3: package index (used to resolve Prefab textures).
     pub pkg_index: Option<Arc<UnityPackageIndex>>,
-    /// 複数選択用チェック状態（model_list と同サイズ）
+    /// Per-entry checked state for multi-select (same length as model_list).
     pub checked: Vec<bool>,
 }
 
-/// unitypackage モデル遅延読み込み状態
+/// Deferred load state for a unitypackage model.
 pub struct PendingPkgModelLoad {
     pub assets: Arc<Vec<crate::unitypackage::ExtractedAsset>>,
     pub fbx_index: usize,
     pub model_type: PkgModelType,
     pub source_path: PathBuf,
-    /// オーバーレイ表示済みフラグ
+    /// Whether the overlay has been shown.
     pub shown: bool,
-    /// アペンドモード（既存モデルに追加）
+    /// Append mode (add to the existing model).
     pub append: bool,
-    /// テクスチャ選択ダイアログを抑制（リロード経由時）
+    /// Suppress the texture matching dialog (when reaching this via reload).
     pub suppress_tex_match: bool,
-    /// 一時ファイルからの読み込み時、アーカイブデータのスナップショット
+    /// Snapshot of the archive data when loaded from a temp file.
     pub archive_snapshot: Option<Arc<[u8]>>,
-    /// アーカイブ(ZIP/7z)内 .unitypackage の場合、リロード用のソース情報
+    /// For .unitypackage inside an archive (ZIP / 7z): the source info used for reload.
     pub nested_archive_source: Option<ReloadableSource>,
-    /// Phase 3: パッケージインデックス（Prefab テクスチャ解決用）
+    /// Phase 3: package index (used to resolve Prefab textures).
     pub pkg_index: Option<Arc<UnityPackageIndex>>,
-    /// Batch progress: (current, total) — carried from PendingMultiLoad at queue pop time
+    /// Batch progress: (current, total) — carried from PendingMultiLoad at queue pop time.
     pub batch_progress: Option<(usize, usize)>,
-    /// FBX アニメ選択ダイアログをスキップ（execute_fbx_choice 確定後の再投入時）
+    /// Skip the FBX animation choice dialog (used when re-submitting after execute_fbx_choice resolves).
     pub skip_anim_check: bool,
 }
 
-/// アーカイブ内モデル選択待ち
+/// Pending model selection inside an archive.
 pub struct PendingArchive {
     pub archive_data: Arc<[u8]>,
     pub format: crate::archive::ArchiveFormat,
@@ -67,7 +67,7 @@ pub struct PendingArchive {
     pub is_temp: bool,
 }
 
-/// アーカイブ内モデル遅延読み込み
+/// Deferred load for a model inside an archive.
 pub struct PendingArchiveLoad {
     pub archive_data: Arc<[u8]>,
     pub format: crate::archive::ArchiveFormat,
@@ -79,85 +79,86 @@ pub struct PendingArchiveLoad {
     pub is_temp: bool,
 }
 
-/// FBX読み込み方法選択ダイアログの状態（モデル+アニメーション両方含むFBX用）
+/// State for the FBX-load-method dialog (used when an FBX contains both model and animation).
 pub struct PendingFbxChoice {
     pub path: PathBuf,
     pub load_model: bool,
     pub load_animation: bool,
-    /// unitypackage 経由の場合のデータ
+    /// Extra data when arriving via unitypackage.
     pub pkg_context: Option<PendingFbxChoicePkg>,
-    /// D&D一時ファイルの先読みデータ
+    /// Pre-read data for the D&D temp file.
     pub preloaded: Option<super::helpers::PreloadedData>,
 }
 
-/// unitypackage 経由 FBX 選択時の追加コンテキスト
+/// Extra context for the FBX-choice dialog when arriving via unitypackage.
 pub struct PendingFbxChoicePkg {
     pub assets: Arc<Vec<crate::unitypackage::ExtractedAsset>>,
     pub fbx_index: usize,
     pub source_path: PathBuf,
-    /// 一時ファイルからの読み込み時、アーカイブデータのスナップショット
+    /// Snapshot of the archive data when loaded from a temp file.
     pub archive_snapshot: Option<Arc<[u8]>>,
-    /// アーカイブ(ZIP/7z)内 .unitypackage の場合、リロード用のソース情報
+    /// For .unitypackage inside an archive (ZIP / 7z): the source info used for reload.
     pub nested_archive_source: Option<ReloadableSource>,
-    /// Phase 3: パッケージインデックス（Prefab テクスチャ解決用）
+    /// Phase 3: package index (used to resolve Prefab textures).
     pub pkg_index: Option<Arc<UnityPackageIndex>>,
 }
 
-/// 遅延処理のオーバーレイ表示状態
+/// Overlay-display state for a deferred process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PendingOverlay {
-    /// オーバーレイ未表示（次フレームで表示）
+    /// Overlay not yet shown (will be shown next frame).
     WaitingOverlay,
-    /// オーバーレイ表示済み（次フレームで実行）
+    /// Overlay shown (will execute next frame).
     Ready,
 }
 
-/// ロード投入（全入口統一: ダイアログ / D&D / IPC）
+/// Load dispatch (single entry point for dialog / D&D / IPC).
 pub struct PendingLoadDispatch {
     pub path: PathBuf,
     pub append: bool,
     pub overlay: PendingOverlay,
-    /// D&D temp ファイルの先読みデータ（self.preloaded から移動）
+    /// Pre-read data for D&D temp files (moved from self.preloaded).
     pub preloaded: Option<PreloadedData>,
-    /// reload_current 経由の dispatch かどうか。true の場合、route_load_dispatch は
-    /// 新規ロード向けの状態リセット（normalize_pose 等）をスキップし、ユーザーが
-    /// 現モデルに設定した値を保持したまま BG パースへ進む。
+    /// Whether this dispatch comes via reload_current. When true, route_load_dispatch
+    /// skips the new-load-style state reset (normalize_pose, etc.) and proceeds to
+    /// BG parse with the user's settings on the current model preserved.
     pub is_reload: bool,
 }
 
-/// バックグラウンド CPU パースの結果
+/// Result of background CPU parsing.
 pub struct BgLoadResult {
     pub ir: IrModel,
     pub source: ReloadableSource,
     pub kind: BgLoadKind,
     pub path: PathBuf,
-    /// 発行元 dispatch の世代番号。現世代の `BgLoadHandle.request_id` と一致しない結果は
-    /// 「古いロードが完了したがユーザーは既に次のロードに進んでいる」状態として破棄する。
+    /// Generation number of the originating dispatch. A result whose request_id does
+    /// not match the current `BgLoadHandle.request_id` represents "an old load
+    /// finished, but the user has already moved on to the next load" and is discarded.
     pub request_id: u64,
 }
 
-/// バックグラウンド CPU パースのハンドル（受信チャネル + キャンセルトークン + 世代番号）
+/// Background CPU parse handle (receiver channel + cancel token + generation number).
 pub struct BgLoadHandle {
     pub rx: std::sync::mpsc::Receiver<anyhow::Result<BgLoadResult>>,
-    /// 別スレッドのパース処理へのキャンセル通知。新規ロード投入時に `true` に設定する。
+    /// Cancel signal sent to the parse running on a separate thread. Set to `true` when a new load is submitted.
     pub cancel: Arc<AtomicBool>,
     pub request_id: u64,
 }
 
-/// ロード種別（後処理の分岐に使用）
+/// Load kind (used by the post-processing branch).
 pub enum BgLoadKind {
-    /// 通常ロード（format + FBX自動アニメフラグ）
+    /// Standard load (format + FBX auto-animation flag).
     Initial {
         format: FileFormat,
         auto_fbx_anim: bool,
     },
-    /// 追加読み込み
+    /// Append load.
     Append,
-    /// アーカイブ内モデルの初回ロード（BGスレッドで解凍+パース済み）
+    /// First load of a model inside an archive (already extracted + parsed on the BG thread).
     ArchiveInitial,
-    /// アーカイブ内モデルの追加ロード（BGスレッドで解凍+パース済み）
+    /// Append load of a model inside an archive (already extracted + parsed on the BG thread).
     ArchiveAppend,
-    /// アーカイブ内 .unitypackage — BGスレッドで pkg_index 構築済み
+    /// .unitypackage inside an archive — pkg_index already built on the BG thread.
     ArchivePreparedUnityPackage {
         pkg_data: Vec<u8>,
         pkg_index: Arc<crate::unitypackage::UnityPackageIndex>,
@@ -169,13 +170,13 @@ pub enum BgLoadKind {
         append: bool,
         entry_path: PathBuf,
     },
-    /// UnityPackage 内モデル初回ロード（BGスレッドでパース済み）
+    /// First load of a model inside a UnityPackage (already parsed on the BG thread).
     PkgInitial(Box<PkgInitialPayload>),
-    /// UnityPackage 内モデル追加ロード（BGスレッドでパース済み）
+    /// Append load of a model inside a UnityPackage (already parsed on the BG thread).
     PkgAppend(Box<PkgAppendPayload>),
-    /// FBX アニメーション選択待ち（パース済み IR を保留）
+    /// Waiting for FBX animation choice (parsed IR is held).
     NeedsFbxChoice(Box<PkgFbxChoicePayload>),
-    /// UnityPackage index 構築完了（メインスレッドで PendingUnityPackage/PkgModelLoad をセット）
+    /// UnityPackage index built (the main thread sets up PendingUnityPackage / PkgModelLoad).
     UnityPackageIndexed {
         pkg_index: Arc<crate::unitypackage::UnityPackageIndex>,
         assets: Vec<crate::unitypackage::ExtractedAsset>,
@@ -185,7 +186,7 @@ pub enum BgLoadKind {
         archive_snapshot: Option<Arc<[u8]>>,
         append: bool,
     },
-    /// アーカイブ一覧化完了（メインスレッドで PendingArchive/ArchiveLoad をセット）
+    /// Archive listed (the main thread sets up PendingArchive / ArchiveLoad).
     ArchiveIndexed {
         archive_data: Arc<[u8]>,
         format: crate::archive::ArchiveFormat,
@@ -196,24 +197,24 @@ pub enum BgLoadKind {
     },
 }
 
-/// PkgInitial 用ペイロード
+/// Payload for PkgInitial.
 pub struct PkgInitialPayload {
     pub fbx_name: Option<String>,
     pub pkg_model_locator: Option<crate::unitypackage::PkgModelLocator>,
     pub pkg_textures_legacy: Vec<(String, Arc<[u8]>)>,
     pub unmatched_indices: Vec<usize>,
     pub pkg_material_keys: Vec<Option<crate::unitypackage::PkgMaterialKey>>,
-    /// Prefab FBX ranges (name, mat_start, mat_count)
+    /// Prefab FBX ranges (name, mat_start, mat_count).
     pub fbx_ranges: Vec<(String, usize, usize)>,
     pub batch_progress: Option<(usize, usize)>,
     pub suppress_tex_match: bool,
-    /// Prefab 名（ファイル名表示用）
+    /// Prefab name (used for the file name display).
     pub prefab_name: Option<String>,
-    /// Prefab のエントリパス
+    /// Entry path of the Prefab.
     pub prefab_entry_path: Option<String>,
 }
 
-/// PkgAppend 用ペイロード
+/// Payload for PkgAppend.
 pub struct PkgAppendPayload {
     pub pkg_model_name: Option<String>,
     pub pkg_model_locator: Option<crate::unitypackage::PkgModelLocator>,
@@ -224,7 +225,7 @@ pub struct PkgAppendPayload {
     pub pkg_material_keys: Vec<Option<crate::unitypackage::PkgMaterialKey>>,
 }
 
-/// FBX アニメーション選択保留用ペイロード
+/// Payload while waiting for the FBX animation choice.
 pub struct PkgFbxChoicePayload {
     pub fbx_name: String,
     pub assets: Arc<Vec<crate::unitypackage::ExtractedAsset>>,
@@ -236,38 +237,40 @@ pub struct PkgFbxChoicePayload {
     pub batch_progress: Option<(usize, usize)>,
 }
 
-/// 非同期ファイルダイアログの種別
+/// Kind of the asynchronous file dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileDialogKind {
-    /// モデル/アニメーションを開く
+    /// Open model / animation.
     Open,
-    /// モデル追加読み込み
+    /// Append model load.
     Append,
 }
 
-/// バックグラウンドロードの状態マシン。
+/// State machine for background loading.
 ///
-/// 従来は `load_dispatch: Option<PendingLoadDispatch>` と `bg_load: Option<BgLoadHandle>` の
-/// 2 フィールド併存で表現していたが、「両方 Some」「両方 None のはずが片方だけ取り残される」などの
-/// 不正状態を型レベルで排除するため enum に統合した。
+/// The previous representation used `load_dispatch: Option<PendingLoadDispatch>` and
+/// `bg_load: Option<BgLoadHandle>` side by side, which left "both Some" or "one
+/// stays behind when both should be None" as legal but invalid states. The
+/// enum unifies them so those states are unrepresentable at the type level.
 ///
-/// 状態遷移:
-/// - `Idle` → `PendingDispatch`: ファイルダイアログ結果・D&D・IPC・コマンドライン引数
-/// - `PendingDispatch` → `Idle` or `Loading`: `route_load_dispatch` が即時実行 / spawn_bg_load を選ぶ
-/// - `Loading` → `Idle`: BG スレッドからの結果受信
-/// - `Loading` → `PendingDispatch { prior_loading: Some(..) }`: Loading 中に次の dispatch が投入された場合、
-///   先行 handle を `prior_loading` として引き継ぎ、`route_load_dispatch` が intent に応じて
-///   キャンセル（モデル要求）か保護（アニメ単体要求）を判断する
+/// State transitions:
+/// - `Idle` -> `PendingDispatch`: file-dialog result / D&D / IPC / command-line argument.
+/// - `PendingDispatch` -> `Idle` or `Loading`: `route_load_dispatch` chooses immediate-execute or spawn_bg_load.
+/// - `Loading` -> `Idle`: result received from the BG thread.
+/// - `Loading` -> `PendingDispatch { prior_loading: Some(..) }`: when a new dispatch is
+///   submitted during Loading, the prior handle is carried as `prior_loading`, and
+///   `route_load_dispatch` decides whether to cancel (model request) or protect
+///   (animation-only request) based on intent.
 pub enum BackgroundLoadState {
-    /// 何も走っていない
+    /// Nothing is running.
     Idle,
-    /// dispatch 予約あり。次フレームで `route_load_dispatch` が呼ばれる。
-    /// `prior_loading` は Loading 中に新 dispatch が投入された場合の先行 handle。
+    /// A dispatch is queued. `route_load_dispatch` will be called next frame.
+    /// `prior_loading` is the prior handle when a new dispatch was submitted during Loading.
     PendingDispatch {
         dispatch: PendingLoadDispatch,
         prior_loading: Option<BgLoadHandle>,
     },
-    /// BG スレッドがパース中。結果受信待ち。
+    /// BG thread is parsing. Waiting for the result.
     Loading(BgLoadHandle),
 }
 
@@ -280,15 +283,16 @@ impl BackgroundLoadState {
         matches!(self, BackgroundLoadState::Loading(_))
     }
 
-    /// 何らかのロード処理が進行中（dispatch 予約 or BG パース中）
+    /// Some load processing is in progress (dispatch queued or BG parse in flight).
     pub fn is_active(&self) -> bool {
         !self.is_idle()
     }
 
-    /// 新しい dispatch を投入する。
-    /// 先行 Loading がある場合は `prior_loading` として引き継ぎ、`route_load_dispatch` の
-    /// intent 判定（モデル要求 vs アニメ単体要求）でキャンセル可否を決定する。
-    /// 既に `PendingDispatch` 状態なら古い dispatch は破棄し、その `prior_loading` のみ引き継ぐ。
+    /// Submit a new dispatch.
+    /// If a Loading is in flight, it is carried as `prior_loading` and the cancel
+    /// decision is made by `route_load_dispatch` based on intent (model vs.
+    /// animation-only request).
+    /// If already in `PendingDispatch`, the old dispatch is dropped and only its `prior_loading` is carried over.
     pub fn submit_dispatch(&mut self, dispatch: PendingLoadDispatch) {
         let prior_loading = match std::mem::replace(self, BackgroundLoadState::Idle) {
             BackgroundLoadState::Idle => None,
@@ -302,7 +306,7 @@ impl BackgroundLoadState {
     }
 }
 
-/// OBJ/STL インポート時の単位選択
+/// Unit choice for OBJ / STL import.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ImportUnit {
     Mm,
@@ -312,7 +316,7 @@ pub enum ImportUnit {
 }
 
 impl ImportUnit {
-    /// glTF 空間（メートル）へのスケール係数
+    /// Scale factor into glTF space (meters).
     pub fn scale(self) -> f32 {
         match self {
             ImportUnit::Mm => 0.001,
@@ -331,7 +335,7 @@ impl ImportUnit {
     }
 }
 
-/// OBJ/STL インポートオプション選択待ち状態
+/// Wait state for OBJ / STL import options.
 pub struct PendingImportOptions {
     pub path: PathBuf,
     pub format: FileFormat,
@@ -341,70 +345,70 @@ pub struct PendingImportOptions {
     pub z_up: bool,
 }
 
-/// 遅延処理（ペンディング）の集約状態
+/// Aggregated state of all pending (deferred) processes.
 pub struct PendingState {
-    /// FBX読み込み方法選択待ち（モデル+アニメ両方含む場合）
+    /// Waiting for the FBX-load-method choice (when both model and animation are in the FBX).
     pub fbx_choice: Option<PendingFbxChoice>,
-    /// unitypackage FBX選択待ち
+    /// Waiting for unitypackage FBX selection.
     pub unity_pkg: Option<PendingUnityPackage>,
-    /// FBX遅延読み込み
+    /// Deferred FBX load.
     pub pkg_load: Option<PendingPkgModelLoad>,
-    /// アーカイブ内モデル選択待ち
+    /// Waiting for in-archive model selection.
     pub archive: Option<PendingArchive>,
-    /// アーカイブモデル遅延読み���み
+    /// Deferred archive model load.
     pub archive_load: Option<PendingArchiveLoad>,
-    /// バックグラウンドロードの状態マシン
-    /// （dispatch 予約 + BG パース中のハンドルを型レベルで統合）
+    /// State machine for background loading
+    /// (unifies the dispatch reservation and the BG parse handle at the type level).
     pub bg_state: BackgroundLoadState,
-    /// PMX変換遅延実行
+    /// Deferred PMX conversion.
     pub convert: Option<PendingOverlay>,
-    /// GPU再構築遅延実行
+    /// Deferred GPU rebuild.
     pub rebuild: Option<PendingOverlay>,
-    /// モデル再読み込み遅延実行
+    /// Deferred model reload.
     pub reload: Option<PendingOverlay>,
-    /// ビューポートサイズ確定後の refit（初回ロード時）
+    /// Refit after the viewport size is finalized (on first load).
     pub refit: bool,
-    /// テクスチャ履歴の上書き保存確認ダイアログ表示フラグ
+    /// Flag to show the "overwrite save texture history" confirmation dialog.
     pub confirm_save_tex_history: bool,
-    /// 非同期ファイルダイアログ（種別, 結果受信チャネル）
+    /// Asynchronous file dialog (kind, result receiver channel).
     pub file_dialog: Option<(FileDialogKind, std::sync::mpsc::Receiver<Option<PathBuf>>)>,
-    /// OBJ/STL インポートオプション選択待ち
+    /// Wait state for OBJ / STL import options.
     pub import_options: Option<PendingImportOptions>,
-    /// 複数モデル一括ロード（assets を1つだけ保持し、デキュー時に clone）
+    /// Multi-model batch load (holds assets only once and clones at dequeue time).
     pub multi_load: Option<PendingMultiLoad>,
-    /// GPU テクスチャアップロードのフレーム分割（BG パース完了後）
+    /// GPU texture upload spread across frames (after BG parse completes).
     pub gpu_build: Option<PendingGpuBuild>,
-    /// バックグラウンド PMX 変換の状態
+    /// State of the background PMX conversion.
     pub convert_bg: Option<PendingConvertBg>,
 }
 
-/// GPU テクスチャアップロード + CPU prep + GPU finalize のフレーム分割状態
+/// State for splitting GPU texture upload + CPU prep + GPU finalize across frames.
 pub struct PendingGpuBuild {
     pub ir: IrModel,
     pub source: super::helpers::ReloadableSource,
-    /// アップロード済みテクスチャビュー（順番に蓄積）
+    /// Uploaded texture views (accumulated in order).
     pub gpu_textures: Vec<(eframe::wgpu::TextureView, eframe::wgpu::TextureView)>,
-    /// 次にアップロードするテクスチャインデックス
+    /// Index of the next texture to upload.
     pub next_tex: usize,
-    /// material_display から抽出したフラグ群
+    /// Flags extracted from material_display.
     pub mat_flags: super::super::mesh::MaterialBuildFlags,
-    /// apply_bg_load_result 側の後処理用 kind（PkgInitial 等）
+    /// Post-processing kind for apply_bg_load_result (PkgInitial etc.).
     pub post_kind: Option<BgLoadKind>,
-    /// 結果パス（ログ用）
+    /// Result path (for logging).
     pub path: PathBuf,
-    /// Append 時の追加情報（None = 初回ロード）
+    /// Extra info on Append (None = first load).
     pub append_info: Option<Box<AppendGpuBuildInfo>>,
-    /// BG スレッドで CPU prep 実行中の結果受信チャネル
+    /// Receiver channel for the CPU prep running on the BG thread.
     pub(crate) cpu_prep_rx: Option<
         std::sync::mpsc::Receiver<anyhow::Result<(super::super::mesh::CpuPrepResult, IrModel)>>,
     >,
-    /// `reload_current` 経由の dispatch かどうか（Step 2-10 修正）。
-    /// `start_deferred_gpu_build` 時点の `self.reload_snapshot.is_some()` をキャプチャし、
-    /// `finish_load_with_gpu` まで確実に運ぶ。review_004 [P2] 対応。
+    /// Whether the dispatch came via `reload_current` (Step 2-10 fix).
+    /// Captures `self.reload_snapshot.is_some()` at `start_deferred_gpu_build` time
+    /// and carries it reliably through to `finish_load_with_gpu`. review_004 [P2] fix.
     pub is_reload: bool,
 }
 
-/// IR merge 前のサイズ情報スナップショット（ロールバック用）
+/// IR-size snapshot before merge (used for rollback).
 pub struct IrRollbackSnapshot {
     pub bone_count: usize,
     pub mesh_count: usize,
@@ -420,7 +424,7 @@ pub struct IrRollbackSnapshot {
 }
 
 impl IrRollbackSnapshot {
-    /// IrModel の現在の状態からスナップショットを取得
+    /// Capture a snapshot of the current IrModel state.
     pub fn capture(ir: &crate::intermediate::types::IrModel) -> Self {
         Self {
             bone_count: ir.bones.len(),
@@ -441,7 +445,7 @@ impl IrRollbackSnapshot {
         }
     }
 
-    /// マージ済み IR をスナップショット時点に巻き戻す
+    /// Rewind a merged IR back to the snapshot state.
     pub fn rollback(self, ir: &mut crate::intermediate::types::IrModel) {
         ir.bones.truncate(self.bone_count);
         ir.meshes.truncate(self.mesh_count);
@@ -462,7 +466,7 @@ impl IrRollbackSnapshot {
     }
 }
 
-/// LoadedModel の所有権フィールドスナップショット（IR/GPU以外）
+/// Snapshot of the LoadedModel ownership fields (everything except IR / GPU).
 pub struct LoadedModelOwnership {
     pub source: super::helpers::ReloadableSource,
     pub primary_astance_result: crate::intermediate::types::AStanceResult,
@@ -473,7 +477,7 @@ pub struct LoadedModelOwnership {
     pub prefab_entry_path: Option<String>,
 }
 
-/// Append 中のアニメーション再生状態スナップショット
+/// Animation playback state snapshot during Append.
 pub struct AnimationSnapshot {
     pub animation_arc: Option<std::sync::Arc<crate::intermediate::animation::VrmaAnimation>>,
     pub playing: bool,
@@ -486,7 +490,7 @@ pub struct AnimationSnapshot {
 }
 
 impl AnimationSnapshot {
-    /// ViewerApp のアニメーション状態からスナップショットを取得
+    /// Capture a snapshot from ViewerApp's animation state.
     pub fn capture(anim_state: Option<&super::super::animation::AnimationState>) -> Self {
         if let Some(s) = anim_state {
             Self {
@@ -513,7 +517,7 @@ impl AnimationSnapshot {
         }
     }
 
-    /// AnimationState に再生状態を復元する
+    /// Restore the playback state into AnimationState.
     pub fn apply_to(&self, state: &mut super::super::animation::AnimationState) {
         state.playing = self.playing;
         state.loop_mode = self.loop_mode;
@@ -525,81 +529,81 @@ impl AnimationSnapshot {
     }
 }
 
-/// Append 遅延 GPU ビルド時の追加情報
+/// Extra info for a deferred Append GPU build.
 pub struct AppendGpuBuildInfo {
-    /// GPU ビルド失敗時のロールバック用: マージ前の GPU モデル
+    /// GPU model before merge (used for GPU build failure rollback).
     pub rollback_gpu_model: super::super::mesh::GpuModel,
-    /// マージ前の IR スナップショット（ロールバック用）
+    /// IR snapshot before merge (used for rollback).
     pub ir_snapshot: IrRollbackSnapshot,
-    /// マージ前の LoadedModel 所有権フィールド
+    /// LoadedModel ownership fields before merge.
     pub ownership: LoadedModelOwnership,
-    /// 追加モデルの ReloadableSource
+    /// ReloadableSource for the appended model.
     pub append_source: super::helpers::ReloadableSource,
-    /// 追加モデル名
+    /// Name of the appended model.
     pub added_name: String,
-    /// 追加モデルのボーン数
+    /// Bone count of the appended model.
     pub added_bones: usize,
-    /// 追加モデルのメッシュ数
+    /// Mesh count of the appended model.
     pub added_meshes: usize,
-    /// 追加モデルの材質数
+    /// Material count of the appended model.
     pub added_materials: usize,
-    /// マージ前の材質数（MaterialGroup 構築用）
+    /// Material count before merge (used to build MaterialGroup).
     pub saved_material_count: usize,
-    /// merge() の戻り値: 統合ボーン数
+    /// merge() return value: total integrated bone count.
     pub merged_bones: usize,
-    /// merge() の戻り値: 新規ボーン数
+    /// merge() return value: count of newly added bones.
     pub new_bones: usize,
-    /// unitypackage 内のモデル名
+    /// Model name inside the unitypackage.
     pub pkg_model_name: Option<String>,
-    /// unitypackage モデルロケータ
+    /// unitypackage model locator.
     pub pkg_locator: Option<crate::unitypackage::PkgModelLocator>,
-    /// サイレントモード（トーストを表示しない）
+    /// Silent mode (do not show toasts).
     pub silent: bool,
-    /// PkgAppend 後処理用ペイロード（None = 非 Pkg アペンド）
+    /// Post-processing payload for PkgAppend (None = non-Pkg append).
     pub pkg_append_payload: Option<Box<PkgAppendPayload>>,
-    /// PkgAppend 用: マージ前の材質オフセット
+    /// PkgAppend: material offset before merge.
     pub mat_offset: usize,
-    /// PkgAppend 用: マージ前のテクスチャ数
+    /// PkgAppend: texture count before merge.
     pub tex_count_before: usize,
-    /// PkgAppend 用: ソースパス
+    /// PkgAppend: source path.
     pub source_path: PathBuf,
-    /// アニメーション状態スナップショット
+    /// Animation state snapshot.
     pub anim_snapshot: AnimationSnapshot,
 }
 
-/// バックグラウンド PMX 変換の状態
+/// State of a background PMX conversion.
 pub struct PendingConvertBg {
-    /// BG スレッドからの結果受信チャネル
+    /// Receiver channel for the BG thread result.
     pub rx: std::sync::mpsc::Receiver<ConvertBgResult>,
-    /// キャンセルフラグ
+    /// Cancel flag.
     pub cancel: Arc<AtomicBool>,
 }
 
-/// バックグラウンド PMX 変換の結果
+/// Result of a background PMX conversion.
 pub struct ConvertBgResult {
-    /// 変換結果: Ok(stats_message) or Err(error_message)
+    /// Conversion result: Ok(stats_message) or Err(error_message).
     pub result: Result<String, String>,
-    /// ログバッファ書き込み（output_log=true の場合）
+    /// Whether the log buffer was written (true when output_log = true).
     pub log_written: bool,
-    /// 警告付きメッセージか
+    /// Whether the message includes a warning.
     pub has_warning: bool,
-    /// 出力ディレクトリ（成功時に開く用）
+    /// Output directory (for opening on success).
     pub output_dir: Option<PathBuf>,
 }
 
-/// 1 フレームにアップロードするテクスチャ枚数
+/// Number of textures uploaded per frame.
 pub const GPU_UPLOAD_BATCH: usize = 4;
 
-/// 複数モデル一括ロード用キュー（assets を Arc 共有して clone コストを排除）
+/// Queue for batch loading of multiple models (assets shared via Arc to eliminate clone cost).
 pub struct PendingMultiLoad {
     pub assets: Arc<Vec<crate::unitypackage::ExtractedAsset>>,
-    /// 残りのモデル (fbx_index, model_type)
+    /// Remaining models (fbx_index, model_type).
     pub remaining: Vec<(usize, PkgModelType)>,
     pub source_path: PathBuf,
     pub archive_snapshot: Option<Arc<[u8]>>,
     pub nested_archive_source: Option<ReloadableSource>,
     pub pkg_index: Option<Arc<UnityPackageIndex>>,
-    /// Total number of models in batch (for progress display)
+    /// Total number of models in batch (for progress display).
     pub total_count: usize,
 }
 
@@ -626,61 +630,61 @@ impl Default for PendingState {
     }
 }
 
-/// UVマップ保存ダイアログの非同期結果待ち状態
+/// Wait state for the asynchronous result of the UV-map save dialog.
 pub struct PendingUvExport {
-    /// ダイアログ結果の受信チャネル
+    /// Receiver channel for the dialog result.
     pub rx: std::sync::mpsc::Receiver<Option<std::path::PathBuf>>,
-    /// UVマップ出力解像度
+    /// UV-map output resolution.
     pub uv_map_size: u32,
-    /// 材質グループ情報（名前, 材質インデックス範囲）
+    /// Material group info (name, material index range).
     pub uv_groups: Vec<(String, std::ops::Range<usize>)>,
 }
 
-/// UVマップ BG エクスポートの結果待ち状態
+/// Wait state for a UV-map BG export result.
 pub struct PendingUvBgExport {
-    /// BG スレッドからの結果受信チャネル（Ok=出力パス, Err=エラーメッセージ）
+    /// Receiver channel for the BG thread result (Ok = output path, Err = error message).
     pub rx: std::sync::mpsc::Receiver<Result<std::path::PathBuf, String>>,
 }
 
-/// PMX 変換前のディレクトリ作成 BG 処理の結果待ち状態
+/// Wait state for the BG directory-creation step before PMX conversion.
 pub struct PendingMkdir {
-    /// BG スレッドからの結果受信チャネル（Ok=成功, Err=エラーメッセージ）
+    /// Receiver channel for the BG thread result (Ok = success, Err = error message).
     pub rx: std::sync::mpsc::Receiver<Result<(), String>>,
 }
 
-/// PMXエクスポート関連の状態
+/// State related to PMX export.
 pub struct ExportState {
-    /// PMX変換時にログファイルを出力するか
+    /// Whether to write a log file at PMX conversion time.
     pub output_log: bool,
-    /// PMX出力パス（テキストボックス編集用）
+    /// PMX output path (for the text-box edit).
     pub pmx_output_path: String,
-    /// ユーザーに表示するモデル名（拡張子なし）。
-    /// タイトルバー表示と PMX 出力ファイル名の両方に使われる。
-    /// 初期値はロード元に応じて自動設定され、UI から編集可能。
+    /// Model name shown to the user (without extension).
+    /// Used both in the title bar and in the PMX output file name.
+    /// The default depends on the load source and is editable via the UI.
     pub model_display_name: String,
-    /// 表示材質のみPMX出力（デフォルト: false）
+    /// Export only visible materials to PMX (default: false).
     pub export_visible_only: bool,
-    /// UVマップ出力解像度
+    /// UV-map output resolution.
     pub uv_map_size: u32,
-    /// 物理（剛体・ジョイント）なしで出力
+    /// Output without physics (rigid bodies / joints).
     pub no_physics: bool,
-    /// 元のボーン構造のまま出力（標準ボーン挿入スキップ）
+    /// Output with the original bone structure (skip standard-bone insertion).
     pub raw_structure: bool,
-    /// MME マテリアル (.fx) も出力するか (§K.5 / Step 6)
+    /// Also output MME materials (.fx) (§K.5 / Step 6).
     pub output_mme: bool,
-    /// PMX出力倍率（デフォルト: 1.0）
+    /// PMX output scale factor (default: 1.0).
     pub scale: f32,
-    /// converted_modelXX の作成先ベースディレクトリ（None = ソースファイルと同じ場所）
+    /// Base directory for creating converted_modelXX (None = same place as the source file).
     pub output_base_dir: Option<std::path::PathBuf>,
-    /// 非同期フォルダ選択ダイアログ（PMX出力先）
+    /// Asynchronous folder selection dialog (PMX output destination).
     pub pending_folder_dialog: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
-    /// 非同期フォルダ選択ダイアログ（ray-mmd ルート）
+    /// Asynchronous folder selection dialog (ray-mmd root).
     pub pending_ray_mmd_dialog: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
-    /// 非同期UVマップ保存ダイアログ
+    /// Asynchronous UV-map save dialog.
     pub pending_uv_dialog: Option<PendingUvExport>,
-    /// UVマップ BG エクスポートの結果待ち
+    /// Wait state for UV-map BG export.
     pub pending_uv_bg: Option<PendingUvBgExport>,
-    /// PMX 変換前のディレクトリ作成 BG 処理の結果待ち
+    /// Wait state for the BG directory-creation step before PMX conversion.
     pub pending_mkdir: Option<PendingMkdir>,
 }
 
@@ -707,7 +711,7 @@ impl Default for ExportState {
 }
 
 impl ViewerApp {
-    /// プログレスオーバーレイ描画（処理中はキャンセルボタン付き）
+    /// Draw the progress overlay (with a cancel button while processing is in flight).
     pub(super) fn paint_progress_overlay(
         &mut self,
         viewport: &egui::Ui,
@@ -743,14 +747,14 @@ impl ViewerApp {
             egui::pos2(center.x, center.y),
             egui::vec2(rect.width(), bar_h),
         );
-        // 背景帯
+        // Background band.
         viewport.painter().rect_filled(
             bar_rect,
             0.0,
             egui::Color32::from_rgba_unmultiplied(0, 0, 0, 0xC0),
         );
 
-        // テキスト（中央揃え）
+        // Text (centered).
         viewport.painter().text(
             center,
             egui::Align2::CENTER_CENTER,
@@ -759,7 +763,7 @@ impl ViewerApp {
             color,
         );
 
-        // キャンセル可能な処理中: 最前面 Area でキャンセルボタンを配置
+        // Cancellable while processing: place the cancel button on a top-most Area.
         let is_cancellable = is_bg_loading || is_gpu_building || is_converting_bg;
         if is_cancellable {
             let btn_w = 56.0_f32;
@@ -791,7 +795,7 @@ impl ViewerApp {
                     }
                 });
 
-            // Esc キーでもキャンセル
+            // Esc also cancels.
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 if is_bg_loading {
                     self.cancel_bg_load();
@@ -805,7 +809,7 @@ impl ViewerApp {
         ctx.request_repaint();
     }
 
-    /// BGロードをキャンセルし、モデルと関連する全ての状態をクリアする
+    /// Cancel the BG load and clear the model and every related state.
     fn cancel_bg_load(&mut self) {
         if let BackgroundLoadState::Loading(handle) =
             std::mem::replace(&mut self.pending.bg_state, BackgroundLoadState::Idle)
@@ -823,7 +827,7 @@ impl ViewerApp {
                 .cancel
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        // 待機中の全ての遅延処理をクリア
+        // Clear every queued deferred process.
         self.pending.pkg_load = None;
         self.pending.archive_load = None;
         self.pending.multi_load = None;
@@ -831,7 +835,7 @@ impl ViewerApp {
         self.pending.unity_pkg = None;
         self.pending.archive = None;
 
-        // リロード中のキャンセル: スナップショットから旧状態を復元して旧モデルを残す
+        // Cancellation during reload: restore the prior state from the snapshot to keep the old model.
         if let Some(snap) = self.reload_snapshot.take() {
             self.restore_snapshot_on_failure(snap);
             self.convert_message = Some(ConvertMessage::success(
@@ -840,15 +844,16 @@ impl ViewerApp {
             return;
         }
 
-        // 通常ロードのキャンセル: モデルとアニメーション状態を全クリア
+        // Cancellation during a normal load: clear the model and animation state entirely.
         self.loaded = None;
         self.anim.state = None;
         self.anim.library.clear();
         self.anim.active_index = None;
         self.tex.pkg_textures = None;
         self.clear_pkg_thumb_cache();
-        // v0.5.2 [review_01 P1]: ir.textures と同数の別モデルに差し替わっても
-        // 前モデルの TextureId が再利用されないよう、ロードキャンセル時も破棄する。
+        // v0.5.2 [review_01 P1]: discard on load cancel as well, so the previous
+        // model's TextureId is not reused even when swapped in for a different
+        // model with the same number of ir.textures.
         self.clear_ir_thumb_cache();
         self.cancel_tex_match_preview();
         self.tex.pending_match = None;
@@ -858,7 +863,7 @@ impl ViewerApp {
         self.morph_weights.clear();
         self.material_visibility.clear();
 
-        // レンダラキャッシュ無効化
+        // Invalidate renderer caches.
         if let Some(ref mut renderer) = self.renderer {
             renderer.invalidate_visualization_cache();
             renderer.invalidate_normal_cache();
@@ -869,14 +874,14 @@ impl ViewerApp {
         ));
     }
 
-    /// GPU 構築（テクスチャアップロード）をキャンセルし、状態をクリアする
+    /// Cancel the GPU build (texture upload) and clear the state.
     fn cancel_gpu_build(&mut self) {
         if self.pending.gpu_build.is_some() {
             log::info!("User cancelled GPU build");
             self.pending.gpu_build = None;
         }
 
-        // リロード中のキャンセル: スナップショットから旧状態を復元して旧モデルを残す
+        // Cancellation during reload: restore the prior state from the snapshot to keep the old model.
         if let Some(snap) = self.reload_snapshot.take() {
             self.restore_snapshot_on_failure(snap);
             self.convert_message = Some(ConvertMessage::success(
@@ -885,15 +890,16 @@ impl ViewerApp {
             return;
         }
 
-        // 通常ロードのキャンセル: モデルとアニメーション状態を全クリア
+        // Cancellation during a normal load: clear the model and animation state entirely.
         self.loaded = None;
         self.anim.state = None;
         self.anim.library.clear();
         self.anim.active_index = None;
         self.tex.pkg_textures = None;
         self.clear_pkg_thumb_cache();
-        // v0.5.2 [review_01 P1]: ir.textures と同数の別モデルに差し替わっても
-        // 前モデルの TextureId が再利用されないよう、ロードキャンセル時も破棄する。
+        // v0.5.2 [review_01 P1]: discard on load cancel as well, so the previous
+        // model's TextureId is not reused even when swapped in for a different
+        // model with the same number of ir.textures.
         self.clear_ir_thumb_cache();
         self.cancel_tex_match_preview();
         self.tex.pending_match = None;
@@ -913,7 +919,7 @@ impl ViewerApp {
         ));
     }
 
-    /// バックグラウンド PMX 変換をキャンセルする
+    /// Cancel the background PMX conversion.
     fn cancel_convert_bg(&mut self) {
         if let Some(ref handle) = self.pending.convert_bg {
             handle
@@ -927,7 +933,7 @@ impl ViewerApp {
         ));
     }
 
-    /// プログレスフラグ更新（次フレームで処理を実行するためのトリガー）
+    /// Update progress flags (the trigger to run the action on the next frame).
     pub(super) fn update_progress_flags(&mut self, ctx: &egui::Context) {
         if let BackgroundLoadState::PendingDispatch {
             ref mut dispatch, ..
@@ -964,7 +970,7 @@ impl ViewerApp {
         }
     }
 
-    /// Set progress toast for batch model loading
+    /// Set progress toast for batch model loading.
     #[allow(dead_code)]
     fn set_batch_progress_message(
         &mut self,
@@ -985,7 +991,7 @@ impl ViewerApp {
         }
     }
 
-    /// 遅延処理（ファイル読み込み、GPU再構築、PMX変換など）を実行
+    /// Run the deferred processes (file load, GPU rebuild, PMX conversion, etc.).
     pub(super) fn process_pending_tasks(&mut self, ctx: &egui::Context) {
         self.poll_pending_psd_conversions();
         self.poll_file_dialog();
@@ -1036,7 +1042,7 @@ impl ViewerApp {
     }
 
     fn poll_dispatch_and_bg_load(&mut self) {
-        // PendingDispatch が Ready → メインスレッドルーティング
+        // PendingDispatch is Ready -> route on the main thread.
         let dispatch_ready = matches!(
             &self.pending.bg_state,
             BackgroundLoadState::PendingDispatch { dispatch, .. }
@@ -1054,7 +1060,7 @@ impl ViewerApp {
             self.route_load_dispatch(dispatch, prior_loading);
         }
 
-        // バックグラウンド CPU パース結果をポーリング
+        // Poll the background CPU parse result.
         if let BackgroundLoadState::Loading(ref handle) = self.pending.bg_state {
             let current_id = handle.request_id;
             match handle.rx.try_recv() {
@@ -1094,7 +1100,7 @@ impl ViewerApp {
     }
 
     fn poll_deferred_loads(&mut self) {
-        // unitypackage モデル遅延読み込み → BGスレッドへ投入
+        // Deferred unitypackage model load -> hand off to the BG thread.
         if self.pending.pkg_load.as_ref().is_some_and(|p| p.shown) {
             let p = self
                 .pending
@@ -1104,8 +1110,8 @@ impl ViewerApp {
             self.spawn_bg_pkg_load(p);
         }
 
-        // 複数モデル一括ロードキューの処理
-        // pkg_load と fbx_choice の両方が空、かつ bg_state が idle のときのみ次を投入
+        // Process the multi-model batch-load queue.
+        // Submit the next entry only when both pkg_load and fbx_choice are empty and bg_state is idle.
         if self.pending.pkg_load.is_none()
             && self.pending.fbx_choice.is_none()
             && self.pending.bg_state.is_idle()
@@ -1139,7 +1145,7 @@ impl ViewerApp {
             }
         }
 
-        // アーカイブモデル遅延読み込み → BGスレッドへ投入
+        // Deferred archive model load -> hand off to the BG thread.
         if self.pending.archive_load.as_ref().is_some_and(|p| p.shown) {
             let p = self
                 .pending
@@ -1161,15 +1167,16 @@ impl ViewerApp {
         let queue = &render_state.queue;
         let total = gb.ir.textures.len();
 
-        // Phase 1: テクスチャアップロード（フレーム分割）+ 完了後の Phase 2 起動。
-        // cpu_prep_rx が None の間のみ実行する（Phase 2 起動後は何もしない）。
-        // total == 0 （例: MTL 解決失敗で材質=デフォルトのみの OBJ 等）のケースでは
-        // アップロード対象が無いまま直ちに Phase 2 起動へ進む必要がある。
-        // 旧実装は外側 if に `gb.next_tex < total` を含めていたため、total==0 で
-        // Phase 1 ブロック全体がスキップされ、Phase 2 の起動にも到達せず
-        // GPU 構築が永久ハングしていた。
+        // Phase 1: texture upload (split across frames) + start Phase 2 once done.
+        // Run only while cpu_prep_rx is None (do nothing after Phase 2 is started).
+        // For total == 0 (e.g. an OBJ where MTL resolution failed and only the
+        // default material remains), there is nothing to upload, so we must
+        // proceed straight to starting Phase 2.
+        // The previous implementation included `gb.next_tex < total` on the
+        // outer if, so the entire Phase 1 block was skipped when total == 0,
+        // Phase 2 was never started, and the GPU build hung indefinitely.
         if gb.cpu_prep_rx.is_none() {
-            // 残りテクスチャを 1 バッチだけアップロード（total==0 ならこのブロックはスキップ）
+            // Upload one batch of remaining textures (this block is skipped when total == 0).
             if gb.next_tex < total {
                 let end = (gb.next_tex + GPU_UPLOAD_BATCH).min(total);
                 for i in gb.next_tex..end {
@@ -1184,7 +1191,7 @@ impl ViewerApp {
                 gb.next_tex = end;
             }
 
-            // Phase 1 完了（0 本含む）→ Phase 2: BG スレッドで CPU prep 開始
+            // Phase 1 done (including 0 textures) -> Phase 2: start CPU prep on the BG thread.
             if gb.next_tex >= total {
                 log::info!(
                     "[gpu_build] Phase 1 done: {total} textures uploaded, spawning BG cpu_prep"
@@ -1205,7 +1212,7 @@ impl ViewerApp {
             }
         }
 
-        // Phase 3: CPU prep 結果ポーリング → GPU finalize
+        // Phase 3: poll the CPU prep result -> GPU finalize.
         if let Some(ref rx) = gb.cpu_prep_rx {
             match rx.try_recv() {
                 Ok(Ok((prep, ir))) => {
@@ -1481,8 +1488,8 @@ impl ViewerApp {
     }
 }
 
-/// UVマップエクスポートに必要な最小データだけを IrModel として抽出する。
-/// テクスチャ・ボーン等の重いデータはコピーしない。
+/// Extract only the minimum data needed for UV-map export as an IrModel.
+/// Heavy data such as textures and bones are not copied.
 fn build_minimal_ir_for_uv(ir: &IrModel) -> IrModel {
     use crate::intermediate::types::IrMesh;
     let meshes = ir

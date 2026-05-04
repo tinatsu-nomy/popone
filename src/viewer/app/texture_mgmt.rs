@@ -1,4 +1,4 @@
-//! テクスチャ割り当て、プレビュー、pkg テクスチャ処理
+//! Texture assignment, preview, and pkg-texture handling.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -8,18 +8,18 @@ use eframe::egui;
 use eframe::wgpu;
 use rust_i18n::t;
 
-/// PSD→PNG バックグラウンド変換の結果型
+/// Result type for the PSD -> PNG background conversion.
 type PsdConversionResult = anyhow::Result<Vec<u8>>;
 
-/// PSD→PNG バックグラウンド変換の保留状態
+/// Pending state for the PSD -> PNG background conversion.
 pub struct PendingPsdConversion {
-    /// 変換結果の受信チャネル
+    /// Receiver channel for the conversion result.
     pub rx: std::sync::mpsc::Receiver<PsdConversionResult>,
-    /// 変換完了後に差し替える IrTexture のインデックス
+    /// Index of the IrTexture to swap in once the conversion completes.
     pub tex_idx: usize,
-    /// 変換完了後に設定する PNG ファイル名（例: "foo.png"）
+    /// PNG file name to set after the conversion (e.g. "foo.png").
     pub png_filename: String,
-    /// 元の表示名（ログ出力用）
+    /// Original display name (used for logging).
     pub display_name: String,
 }
 
@@ -27,40 +27,41 @@ use super::helpers::{is_temp_path, TextureSource};
 use super::{ConvertMessage, GpuModel, ViewerApp};
 use crate::intermediate::types::{TextureData, TextureSlot};
 
-/// テクスチャ割り当て・パッケージテクスチャ関連の状態
+/// State for texture assignment and package textures.
 pub struct TextureState {
-    /// 手動テクスチャ割り当て履歴（材質Index → テクスチャソース）
+    /// Manual texture assignment history (material index -> texture source).
     pub assignments: HashMap<usize, TextureSource>,
-    /// パッケージテクスチャ手動割り当て履歴（材質Index → テクスチャ名）
+    /// Manual package-texture assignment history (material index -> texture name).
     pub pkg_assignments: HashMap<usize, String>,
-    /// テクスチャD&Dプレビュー
+    /// Texture D&D preview.
     pub pending_preview: Option<PendingTexPreview>,
-    /// unitypackageテクスチャ手動割当ダイアログ
+    /// Manual unitypackage texture assignment dialog.
     pub pending_match: Option<PendingTexMatch>,
-    /// unitypackage内テクスチャ（モデル読み込み中保持）
+    /// Textures inside a unitypackage (held while the model is loaded).
     pub pkg_textures: Option<Vec<(String, Arc<[u8]>)>>,
-    /// pkg_textures のサムネイル TextureId キャッシュ
+    /// TextureId thumbnail cache for pkg_textures.
     pub pkg_thumb_cache: Vec<Option<egui::TextureId>>,
-    /// loaded.ir.textures のサムネイル TextureId キャッシュ（割当済みテクスチャ表示用）
+    /// TextureId thumbnail cache for loaded.ir.textures (used to display already-assigned textures).
     ///
-    /// v0.5.2 で追加。マテリアルに割り当てたテクスチャをUI上でサムネイル表示するため、
-    /// `ir.textures[i]` に対応する 64px 縮小版を egui の `TextureId` として登録して保持する。
-    /// サイズは `ir.textures.len()` と一致するよう `sync_ir_thumb_cache()` で同期。
+    /// Added in v0.5.2. Used to show thumbnails of textures assigned to a
+    /// material in the UI: the 64 px scaled-down version corresponding to
+    /// `ir.textures[i]` is registered as an egui `TextureId` and held here.
+    /// Kept in sync with `ir.textures.len()` via `sync_ir_thumb_cache()`.
     pub ir_thumb_cache: Vec<Option<egui::TextureId>>,
-    /// 同一材質名への同時テクスチャ割り当て
+    /// Simultaneous texture assignment to materials with the same name.
     pub link_same_name: bool,
-    /// pkgテクスチャポップアップ用フィルタ
+    /// Filter for the pkg-texture popup.
     pub pkg_popup_filter: String,
-    /// 最後にテクスチャファイルを開いたディレクトリ
+    /// Most recent directory used for opening a texture file.
     pub last_dir: Option<PathBuf>,
-    /// 非同期テクスチャファイルダイアログ（材質Index, TextureSlot, 結果受信チャネル）
-    /// Step 4-16b: slot 情報を追加し、各セクションのテクスチャ選択ボタンから起動可能にした。
+    /// Asynchronous texture file dialog (material index, TextureSlot, result receiver channel).
+    /// Step 4-16b: added the slot info so it can be launched from the texture-select button of each section.
     pub pending_file_dialog: Option<(
         usize,
         TextureSlot,
         std::sync::mpsc::Receiver<Option<PathBuf>>,
     )>,
-    /// PSD→PNG バックグラウンド変換の保留リスト
+    /// Pending list of PSD -> PNG background conversions.
     pub pending_psd_conversions: Vec<PendingPsdConversion>,
 }
 
@@ -83,63 +84,63 @@ impl Default for TextureState {
     }
 }
 
-/// テクスチャD&Dプレビュー状態
+/// Texture D&D preview state.
 pub struct PendingTexPreview {
     pub path: PathBuf,
-    /// 読み込み済みバイトデータ（一時ファイル消失対策）
+    /// Cached bytes that have already been read (defends against the temp file disappearing).
     pub cached_data: Vec<u8>,
-    /// PSDファイルかどうか
+    /// Whether this is a PSD file.
     pub is_psd: bool,
-    /// 一時パスから読み込まれたか（消失前に判定済み）
+    /// Whether the data was read from a temp path (decided before the file disappeared).
     pub was_temp: bool,
-    /// 材質ごとの選択状態（チェックボックス）
+    /// Per-material selection state (checkboxes).
     pub selection: Vec<bool>,
-    /// 現在プレビュー適用中の材質
+    /// Materials currently in preview.
     pub previewed: Vec<bool>,
-    /// プレビュー用テクスチャビュー（GPU）
+    /// Preview texture view (GPU).
     pub(super) texture_view: wgpu::TextureView,
-    /// draw_index → 退避した元の bind group
+    /// draw_index -> the original bind group that was saved aside.
     pub(super) saved_binds: HashMap<usize, Option<wgpu::BindGroup>>,
-    /// サムネイル表示用 egui TextureId
+    /// egui TextureId for showing the thumbnail.
     pub preview_tex_id: Option<egui::TextureId>,
 }
 
-/// unitypackage テクスチャ手動割当ダイアログの状態
+/// State of the manual unitypackage texture assignment dialog.
 pub struct PendingTexMatch {
-    /// 未割当の材質インデックス一覧（ir.materials 内のインデックス）
+    /// List of indices of unassigned materials (indices into ir.materials).
     pub mat_indices: Vec<usize>,
-    /// 材質インデックス → 選択中のテクスチャインデックス (pkg_textures 内)
+    /// material index -> currently selected texture index (within pkg_textures).
     pub selections: Vec<Option<usize>>,
-    /// テクスチャ名フィルタ
+    /// Texture-name filter.
     pub tex_filter: String,
-    /// 現在プレビュー適用中の選択状態
+    /// Selection currently being previewed.
     pub previewed: Vec<Option<usize>>,
-    /// draw_index → 退避した元の (texture_bind_group, mmd_texture_bind_group)
+    /// draw_index -> the original (texture_bind_group, mmd_texture_bind_group) saved aside.
     pub saved_binds: HashMap<usize, (Option<wgpu::BindGroup>, Option<wgpu::BindGroup>)>,
-    /// pkg テクスチャの GPU TextureView（インデックス対応）
+    /// GPU TextureView for the pkg textures (index-aligned).
     pub texture_views: Vec<Option<wgpu::TextureView>>,
-    /// アップロード失敗済みテクスチャインデックス（再試行防止）
+    /// Indices of textures whose upload has failed (prevents retry).
     pub failed_uploads: std::collections::HashSet<usize>,
 }
 
-/// UI 表示用にキャッシュされた材質情報（借用制約回避 + 毎フレーム clone 回避）
+/// Material info cached for UI display (avoids borrow constraints + per-frame clone).
 pub struct CachedMaterialInfo {
     /// (draw_index, material_index)
     pub draw_indices: Vec<(usize, usize)>,
-    /// 材質名
+    /// Material name.
     pub names: Vec<String>,
-    /// テクスチャインデックス
+    /// Texture index.
     pub tex_indices: Vec<Option<usize>>,
-    /// FBX 元テクスチャファイル名
+    /// Source texture file name (FBX origin).
     pub source_tex_names: Vec<Option<String>>,
-    /// テクスチャ設定済みカウント
+    /// Count of materials with a texture set.
     pub tex_set_count: usize,
-    /// ステータスバー用テクスチャ状況文字列（毎フレーム format! 回避）
+    /// Texture-status string for the status bar (avoids per-frame format!).
     pub tex_status_text: String,
 }
 
 impl ViewerApp {
-    /// 材質情報キャッシュを構築
+    /// Build the material info cache.
     pub(super) fn build_mat_cache(
         ir: &crate::intermediate::types::IrModel,
         gpu_model: &GpuModel,
@@ -175,14 +176,14 @@ impl ViewerApp {
         }
     }
 
-    /// 材質キャッシュを更新（テクスチャ割り当て後 / 材質名編集後）
+    /// Refresh the material cache (after a texture assignment / material rename).
     pub(in crate::viewer) fn update_mat_cache(&mut self) {
         if let Some(ref mut loaded) = self.loaded {
             loaded.mat_cache = Self::build_mat_cache(&loaded.ir, &loaded.gpu_model);
         }
     }
 
-    /// pkg_textures のサムネイルを GPU にアップロードしてキャッシュ
+    /// Upload pkg_textures thumbnails to the GPU and cache them.
     pub fn rebuild_pkg_thumb_cache(&mut self) {
         self.clear_pkg_thumb_cache();
         let Some(ref pkg) = self.tex.pkg_textures else {
@@ -220,8 +221,8 @@ impl ViewerApp {
         }
     }
 
-    /// pkg_textures の新規追加分のみサムネイルを生成して追記する（差分更新）。
-    /// `start_index` 以降のエントリが新規追加分。
+    /// Generate thumbnails only for newly added pkg_textures and append them (incremental update).
+    /// Entries from `start_index` onward are the newly added ones.
     pub fn append_pkg_thumb_cache(&mut self, start_index: usize) {
         let Some(ref pkg) = self.tex.pkg_textures else {
             return;
@@ -261,7 +262,7 @@ impl ViewerApp {
         }
     }
 
-    /// サムネイルキャッシュをクリア
+    /// Clear the thumbnail cache.
     pub(super) fn clear_pkg_thumb_cache(&mut self) {
         let mut renderer = self.render_state.renderer.write();
         for tex_id in self.tex.pkg_thumb_cache.drain(..).flatten() {
@@ -269,11 +270,11 @@ impl ViewerApp {
         }
     }
 
-    /// `loaded.ir.textures` のサムネイルを GPU にアップロードして `ir_thumb_cache` に登録する。
+    /// Upload thumbnails of `loaded.ir.textures` to the GPU and register them in `ir_thumb_cache`.
     ///
-    /// v0.5.2 で追加。マテリアル編集ウィンドウでテクスチャスロットに割り当て済みの
-    /// テクスチャをサムネイル表示するために利用する。`pkg_thumb_cache` と同様に
-    /// 64px 縮小版を `register_native_texture` で登録し、`egui::TextureId` を保持。
+    /// Added in v0.5.2. Used to show thumbnails of textures assigned to a slot in
+    /// the material edit window. Like `pkg_thumb_cache`, the 64 px scaled-down
+    /// version is registered with `register_native_texture` and the `egui::TextureId` is held.
     pub fn rebuild_ir_thumb_cache(&mut self) {
         self.clear_ir_thumb_cache();
         let Some(ref loaded) = self.loaded else {
@@ -291,12 +292,12 @@ impl ViewerApp {
         }
     }
 
-    /// `loaded.ir.textures` の長さに合わせて `ir_thumb_cache` を同期する（差分更新）。
+    /// Sync `ir_thumb_cache` with the length of `loaded.ir.textures` (incremental update).
     ///
-    /// モデル切替・テクスチャ追加など `ir.textures` 長が変化した際に呼び出す。
-    /// - `loaded` が無い場合: 全クリア
-    /// - 長さが短縮されている場合: 既存を破棄して再構築
-    /// - 長さが増加している場合: 追加分のみアップロード
+    /// Call when `ir.textures` length changes, e.g. on model swap or texture addition.
+    /// - When `loaded` is missing: clear all.
+    /// - When the length shrank: discard existing and rebuild.
+    /// - When the length grew: only upload the new tail.
     pub fn sync_ir_thumb_cache(&mut self) {
         let Some(ref loaded) = self.loaded else {
             if !self.tex.ir_thumb_cache.is_empty() {
@@ -313,11 +314,11 @@ impl ViewerApp {
             self.rebuild_ir_thumb_cache();
             return;
         }
-        // append のみで済むケース
+        // The append-only case.
         self.append_ir_thumb_cache(cache_len);
     }
 
-    /// `ir_thumb_cache` に `start_index` 以降の新規テクスチャ分を追記する（差分更新）。
+    /// Append thumbnails for new textures from `start_index` onward into `ir_thumb_cache` (incremental update).
     pub fn append_ir_thumb_cache(&mut self, start_index: usize) {
         let Some(ref loaded) = self.loaded else {
             return;
@@ -337,7 +338,7 @@ impl ViewerApp {
         }
     }
 
-    /// `ir_thumb_cache` を破棄して GPU リソースを解放する。
+    /// Discard `ir_thumb_cache` and free the GPU resources.
     pub(super) fn clear_ir_thumb_cache(&mut self) {
         let mut renderer = self.render_state.renderer.write();
         for tex_id in self.tex.ir_thumb_cache.drain(..).flatten() {
@@ -345,10 +346,10 @@ impl ViewerApp {
         }
     }
 
-    /// 単一 `IrTexture` からサムネイル TextureId を生成する。
+    /// Build a thumbnail TextureId from a single `IrTexture`.
     ///
-    /// `TextureData::RawRgba` は直接リサイズし、`Encoded` はデコード→リサイズする。
-    /// 失敗時は `None` を返し、UI 側で「サムネ無し」としてフォールバックする。
+    /// `TextureData::RawRgba` is resized directly; `Encoded` is decoded then resized.
+    /// On failure returns `None`, and the UI side falls back to "no thumbnail".
     fn build_ir_thumb_entry(
         tex: &crate::intermediate::types::IrTexture,
         thumb_size: u32,
@@ -394,9 +395,9 @@ impl ViewerApp {
         Some(renderer.register_native_texture(device, &view, eframe::wgpu::FilterMode::Linear))
     }
 
-    /// 指定材質に外部テクスチャを割り当て（ファイルパスから）
+    /// Assign an external texture (from a file path) to the given material.
     pub fn assign_texture_to_material(&mut self, material_index: usize, path: &Path) {
-        // ファイルを1回だけ読み込む（二重読み込み回避）
+        // Read the file once (avoids double read).
         let tex_data = match std::fs::read(path) {
             Ok(d) => d,
             Err(e) => {
@@ -413,13 +414,13 @@ impl ViewerApp {
             .unwrap_or("")
             .to_lowercase();
         let data_arc = Arc::from(tex_data.into_boxed_slice());
-        // Cached として渡し、assign_texture_source_to_material 内での再読み込みを回避
+        // Pass it in as Cached to avoid re-reading inside assign_texture_source_to_material.
         let cached_source = TextureSource::Cached {
             original_name: path.to_string_lossy().into_owned(),
             data: Arc::clone(&data_arc),
             is_psd: ext_lower == "psd",
         };
-        // 履歴用: 一時パスは Cached、通常パスは File で保存（reload 時に再読み込み可能に）
+        // For history: a temp path is saved as Cached, a normal path as File (so reload can re-read it).
         let history_source = if is_temp_path(path) {
             TextureSource::Cached {
                 original_name: path.to_string_lossy().into_owned(),
@@ -430,7 +431,7 @@ impl ViewerApp {
             TextureSource::File(path.to_path_buf())
         };
         self.assign_texture_source_to_material(material_index, &cached_source);
-        // 履歴を上書き（通常ファイルパスの場合は File で保存し、メモリ使用量を抑える）
+        // Override the history (for normal file paths, save as File to reduce memory usage).
         self.tex
             .assignments
             .insert(material_index, history_source.clone());
@@ -444,13 +445,13 @@ impl ViewerApp {
         }
     }
 
-    /// 指定材質に TextureSource を割り当て
+    /// Assign a TextureSource to the given material.
     pub fn assign_texture_source_to_material(
         &mut self,
         material_index: usize,
         tex_source: &TextureSource,
     ) {
-        // TextureSource からバイト列を取得
+        // Get bytes from the TextureSource.
         let (tex_data, is_psd, display_name) = match tex_source {
             TextureSource::File(path) => {
                 let data = match std::fs::read(path) {
@@ -507,8 +508,8 @@ impl ViewerApp {
         self.update_mat_cache();
     }
 
-    /// パッケージ内テクスチャデータを材質に割り当て（バイト列から直接）
-    /// 成功時は true、デコード/アップロード失敗時は false を返す
+    /// Assign in-package texture data directly (from bytes) to a material.
+    /// Returns true on success, false on decode / upload failure.
     pub fn assign_texture_data_to_material(
         &mut self,
         material_index: usize,
@@ -533,10 +534,11 @@ impl ViewerApp {
     /// linked sibling assignment -- shared by both file-path and raw-byte callers.
     /// Returns false on upload failure or missing loaded model.
     ///
-    /// `slot` 引数は §B で導入された `TextureSlot` enum に対応する。Step 4-16a で
-    /// 全 11 スロットの書き込み経路を実装。BaseColor は既存の texture_bind_group
-    /// 即時更新、他のスロットは IrMaterial フィールド書き換え + `mark_material_dirty`
-    /// → `rebuild_material_bind_groups` で bind group 再生成。
+    /// The `slot` argument corresponds to the `TextureSlot` enum introduced in §B.
+    /// Step 4-16a implements the write path for all 11 slots. BaseColor updates
+    /// the existing texture_bind_group immediately; the other slots rewrite the
+    /// IrMaterial field + `mark_material_dirty` -> the bind group is regenerated
+    /// in `rebuild_material_bind_groups`.
     pub(crate) fn assign_texture_core(
         &mut self,
         material_index: usize,
@@ -601,8 +603,8 @@ impl ViewerApp {
         };
 
         // Reuse existing IrTexture with same name+content (dedup)
-        // review_012 [P1] 対応: 新規テクスチャの場合は gpu_texture_views にも push する。
-        // 既存テクスチャ再利用時は push しない（TODO-1: dedup 条件で整合維持）。
+        // review_012 [P1] fix: when this is a new texture, also push to gpu_texture_views.
+        // Do not push when reusing an existing texture (TODO-1: keep alignment via the dedup condition).
         let existing_idx = loaded.ir.textures.iter().position(|t| {
             t.filename == ir_filename
                 && t.data.len() == ir_data.len()
@@ -622,28 +624,29 @@ impl ViewerApp {
                     source_path: display_name.to_string(),
                     mip_chain: None,
                 });
-            // [P1] 新規テクスチャ: GPU view 配列にも追加（rebuild 時に tex_idx から引けるように）
+            // [P1] New texture: also append to the GPU view array (so rebuild can index by tex_idx).
             loaded
                 .gpu_model
                 .push_gpu_texture_view(texture_view.clone(), texture_view_unorm.clone());
-            // v0.5.2 [review_02 P1] 対応: 単純な push ではなく不足分を末尾 append する。
-            // `ir_thumb_cache` は材質編集ウィンドウを開くまで未構築（長さ 0）のままなので、
-            // `sync_ir_thumb_cache()` を経ずに push すると新規サムネイルが index 0 に入り、
-            // 既存スロットのサムネイルと index がずれる（全スロット誤表示）。
+            // v0.5.2 [review_02 P1] fix: append the missing tail rather than a single push.
+            // `ir_thumb_cache` stays empty (length 0) until the material edit window opens,
+            // so a `push` without going through `sync_ir_thumb_cache()` would put the new
+            // thumbnail at index 0, misaligning every existing slot's thumbnail.
             //
-            // 正しくは「現在の cache 長から ir.textures 長まで足りない分を全て append」する。
-            // 通常は cache_len == textures.len() - 1 で 1 枚だけ append、キャッシュ未構築時は
-            // 新規テクスチャを含めて全枚数を一括生成する。
+            // The correct behavior is "append everything missing from the current cache
+            // length up to ir.textures length". Normally cache_len == textures.len() - 1,
+            // so a single append; when the cache is uninitialized, build all entries
+            // including the new texture in one shot.
             //
-            // `device`/`queue` は `&self.render_state.device`/queue として既に借用中で、
-            // `self.render_state.renderer` と `self.tex.ir_thumb_cache` は disjoint fields の
-            // ため、この場で write ロックと cache への push が両立する。
+            // `device` / `queue` are already borrowed via `&self.render_state.device` /
+            // queue, and `self.render_state.renderer` and `self.tex.ir_thumb_cache` are
+            // disjoint fields, so the write lock and the cache push coexist here.
             {
                 let mut renderer = self.render_state.renderer.write();
                 let cache_len = self.tex.ir_thumb_cache.len();
                 let target_len = loaded.ir.textures.len();
                 if cache_len > target_len {
-                    // キャッシュが長すぎる異常系: 全破棄してから再構築（ここに来るのは想定外）
+                    // Anomalous case where the cache is too long: drop everything and rebuild (should not happen).
                     for old in self.tex.ir_thumb_cache.drain(..).flatten() {
                         renderer.free_texture(&old);
                     }
@@ -675,13 +678,13 @@ impl ViewerApp {
             });
         }
 
-        // Step 4-16a: slot に応じて IrMaterial の対応フィールドにテクスチャを設定
+        // Step 4-16a: set the texture on the IrMaterial field corresponding to slot.
         Self::apply_texture_to_slot(&mut loaded.ir.materials[material_index], slot, tex_idx);
 
         // GPU DrawCall update:
-        // - BaseColor: 既存の texture_bind_group 即時更新（遅延なし）
-        // - 他のスロット: mark_material_dirty で次フレームに rebuild_material_bind_groups
-        //   が全 bind group を再生成（mtoon_aux_bind_group 含む）
+        // - BaseColor: update the existing texture_bind_group immediately (no defer).
+        // - Other slots: mark_material_dirty so the next frame rebuild_material_bind_groups
+        //   regenerates every bind group (including mtoon_aux_bind_group).
         let needs_immediate_gpu_update = slot == TextureSlot::BaseColor;
         if needs_immediate_gpu_update {
             let texture_bgl = match self.renderer {
@@ -729,12 +732,12 @@ impl ViewerApp {
             }
         }
 
-        // 非 BaseColor スロットは mark_material_dirty で rebuild を予約。
-        // loaded の mut borrow を先に終わらせるため、ここで true を返してから
-        // 呼び出し元で mark_material_dirty を呼ぶ設計にするか、あるいは
-        // ここで直接呼ぶ（loaded は上の if 分岐後は使わないので NLL で許容される）。
+        // Non-BaseColor slots queue the rebuild via mark_material_dirty.
+        // To finish loaded's mut borrow first, we either return true and let
+        // the caller invoke mark_material_dirty, or call it directly here
+        // (allowed under NLL since loaded is unused after the if branch above).
         if !needs_immediate_gpu_update {
-            // loaded の borrow は上のブロックで終了しているため、self を mut で借りられる
+            // loaded's borrow ends in the block above, so self can be borrowed mutably.
             self.mark_material_dirty(material_index);
             if self.tex.link_same_name {
                 if let Some(ref loaded) = self.loaded {
@@ -749,14 +752,14 @@ impl ViewerApp {
         true
     }
 
-    /// Step 4-16a: slot に応じて IrMaterial の対応フィールドにテクスチャインデックスを設定。
+    /// Step 4-16a: set the texture index on the IrMaterial field corresponding to slot.
     ///
-    /// - BaseColor: 既存の texture_index + base_color_tex_info + apply_textured_defaults
-    /// - Emissive / Normal: IrMaterial 直接フィールド
-    /// - Shade / ShadingShift / Rim / OutlineWidth / Matcap / UvAnimMask: MtoonParams フィールド
-    ///   + review_012 [P2]: `shader_family = Mtoon` に同期（描画側が MToon パスで aux bind
-    ///     group を組むための前提条件）
-    /// - Sphere / Toon: MMD 専用フィールド
+    /// - BaseColor: existing texture_index + base_color_tex_info + apply_textured_defaults.
+    /// - Emissive / Normal: direct IrMaterial fields.
+    /// - Shade / ShadingShift / Rim / OutlineWidth / Matcap / UvAnimMask: MtoonParams fields
+    ///   + review_012 [P2]: sync `shader_family = Mtoon` (the rendering-side prerequisite for
+    ///     building the aux bind group along the MToon path).
+    /// - Sphere / Toon: MMD-only fields.
     fn apply_texture_to_slot(
         mat: &mut crate::intermediate::types::IrMaterial,
         slot: TextureSlot,
@@ -764,9 +767,9 @@ impl ViewerApp {
     ) {
         use crate::intermediate::types::{IrTextureInfo, ShaderFamily};
 
-        // review_012 [P2]: MToon 系スロットを割り当てた場合、shader_family を Mtoon に同期する。
-        // 描画側が shader_family 主軸判定 (review_007) で MToon パスを選択するために必要。
-        // §G の方針「ユーザーの明示的操作」にテクスチャスロット割当も含む。
+        // review_012 [P2]: when an MToon-side slot is assigned, sync shader_family to Mtoon.
+        // Required so the rendering side selects the MToon path under shader_family-based
+        // dispatch (review_007). §G's "explicit user action" includes texture-slot assignment.
         let is_mtoon_slot = matches!(
             slot,
             TextureSlot::ShadeMultiply
@@ -819,12 +822,12 @@ impl ViewerApp {
             TextureSlot::Sphere => {
                 mat.sphere_texture_index = Some(tex_idx);
                 if mat.sphere_mode == 0 {
-                    mat.sphere_mode = 1; // 乗算がデフォルト
+                    mat.sphere_mode = 1; // multiply is the default
                 }
             }
             TextureSlot::Toon => {
                 mat.toon_texture_index = Some(tex_idx);
-                mat.toon_shared_index = None; // 個別トゥーンに切替
+                mat.toon_shared_index = None; // switch to per-material toon
             }
         }
     }
@@ -857,7 +860,7 @@ impl ViewerApp {
         }
     }
 
-    /// 1枚のテクスチャをプレビューダイアログで開く
+    /// Open one texture in the preview dialog.
     pub(super) fn open_texture_preview(&mut self, path: PathBuf) {
         let ext = path
             .extension()
@@ -865,7 +868,7 @@ impl ViewerApp {
             .unwrap_or("")
             .to_lowercase();
         let is_psd = ext == "psd";
-        // ファイル消失前に一時パス判定を確定（canonicalize がファイル存在を前提とするため）
+        // Decide the temp-path check before the file disappears (canonicalize requires file existence).
         let was_temp = is_temp_path(&path);
         let data = match std::fs::read(&path) {
             Ok(d) => d,
@@ -912,7 +915,7 @@ impl ViewerApp {
         }
     }
 
-    /// 複数テクスチャの自動割り当て（ファイル名と材質名のマッチング）
+    /// Auto-assign multiple textures (matching by file name and material name).
     pub(super) fn auto_assign_textures(&mut self, image_files: Vec<PathBuf>) {
         let Some(ref loaded) = self.loaded else {
             return;
@@ -927,7 +930,7 @@ impl ViewerApp {
         let mut assigned = 0usize;
         let mut unmatched: Vec<String> = Vec::new();
 
-        // ファイル名 → マッチする材質インデックスを収集
+        // File name -> collect indices of matching materials.
         let mut assignments: Vec<(PathBuf, Vec<usize>)> = Vec::new();
         for path in &image_files {
             let stem = path
@@ -938,7 +941,7 @@ impl ViewerApp {
             if stem.is_empty() {
                 continue;
             }
-            // 材質名にファイル名（拡張子なし）を含む材質を検索
+            // Find materials whose name contains the file name (without extension).
             let matched: Vec<usize> = mat_names
                 .iter()
                 .enumerate()
@@ -957,7 +960,7 @@ impl ViewerApp {
             }
         }
 
-        // 割り当て実行
+        // Run the assignments.
         for (path, mat_indices) in assignments {
             for &mat_idx in &mat_indices {
                 self.assign_texture_to_material(mat_idx, &path);
@@ -965,7 +968,7 @@ impl ViewerApp {
             }
         }
 
-        // 結果メッセージ
+        // Result message.
         let mut msg = t!("viewer.toast.tex.auto_assigned", count = assigned).into_owned();
         if !unmatched.is_empty() {
             msg += &t!(
@@ -986,7 +989,7 @@ impl ViewerApp {
         }
     }
 
-    /// テクスチャプレビューの同期（selection と previewed の差分を GPU に反映）
+    /// Sync the texture preview (apply the diff between selection and previewed to the GPU).
     pub fn sync_tex_preview(&mut self) {
         let Some(ref mut preview) = self.tex.pending_preview else {
             return;
@@ -1003,7 +1006,7 @@ impl ViewerApp {
 
         for mat_idx in 0..preview.selection.len() {
             if preview.selection[mat_idx] && !preview.previewed[mat_idx] {
-                // プレビュー適用: 元の bind group を退避し、プレビュー用に差し替え
+                // Apply preview: save the original bind group aside and swap in the preview one.
                 for (draw_idx, draw) in loaded.gpu_model.draws.iter_mut().enumerate() {
                     if draw.material_index == mat_idx {
                         if let std::collections::hash_map::Entry::Vacant(e) =
@@ -1022,7 +1025,7 @@ impl ViewerApp {
                 }
                 preview.previewed[mat_idx] = true;
             } else if !preview.selection[mat_idx] && preview.previewed[mat_idx] {
-                // プレビュー解除: 退避した元の bind group を復元
+                // Cancel preview: restore the original bind group from the saved aside.
                 for (draw_idx, draw) in loaded.gpu_model.draws.iter_mut().enumerate() {
                     if draw.material_index == mat_idx {
                         if let Some(orig) = preview.saved_binds.remove(&draw_idx) {
@@ -1035,14 +1038,14 @@ impl ViewerApp {
         }
     }
 
-    /// テクスチャプレビューを確定適用
+    /// Commit the texture preview as the final assignment.
     pub fn apply_tex_preview(&mut self) {
         let Some(preview) = self.tex.pending_preview.take() else {
             return;
         };
         let path = &preview.path;
 
-        // 選択された材質のインデックスを収集
+        // Collect the indices of the selected materials.
         let selected: Vec<usize> = preview
             .selection
             .iter()
@@ -1051,12 +1054,12 @@ impl ViewerApp {
             .collect();
 
         if selected.is_empty() {
-            // 何も選択されていなければ元に戻す
+            // Nothing selected -> revert.
             self.cancel_tex_preview_inner(preview);
             return;
         }
 
-        // IrModel にテクスチャを追加（1回だけ）
+        // Add the texture into the IrModel (only once).
         let Some(ref mut loaded) = self.loaded else {
             return;
         };
@@ -1064,7 +1067,7 @@ impl ViewerApp {
         let is_psd = preview.is_psd;
         let tex_data = preview.cached_data.clone();
 
-        // 一時パスの場合はキャッシュ用にバイト列を保持（消失前に判定済みのフラグを使用）
+        // For temp paths, retain bytes for caching (using the flag decided before file disappearance).
         let cached_data = if preview.was_temp {
             Some(tex_data.clone())
         } else {
@@ -1077,9 +1080,9 @@ impl ViewerApp {
             .to_string_lossy()
             .to_string();
 
-        // PSD の場合は一時的に PSD 生データで IrTexture を作成し、BG スレッドで PNG 変換
+        // For PSD, temporarily build IrTexture with raw PSD bytes; the BG thread converts to PNG.
         let (ir_data, ir_filename, ir_mime, spawn_psd_bg) = if is_psd {
-            // 変換完了まで実データと一致するメタ情報を保持
+            // Hold meta info that matches the actual bytes until conversion completes.
             let psd_filename = format!("{}.psd", basename);
             (
                 tex_data.clone(),
@@ -1102,7 +1105,7 @@ impl ViewerApp {
             (tex_data, filename, mime.to_string(), false)
         };
 
-        // BG PSD 変換完了後に設定する PNG ファイル名
+        // PNG file name to set after BG PSD conversion completes.
         let png_filename_for_bg = if spawn_psd_bg {
             Some(format!("{}.png", basename))
         } else {
@@ -1121,11 +1124,12 @@ impl ViewerApp {
                 mip_chain: None,
             });
 
-        // v0.5.2 [review_02 P1] 対応: ir_thumb_cache を現行長まで追いつかせる。
-        // 材質編集ウィンドウ未表示の状態で preview → apply 確定すると、`sync_ir_thumb_cache()`
-        // を経ないまま `push` したサムネイルが index 0 に入り、既存スロット表示がずれる。
-        // 不足分（cache_len 〜 ir.textures.len() までの全テクスチャ）を一括 append することで、
-        // 新規テクスチャは必ず正しい `tex_idx` 位置に入る。
+        // v0.5.2 [review_02 P1] fix: catch ir_thumb_cache up to the current length.
+        // If the user commits preview -> apply while the material edit window is closed,
+        // a `push` without going through `sync_ir_thumb_cache()` would put the new
+        // thumbnail at index 0 and misalign every existing slot's display.
+        // Bulk-appending the missing tail (cache_len .. ir.textures.len()) guarantees
+        // that the new texture lands at the correct `tex_idx`.
         {
             let device = &self.render_state.device;
             let queue = &self.render_state.queue;
@@ -1144,7 +1148,7 @@ impl ViewerApp {
             }
         }
 
-        // PSD の場合は BG スレッドで PNG 変換を開始
+        // For PSD, start the PNG conversion on the BG thread.
         if spawn_psd_bg {
             let psd_data = loaded.ir.textures[tex_idx].data.as_bytes().to_vec();
             let (tx, rx) = std::sync::mpsc::channel();
@@ -1162,7 +1166,7 @@ impl ViewerApp {
             });
         }
 
-        // 選択した材質の texture_index を更新
+        // Update texture_index on the selected materials.
         let path_buf = path.clone();
         for &mat_idx in &selected {
             let mat = &mut loaded.ir.materials[mat_idx];
@@ -1176,7 +1180,7 @@ impl ViewerApp {
             );
         }
 
-        // 割り当て履歴を記録（reload_current 時の復元用）
+        // Record the assignment history (for restoration on reload_current).
         let tex_src = if let Some(data) = cached_data {
             TextureSource::Cached {
                 original_name: path_buf.to_string_lossy().into_owned(),
@@ -1190,14 +1194,14 @@ impl ViewerApp {
             self.tex.assignments.insert(mat_idx, tex_src.clone());
         }
 
-        // サムネイル用 egui テクスチャを解放
+        // Free the egui thumbnail texture.
         if let Some(tex_id) = preview.preview_tex_id {
             let mut renderer = self.render_state.renderer.write();
             renderer.free_texture(&tex_id);
         }
 
-        // GPU は既にプレビュー状態 → saved_binds を捨てて確定
-        // saved_binds 内の未プレビュー分は復元
+        // The GPU is already in the preview state -> drop saved_binds and commit.
+        // Restore any non-previewed entries left in saved_binds.
         for (draw_idx, orig) in preview.saved_binds.into_iter() {
             let draw = &mut loaded.gpu_model.draws[draw_idx];
             if !selected.contains(&draw.material_index) {
@@ -1205,11 +1209,11 @@ impl ViewerApp {
             }
         }
 
-        // 材質キャッシュ更新
+        // Refresh the material cache.
         self.update_mat_cache();
     }
 
-    /// テクスチャプレビューをキャンセル（元に戻す）
+    /// Cancel the texture preview (revert).
     pub fn cancel_tex_preview(&mut self) {
         let Some(preview) = self.tex.pending_preview.take() else {
             return;
@@ -1218,7 +1222,7 @@ impl ViewerApp {
     }
 
     pub(super) fn cancel_tex_preview_inner(&mut self, preview: PendingTexPreview) {
-        // サムネイル用 egui テクスチャを解放
+        // Free the egui thumbnail texture.
         if let Some(tex_id) = preview.preview_tex_id {
             let mut renderer = self.render_state.renderer.write();
             renderer.free_texture(&tex_id);
@@ -1226,7 +1230,7 @@ impl ViewerApp {
         let Some(ref mut loaded) = self.loaded else {
             return;
         };
-        // 退避した全 bind group を復元
+        // Restore every saved bind group.
         for (draw_idx, orig) in preview.saved_binds.into_iter() {
             if draw_idx < loaded.gpu_model.draws.len() {
                 loaded.gpu_model.draws[draw_idx].texture_bind_group = orig;
@@ -1234,14 +1238,14 @@ impl ViewerApp {
         }
     }
 
-    /// pkg テクスチャの TextureView スロットを初期化（遅延ロード用）
-    /// 実際の GPU アップロードは sync_tex_match_preview 内で選択時にオンデマンドで行う
+    /// Initialize the TextureView slots for pkg textures (deferred load).
+    /// The actual GPU upload happens on demand inside sync_tex_match_preview when selected.
     pub fn prepare_tex_match_views(&mut self) {
         let Some(ref mut pending) = self.tex.pending_match else {
             return;
         };
         if !pending.texture_views.is_empty() {
-            return; // 既に初期化済み
+            return; // already initialized
         }
         let pkg_count = self.tex.pkg_textures.as_ref().map(|p| p.len()).unwrap_or(0);
         if pkg_count > 0 {
@@ -1249,9 +1253,9 @@ impl ViewerApp {
         }
     }
 
-    /// テクスチャ手動割当のリアルタイムプレビュー同期
-    /// selections と previewed の差分を GPU bind group に反映
-    /// テクスチャは選択時にオンデマンドで GPU アップロード（VRAM スパイク防止）
+    /// Real-time preview sync for the manual texture-match dialog.
+    /// Apply the diff between selections and previewed to the GPU bind groups.
+    /// Textures are uploaded to GPU on demand at selection time (avoids VRAM spikes).
     pub fn sync_tex_match_preview(&mut self) {
         let Some(ref mut pending) = self.tex.pending_match else {
             return;
@@ -1276,7 +1280,7 @@ impl ViewerApp {
             }
 
             if let Some(tex_idx) = sel {
-                // オンデマンドアップロード: 未アップロードなら今アップロード
+                // On-demand upload: upload now if not yet uploaded.
                 if tex_idx < pending.texture_views.len()
                     && pending.texture_views[tex_idx].is_none()
                     && !pending.failed_uploads.contains(&tex_idx)
@@ -1299,7 +1303,7 @@ impl ViewerApp {
                     }
                 }
 
-                // テクスチャビュー取得（失敗時は既存プレビューを復元 — 同名兄弟含む）
+                // Acquire the texture view (on failure, restore the existing preview — including same-name siblings).
                 let Some(Some(ref view)) = pending.texture_views.get(tex_idx) else {
                     if prev.is_some() {
                         let fail_targets: Vec<usize> = if self.tex.link_same_name {
@@ -1324,7 +1328,7 @@ impl ViewerApp {
                     continue;
                 };
 
-                // link_same_name 時は同名材質にも横展開（同一 MaterialGroup 内）
+                // With link_same_name, propagate to materials with the same name (within the same MaterialGroup).
                 let target_mats: Vec<usize> = if self.tex.link_same_name {
                     let mut targets = vec![mat_idx];
                     targets.extend(loaded.same_name_siblings(mat_idx));
@@ -1361,13 +1365,13 @@ impl ViewerApp {
                                 &sampler,
                             );
                             draw.texture_bind_group = Some(new_bg);
-                            // MMD パスでも texture_bind_group を参照させるため mmd 側を None に
+                            // Set the MMD side to None so the MMD path also reads texture_bind_group.
                             draw.mmd_texture_bind_group = None;
                         }
                     }
                 }
             } else {
-                // 選択解除 → 元の bind group を復元（同一 MaterialGroup 内の同名材質含む）
+                // Selection cleared -> restore the original bind group (including same-name materials within the same MaterialGroup).
                 let target_mats: Vec<usize> = if self.tex.link_same_name {
                     let mut targets = vec![mat_idx];
                     targets.extend(loaded.same_name_siblings(mat_idx));
@@ -1392,7 +1396,7 @@ impl ViewerApp {
         }
     }
 
-    /// テクスチャ手動割当プレビューをキャンセル（元の bind group を復元）
+    /// Cancel the manual-texture-match preview (restore the original bind groups).
     pub fn cancel_tex_match_preview(&mut self) {
         let Some(pending) = self.tex.pending_match.take() else {
             return;
@@ -1406,35 +1410,36 @@ impl ViewerApp {
                 loaded.gpu_model.draws[draw_idx].mmd_texture_bind_group = orig_mmd;
             }
         }
-        // D&D プレビューが併存していた場合、bind group 復元で表示がずれるため
-        // previewed をリセットして次フレームの sync_tex_preview で再適用させる
+        // If a D&D preview was alive at the same time, restoring bind groups offsets the display,
+        // so reset previewed and let the next frame's sync_tex_preview re-apply.
         if let Some(ref mut preview) = self.tex.pending_preview {
             preview.previewed.iter_mut().for_each(|v| *v = false);
         }
     }
 
     // -----------------------------------------------------------------------
-    // テクスチャ割り当て履歴 (popone_history.json)
+    // Texture assignment history (popone_history.json)
     // -----------------------------------------------------------------------
 
-    /// 現在のモデルが履歴対象かどうか判定し、キーを返す
+    /// Decide whether the current model is history-eligible and return the key.
     pub fn texture_history_key(&self) -> Option<String> {
         use super::helpers::ReloadableSource;
         let loaded = self.loaded.as_ref()?;
         if !loaded.appended_models.is_empty() {
             return None;
         }
-        // v0.5.0: 材質パラメータ編集の永続化のため、全フォーマット（VRM / PMX / FBX /
-        // OBJ 等）で履歴キーを返すよう拡張。旧版では FBX / OBJ のみに制限していたが、
-        // テクスチャ履歴だけでなく MaterialParamOverride も同じキーで保存するため、
-        // File ソースなら全フォーマットでキーを返す。
+        // v0.5.0: extended to return a history key for every format (VRM / PMX / FBX /
+        // OBJ etc.) so material parameter edits can be persisted. The previous
+        // version was limited to FBX / OBJ; since not only the texture history
+        // but also MaterialParamOverride is saved under the same key, return a
+        // key for every format on a File source.
         match &loaded.source {
             ReloadableSource::File(path) => Some(super::persistence::normalize_path(path)),
             _ => None,
         }
     }
 
-    /// 現在のテクスチャ割り当て + 材質パラメータ編集差分を履歴に保存
+    /// Save the current texture assignments + material parameter edit deltas to history.
     pub fn do_save_texture_history(&mut self) {
         let Some(key) = self.texture_history_key() else {
             return;
@@ -1443,7 +1448,7 @@ impl ViewerApp {
             return;
         };
 
-        // テクスチャ割当エントリ（BaseColor: v1 互換）
+        // Texture assignment entries (BaseColor: v1 compatibility).
         let mut entries: Vec<super::persistence::TextureHistoryEntry> = self
             .tex
             .assignments
@@ -1468,7 +1473,7 @@ impl ViewerApp {
             })
             .collect();
 
-        // v0.5.1 追加 (M5): 補助スロットの割当エントリを追加
+        // v0.5.1 added (M5): assignment entries for auxiliary slots.
         for ((mat_idx, slot), path) in &self.slot_texture_paths {
             let mat_name = loaded
                 .ir
@@ -1484,10 +1489,10 @@ impl ViewerApp {
             });
         }
 
-        // v0.5.0 追加: 材質パラメータ編集差分（§I 最小永続化）
-        // pristine_materials との diff を計算して保存する。
-        // review_025 [P2]: mme_kind は IrMaterial にないため diff_from では取れない。
-        // material_overrides から転写して保存に含める。
+        // v0.5.0 added: material parameter edit deltas (§I minimal persistence).
+        // Compute the diff against pristine_materials and save.
+        // review_025 [P2]: mme_kind is not on IrMaterial so diff_from cannot pick it up.
+        // Transcribe it from material_overrides and include it in the save.
         let param_entries: Vec<super::persistence::MaterialParamOverrideEntry> = loaded
             .ir
             .materials
@@ -1497,7 +1502,7 @@ impl ViewerApp {
                 let pristine = self.pristine_materials.get(mat_idx)?;
                 let mut diff =
                     super::material_edit::MaterialParamOverride::diff_from(pristine, mat);
-                // mme_kind を material_overrides から転写
+                // Transcribe mme_kind from material_overrides.
                 let mme_kind = self
                     .material_overrides
                     .get(&mat_idx)
@@ -1514,7 +1519,7 @@ impl ViewerApp {
             })
             .collect();
 
-        // v0.5.5 追加: 頂点単位 UV 編集差分（Phase 1）
+        // v0.5.5 added: per-vertex UV edit deltas (Phase 1).
         let uv_entries: Vec<super::persistence::VertexUvOverrideEntry> = self.uv_edit.to_entries();
 
         if entries.is_empty() && param_entries.is_empty() && uv_entries.is_empty() {
@@ -1528,9 +1533,9 @@ impl ViewerApp {
         let param_count = param_entries.len();
         let uv_count = uv_entries.len();
         self.texture_history.history.insert(key.clone(), entries);
-        // review_011 [P2] 対応: param_entries が空なら古い param_overrides を明示的に消す。
-        // 空のまま残すと、ユーザーが編集を「初期値に戻す」で全消しした後でも古い override が
-        // 「履歴呼出」で再適用されてしまう。
+        // review_011 [P2] fix: when param_entries is empty, explicitly drop the old param_overrides.
+        // Leaving them around would make a "recall history" after the user reset every edit
+        // re-apply the old override.
         if !param_entries.is_empty() {
             self.texture_history
                 .param_overrides
@@ -1538,7 +1543,7 @@ impl ViewerApp {
         } else {
             self.texture_history.param_overrides.remove(&key);
         }
-        // v0.5.5: 頂点 UV 編集も同じポリシー（空なら明示的に削除）
+        // v0.5.5: same policy for vertex UV edits (drop explicitly when empty).
         if !uv_entries.is_empty() {
             self.texture_history
                 .vertex_uv_overrides
@@ -1558,16 +1563,16 @@ impl ViewerApp {
         ));
     }
 
-    /// 履歴からテクスチャ割り当てを呼び出し
+    /// Recall texture assignments from history.
     pub fn do_recall_texture_history(&mut self) {
         let Some(key) = self.texture_history_key() else {
             return;
         };
-        // review_011 [P1] 対応: テクスチャ履歴が空でも param_overrides があれば続行する。
-        // パラメータ編集だけ保存したケースで「このモデルの履歴がありません」即 return を防ぐ。
+        // review_011 [P1] fix: continue even when texture history is empty as long as param_overrides exist.
+        // Avoids the "no history for this model" early return when only parameter edits were saved.
         let has_tex_entries = self.texture_history.history.contains_key(&key);
         let has_param_entries = self.texture_history.param_overrides.contains_key(&key);
-        // v0.5.5: 頂点 UV 編集だけ保存したケースも呼び戻せるようにする
+        // v0.5.5: also allow recall when only vertex UV edits were saved.
         let has_uv_entries = self.texture_history.vertex_uv_overrides.contains_key(&key);
         if !has_tex_entries && !has_param_entries && !has_uv_entries {
             self.convert_message = Some(ConvertMessage::failure(
@@ -1582,15 +1587,15 @@ impl ViewerApp {
             .cloned()
             .unwrap_or_default();
 
-        // 照合結果を先に収集（loaded の不変借用を閉じるため）
-        // v0.5.1 M5: (mat_idx, slot, path) の 3 タプルに拡張。同一材質の複数スロットを許容。
+        // Collect resolutions first (so loaded's immutable borrow is closed).
+        // v0.5.1 M5: extended to (mat_idx, slot, path) 3-tuple. Allows multiple slots per material.
         let resolved: Vec<(usize, crate::intermediate::types::TextureSlot, PathBuf)>;
         let mut skipped = 0usize;
         {
             let Some(loaded) = self.loaded.as_ref() else {
                 return;
             };
-            // v0.5.1 M5: (mat_idx, slot) を重複検出キーに
+            // v0.5.1 M5: use (mat_idx, slot) as the duplicate-detection key.
             let mut seen = std::collections::HashSet::new();
             let mut tmp = Vec::new();
             for entry in &entries {
@@ -1618,15 +1623,15 @@ impl ViewerApp {
             resolved = tmp;
         }
 
-        // v0.5.1 レビュー [P1] 対応: 順序修正 — 先に pristine 復元してからテクスチャ/param を適用。
+        // v0.5.1 review [P1] fix: order correction — restore pristine before applying texture / params.
         //
-        // 旧実装ではテクスチャ復元 → pristine 復元 → param 復元の順で、pristine 復元時に
-        // 補助スロットのテクスチャ参照（IrMaterial.emissive_texture 等）がクリアされ、
-        // 復元した補助スロットが全て消える不具合があった。
+        // The previous implementation went texture restore -> pristine restore -> param restore,
+        // and the pristine restore cleared the auxiliary-slot texture references
+        // (IrMaterial.emissive_texture etc.), so the restored auxiliary slots all disappeared.
         //
-        // review_012 [P2] 対応: 保存差分を適用する前に、全材質を pristine に戻して
-        // material_overrides をクリアする。これにより「呼出前の unsaved 編集が残る」
-        // 問題を解消し、「呼出 = 保存時点の状態を完全再現」を保証する。
+        // review_012 [P2] fix: before applying the saved diff, revert every material to pristine
+        // and clear material_overrides. This eliminates "unsaved edits before recall remain" and
+        // guarantees "recall = exact reproduction of the saved state".
         {
             let mat_count = if let Some(loaded) = self.loaded.as_mut() {
                 for (i, mat) in loaded.ir.materials.iter_mut().enumerate() {
@@ -1638,34 +1643,35 @@ impl ViewerApp {
             } else {
                 0
             };
-            // dirty は loaded borrow 解放後に一括で立てる
+            // dirty flags are batched after the loaded borrow is released.
             for i in 0..mat_count {
                 self.mark_material_dirty(i);
             }
         }
         self.material_overrides.clear();
-        // pristine 復元で補助スロットの参照も消えるため、slot_texture_paths もクリア。
-        // 直後のテクスチャ復元ループで resolved 経由で再設定される。
+        // The pristine restore also wipes auxiliary-slot references, so clear slot_texture_paths.
+        // The texture restore loop just below re-sets it via resolved.
         self.slot_texture_paths.clear();
-        // v0.5.1 レビュー 02 [P1] 対応: BaseColor の tex.assignments / pkg_assignments もクリア。
-        // 履歴に BaseColor エントリがない場合、旧実装では古いパスが残留し「次回保存で
-        // 古い BaseColor が混入」「GPU 側に古い bind が表示される」不具合があった。
-        // pristine 復元 = 保存時点の再現なので、assignments もベースラインに戻す。
+        // v0.5.1 review 02 [P1] fix: also clear BaseColor tex.assignments / pkg_assignments.
+        // Without this, when the history has no BaseColor entry the previous implementation
+        // left the old path behind, causing "old BaseColor leaks into the next save" and
+        // "old bind shows on the GPU side". Pristine restore = save-time reproduction, so
+        // assignments are returned to the baseline as well.
         self.tex.assignments.clear();
         self.tex.pkg_assignments.clear();
 
-        // link_same_name を一時的に無効化（reload_current と同じパターン）
+        // Temporarily disable link_same_name (same pattern as reload_current).
         let saved_link = self.tex.link_same_name;
         self.tex.link_same_name = false;
 
         let mut applied = 0usize;
         for (mat_idx, slot, tex_path) in &resolved {
             self.convert_message = None;
-            // v0.5.1 M5: slot に応じて BaseColor と補助スロットで経路を分ける
+            // v0.5.1 M5: branch by slot for BaseColor vs auxiliary slots.
             if *slot == crate::intermediate::types::TextureSlot::BaseColor {
                 self.assign_texture_to_material(*mat_idx, tex_path);
             } else {
-                // 補助スロット: ファイル読み込み + assign_texture_core を直接呼ぶ
+                // Auxiliary slot: read the file and call assign_texture_core directly.
                 let data = match std::fs::read(tex_path) {
                     Ok(d) => d,
                     Err(e) => {
@@ -1689,11 +1695,11 @@ impl ViewerApp {
                     .unwrap_or("")
                     .to_string();
                 self.assign_texture_core(*mat_idx, *slot, &data, is_psd, &display_name);
-                // 補助スロットのパスを slot_texture_paths にも記録
+                // Also record the auxiliary slot path in slot_texture_paths.
                 self.slot_texture_paths
                     .insert((*mat_idx, *slot), tex_path.clone());
             }
-            // assign_texture_to_material は失敗時に convert_message に Failure を設定する
+            // assign_texture_to_material sets convert_message to Failure on failure.
             let failed = self
                 .convert_message
                 .as_ref()
@@ -1707,8 +1713,8 @@ impl ViewerApp {
 
         self.tex.link_same_name = saved_link;
 
-        // テクスチャ復元と同じ「resolve → apply」2 フェーズ分離パターンで
-        // immutable borrow (resolve) と mutable borrow (apply) の衝突を避ける。
+        // Use the same "resolve -> apply" 2-phase split as the texture restore to
+        // avoid an immutable borrow (resolve) clashing with a mutable borrow (apply).
         let mut param_applied = 0usize;
         let resolved_params: Vec<(usize, super::material_edit::MaterialParamOverride)> = {
             let param_entries = self
@@ -1744,10 +1750,10 @@ impl ViewerApp {
             }
             self.mark_material_dirty(mat_idx);
             param_applied += 1;
-            // v0.5.5: 頂点 UV 編集の復元はここから下流で一括処理する（下記 uv_applied 参照）
+            // v0.5.5: vertex UV edits are restored in a single batch downstream (see uv_applied below).
         }
 
-        // v0.5.5 追加: 頂点 UV 編集の復元（IR 直書きと GPU 再同期）
+        // v0.5.5 added: restore vertex UV edits (write to IR + sync GPU).
         let mut uv_applied = 0usize;
         if has_uv_entries {
             let uv_entries = self
@@ -1810,7 +1816,7 @@ impl ViewerApp {
         });
     }
 
-    /// PSD→PNG バックグラウンド変換の結果をポーリングし、IrTexture を差し替え
+    /// Poll the PSD -> PNG background conversion results and swap the IrTexture in.
     pub(super) fn poll_pending_psd_conversions(&mut self) {
         if self.tex.pending_psd_conversions.is_empty() {
             return;
@@ -1819,19 +1825,19 @@ impl ViewerApp {
         let loaded = match self.loaded.as_mut() {
             Some(l) => l,
             None => {
-                // モデルがアンロードされた場合は全て破棄
+                // Drop everything if the model was unloaded.
                 self.tex.pending_psd_conversions.clear();
                 return;
             }
         };
 
-        // 完了した変換を逆順に処理（インデックスをずらさないため）
+        // Process completed conversions in reverse order (so indices do not shift).
         let mut i = 0;
         while i < self.tex.pending_psd_conversions.len() {
             match self.tex.pending_psd_conversions[i].rx.try_recv() {
                 Ok(Ok(png_data)) => {
                     let conv = self.tex.pending_psd_conversions.remove(i);
-                    // IrTexture のデータ・ファイル名・MIME を PSD から PNG に差し替え
+                    // Swap the IrTexture's data / file name / MIME from PSD to PNG.
                     if conv.tex_idx < loaded.ir.textures.len() {
                         let tex = &mut loaded.ir.textures[conv.tex_idx];
                         tex.data = TextureData::Encoded(Arc::from(png_data));
@@ -1843,10 +1849,10 @@ impl ViewerApp {
                             conv.tex_idx,
                         );
 
-                        // v0.5.2 [review_01 P2]: PSD→PNG 差し替え後はサムネイルも再生成。
-                        // `sync_ir_thumb_cache()` は長さ比較で判定するため、インプレース
-                        // 更新では再構築されず、PSD デコード失敗時に `None` だった
-                        // エントリが永続的に空欄のままになる問題を修正。
+                        // v0.5.2 [review_01 P2]: regenerate the thumbnail after the PSD -> PNG swap.
+                        // `sync_ir_thumb_cache()` decides by length comparison, so an in-place
+                        // update would not rebuild and a `None` left by a PSD decode failure
+                        // would stay empty forever.
                         let tex_ref: &crate::intermediate::types::IrTexture =
                             &loaded.ir.textures[conv.tex_idx];
                         let device = &self.render_state.device;
@@ -1869,7 +1875,7 @@ impl ViewerApp {
                             conv.display_name,
                         );
                     }
-                    // i は進めない（remove でずれたため）
+                    // Do not advance i (remove shifted things).
                 }
                 Ok(Err(e)) => {
                     let conv = self.tex.pending_psd_conversions.remove(i);
@@ -1878,10 +1884,10 @@ impl ViewerApp {
                         conv.display_name,
                         e,
                     );
-                    // 変換失敗時は PSD 生データのまま IrTexture に残る
+                    // On failure, the raw PSD data stays in the IrTexture.
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    // まだ変換中
+                    // Still converting.
                     i += 1;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {

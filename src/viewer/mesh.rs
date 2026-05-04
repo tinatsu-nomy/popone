@@ -39,119 +39,119 @@ impl MaterialBuildFlags {
     }
 }
 
-/// GPU空間で重複排除・座標変換済みのモーフデータ
+/// Morph data deduplicated and coordinate-converted into GPU space.
 #[allow(clippy::type_complexity)]
 pub(crate) enum GpuMorphEntry {
-    /// 頂点モーフ: (gpu_vi, pos_delta, normal_delta, tangent_delta)
+    /// Vertex morph: (gpu_vi, pos_delta, normal_delta, tangent_delta).
     Vertex(Vec<(u32, [f32; 3], [f32; 3], [f32; 3])>),
-    /// グループモーフ: (サブモーフIndex, ウェイト)
+    /// Group morph: (sub-morph index, weight).
     Group(Vec<(usize, f32)>),
-    /// 材質モーフ: VRM 1.0 Expression の materialColorBinds / textureTransformBinds
+    /// Material morph: VRM 1.0 Expression's materialColorBinds / textureTransformBinds.
     Material {
         color_binds: Vec<crate::intermediate::types::IrMaterialColorBind>,
         uv_binds: Vec<crate::intermediate::types::IrTextureTransformBind>,
     },
-    /// UV モーフ (Phase 3 A-2): (gpu_vi, [du, dv]) を `channel` (0=UV0, 1=UV1) に加算する。
-    /// channel >= 2 は GPU 頂点に UV2〜4 が無いため empty Vec として保持（apply は no-op）。
+    /// UV morph (Phase 3 A-2): add (gpu_vi, [du, dv]) to `channel` (0 = UV0, 1 = UV1).
+    /// channel >= 2 is kept as an empty Vec because the GPU vertex has no UV2..UV4 (apply is a no-op).
     Uv {
         channel: u8,
         offsets: Vec<(u32, [f32; 2])>,
     },
 }
 
-/// 描画方式
+/// Render style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderStyle {
     Standard,
     Mmd,
 }
 
-/// MToon 仕様に基づくレンダーキュー（描画順序カテゴリ）
+/// Render queue based on the MToon spec (draw-order category).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RenderQueue {
-    /// 不透明（デプス書込あり）
+    /// Opaque (depth write enabled).
     Opaque = 0,
-    /// alphaCutoff でカットアウト（デプス書込あり）
+    /// Cut out by alphaCutoff (depth write enabled).
     Mask = 1,
-    /// 半透明・デプス書込あり（MToon transparentWithZWrite）
+    /// Translucent with depth write (MToon transparentWithZWrite).
     BlendZWrite = 2,
-    /// 半透明・デプス書込なし
+    /// Translucent without depth write.
     Blend = 3,
 }
 
-/// 材質ごとの描画情報
+/// Per-material draw info.
 pub struct DrawCall {
     pub index_offset: u32,
     pub index_count: u32,
     pub cull_mode: CullMode,
     pub is_alpha: bool,
-    /// MToon 仕様準拠レンダーキュー
+    /// Render queue per the MToon spec.
     pub render_queue: RenderQueue,
-    /// renderQueueOffsetNumber（BLEND 内ソート用）
+    /// renderQueueOffsetNumber (used for sorting within BLEND).
     pub render_queue_offset: i32,
-    /// MASK モード時の alphaCutoff
+    /// alphaCutoff for MASK mode.
     pub alpha_cutoff: f32,
     pub texture_bind_group: Option<wgpu::BindGroup>,
-    /// 材質 uniform バッファ（UNIFORM | COPY_DST）。`queue.write_buffer` で部分更新可能。
+    /// Material uniform buffer (UNIFORM | COPY_DST). Partially updatable via `queue.write_buffer`.
     pub material_buf: wgpu::Buffer,
     pub material_bind_group: wgpu::BindGroup,
     pub material_index: usize,
     pub render_style: RenderStyle,
     pub has_edge: bool,
-    /// MToon アウトライン描画対象
+    /// MToon outline target.
     pub has_outline: bool,
-    /// MToon 補助テクスチャ bind group（group 3: matcap + shade + shift + rim + uvMask）
+    /// MToon auxiliary texture bind group (group 3: matcap + shade + shift + rim + uvMask).
     pub mtoon_aux_bind_group: Option<wgpu::BindGroup>,
-    /// 描画メッシュの重心位置（半透明距離ソート用）
+    /// Centroid of the draw mesh (for translucent distance sorting).
     pub center: glam::Vec3,
-    // MMD 用 BindGroup（prepare_mmd_resources で設定）
+    // MMD bind groups (set in prepare_mmd_resources).
     pub mmd_material_buf: Option<wgpu::Buffer>,
     pub mmd_material_bind_group: Option<wgpu::BindGroup>,
     pub mmd_aux_bind_group: Option<wgpu::BindGroup>,
-    /// MMD 用テクスチャ bind group（Unorm ビュー使用）
+    /// MMD texture bind group (uses the Unorm view).
     pub mmd_texture_bind_group: Option<wgpu::BindGroup>,
 }
 
-/// GPU上のモデルデータ
+/// Model data on the GPU.
 pub struct GpuModel {
     pub vertex_buf: wgpu::Buffer,
     pub index_buf: wgpu::Buffer,
     pub draws: Vec<DrawCall>,
     pub has_alpha: bool,
-    /// エッジスケールバッファ（MMD エッジ用、f32 × 頂点数）
+    /// Edge-scale buffer (for MMD edges; f32 x vertex count).
     pub edge_scale_buf: Option<wgpu::Buffer>,
-    /// GPU テクスチャビュー sRGB（標準描画用）
+    /// GPU texture views, sRGB (for standard rendering).
     pub gpu_texture_views: Vec<wgpu::TextureView>,
-    /// GPU テクスチャビュー Unorm（MMD 描画用）
+    /// GPU texture views, Unorm (for MMD rendering).
     pub gpu_texture_views_unorm: Vec<wgpu::TextureView>,
-    /// ベース頂点（モーフ適用前）
+    /// Base vertices (before morphs).
     base_vertices: Vec<Vertex>,
-    /// インデックスバッファの生データ（法線表示フィルタ用）
+    /// Raw index buffer data (used by the normal-display filter).
     base_indices: Vec<u32>,
-    /// IrModel グローバル頂点Index → GPU 頂点Index
+    /// IrModel global vertex index -> GPU vertex index.
     global_to_gpu: Vec<u32>,
-    /// VRM 0.0 座標変換を使うか
+    /// Whether to use the VRM 0.0 coordinate transform.
     use_vrm0_coords: bool,
-    /// キャッシュ済みバウンディングボックス (min, max)
+    /// Cached bounding box (min, max).
     cached_bbox: (Vec3, Vec3),
-    /// モーフ適用用作業バッファ（毎フレーム clone を回避）
+    /// Working buffer for morph application (avoids cloning every frame).
     morph_work: Vec<Vertex>,
-    /// GPU空間モーフデータ（重複排除・座標変換済み）
+    /// GPU-space morph data (deduplicated and coordinate-converted).
     pub(crate) gpu_morphs: Vec<GpuMorphEntry>,
-    /// グループモーフ循環検出用バッファ（毎回 alloc を回避）
+    /// Buffer for group-morph cycle detection (avoids per-call alloc).
     morph_visited: Vec<bool>,
-    /// 前回適用時の morph weights（変化がなければ再計算をスキップ）
+    /// Morph weights from the previous apply (skip recomputation if unchanged).
     last_weights: Vec<f32>,
-    /// morph weights キャッシュ無効化フラグ（アニメーション解除時等に使用）
+    /// Morph-weight cache invalidation flag (used when an animation is detached, etc.).
     morph_cache_dirty: bool,
-    /// アニメーション済み頂点キャッシュ（法線表示同期用）
+    /// Cache of animated vertices (for normal-display sync).
     animated_vertices: Option<Vec<Vertex>>,
-    /// Expression 材質ブレンド用: ロード時の材質パラメータベース値
+    /// Base material parameter values at load time, used for Expression material blending.
     pub material_base_values: Vec<MaterialBaseValues>,
 }
 
-/// Expression 材質バインドのベース値（ロード時点の材質パラメータ）。
-/// Expression の加算合成 `final = base + Σ((target - base) * weight)` で使用��
+/// Base values for Expression material binds (material parameters captured at load time).
+/// Used by Expression's additive blend `final = base + Σ((target - base) * weight)`.
 #[derive(Debug, Clone)]
 pub struct MaterialBaseValues {
     pub diffuse: [f32; 4],
@@ -165,7 +165,7 @@ pub struct MaterialBaseValues {
 }
 
 impl MaterialBaseValues {
-    /// `IrMaterial` からベース値をキャプチャ
+    /// Capture base values from an `IrMaterial`.
     pub fn from_ir(mat: &IrMaterial) -> Self {
         let mp = mat.mtoon();
         let uv = mat
@@ -186,8 +186,9 @@ impl MaterialBaseValues {
     }
 }
 
-/// Expression 材質バインドのアキュムレーション: 全アクティブ Expression のウェイトから
-/// 材質パラメータの変化分を蓄積し、変更のある材質のみ `MaterialParams` を返す。
+/// Accumulate Expression material binds: combine the weights of every active
+/// Expression into per-material parameter deltas, and return `MaterialParams`
+/// only for materials that actually changed.
 pub(crate) fn accumulate_expression_materials(
     gpu_morphs: &[GpuMorphEntry],
     morph_weights: &[f32],
@@ -196,7 +197,7 @@ pub(crate) fn accumulate_expression_materials(
     mat_count: usize,
     flags: &MaterialBuildFlags,
 ) -> Vec<Option<gpu::MaterialParams>> {
-    // アキュムレータ: 各材質の各カラープロパティの変化量
+    // Accumulator: per-material delta of each color property.
     #[derive(Default)]
     struct ColorAccum {
         diffuse: [f32; 4],
@@ -212,16 +213,18 @@ pub(crate) fn accumulate_expression_materials(
 
     let mut accum: Vec<ColorAccum> = (0..mat_count).map(|_| ColorAccum::default()).collect();
 
-    // v0.5.1 レビュー [P1] 対応: Material morph が参照する全材質を事前に dirty 扱いにする。
+    // v0.5.1 review [P1] fix: pre-mark every material referenced by a Material
+    // morph as dirty.
     //
-    // 旧実装は weight < 1e-6 の morph を完全にスキップしていたため、Expression が
-    // 1.0 → 0.0 に戻ったフレームで「ベース値を書き戻す処理」が一度も走らず、
-    // 最後に適用された色/UV が GPU 側に残留していた。
+    // The previous implementation skipped morphs with weight < 1e-6 entirely.
+    // On the frame an Expression dropped from 1.0 back to 0.0, the
+    // "write the base value back" path never ran and the last applied color /
+    // UV stayed on the GPU side.
     //
-    // 修正: 影響材質は常に dirty 扱いとし、weight=0 のとき accum がゼロになって
-    // 最終値 = base となる（ベース値が write_material_buffer で書き戻される）。
-    // 実用上、Expression で動く材質は数個（顔の肌・目・唇など）のため
-    // per-frame オーバーヘッドは軽微。
+    // Fix: always mark referenced materials as dirty. With weight = 0 the
+    // accumulator is zero, so the final value = base (the base is restored by
+    // write_material_buffer). In practice, the materials Expressions touch are
+    // a handful (face skin, eyes, lips, etc.), so the per-frame overhead is small.
     for entry in gpu_morphs.iter() {
         if let GpuMorphEntry::Material {
             color_binds,
@@ -308,7 +311,7 @@ pub(crate) fn accumulate_expression_materials(
         }
     }
 
-    // dirty な材質のみ最終値を計算して MaterialParams を返す
+    // Compute final values only for dirty materials and return MaterialParams.
     accum
         .into_iter()
         .enumerate()
@@ -317,7 +320,7 @@ pub(crate) fn accumulate_expression_materials(
                 return None;
             }
             let base = &base_values[mi];
-            // 一時的に IrMaterial をクローンし、アキュ���レーション結果を適用
+            // Clone the IrMaterial temporarily and apply the accumulation result.
             let mut mat = ir_materials[mi].clone();
             mat.diffuse = glam::Vec4::from_array([
                 base.diffuse[0] + a.diffuse[0],
@@ -353,7 +356,7 @@ pub(crate) fn accumulate_expression_materials(
                     base.rim_color[2] + a.rim[2],
                 );
             }
-            // UV transform
+            // UV transform.
             if a.uv_offset != [0.0; 2] || a.uv_scale != [0.0; 2] {
                 let ti = mat
                     .base_color_tex_info
@@ -373,12 +376,14 @@ pub(crate) fn accumulate_expression_materials(
 }
 
 impl GpuModel {
-    /// 新規にアップロードされた GPU テクスチャビュー（sRGB / Unorm 同一データ）を末尾に追加し、
-    /// 割り当て可能なテクスチャインデックス（`self.gpu_texture_views.len()` - 1 に一致）を返す（§D / TODO-7）。
+    /// Append a newly uploaded GPU texture view pair (sRGB / Unorm with the
+    /// same data) to the end and return the assignable texture index (matches
+    /// `self.gpu_texture_views.len() - 1`; §D / TODO-7).
     ///
-    /// **呼び出し側の責務**: 既存 `IrTexture` を再利用するケース（同じ filename+content で dedup される）では
-    /// 呼ばない。**新しい `IrTexture` を `ir.textures` に push した時だけ**呼び、GPU 側のビュー列との
-    /// インデックス整合を保つ（TODO-1）。
+    /// **Caller responsibility**: do not call when an existing `IrTexture` is
+    /// reused (those are dedup'd by filename + content). Only call **when a
+    /// new `IrTexture` is pushed onto `ir.textures`**, so the index alignment
+    /// with the GPU view list is preserved (TODO-1).
     pub fn push_gpu_texture_view(
         &mut self,
         srgb: wgpu::TextureView,
@@ -395,8 +400,8 @@ impl GpuModel {
         idx
     }
 
-    /// 指定材質にテクスチャを割り当て（DrawCall の bind group を更新）
-    /// sampler_info から材質固有のサンプラーを生成して使用する
+    /// Assign a texture to the given material (updates the DrawCall's bind group).
+    /// Builds a per-material sampler from sampler_info.
     pub fn assign_texture_to_material(
         &mut self,
         material_index: usize,
@@ -418,39 +423,39 @@ impl GpuModel {
         }
     }
 
-    /// バウンディングボックスを取得（キャッシュ済み）
+    /// Get the bounding box (cached).
     pub fn bbox(&self) -> (Vec3, Vec3) {
         self.cached_bbox
     }
 
-    /// グローバル頂点Index → GPU頂点Index マッピングを取得（アニメーション用）
+    /// Get the global vertex index -> GPU vertex index map (used by animation).
     pub fn global_to_gpu_map(&self) -> &[u32] {
         &self.global_to_gpu
     }
 
-    /// ベース頂点を取得（法線表示等に使用）
+    /// Get the base vertices (used for normal display, etc.).
     pub fn base_vertices(&self) -> &[Vertex] {
         &self.base_vertices
     }
 
-    /// アニメーション済み頂点を取得（あればアニメ済み、なければベース）
+    /// Get the current vertices (animated if available, otherwise the base).
     pub fn current_vertices(&self) -> &[Vertex] {
         self.animated_vertices
             .as_deref()
             .unwrap_or(&self.base_vertices)
     }
 
-    /// アニメーション済み頂点をキャッシュ
+    /// Cache the animated vertices.
     pub fn set_animated_vertices(&mut self, verts: Vec<Vertex>) {
         self.animated_vertices = Some(verts);
     }
 
-    /// モーフウェイトキャッシュを無効化（次回 apply_morphs で強制再計算）
+    /// Invalidate the morph weight cache (forces recomputation on the next apply_morphs).
     pub fn invalidate_morph_cache(&mut self) {
         self.morph_cache_dirty = true;
     }
 
-    /// ベース頂点を animated_vertices にコピー（バッファ再利用、毎フレーム alloc 回避）
+    /// Copy base vertices into animated_vertices (buffer reuse, avoids per-frame alloc).
     pub fn reset_animated_to_base(&mut self) {
         match self.animated_vertices {
             Some(ref mut v) => {
@@ -463,27 +468,28 @@ impl GpuModel {
         }
     }
 
-    /// アニメーション済み頂点への可変参照
+    /// Mutable reference to the animated vertices.
     pub fn animated_vertices_mut(&mut self) -> &mut [Vertex] {
         self.animated_vertices.as_deref_mut().unwrap_or(&mut [])
     }
 
-    /// アニメーション済み頂点キャッシュをクリア
+    /// Clear the animated-vertex cache.
     pub fn clear_animated_vertices(&mut self) {
         self.animated_vertices = None;
     }
 
-    /// インデックスバッファの生データを取得（法線表示のフィルタ用）
+    /// Get the raw index buffer data (used by the normal-display filter).
     pub fn base_indices(&self) -> &[u32] {
         &self.base_indices
     }
 
-    /// IR の頂点 UV を GPU 側（`base_vertices` と `vertex_buf`）に同期する (v0.5.5)。
+    /// Sync the IR vertex UVs to the GPU side (`base_vertices` and `vertex_buf`) (v0.5.5).
     ///
-    /// 頂点編集エディタ（`UvEditState`）で UV を書き換えた後、mouse-up 等の編集確定時に
-    /// 呼び出す。毎フレーム呼ぶ想定ではない（vertex_buf 全体の再転送のため）。
-    /// animated_vertices が存在する場合は UV のみ同期（position/normal 等は次回モーフ適用で更新）。
-    /// Phase 3 A-1 以降は UV0 (`IrVertex.uv`) と UV1 (`IrMesh.uvs1[vi]`) の両方を反映する。
+    /// Call this after the vertex editor (`UvEditState`) commits a UV edit
+    /// (e.g. on mouse-up). Not intended to be called every frame (it
+    /// re-uploads the entire vertex_buf). When animated_vertices exists, only
+    /// the UV is synced (position / normal / etc. update on the next morph apply).
+    /// From Phase 3 A-1 onward, both UV0 (`IrVertex.uv`) and UV1 (`IrMesh.uvs1[vi]`) are reflected.
     pub fn sync_uvs_from_ir(&mut self, ir: &IrModel, queue: &wgpu::Queue) {
         let mut global_offset = 0usize;
         for mesh in &ir.meshes {
@@ -518,8 +524,9 @@ impl GpuModel {
         self.morph_cache_dirty = true;
     }
 
-    /// GPU モデルの法線を IrModel に書き戻す（PMX 変換時に再計算済み法線を反映）
-    /// 座標変換は自己逆（Z反転/X反転を2回で元に戻る）なので同じ関数で逆変換
+    /// Write GPU model normals back into the IrModel (reflects recomputed normals at PMX export time).
+    /// The coordinate transform is self-inverse (Z flip / X flip cancels after two applications),
+    /// so the same function is used for the inverse transform.
     pub fn write_normals_back(&self, ir: &mut IrModel) {
         let inv_normal_fn: fn(Vec3) -> Vec3 = if self.use_vrm0_coords {
             gltf_normal_to_pmx_v0
@@ -540,7 +547,7 @@ impl GpuModel {
                 let global_vi = global_offset + local_vi;
                 if let Some(&gpu_vi) = self.global_to_gpu.get(global_vi) {
                     if let Some(gpu_v) = self.base_vertices.get(gpu_vi as usize) {
-                        // GPU法線(PMX座標系) → glTF座標系に逆変換
+                        // GPU normal (PMX coordinates) -> inverse transform back to glTF coordinates.
                         v.normal = inv_normal_fn(Vec3::from(gpu_v.normal));
                     }
                 }
@@ -548,10 +555,10 @@ impl GpuModel {
         }
     }
 
-    /// モーフウェイトを適用して頂点バッファを更新
-    /// weights が前回と同一なら早期リターンして再計算をスキップする
+    /// Apply morph weights and update the vertex buffer.
+    /// Early-out when weights have not changed since the previous call (skips recomputation).
     pub fn apply_morphs(&mut self, weights: &[f32], queue: &wgpu::Queue) {
-        // weights が前回から変化していなければ何もしない（キャッシュ無効化時は強制実行）
+        // Do nothing when weights are unchanged (forced when the cache is invalidated).
         if !self.morph_cache_dirty
             && self.last_weights.len() == weights.len()
             && self.last_weights == weights
@@ -564,7 +571,7 @@ impl GpuModel {
         self.morph_work.extend_from_slice(&self.base_vertices);
 
         let morph_len = self.gpu_morphs.len();
-        // visited バッファを1回だけ確保し、各モーフ後は fill(false) で再利用
+        // Allocate the visited buffer once, then reset with fill(false) after each morph.
         self.morph_visited.resize(morph_len, false);
         for morph_idx in 0..morph_len {
             let w = weights.get(morph_idx).copied().unwrap_or(0.0);
@@ -581,7 +588,7 @@ impl GpuModel {
             self.morph_visited.fill(false);
         }
 
-        // CPU 側の現在頂点も同期 — swap でアロケーション回避
+        // Sync the CPU-side current vertices too — swap to avoid alloc.
         let mut swap_buf = self.animated_vertices.take().unwrap_or_default();
         std::mem::swap(&mut self.morph_work, &mut swap_buf);
         self.animated_vertices = Some(swap_buf);
@@ -596,15 +603,15 @@ impl GpuModel {
             ),
         );
 
-        // 次回比較用に weights を記録
+        // Record weights for the next-call comparison.
         self.last_weights.clear();
         self.last_weights.extend_from_slice(weights);
     }
 
-    /// モーフウェイトを外部バッファに適用（アニメーション用：GPU アップロードはしない）
+    /// Apply morph weights to an external buffer (for animation; does not upload to the GPU).
     pub fn apply_morphs_to_buf(&mut self, weights: &[f32], vertices: &mut [Vertex]) {
         let morph_len = self.gpu_morphs.len();
-        // visited バッファを1回だけ確保し fill(false) で再利用
+        // Allocate the visited buffer once, then reset with fill(false).
         self.morph_visited.resize(morph_len, false);
         for morph_idx in 0..morph_len {
             let w = weights.get(morph_idx).copied().unwrap_or(0.0);
@@ -622,11 +629,11 @@ impl GpuModel {
         }
     }
 
-    /// animated_vertices にモーフを直接適用（借用衝突回避版）
+    /// Apply morphs directly to animated_vertices (avoids borrow conflict).
     pub fn apply_morphs_to_animated(&mut self, weights: &[f32]) {
         if let Some(ref mut verts) = self.animated_vertices {
             let morph_len = self.gpu_morphs.len();
-            // visited バッファを1回だけ確保し fill(false) で再利用
+            // Allocate the visited buffer once, then reset with fill(false).
             self.morph_visited.resize(morph_len, false);
             for morph_idx in 0..morph_len {
                 let w = weights.get(morph_idx).copied().unwrap_or(0.0);
@@ -653,7 +660,7 @@ impl GpuModel {
         visited: &mut [bool],
     ) {
         if visited[morph_idx] {
-            return; // 循環参照を検出 — スキップ
+            return; // Cycle detected — skip.
         }
         match &gpu_morphs[morph_idx] {
             GpuMorphEntry::Vertex(voffs) => {
@@ -695,11 +702,11 @@ impl GpuModel {
                 visited[morph_idx] = false;
             }
             GpuMorphEntry::Material { .. } => {
-                // 材質モーフは頂点に影響しない — accumulate_expression_materials で処理
+                // Material morphs do not affect vertices — handled in accumulate_expression_materials.
             }
             GpuMorphEntry::Uv { channel, offsets } => {
-                // Phase 3 A-2: UV0 / UV1 に (du, dv) * weight を加算する。
-                // GPU の Vertex 構造体に UV2〜4 は無いので channel >= 2 なら offsets は空。
+                // Phase 3 A-2: add (du, dv) * weight to UV0 / UV1.
+                // The GPU Vertex struct has no UV2..UV4, so offsets is empty for channel >= 2.
                 match channel {
                     0 => {
                         for &(gpu_vi, d) in offsets {
@@ -726,7 +733,7 @@ impl GpuModel {
     }
 }
 
-/// IrModel + GlbData から GPU バッファを構築
+/// Build GPU buffers from IrModel + GlbData.
 pub fn build_gpu_model(
     ir: &IrModel,
     images: &[gltf::image::Data],
@@ -738,7 +745,7 @@ pub fn build_gpu_model(
     build_gpu_model_inner(ir, gpu_textures, device, queue, flags)
 }
 
-/// IrMinFilter を wgpu の (min_filter, mipmap_filter) ペアに変換する
+/// Convert IrMinFilter into the wgpu (min_filter, mipmap_filter) pair.
 fn ir_min_filter_to_wgpu(mode: IrMinFilter) -> (wgpu::FilterMode, wgpu::FilterMode) {
     match mode {
         IrMinFilter::Nearest => (wgpu::FilterMode::Nearest, wgpu::FilterMode::Nearest),
@@ -750,14 +757,14 @@ fn ir_min_filter_to_wgpu(mode: IrMinFilter) -> (wgpu::FilterMode, wgpu::FilterMo
     }
 }
 
-/// IrSamplerInfo から wgpu::Sampler を作成（プレビュー等で単発使用）
+/// Build a wgpu::Sampler from IrSamplerInfo (one-shot use, e.g. for previews).
 pub fn create_sampler_from_info(device: &wgpu::Device, info: &IrSamplerInfo) -> wgpu::Sampler {
     let (min_filter, mipmap_filter) = ir_min_filter_to_wgpu(info.min_filter);
     let mag_filter = match info.mag_filter {
         IrMagFilter::Nearest => wgpu::FilterMode::Nearest,
         IrMagFilter::Linear => wgpu::FilterMode::Linear,
     };
-    // anisotropy_clamp > 1 は全フィルタが Linear の場合のみ有効（wgpu/WebGPU 仕様）
+    // anisotropy_clamp > 1 is only effective when every filter is Linear (wgpu / WebGPU spec).
     let all_linear = mag_filter == wgpu::FilterMode::Linear
         && min_filter == wgpu::FilterMode::Linear
         && mipmap_filter == wgpu::FilterMode::Linear;
@@ -781,7 +788,7 @@ pub fn create_sampler_from_info(device: &wgpu::Device, info: &IrSamplerInfo) -> 
     })
 }
 
-/// IrSamplerInfo に対応する wgpu::Sampler をキャッシュから取得（なければ作成）
+/// Get a wgpu::Sampler matching IrSamplerInfo from the cache (creates one on miss).
 fn ensure_sampler<'a>(
     cache: &'a mut HashMap<IrSamplerInfo, wgpu::Sampler>,
     device: &wgpu::Device,
@@ -817,7 +824,7 @@ fn ensure_sampler<'a>(
     })
 }
 
-/// IrModel のみから GPU バッファを構築（FBX 用）
+/// Build GPU buffers from IrModel only (used by FBX).
 pub fn build_gpu_model_from_ir(
     ir: &IrModel,
     device: &wgpu::Device,
@@ -828,15 +835,15 @@ pub fn build_gpu_model_from_ir(
     build_gpu_model_inner(ir, gpu_textures, device, queue, flags)
 }
 
-/// MToon 補助テクスチャの参照情報（CPU フェーズ用）
+/// MToon auxiliary texture reference info (CPU phase).
 pub(crate) struct AuxTexRef {
     pub tex_index: Option<usize>,
     pub sampler: IrSamplerInfo,
-    /// true = sRGB ビュー使用, false = linear/Unorm ビュー使用
+    /// true = use the sRGB view, false = use the linear / Unorm view.
     pub use_srgb: bool,
 }
 
-/// MToon 補助テクスチャ参照（8 スロット）
+/// MToon auxiliary texture references (8 slots).
 pub(crate) struct AuxTexRefs {
     pub matcap: AuxTexRef,
     pub shade: AuxTexRef,
@@ -848,11 +855,12 @@ pub(crate) struct AuxTexRefs {
     pub normal: AuxTexRef,
 }
 
-/// 1 材質ぶんの `MaterialParams` を純関数として組み立てる（§C）。
+/// Build a single material's `MaterialParams` as a pure function (§C).
 ///
-/// 旧来は `cpu_prep_model` 内にインライン展開されていたが、v0.5.0 で材質編集ドロワー
-/// からの `rebuild_material_bind_groups` 経路が同じロジックを再利用するため純関数化した。
-/// GPU API 呼び出しを一切含まず、CPU 計算のみを行う。
+/// This used to be inlined inside `cpu_prep_model`, but in v0.5.0 the
+/// `rebuild_material_bind_groups` path of the material edit drawer needed the
+/// same logic, so it was extracted as a pure function. Performs only CPU
+/// computation; never touches the GPU API.
 pub(crate) fn build_material_params_for(
     mat: &IrMaterial,
     mat_idx: usize,
@@ -867,11 +875,12 @@ pub(crate) fn build_material_params_for(
     gpu::MaterialParams {
         diffuse: mat.diffuse.to_array(),
         shade_color: mp.shade_color.unwrap_or(Vec3::ZERO).to_array(),
-        // review_007 [P2] 対応: 描画側も `shader_family` 主軸判定に統一。
-        // `mat.is_mtoon()` (= `mtoon.is_some()`) だと、非 MToon 材質で MToon 系
-        // フィールドを編集した瞬間にプレビューが MToon 化してしまい、export 側
-        // (`shader_family` 主軸) との不一致が発生していた。`shader_family` を見る
-        // ことで、チェックボックス ON/OFF とプレビュー・export が完全一致する。
+        // review_007 [P2] fix: unify the rendering side too on `shader_family` as the primary axis.
+        // With `mat.is_mtoon()` (= `mtoon.is_some()`), the moment a non-MToon
+        // material's MToon-related field was edited, the preview "became MToon"
+        // and disagreed with the export side (which is `shader_family`-driven).
+        // Looking at `shader_family` aligns the checkbox ON / OFF with the
+        // preview and the export.
         is_mtoon: matches!(
             mat.shader_family,
             ShaderFamily::Mtoon
@@ -899,10 +908,10 @@ pub(crate) fn build_material_params_for(
         uv_anim_scroll_y: mp.uv_animation_scroll_y_speed,
         uv_anim_rotation: mp.uv_animation_rotation_speed,
         has_uv_anim_mask: mp.uv_animation_mask_texture.is_some(),
-        // alphaMode エンコーディング: OPAQUE=-1.0, MASK=cutoff(>=0.0), BLEND=-0.5
+        // alphaMode encoding: OPAQUE = -1.0, MASK = cutoff (>= 0.0), BLEND = -0.5.
         alpha_cutoff: match mat.alpha_mode {
             AlphaMode::Opaque => -1.0,
-            AlphaMode::Mask => mat.alpha_cutoff, // 0.0 も合法値
+            AlphaMode::Mask => mat.alpha_cutoff, // 0.0 is also a legal value
             _ => -0.5,                           // Blend / BlendZWrite
         },
         base_uv: gpu::pack_uv_params(mat.base_color_tex_info.as_ref()),
@@ -930,16 +939,18 @@ pub(crate) fn build_material_params_for(
     }
 }
 
-/// 材質編集時の rebuild 経路専用: `AuxTexRefs` と `GpuModel` の分割済み view 列から
-/// MToon 補助 bind group を組み立てる（§C）。
+/// Specifically for the material-edit rebuild path: build the MToon auxiliary
+/// bind group from `AuxTexRefs` and the split view lists of `GpuModel` (§C).
 ///
-/// `gpu_finalize_model` 内の同等ロジックは `gpu_textures_dual: &[(srgb, unorm)]` タプル列と
-/// ローカル default view の構成で動くが、ここでは **既に構築済みの `GpuModel`** を
-/// 更新する経路向けに、`gpu_texture_views` / `gpu_texture_views_unorm` の分割済みベクタと
-/// `DefaultViews` 集合を直接受け取る。
+/// The equivalent logic in `gpu_finalize_model` runs over a
+/// `gpu_textures_dual: &[(srgb, unorm)]` tuple list with locally-built default
+/// views; here we target the path that **updates an already-built `GpuModel`**,
+/// so we receive the split `gpu_texture_views` / `gpu_texture_views_unorm`
+/// vectors and the `DefaultViews` collection directly.
 ///
-/// サンプラーは毎回 `create_sampler_from_info` で生成する（rebuild は編集時のみ呼ばれるので
-/// キャッシュの価値が低い。Step 1-3b の最小実装としての割り切り）。
+/// The samplers are created via `create_sampler_from_info` every call (rebuild
+/// only fires during edits, so caching has little value — a deliberate
+/// minimal-scope cut for Step 1-3b).
 pub(crate) fn rebuild_mtoon_aux_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -1014,13 +1025,14 @@ pub(crate) fn rebuild_mtoon_aux_bind_group(
     )
 }
 
-/// 材質の補助テクスチャ参照を純関数として組み立てる（§C）。
+/// Build a material's auxiliary texture references as a pure function (§C).
 ///
-/// 戻り値 `None` は「aux bind group 不要」を示し、呼び出し側はデフォルト bind group を使う。
-/// 戻り値 `Some(_)` の場合は呼び出し側が `create_mtoon_aux_bind_group` で bind group を作る。
+/// `None` means "no aux bind group needed" — the caller falls back to the
+/// default bind group. `Some(_)` means the caller will build the bind group
+/// via `create_mtoon_aux_bind_group`.
 pub(crate) fn build_aux_refs_for(mat: &IrMaterial) -> Option<AuxTexRefs> {
-    // review_007 [P2] 対応: 描画側も `shader_family` 主軸に統一。
-    // emissiveTexture / normalTexture は非 MToon でも必要なので独立条件で残す。
+    // review_007 [P2] fix: unify the rendering side too on `shader_family` as the primary axis.
+    // emissiveTexture / normalTexture are needed even for non-MToon, so they stay on independent conditions.
     let is_mtoon_like = matches!(
         mat.shader_family,
         ShaderFamily::Mtoon | ShaderFamily::Uts2 | ShaderFamily::LilToon | ShaderFamily::Poiyomi
@@ -1076,7 +1088,7 @@ pub(crate) fn build_aux_refs_for(mat: &IrMaterial) -> Option<AuxTexRefs> {
     })
 }
 
-/// 材質ごとの描画計画（GPU bind group 作成前の CPU 側データ）
+/// Per-material draw plan (CPU-side data before the GPU bind group is created).
 #[allow(dead_code)]
 pub(crate) struct CpuDrawPlan {
     pub index_offset: u32,
@@ -1091,7 +1103,7 @@ pub(crate) struct CpuDrawPlan {
     pub has_edge: bool,
     pub has_outline: bool,
     pub center: glam::Vec3,
-    // Bind group 構築用メタデータ
+    // Metadata used to build the bind group.
     pub base_tex_index: Option<usize>,
     pub base_sampler: IrSamplerInfo,
     pub material_params: gpu::MaterialParams,
@@ -1099,7 +1111,7 @@ pub(crate) struct CpuDrawPlan {
     pub aux_refs: Option<AuxTexRefs>,
 }
 
-/// CPU プリプロセスフェーズの出力（GPU API 不要）
+/// Output of the CPU preprocessing phase (no GPU API needed).
 pub(crate) struct CpuPrepResult {
     pub all_vertices: Vec<Vertex>,
     pub all_indices: Vec<u32>,
@@ -1114,11 +1126,11 @@ pub(crate) struct CpuPrepResult {
     pub material_base_values: Vec<MaterialBaseValues>,
 }
 
-/// CPU プリプロセスフェーズ: 頂点変換・法線平滑化・モーフ前計算（GPU API 呼び出しなし）
+/// CPU preprocessing phase: vertex transform / normal smoothing / morph pre-compute (no GPU API calls).
 pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result<CpuPrepResult> {
     let smooth_per_mat = &flags.smooth;
     let clear_per_mat = &flags.clear;
-    // normal_map / emissive フラグは build_material_params_for 内で flags から直接読む。
+    // The normal_map / emissive flags are read directly from `flags` inside build_material_params_for.
     let pos_fn = if ir.source_format.is_vrm0() {
         gltf_pos_to_pmx_v0
     } else {
@@ -1137,18 +1149,18 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
     let mut draw_plans: Vec<CpuDrawPlan> = Vec::with_capacity(ir.materials.len());
     let mut has_alpha = false;
 
-    // グローバル頂点Index → GPU頂点Index マッピング
+    // Global vertex index -> GPU vertex index map.
     let total_global_verts: usize = ir.meshes.iter().map(|m| m.vertices.len()).sum();
     let mut global_to_gpu = vec![0u32; total_global_verts];
 
-    // 頂点統合（vertex welding）用マップ: 位置+UV キー → GPU頂点Index
+    // Vertex welding map: position + UV key -> GPU vertex index.
     let mut vertex_dedup: HashMap<PosUvKey, u32> = HashMap::with_capacity(total_verts);
-    // 法線累積カウント（平均化用）
+    // Normal accumulator (for averaging).
     let mut normal_accum: Vec<([f32; 3], u32)> = Vec::with_capacity(total_verts);
 
     let default_sampler_info = IrSamplerInfo::default();
 
-    // 各メッシュのグローバル頂点オフセット（メッシュ元順序）
+    // Global vertex offset of each mesh (in source mesh order).
     let mut mesh_global_offsets = Vec::with_capacity(ir.meshes.len());
     let mut offset = 0usize;
     for mesh in &ir.meshes {
@@ -1156,7 +1168,7 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
         offset += mesh.vertices.len();
     }
 
-    // 材質ごとにメッシュを集計
+    // Group meshes by material.
     let mat_count = ir.materials.len();
     let mut mat_meshes: Vec<Vec<usize>> = vec![Vec::new(); mat_count];
     for (mi, mesh) in ir.meshes.iter().enumerate() {
@@ -1173,36 +1185,36 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
         let mat = &ir.materials[mat_idx];
         let index_offset = all_indices.len() as u32;
 
-        // 材質ごとの法線平滑化フラグ（法線マップと併用可: TBN 基底法線の平滑化で品質向上）
+        // Per-material smoothing flag (compatible with normal maps: smoothing the TBN base normal improves quality).
         let mat_smooth = smooth_per_mat.get(mat_idx).copied().unwrap_or(false);
 
-        // 材質ごとに vertex_dedup をリセット（異なる材質間で頂点を共有しない）
+        // Reset vertex_dedup per material (vertices are not shared across different materials).
         vertex_dedup.clear();
 
         for &mi in mesh_indices {
             let mesh = &ir.meshes[mi];
             let global_offset = mesh_global_offsets[mi];
 
-            // 頂点変換 + マッピング構築
+            // Vertex transform + map building.
             let has_uv1 = !mesh.uvs1.is_empty();
             for (local_vi, v) in mesh.vertices.iter().enumerate() {
                 let pos = pos_fn(v.position);
                 let normal = normal_fn(v.normal);
-                // UV1: 存在すれば使用、なければゼロ（UniVRM MeshData.cs 準拠）
+                // UV1: use it if present, otherwise zero (UniVRM MeshData.cs convention).
                 let uv1 = if has_uv1 {
                     mesh.uvs1[local_vi]
                 } else {
                     [0.0, 0.0]
                 };
 
-                // ミラー変換(det=-1)では cross(M*N, M*T) = -M*cross(N,T) となるため
-                // bitangent の向きを維持するには tangent.w を反転する必要がある
+                // Under a mirror transform (det = -1), cross(M*N, M*T) = -M*cross(N, T),
+                // so tangent.w must be flipped to keep the bitangent direction.
                 let tangent = normal_fn(v.tangent.truncate())
                     .normalize_or_zero()
                     .extend(-v.tangent.w);
 
                 let gpu_vi = if mat_smooth {
-                    // 位置+UVで統合、法線は累積して後で平均化
+                    // Merge by position + UV; accumulate normals to be averaged later.
                     let key = PosUvKey::new(pos.to_array(), v.uv.to_array(), uv1);
                     *vertex_dedup.entry(key).or_insert_with(|| {
                         let idx = all_vertices.len() as u32;
@@ -1225,7 +1237,7 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
                         uv1,
                         tangent: tangent.to_array(),
                     });
-                    // normal_accum を all_vertices と同期（count=0 で平均化対象外）
+                    // Keep normal_accum in sync with all_vertices (count = 0 excludes from averaging).
                     normal_accum.push(([0.0; 3], 0));
                     idx
                 };
@@ -1240,7 +1252,7 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
                 global_to_gpu[global_offset + local_vi] = gpu_vi;
             }
 
-            // インデックス
+            // Indices.
             let mut indices: Vec<u32> = if mat_smooth {
                 mesh.indices
                     .iter()
@@ -1256,31 +1268,30 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
 
         let index_count = all_indices.len() as u32 - index_offset;
 
-        // ベースカラーテクスチャのサンプラー情報
+        // Sampler info of the base color texture.
         let base_sampler = mat
             .base_color_tex_info
             .as_ref()
             .map(|ti| ti.sampler)
             .unwrap_or(default_sampler_info);
 
-        // 材質パラメータ（純粋な計算 — GPU API 不要）
-        // §C: build_material_params_for / build_aux_refs_for として pub(crate) 関数に
-        // 切り出し済み。材質編集ドロワーの rebuild_material_bind_groups 経路からも
-        // 同じロジックを再利用する。
+        // Material params (pure CPU computation — no GPU API needed).
+        // §C: extracted as the pub(crate) functions build_material_params_for / build_aux_refs_for.
+        // The same logic is reused from the material-edit drawer's rebuild_material_bind_groups path.
         let diffuse = mat.diffuse;
         let mp = mat.mtoon();
         let material_params = build_material_params_for(mat, mat_idx, flags);
         let aux_refs = build_aux_refs_for(mat);
         let needs_aux = aux_refs.is_some();
 
-        // alphaMode ベースでレンダーキューを決定
+        // Decide the render queue from alphaMode.
         let render_queue = match mat.alpha_mode {
             AlphaMode::Opaque => RenderQueue::Opaque,
             AlphaMode::Mask => RenderQueue::Mask,
             AlphaMode::BlendWithZWrite => RenderQueue::BlendZWrite,
             AlphaMode::Blend => RenderQueue::Blend,
         };
-        // is_alpha は後方互換（BLEND 系 or diffuse.w < 1.0）
+        // is_alpha for backward compatibility (BLEND-family or diffuse.w < 1.0).
         let is_alpha = matches!(render_queue, RenderQueue::Blend | RenderQueue::BlendZWrite)
             || diffuse.w < 1.0;
 
@@ -1297,7 +1308,7 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
         let has_outline =
             mp.outline_width_mode != OutlineWidthMode::None && mp.outline_width_factor > 0.0;
 
-        // 描画メッシュの重心を計算（半透明距離ソート用）
+        // Compute the centroid of the draw mesh (for translucent distance sorting).
         let center = if index_count > 0 {
             let mut sum = glam::Vec3::ZERO;
             let start = index_offset as usize;
@@ -1335,7 +1346,7 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
     let any_smooth = smooth_per_mat.iter().any(|&s| s);
     let any_clear = clear_per_mat.iter().any(|&c| c);
 
-    // 累積法線を平均化・正規化（smooth 有効材質の頂点のみ、count > 0 で自動フィルタ）
+    // Average and normalize the accumulated normals (only the vertices of smooth-enabled materials; count > 0 filters automatically).
     if any_smooth {
         for (vi, v) in all_vertices.iter_mut().enumerate() {
             if let Some(&(sum, count)) = normal_accum.get(vi) {
@@ -1347,18 +1358,18 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
         }
     }
 
-    // カスタム法線クリア: 対象材質の頂点のみジオメトリから法線を再計算
+    // Custom-normal clear: recompute normals from geometry only for the vertices of the targeted materials.
     if any_clear {
         recalculate_normals_selective(&mut all_vertices, &all_indices, &draw_plans, clear_per_mat);
     }
 
-    // normal 再計算後の tangent 再直交化（Gram-Schmidt）
-    // smooth / clear で normal が変わると TBN 行列が不整合になるため
+    // Re-orthogonalize tangents after normal recomputation (Gram-Schmidt).
+    // When smooth / clear changes the normal, the TBN matrix becomes inconsistent.
     if any_smooth || any_clear {
         reorthogonalize_tangents(&mut all_vertices);
     }
 
-    // GPU空間モーフデータを事前計算（重複排除 + 座標変換済み）
+    // Pre-compute GPU-space morph data (deduplicated + coordinate-converted).
     let gpu_morphs: Vec<GpuMorphEntry> = ir
         .morphs
         .iter()
@@ -1380,7 +1391,7 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
                 for &(vi, off) in tangents {
                     *tan_map.entry(vi).or_insert(Vec3::ZERO) += off;
                 }
-                // positions / normals / tangents の和集合で影響頂点を収集
+                // Collect affected vertices as the union of positions / normals / tangents.
                 let affected: std::collections::BTreeSet<usize> = positions
                     .iter()
                     .map(|(vi, _)| *vi)
@@ -1419,14 +1430,14 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
                 uv_binds: uv_binds.clone(),
             },
             IrMorphKind::Uv { channel, offsets } => {
-                // Phase 3 A-2: IR グローバル頂点 index → GPU 頂点 index。
-                // 同一 GPU 頂点に複数の IR 頂点が dedup されていることがあるため、同じ
-                // gpu_vi に対しては最初に見つかったオフセットだけ採用する
-                // （PMX→IR 時の split 頂点は同じ基底 UV を持つので、同じオフセットを
-                // 両方に流しても大きな問題はないが重複加算は避ける）。
+                // Phase 3 A-2: IR global vertex index -> GPU vertex index.
+                // Multiple IR vertices may dedup to the same GPU vertex, so for the same gpu_vi
+                // we adopt only the first offset we see (split vertices on PMX -> IR share the
+                // same base UV, so feeding the same offset to both is mostly fine, but we still
+                // avoid the double accumulation).
                 let mut seen: HashSet<u32> = HashSet::new();
                 let mut deduped: Vec<(u32, [f32; 2])> = Vec::with_capacity(offsets.len());
-                // channel >= 2 は UV2〜UV4 (GPU に領域なし)。早期 return で空ベクタにする。
+                // channel >= 2 is UV2..UV4 (no GPU storage). Early-return as an empty vec.
                 if *channel < 2 {
                     for &(global_vi, off) in offsets {
                         if let Some(&gpu_vi) = global_to_gpu.get(global_vi) {
@@ -1444,7 +1455,7 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
         })
         .collect();
 
-    // ベース頂点を保存 + bbox 計算
+    // Save base vertices + compute the bbox.
     let base_vertices = all_vertices.clone();
     let cached_bbox = {
         let mut min = Vec3::splat(f32::MAX);
@@ -1457,7 +1468,7 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
         (min, max)
     };
 
-    // エッジスケール計算（MMD エッジ専用、CPU のみ）
+    // Compute edge scales (MMD-edge specific, CPU only).
     let has_mmd = draw_plans
         .iter()
         .any(|d| d.render_style == RenderStyle::Mmd);
@@ -1477,7 +1488,7 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
         None
     };
 
-    // Expression 材質バインド用ベース値をキャプチャ
+    // Capture base values for Expression material binds.
     let material_base_values: Vec<MaterialBaseValues> = ir
         .materials
         .iter()
@@ -1499,7 +1510,7 @@ pub(crate) fn cpu_prep_model(ir: &IrModel, flags: &MaterialBuildFlags) -> Result
     })
 }
 
-/// GPU ファイナライズフェーズ: CPU 前計算結果から GPU リソースを生成
+/// GPU finalize phase: build GPU resources from the CPU pre-compute result.
 pub(crate) fn gpu_finalize_model(
     prep: CpuPrepResult,
     gpu_textures_dual: Vec<(wgpu::TextureView, wgpu::TextureView)>,
@@ -1510,12 +1521,12 @@ pub(crate) fn gpu_finalize_model(
     let material_bgl = gpu::create_material_bind_group_layout(device);
     let mtoon_aux_bgl = gpu::create_mtoon_aux_bind_group_layout_pub(device);
 
-    // サンプラーキャッシュ: IrSamplerInfo → wgpu::Sampler（重複生成を回避）
+    // Sampler cache: IrSamplerInfo -> wgpu::Sampler (avoids duplicate creation).
     let mut sampler_cache: HashMap<IrSamplerInfo, wgpu::Sampler> = HashMap::new();
     let default_sampler_info = IrSamplerInfo::default();
     ensure_sampler(&mut sampler_cache, device, &default_sampler_info);
 
-    // デフォルトテクスチャビュー（MToon 補助 bind group 用）
+    // Default texture views (for the MToon auxiliary bind group).
     let default_white_view = gpu::create_white_texture_view_srgb(device, queue);
     let default_black_view = gpu::create_black_texture_view_pub(device, queue);
     let default_flat_normal_view = gpu::create_flat_normal_texture_view(device, queue);
@@ -1523,7 +1534,7 @@ pub(crate) fn gpu_finalize_model(
     let mut draws: Vec<DrawCall> = Vec::with_capacity(prep.draw_plans.len());
 
     for plan in &prep.draw_plans {
-        // ベースカラーテクスチャ bind group（sRGB ビュー使用）
+        // Base color texture bind group (uses the sRGB view).
         ensure_sampler(&mut sampler_cache, device, &plan.base_sampler);
         let tex_bg = plan.base_tex_index.and_then(|ti| {
             gpu_textures_dual.get(ti).map(|(srgb_view, _)| {
@@ -1534,14 +1545,14 @@ pub(crate) fn gpu_finalize_model(
             })
         });
 
-        // 材質 bind group + buffer（COPY_DST で部分更新可能）
+        // Material bind group + buffer (COPY_DST allows partial updates).
         let (mat_buf, mat_bg) = gpu::create_material_buffer_and_bind_group(
             device,
             &material_bgl,
             &plan.material_params,
         );
 
-        // MToon 補助テクスチャ bind group（group 3）
+        // MToon auxiliary texture bind group (group 3).
         let mtoon_aux_bg = if let Some(ref aux) = plan.aux_refs {
             let resolve = |r: &AuxTexRef| -> Option<&wgpu::TextureView> {
                 r.tex_index.and_then(|idx| {
@@ -1559,7 +1570,7 @@ pub(crate) fn gpu_finalize_model(
             let emissive_view = resolve(&aux.emissive).unwrap_or(&default_white_view);
             let normal_view = resolve(&aux.normal).unwrap_or(&default_flat_normal_view);
 
-            // テクスチャごとに sampler を事前登録
+            // Pre-register a sampler per texture.
             for si in [
                 &aux.matcap.sampler,
                 &aux.shade.sampler,
@@ -1659,7 +1670,7 @@ pub(crate) fn gpu_finalize_model(
         usage: wgpu::BufferUsages::INDEX,
     });
 
-    // エッジスケールバッファ（MMD エッジ専用）
+    // Edge-scale buffer (MMD-edge specific).
     let edge_scale_buf = prep.edge_scales.as_ref().map(|scales| {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("edge_scale_buf"),
@@ -1705,7 +1716,7 @@ pub fn build_gpu_model_inner(
     gpu_finalize_model(prep, gpu_textures_dual, device, queue)
 }
 
-/// カスタム法線クリア（材質選択版）: clear_per_mat が true の材質の頂点のみ法線を再計算
+/// Custom-normal clear (per-material variant): recompute normals only for the vertices of materials with clear_per_mat = true.
 fn recalculate_normals_selective(
     vertices: &mut [Vertex],
     indices: &[u32],
@@ -1716,7 +1727,7 @@ fn recalculate_normals_selective(
 
     let num_verts = vertices.len();
 
-    // clear 対象の頂点インデックスを収集
+    // Collect the vertex indices targeted for clear.
     let mut target_verts: HashSet<u32> = HashSet::new();
     for draw in draws {
         if clear_per_mat
@@ -1736,7 +1747,7 @@ fn recalculate_normals_selective(
         return;
     }
 
-    // 対象頂点の位置グルーピング
+    // Group target vertices by position.
     let mut pos_groups: HashMap<[u32; 3], Vec<usize>> = HashMap::new();
     for &vi in &target_verts {
         let v = &vertices[vi as usize];
@@ -1748,13 +1759,13 @@ fn recalculate_normals_selective(
         pos_groups.entry(key).or_default().push(vi as usize);
     }
 
-    // 対象頂点の法線累積
+    // Accumulator for target-vertex normals.
     let mut accum = vec![Vec3::ZERO; num_verts];
 
-    // 対象頂点を含む三角形のみ面法線を角度加重で累積
+    // Accumulate face normals weighted by angle, only for triangles that include a target vertex.
     for tri in indices.chunks_exact(3) {
         let (i0, i1, i2) = (tri[0], tri[1], tri[2]);
-        // この三角形に対象頂点が含まれているか
+        // Whether this triangle contains a target vertex.
         if !target_verts.contains(&i0) && !target_verts.contains(&i1) && !target_verts.contains(&i2)
         {
             continue;
@@ -1793,7 +1804,7 @@ fn recalculate_normals_selective(
         }
     }
 
-    // 同一位置の対象頂点の法線を合算して正規化
+    // Sum and normalize the normals of the target vertices that share a position.
     for group in pos_groups.values() {
         let mut sum = Vec3::ZERO;
         for &vi in group {
@@ -1807,8 +1818,8 @@ fn recalculate_normals_selective(
     }
 }
 
-/// normal 再計算後の tangent 再直交化（Gram-Schmidt）
-/// tangent.w（handedness）は変更せず、tangent.xyz を normal に対して直交射影する
+/// Re-orthogonalize tangents after normal recomputation (Gram-Schmidt).
+/// tangent.w (handedness) is not modified; tangent.xyz is projected perpendicular to the normal.
 fn reorthogonalize_tangents(vertices: &mut [Vertex]) {
     for v in vertices.iter_mut() {
         let n = Vec3::from(v.normal);
@@ -1817,11 +1828,11 @@ fn reorthogonalize_tangents(vertices: &mut [Vertex]) {
         v.tangent[0] = t_ortho.x;
         v.tangent[1] = t_ortho.y;
         v.tangent[2] = t_ortho.z;
-        // tangent[3] (handedness) は変更しない
+        // tangent[3] (handedness) is left untouched.
     }
 }
 
-/// 頂点統合用キー（位置+UV0+UV1のビット表現で比較、法線は平均化するため含めない）
+/// Vertex-welding key (compares the bit pattern of position + UV0 + UV1; normals are excluded since they get averaged).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct PosUvKey {
     pos: [u32; 3],
