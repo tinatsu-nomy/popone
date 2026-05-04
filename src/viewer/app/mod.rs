@@ -1,4 +1,4 @@
-//! ビューアのメイン状態管理（ViewerApp 構造体定義、eframe::App impl）
+//! Viewer main state management (ViewerApp struct definition, eframe::App impl)
 
 pub mod file_io;
 pub mod helpers;
@@ -28,12 +28,12 @@ use super::gpu::{DrawMode, GpuRenderer, LightMode, RenderParams, ShaderOverride,
 use super::mesh::GpuModel;
 use super::ui;
 
-/// ダークテーマのパネル背景色 (#1D1D1D)
+/// Dark theme panel background color (#1D1D1D)
 const DARK_PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x1D, 0x1D);
-/// ダークテーマのボーダー色 (#333333)
+/// Dark theme border color (#333333)
 const DARK_BORDER_COLOR: egui::Color32 = egui::Color32::from_rgb(0x33, 0x33, 0x33);
 
-// サブモジュールから再エクスポート
+// Re-exports from submodules
 pub use helpers::{FbxLoadMode, PkgModelType, PreloadedData, ReloadableSource, TextureSource};
 pub use pending::{
     ExportState, PendingArchive, PendingArchiveLoad, PendingFbxChoice, PendingFbxChoicePkg,
@@ -41,11 +41,11 @@ pub use pending::{
 };
 pub use texture_mgmt::{CachedMaterialInfo, PendingTexMatch, PendingTexPreview, TextureState};
 
-/// ステータスバー用キャッシュ
+/// Cache for the status bar.
 pub struct CachedStats {
     pub total_vertices: usize,
     pub total_faces: usize,
-    /// 事前フォーマット済みステータス文字列（毎フレーム format! 回避）
+    /// Pre-formatted status string (avoids per-frame format! cost).
     pub status_text: String,
 }
 
@@ -71,17 +71,17 @@ impl CachedStats {
     }
 }
 
-/// 追加読み込みされたモデルの情報（リロード時に再マージ用）
+/// Information about additionally loaded (appended) models (used to re-merge on reload).
 #[derive(Clone)]
 pub struct AppendedModel {
     pub source: ReloadableSource,
-    /// unitypackage内の選択モデル名（FBX/VRM直接の場合はNone）
+    /// Selected model name inside the unitypackage (None for direct FBX/VRM).
     pub pkg_model_name: Option<String>,
-    /// Phase 3: unitypackage モデルの安定キー（段階移行用）
+    /// Phase 3: stable key for unitypackage models (for staged migration).
     pub pkg_model: Option<PkgModelLocator>,
 }
 
-/// モデル別の材質・DrawCall 区間情報
+/// Per-model material / DrawCall range information.
 #[derive(Clone)]
 pub struct MaterialGroup {
     pub name: String,
@@ -93,33 +93,33 @@ pub struct LoadedModel {
     pub ir: IrModel,
     pub gpu_model: GpuModel,
     pub source: ReloadableSource,
-    /// メインモデルの Aスタンス/Tスタンス変換結果（merge の影響を受けない）
+    /// A-stance / T-stance conversion result of the main model (unaffected by merge).
     pub primary_astance_result: crate::intermediate::types::AStanceResult,
-    /// 追加読み込みされたモデル一覧（リロード時に再マージ用）
+    /// List of appended models (used to re-merge on reload).
     pub appended_models: Vec<AppendedModel>,
-    /// モデル別の材質・DrawCall 区間
+    /// Per-model material / DrawCall ranges.
     pub material_groups: Vec<MaterialGroup>,
-    /// 材質情報キャッシュ（テクスチャ割り当て時に更新）
+    /// Material info cache (updated on texture assignment).
     pub mat_cache: CachedMaterialInfo,
-    /// 統計キャッシュ
+    /// Statistics cache.
     pub stats_cache: CachedStats,
-    /// 材質ごとの安定キー（pkg_index 経由ロード時に構築）
+    /// Stable per-material key (built when loaded via pkg_index).
     pub pkg_material_keys: Vec<Option<crate::unitypackage::PkgMaterialKey>>,
-    /// Prefab 経由ロード時の Prefab ファイル名（ファイル階層表示用）
+    /// Prefab file name when loaded via Prefab (used for the file-tree display).
     pub prefab_name: Option<String>,
-    /// Prefab エントリのパス名（リロード時に再解決するため保持）
+    /// Path of the Prefab entry (kept so reload can re-resolve it).
     pub prefab_entry_path: Option<String>,
 }
 
 impl LoadedModel {
-    /// 同名の sibling 材質インデックスを返す（同一 MaterialGroup 内に限定）
-    /// `link_same_name` のスコープ制限に使用
+    /// Returns sibling material indices with the same name (limited to the same MaterialGroup).
+    /// Used to constrain the scope of `link_same_name`.
     pub fn same_name_siblings(&self, mat_idx: usize) -> Vec<usize> {
         let Some(target_mat) = self.ir.materials.get(mat_idx) else {
             return Vec::new();
         };
         let target_name = &target_mat.name;
-        // mat_idx が属する MaterialGroup の範囲を特定
+        // Determine the MaterialGroup range that mat_idx belongs to.
         let group_range = self
             .material_groups
             .iter()
@@ -138,16 +138,16 @@ impl LoadedModel {
     }
 }
 
-/// 材質ごとの表示・描画状態（mat_idx でインデックス）
+/// Per-material display / render state (indexed by mat_idx).
 #[derive(Clone, Debug)]
 pub struct MaterialDisplayState {
-    /// 法線平滑化 ON/OFF
+    /// Normal smoothing ON/OFF.
     pub smooth_normals: bool,
-    /// カスタム法線クリア ON/OFF
+    /// Clear custom normals ON/OFF.
     pub clear_normals: bool,
-    /// ノーマルマップ適用 ON/OFF
+    /// Apply normal map ON/OFF.
     pub normal_map: bool,
-    /// エミッシブ適用 ON/OFF
+    /// Apply emissive ON/OFF.
     pub emissive: bool,
 }
 
@@ -162,15 +162,15 @@ impl Default for MaterialDisplayState {
     }
 }
 
-/// 変換結果の種類
+/// Kinds of conversion results.
 pub enum ConvertResult {
     Success(String),
-    /// 成功したが警告あり（赤文字オーバーレイ）
+    /// Succeeded but with a warning (rendered as a red text overlay).
     Warning(String),
     Failure(String),
 }
 
-/// 表示時刻付き変換結果メッセージ
+/// Conversion result message with a display timestamp.
 pub struct ConvertMessage {
     pub result: ConvertResult,
     pub shown_at: std::time::Instant,
@@ -196,87 +196,87 @@ impl ConvertMessage {
         Self::new(ConvertResult::Failure(msg.into()))
     }
 
-    /// 表示開始からの経過秒数
+    /// Seconds elapsed since the message started being displayed.
     pub fn elapsed_secs(&self) -> f32 {
         self.shown_at.elapsed().as_secs_f32()
     }
 }
 
-/// 表示・描画関連の設定
+/// Display / render related settings.
 #[derive(Clone)]
 pub struct DisplaySettings {
-    /// ライト明るさ (0.0〜2.0)
+    /// Light intensity (0.0..=2.0).
     pub light_intensity: f32,
-    /// ライト色 RGB (linear)
+    /// Light color RGB (linear).
     pub light_color: [f32; 3],
-    /// 環境光 (0.0〜1.0)
+    /// Ambient intensity (0.0..=1.0).
     pub ambient_intensity: f32,
-    /// 環境光 Sky 色 RGB (linear)
+    /// Ambient sky color RGB (linear).
     pub ambient_sky_color: [f32; 3],
-    /// 環境光 Ground 色 RGB (linear)
+    /// Ambient ground color RGB (linear).
     pub ambient_ground_color: [f32; 3],
-    /// 背景明るさ (0.0〜1.0)
+    /// Background brightness (0.0..=1.0).
     pub bg_brightness: f32,
-    /// グリッド表示
+    /// Show grid.
     pub show_grid: bool,
-    /// ボーン表示
+    /// Show bones.
     pub show_bones: bool,
-    /// ボーン濃度
+    /// Bone opacity.
     pub bone_opacity: f32,
-    /// SpringBone（物理）表示
+    /// Show SpringBones (physics).
     pub show_spring_bones: bool,
-    /// SpringBone 濃度
+    /// SpringBone opacity.
     pub spring_bone_opacity: f32,
-    /// ジョイント表示（PMX/PMDのみ）
+    /// Show joints (PMX/PMD only).
     pub show_joints: bool,
-    /// ジョイント濃度
+    /// Joint opacity.
     pub joint_opacity: f32,
-    /// 描画モード
+    /// Draw mode.
     pub draw_mode: DrawMode,
-    /// ライトモード
+    /// Light mode.
     pub light_mode: LightMode,
-    /// 剛体回転をボーン方向に揃える（PMX出力 + 物理表示）
+    /// Align rigid-body rotation to bone direction (for PMX export + physics display).
     pub align_rigid_rotation: bool,
-    /// MSAA アンチエイリアス
+    /// MSAA antialiasing.
     pub msaa: bool,
-    /// 法線平滑化（頂点統合 + 法線平均化）
+    /// Smooth normals (vertex unification + normal averaging).
     pub smooth_normals: bool,
-    /// カスタム法線クリア（ジオメトリから法線を再計算）
+    /// Clear custom normals (recompute normals from geometry).
     pub clear_custom_normals: bool,
-    /// 法線表示
+    /// Show normals.
     pub show_normals: bool,
-    /// 法線表示の長さ
+    /// Normal display length.
     pub normal_length: f32,
-    /// シェーダーオーバーライドモード（GPU uniform 用）
+    /// Shader override mode (for the GPU uniform).
     pub shader_override: ShaderOverride,
-    /// MMD 専用レンダーパス使用（旧 mmd_mode）
+    /// Use MMD-dedicated render path (formerly `mmd_mode`).
     pub use_mmd_path: bool,
-    /// Auto モード（モデル形式に応じて Standard/MMD を自動選択）
+    /// Auto mode (chooses Standard/MMD based on the model format).
     pub auto_shader: bool,
-    /// MToon アウトライン描画
+    /// MToon outline rendering.
     pub outline_enabled: bool,
-    /// MMD エッジ描画
+    /// MMD edge rendering.
     pub mmd_edge_enabled: bool,
-    /// MMD エッジ太さ全体スケール (0.1〜3.0)
+    /// MMD edge-thickness global scale (0.1..=3.0).
     pub mmd_edge_thickness: f32,
-    /// Bloom エフェクト
+    /// Bloom effect.
     pub bloom_enabled: bool,
-    /// Bloom 合成強度 (0.0〜4.0、2.0 = VRM 標準)
+    /// Bloom composite intensity (0.0..=4.0; 2.0 = VRM default).
     pub bloom_intensity: f32,
-    /// Bloom 輝度抽出閾値 (0.0〜1.0)
+    /// Bloom luminance extraction threshold (0.0..=1.0).
     pub bloom_threshold: f32,
-    /// Bloom 拡散段数 (3〜6)
+    /// Bloom diffusion stages (3..=6).
     pub bloom_radius: u32,
-    /// テクスチャデコード失敗時のフォールバックを白にするか（既定 true）。
-    /// false の場合は従来どおり 1×1 マゼンタで欠落を目立たせる。
+    /// Whether the fallback for texture decode failure is white (default `true`).
+    /// When `false`, the legacy 1x1 magenta is used so missing textures stand out.
     pub white_texture_fallback: bool,
-    /// 右ツールパネルのリサイズ可否（既定 false=固定幅 280 px）。
-    /// true でユーザーがドラッグで幅を変更可能（280..=600 px）。
-    /// コンテンツ量に応じた自動リサイズは行わない。
+    /// Whether the right tool panel is resizable (default `false` = fixed 280 px width).
+    /// When `true`, the user can drag to change the width within 280..=600 px.
+    /// No automatic resize based on content volume is performed.
     pub panel_resizable: bool,
-    /// 右ツールパネルの現在幅 (px)。`panel_resizable = true` のときユーザーの
-    /// ドラッグで更新される。`false` のときは 280 px 固定で実値は保持される。
-    /// 範囲は [280, 600]。
+    /// Current width of the right tool panel (px). When `panel_resizable = true`,
+    /// updated by user drag. When `false`, fixed at 280 px while the actual value is
+    /// preserved. Range: [280, 600].
     pub panel_width: f32,
 }
 
@@ -322,13 +322,13 @@ impl Default for DisplaySettings {
 }
 
 impl DisplaySettings {
-    /// UI の ShaderSelection から内部状態を設定
+    /// Set the internal state from the UI `ShaderSelection`.
     pub fn set_shader_selection(&mut self, sel: ShaderSelection) {
         match sel {
             ShaderSelection::Auto => {
                 self.shader_override = ShaderOverride::Default;
                 self.auto_shader = true;
-                // use_mmd_path は normalize_shader_state で自動判定
+                // `use_mmd_path` is decided automatically in `normalize_shader_state`.
             }
             ShaderSelection::Mtoon => {
                 self.shader_override = ShaderOverride::Default;
@@ -358,7 +358,7 @@ impl DisplaySettings {
         }
     }
 
-    /// 現在の内部状態から UI 表示用の ShaderSelection を取得
+    /// Get the UI-display `ShaderSelection` derived from the current internal state.
     pub fn shader_selection(&self) -> ShaderSelection {
         if self.auto_shader {
             ShaderSelection::Auto
@@ -375,32 +375,32 @@ impl DisplaySettings {
     }
 }
 
-/// 右パネルのタブ
+/// Right side panel tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidePanelTab {
-    /// 情報: モデル情報 + メタ情報
+    /// Info: model info + meta info.
     Info,
-    /// 操作: 表情モーフ + アニメーション制御
+    /// Control: expression morphs + animation playback.
     Control,
-    /// 表示: 表示設定 + 材質表示
+    /// Display: display settings + material display.
     Display,
-    /// 出力: PMX変換 + UVマップ
+    /// Export: PMX conversion + UV map.
     Export,
 }
 
-/// アニメーションライブラリ・再生管理
+/// Animation library / playback management.
 pub struct AnimLibrary {
-    /// VRMA アニメーション再生状態
+    /// VRMA animation playback state.
     pub state: Option<AnimationState>,
-    /// 読み込み済みVRMAライブラリ（名前, パス, アニメーションデータ）
+    /// Loaded VRMA library (name, path, animation data).
     pub library: Vec<(
         String,
         PathBuf,
         Arc<crate::intermediate::animation::VrmaAnimation>,
     )>,
-    /// 現在アクティブなVRMAのインデックス
+    /// Index of the currently active VRMA.
     pub active_index: Option<usize>,
-    /// Unity .anim Muscle 角度スケール
+    /// Unity .anim muscle angle scale.
     pub muscle_scale: f32,
 }
 
@@ -415,197 +415,210 @@ impl Default for AnimLibrary {
     }
 }
 
-/// ビューアのメイン状態
+/// Main viewer state.
 pub struct ViewerApp {
     pub loaded: Option<LoadedModel>,
     pub camera: OrbitCamera,
     pub renderer: Option<GpuRenderer>,
     pub convert_message: Option<ConvertMessage>,
-    /// 表情モーフのスライダ値
+    /// Slider values for expression morphs.
     pub morph_weights: Vec<f32>,
-    /// モーフウェイト変更フラグ
+    /// Morph-weight changed flag.
     pub morph_dirty: bool,
-    /// 表示・描画設定
+    /// Display / render settings.
     pub display: DisplaySettings,
-    /// PMXエクスポート関連の状態
+    /// State related to PMX export.
     pub export: ExportState,
-    /// 材質ごとの表示ON/OFF（draw_idx でインデックス）
+    /// Per-material visibility ON/OFF (indexed by `draw_idx`).
     pub material_visibility: Vec<bool>,
-    /// 材質ごとの描画状態（mat_idx でインデックス）
+    /// Per-material render state (indexed by `mat_idx`).
     pub material_display: Vec<MaterialDisplayState>,
-    /// 材質編集ドロワー（§C / §A）: 編集による bind group 再生成要求フラグ。
-    /// mat_idx でインデックス、update() 終端で拾って rebuild_material_bind_groups を呼ぶ。
+    /// Material edit drawer (§C / §A): bind-group rebuild request flag from edits.
+    /// Indexed by `mat_idx`; consumed at the end of `update()` to call
+    /// `rebuild_material_bind_groups`.
     pub material_dirty: Vec<bool>,
-    /// 材質編集ドロワー（§A）: 現在編集中の材質インデックス（None なら Window 非表示）。
+    /// Material edit drawer (§A): index of the material currently being edited
+    /// (Window is hidden when `None`).
     pub editing_material_index: Option<usize>,
-    /// 材質編集ドロワー（§H）: ロード直後の IR 材質スナップショット。
-    /// 「初期値に戻す」ボタンから pristine_materials[mat_idx].clone() で復元する。
-    /// `finish_load_with_gpu` で material_overrides の `apply_to` 実行前にキャプチャされ、
-    /// reload 時も新 IR の値が pristine として設定される。
+    /// Material edit drawer (§H): IR material snapshot taken right after load.
+    /// Restored from `pristine_materials[mat_idx].clone()` via the "Reset to default" button.
+    /// Captured in `finish_load_with_gpu` before `material_overrides`'s `apply_to`,
+    /// and on reload the new IR's values are also installed as pristine.
     pub pristine_materials: Vec<IrMaterial>,
 
-    /// 材質編集ドロワー (Step 4-16b / review_016): 非 BaseColor テクスチャスロット割当の
-    /// ファイルパス記録。reload 時に再読込 + assign_texture_core で復元する。
-    /// key = (mat_idx, TextureSlot), value = ファイルパス。
-    /// 新モデルロード時 (is_reload = false) にクリアされる。
+    /// Material edit drawer (Step 4-16b / review_016): file paths of non-BaseColor
+    /// texture-slot assignments. Restored on reload by re-reading + `assign_texture_core`.
+    /// key = (mat_idx, TextureSlot), value = file path.
+    /// Cleared on a new model load (`is_reload = false`).
     pub slot_texture_paths: std::collections::HashMap<
         (usize, crate::intermediate::types::TextureSlot),
         std::path::PathBuf,
     >,
 
-    /// 材質編集ドロワー: mat_idx ごとのパラメータ上書き値。
+    /// Material edit drawer: per-`mat_idx` parameter overrides.
     ///
-    /// Step 2 で `MaterialParamOverride` struct に集約され、§E の全セクション
-    /// （基本 / 影 / アウトライン / リム / MatCap / UV アニメ / エミッシブ / 法線 / その他）の
-    /// カラー・スカラー値を一括管理する。A スタンス変換・T スタンス変換などで IR が再
-    /// ロードされても `MaterialParamOverride::apply_to()` で新 IR に再適用される。
+    /// Aggregated into the `MaterialParamOverride` struct in Step 2; uniformly
+    /// manages color/scalar values for all §E sections (basic / shade / outline /
+    /// rim / MatCap / UV anim / emissive / normal / other). Even when the IR is
+    /// reloaded by an A-stance / T-stance conversion, the values are reapplied to
+    /// the new IR via `MaterialParamOverride::apply_to()`.
     ///
-    /// **Step 3 の移行計画**: 本フィールドは `MaterialEditRecord.param_override` に
-    /// 吸収され、`declarative_macro` による diff/apply 自動生成に置き換えられる予定。
+    /// **Step 3 migration plan**: this field will be absorbed into
+    /// `MaterialEditRecord.param_override` and replaced by an auto-generated
+    /// diff/apply produced by a `declarative_macro`.
     pub material_overrides: std::collections::HashMap<usize, material_edit::MaterialParamOverride>,
-    /// M6 Step 6.4: 材質パラメータのコピー/ペースト用クリップボード。
-    /// テクスチャ割当は含まない（パス依存を避けるため）、カラー/スカラー値のみ。
+    /// M6 Step 6.4: clipboard for copy/paste of material parameters.
+    /// Excludes texture assignments (to avoid path dependence); only color/scalar values.
     pub clipboard_material: Option<material_edit::MaterialParamOverride>,
-    /// 材質フィルター文字列
+    /// Material filter string.
     pub material_filter: String,
-    /// 表情モーフフィルター文字列
+    /// Expression morph filter string.
     pub morph_filter: String,
-    /// ドラッグオーバー中フラグ
+    /// Drag-over flag.
     pub drag_hovering: bool,
-    /// ビューポートテクスチャID
+    /// Viewport texture ID.
     pub viewport_texture_id: Option<egui::TextureId>,
-    /// wgpu render state（CreationContext から取得）
+    /// wgpu render state (obtained from `CreationContext`).
     pub(crate) render_state: egui_wgpu::RenderState,
-    /// Tポーズ→Aスタンス変換（トグル時に再読み込み）
+    /// T-pose -> A-stance conversion (re-loads when toggled).
     pub normalize_pose: bool,
-    /// Aスタンス→Tスタンス変換（FBX用、トグル時に再読み込み）
+    /// A-stance -> T-stance conversion (FBX; re-loads when toggled).
     pub normalize_to_tstance: bool,
-    /// ビューポートの幅（フィット計算用）
+    /// Viewport width (used for fit computation).
     pub last_viewport_width: f32,
-    /// ビューポートの高さ（フィット計算用）
+    /// Viewport height (used for fit computation).
     pub last_viewport_height: f32,
-    /// 材質編集パネル（下部 TopBottomPanel）が中央ビューポート上に被さっている実 px 高。
-    /// 開いていない / 表示されていない時は 0.0。レンダリング側で FOV 補正に使用し、
-    /// パネル開閉前後でモデルのスクリーン上ピクセル単位サイズを保つ。
+    /// Pixel height of the material edit panel (bottom `TopBottomPanel`) overlapping
+    /// the central viewport. 0.0 when not open / not visible. Used by the renderer
+    /// to apply FOV compensation so the on-screen pixel size of the model is
+    /// preserved across panel open/close.
     pub material_panel_height_px: f32,
-    /// テクスチャ割り当て状態
+    /// Texture-assignment state.
     pub tex: TextureState,
-    /// 遅延処理の集約状態
+    /// Aggregated state for deferred processing.
     pub pending: PendingState,
-    /// FPS計測: フレームタイムスタンプのリングバッファ（直近1秒分）
+    /// FPS measurement: ring buffer of frame timestamps (most recent 1 second).
     frame_times: VecDeque<Instant>,
-    /// FPS計測: 前回フレームからの経過時間（ms）
+    /// FPS measurement: time elapsed since the previous frame (ms).
     frame_dt_ms: f32,
-    /// 表示用FPS（0.25秒間隔で更新）
+    /// FPS for display (updated every 0.25 s).
     fps_display: f32,
-    /// FPS表示の最終更新時刻
+    /// Last update time of the FPS display.
     fps_last_update: Instant,
-    /// IPC受信チャネル（シングルインスタンス用）
+    /// IPC receive channel (single-instance support).
     #[cfg(target_os = "windows")]
     ipc_receiver: std::sync::mpsc::Receiver<PathBuf>,
-    /// ログディレクトリパス
+    /// Log directory path.
     pub logs_dir: PathBuf,
-    /// 現在のログファイルパス
+    /// Current log file path.
     pub log_path: PathBuf,
-    /// ログメモリバッファ（ビューアモード用）
+    /// In-memory log buffer (for the viewer mode).
     pub log_buffer: crate::SharedLogBuffer,
-    /// ログビュアーウインドウのモデル（別 OS ウインドウとして show_viewport_deferred で描画）
+    /// Model for the log viewer window (drawn as a separate OS window via
+    /// `show_viewport_deferred`).
     pub log_viewer: super::log_viewer::SharedLogViewer,
-    /// 最後にモデルファイルを開いたディレクトリ（ダイアログ経由のみ）
+    /// Directory of the most recently opened model file (dialog only).
     pub last_model_dir: Option<PathBuf>,
-    /// unitypackage 内で選択された FBX ファイル名（reload 時の照合用）
+    /// Selected FBX file name inside the unitypackage (used for matching on reload).
     pub selected_fbx_name: Option<String>,
-    /// unitypackage 内で選択されたモデルの安定キー（Phase 3 移行用）
+    /// Stable key of the model selected inside the unitypackage (Phase 3 migration).
     pub selected_pkg_model: Option<PkgModelLocator>,
-    /// アニメーションライブラリ
+    /// Animation library.
     pub anim: AnimLibrary,
-    /// 右パネルの現在のタブ
+    /// Currently selected tab on the right panel.
     pub side_panel_tab: SidePanelTab,
-    /// ウィンドウタイトル更新要求
+    /// Window-title update request.
     pub window_title: Option<String>,
-    /// テクスチャ手動割当ダイアログを抑制（リロード中に使用）
+    /// Suppress the manual texture-assignment dialog (used during reload).
     pub suppress_tex_match: bool,
-    /// ホバー中の材質に対応する draw_index 群（3Dビューでハイライト表示）
+    /// `draw_index` set corresponding to the hovered material (highlighted in the 3D view).
     pub hovered_draw_indices: Vec<usize>,
-    /// D&D一時ファイルの先読みデータ（ロードチェーン中のみ使用）
+    /// Pre-read data of the D&D temporary file (used only during the load chain).
     pub(crate) preloaded: Option<PreloadedData>,
-    /// 起動時刻（UVアニメーション用累積時間の基準）
+    /// Startup time (reference for UV-animation cumulative time).
     start_time: Instant,
-    /// append 時のインスタンス ID カウンタ（ベースモデルは常に 0）
+    /// Instance-ID counter used at append (the base model is always 0).
     pub next_instance_id: u32,
-    /// スプラッシュ画像テクスチャ（モデル未ロード時に表示）
+    /// Splash image texture (shown when no model is loaded).
     splash_texture: Option<egui::TextureHandle>,
-    /// アプリデータディレクトリ（設定・履歴ファイルの保存先）
+    /// App data directory (where settings / history files are saved).
     pub data_dir: PathBuf,
-    /// セッション設定
+    /// Session settings.
     pub app_config: persistence::AppConfig,
-    /// 設定変更フラグ（on_exit で保存するか判定）
+    /// Config-changed flag (decides whether to save in `on_exit`).
     config_dirty: bool,
-    /// ウィンドウ位置の遅延復元状態
+    /// Deferred-restore state for the window position.
     pending_window_restore: PendingWindowRestore,
-    /// テクスチャ割り当て履歴（メモリキャッシュ）
+    /// Texture-assignment history (in-memory cache).
     pub texture_history: persistence::TextureHistoryFile,
-    /// 頂点単位 UV 編集の状態 (v0.5.5)
+    /// State for per-vertex UV editing (v0.5.5).
     pub uv_edit: uv_edit::UvEditState,
-    /// UV 編集ウィンドウの開閉状態 (v0.5.5)。材質編集パネルから開く。
+    /// Open/close state of the UV edit window (v0.5.5). Opened from the material
+    /// edit panel.
     pub uv_edit_window_open: bool,
-    /// UV 編集キャンバスの背景用テクスチャキャッシュ (v0.5.5 Phase 2-1)。
-    /// `(ir_texture_index, egui::TextureId)` を 1 つだけ保持する簡易キャッシュ。
-    /// アクティブ材質の BaseColor 解決結果が変わったら古い `TextureId` を
-    /// `renderer.free_texture` で解放し、`register_native_texture` で張り直す。
+    /// Background texture cache for the UV edit canvas (v0.5.5 Phase 2-1).
+    /// A simple single-entry cache holding `(ir_texture_index, egui::TextureId)`.
+    /// When the BaseColor resolution result for the active material changes,
+    /// release the old `TextureId` via `renderer.free_texture` and re-register
+    /// with `register_native_texture`.
     pub uv_edit_bg_tex: Option<(usize, egui::TextureId)>,
-    /// ダークテーマ適用済みフラグ（update初回で再適用、eframeのスタイルリセット対策）
+    /// Flag indicating dark-theme applied (re-applied on the first `update` to
+    /// counter eframe's style reset).
     dark_theme_applied: bool,
-    /// テーマから解決済みのパネル背景色
+    /// Panel background color resolved from the theme.
     theme_panel_bg: egui::Color32,
-    /// テーマから解決済みのボーダー色
+    /// Border color resolved from the theme.
     theme_border: egui::Color32,
-    /// バックグラウンドロードの世代番号カウンタ。`fresh_request_id` 呼び出しごとに +1。
-    /// 旧ロードの結果を識別して破棄するために使用する。
+    /// Generation-number counter for background loads. Incremented by every
+    /// `fresh_request_id` call. Used to identify and discard the result of an
+    /// older load.
     pub(crate) next_request_id: u64,
-    /// リロード用スナップショット（BG ロード完了後に復元する）
+    /// Snapshot used for reload (restored after a BG load completes).
     pub(crate) reload_snapshot: Option<file_io::ReloadSnapshot>,
-    /// ウォッチドッグ用ハートビート（毎フレーム tick して応答性を監視）
+    /// Watchdog heartbeat (ticks every frame to monitor responsiveness).
     heartbeat: super::watchdog::Heartbeat,
-    /// GPU パイプラインのウォームアップ進行状態
+    /// Progress state of the GPU pipeline warmup.
     warmup_phase: WarmupPhase,
 }
 
-/// GpuRenderer の段階的ウォームアップ状態
+/// Staged warmup state of the `GpuRenderer`.
 #[derive(Default)]
 enum WarmupPhase {
-    /// GpuRenderer::new() をまだ呼んでいない
+    /// `GpuRenderer::new()` has not been called yet.
     #[default]
     NotStarted,
-    /// GpuRenderer::new() 完了、sRGB+MSAA パイプライン未生成
+    /// `GpuRenderer::new()` done; sRGB+MSAA pipeline not created yet.
     RendererCreated,
-    /// sRGB+MSAA 完了
+    /// sRGB+MSAA done.
     SrgbMsaaDone,
-    /// sRGB+noMSAA 完了
+    /// sRGB+noMSAA done.
     SrgbNoMsaaDone,
-    /// 全パイプライン事前生成完了
+    /// All pipelines pre-created.
     Complete,
 }
 
 impl ViewerApp {
-    /// 新しい `request_id` を発行する（世代番号カウンタをインクリメント）。
+    /// Issue a fresh `request_id` (increments the generation counter).
     pub(crate) fn fresh_request_id(&mut self) -> u64 {
         self.next_request_id = self.next_request_id.wrapping_add(1);
         self.next_request_id
     }
 
-    /// `self.export.model_display_name` の変更に伴い、派生状態（ウィンドウタイトル、
-    /// `pmx_output_path` のファイル名部分）を再生成する。
+    /// Regenerates derived state (window title and the file-name part of
+    /// `pmx_output_path`) when `self.export.model_display_name` changes.
     ///
-    /// - ウィンドウタイトル: `POPONE Model Viewer v{ver} - {model_display_name}` を次フレームで適用。
-    /// - `pmx_output_path`: 親ディレクトリ（`converted_modelXX/`）は維持し、ファイル名のみ
-    ///   `{model_display_name}.pmx` に差し替える。`pmx_output_path` が空、または
-    ///   `model_display_name` が空の場合はパス更新をスキップする。
+    /// - Window title: `POPONE Model Viewer v{ver} - {model_display_name}` applied
+    ///   on the next frame.
+    /// - `pmx_output_path`: keeps the parent directory (`converted_modelXX/`) and
+    ///   replaces only the file name with `{model_display_name}.pmx`. Skips the
+    ///   path update when `pmx_output_path` is empty or `model_display_name` is
+    ///   empty.
     ///
-    /// 呼び出し元:
-    /// - Prefab 名が後から確定した直後（file_io.rs の PkgInitial / 同期 Prefab ロード経路）
-    /// - UI の TextEdit でユーザーが名前を編集したとき
-    /// - リロード成功後の snapshot 復元時
+    /// Call sites:
+    /// - Right after the Prefab name is determined (PkgInitial / synchronous
+    ///   Prefab load path in `file_io.rs`).
+    /// - When the user edits the name in the UI `TextEdit`.
+    /// - At snapshot restore after a successful reload.
     pub(crate) fn refresh_derived_from_display_name(&mut self) {
         self.window_title = Some(format!(
             "POPONE Model Viewer v{} - {}",
@@ -623,8 +636,9 @@ impl ViewerApp {
         self.export.pmx_output_path = new_path.to_string_lossy().into_owned();
     }
 
-    /// GPU パイプラインの段階的ウォームアップ（スプラッシュ画面表示中に1フェーズずつ実行）。
-    /// 各フェーズはシェーダーコンパイルを含むため数秒かかるが、フレーム間でスプラッシュ画像が表示される。
+    /// Staged warmup of the GPU pipeline (one phase per frame while the splash
+    /// screen is shown). Each phase includes shader compilation and takes a few
+    /// seconds, but the splash image keeps displaying between frames.
     fn tick_gpu_warmup(&mut self) {
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
@@ -659,20 +673,21 @@ impl ViewerApp {
         }
     }
 
-    /// ログビュアーウインドウ（OS レベルの別ウインドウ）を描画する。
+    /// Draws the log viewer window (a separate OS-level window).
     ///
-    /// `show_viewport_deferred` を使う理由: メイン `update()` は 3D の
-    /// `render_to_texture` を毎フレーム実行するため、`immediate` の「親子相互 repaint」
-    /// がログ流入のたびに 3D 再描画を誘発してしまう。`deferred` なら子 viewport の
-    /// 再描画は親を起こさない。
+    /// Why `show_viewport_deferred`: the main `update()` runs 3D
+    /// `render_to_texture` every frame, so `immediate`'s parent-child mutual
+    /// repaint would trigger a 3D redraw on every log inflow. With `deferred`,
+    /// the child viewport's repaints do not wake the parent.
     ///
-    /// クロージャは `Fn + Send + Sync + 'static` 制約があるので、`&mut self` を
-    /// キャプチャできない。`Arc::clone` した `log_viewer` / `log_buffer`, `PathBuf::clone`
-    /// した `logs_dir` を `move` で渡す。
+    /// The closure has `Fn + Send + Sync + 'static` bounds, so it cannot capture
+    /// `&mut self`. We pass `Arc::clone`d `log_viewer` / `log_buffer` and a
+    /// `PathBuf::clone`d `logs_dir` via `move`.
     fn show_log_viewer(&self, ctx: &egui::Context) {
-        // P1 修正: visible チェックを apply_geometry.take() より「先」に行う。
-        // 隠れたまま起動した最初のフレームで apply_geometry が消費されると、後で
-        // ユーザがボタンで開いたとき config 由来の保存位置が失われてしまうため。
+        // P1 fix: perform the visible check *before* `apply_geometry.take()`.
+        // If `apply_geometry` is consumed on the very first frame while the
+        // window is hidden, then when the user later opens it via the button
+        // the saved position from the config would be lost.
         let apply_geometry = {
             let mut m = self.log_viewer.lock().unwrap_or_else(|p| p.into_inner());
             if !m.visible {
@@ -698,13 +713,13 @@ impl ViewerApp {
         ctx.show_viewport_deferred(vp_id, builder, move |child_ctx, _class| {
             let mut m = model.lock().unwrap_or_else(|p| p.into_inner());
 
-            // 1. SharedLogBuffer からの増分取り込み
+            // 1. Incremental ingest from `SharedLogBuffer`.
             m.poll(&log_buffer);
 
-            // 2. UI 描画
+            // 2. Draw UI.
             m.draw(child_ctx, &log_buffer, &logs_dir);
 
-            // 3. 最新 geometry を記録（同セッション reopen + on_exit 保存用）
+            // 3. Record the latest geometry (for same-session reopen + on_exit save).
             child_ctx.input(|i| {
                 if let (Some(outer), Some(inner)) =
                     (i.viewport().outer_rect, i.viewport().inner_rect)
@@ -714,15 +729,16 @@ impl ViewerApp {
                 }
             });
 
-            // 4. 閉じる検知（× ボタン）。hide() は last_geometry を apply_geometry に
-            //    スナップショットして次回 show 時の位置維持を担保する。
+            // 4. Close detection (x button). `hide()` snapshots `last_geometry`
+            //    into `apply_geometry` to preserve the position on the next show.
             if child_ctx.input(|i| i.viewport().close_requested()) {
                 m.hide();
             }
 
-            // 5. visible 中は 150ms 間隔で再描画（新規ログの遅延表示防止）
-            //    メイン update は 3 秒周期の自発 repaint しかしないので、ここで
-            //    子 viewport だけを起こす。deferred なので親 3D は影響を受けない
+            // 5. While visible, repaint every 150 ms (prevents delayed display
+            //    of new logs). The main `update` self-repaints only every 3 s,
+            //    so we wake only the child viewport here. Because it is deferred,
+            //    the parent 3D view is not affected.
             if m.visible {
                 child_ctx.request_repaint_after(std::time::Duration::from_millis(150));
             }
@@ -730,7 +746,7 @@ impl ViewerApp {
     }
 }
 
-/// ウィンドウ位置の初回フレーム検証・適用用
+/// State for first-frame validation/application of the window position.
 struct PendingWindowRestore {
     saved_config: Option<persistence::WindowConfig>,
     validated: bool,
@@ -750,10 +766,10 @@ impl ViewerApp {
             .clone()
             .expect("wgpu render state required");
 
-        // 日本語フォント読み込み
+        // Load Japanese fonts.
         Self::setup_cjk_fonts(&cc.egui_ctx);
 
-        // ダークテーマ（Blender/Substance Painter 風）— popone.toml [theme] で色変更可能
+        // Dark theme (Blender / Substance Painter style); colors are configurable via popone.toml [theme].
         let theme = app_config
             .as_ref()
             .map(|c| &c.theme)
@@ -761,10 +777,10 @@ impl ViewerApp {
             .unwrap_or_default();
         Self::setup_dark_theme(&cc.egui_ctx, &theme);
 
-        // スプラッシュ画像読み込み
+        // Load splash image.
         let splash_texture = Self::load_splash_texture(&cc.egui_ctx);
 
-        // シングルインスタンス: IPC パイプリスナー起動
+        // Single-instance: start the IPC pipe listener.
         #[cfg(target_os = "windows")]
         let ipc_receiver = {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -772,7 +788,7 @@ impl ViewerApp {
             rx
         };
 
-        // config からディレクトリパスを復元
+        // Restore directory paths from the config.
         let last_model_dir = app_config
             .as_ref()
             .and_then(|c| c.directory.last_model.as_ref())
@@ -784,7 +800,7 @@ impl ViewerApp {
             .map(PathBuf::from)
             .filter(|p| p.is_dir());
 
-        // ウィンドウ位置の遅延復元用（設定ファイルに [window] セクションがある場合のみ）
+        // For deferred restore of the window position (only if the config file has a [window] section).
         let saved_window = app_config.as_ref().and_then(|c| c.window.clone());
         let pending_window_restore = PendingWindowRestore {
             validated: saved_window.is_none(),
@@ -793,8 +809,8 @@ impl ViewerApp {
 
         let app_config = app_config.unwrap_or_default();
 
-        // テクスチャフォールバック色（白/マゼンタ）の初期値をグローバルに反映。
-        // 以降のテクスチャアップロード（BG ロード含む）はこの値を参照する。
+        // Reflect the initial texture fallback color (white / magenta) globally.
+        // All subsequent texture uploads (including BG loads) reference this value.
         super::texture::set_white_texture_fallback(app_config.display.white_texture_fallback);
 
         let display = DisplaySettings {
@@ -804,7 +820,7 @@ impl ViewerApp {
             ..DisplaySettings::default()
         };
 
-        // テクスチャ履歴を読み込み
+        // Load texture history.
         let texture_history = persistence::load_texture_history(&data_dir);
 
         let tex = TextureState {
@@ -883,7 +899,7 @@ impl ViewerApp {
         }
     }
 
-    /// mat_idx から stable key を引く
+    /// Look up the stable key from `mat_idx`.
     pub fn pkg_key_for_material(
         &self,
         mat_idx: usize,
@@ -896,9 +912,9 @@ impl ViewerApp {
     }
 
     fn setup_cjk_fonts(ctx: &egui::Context) {
-        // Noto Sans JP（OFL ライセンス）— 日本語プライマリ
+        // Noto Sans JP (OFL license) - primary Japanese face.
         const NOTO_SANS_JP: &[u8] = include_bytes!("../../../assets/NotoSansJP-Regular.ttf");
-        // Noto Sans SC（OFL ライセンス）— 簡体字フォールバック
+        // Noto Sans SC (OFL license) - simplified-Chinese fallback.
         const NOTO_SANS_SC: &[u8] = include_bytes!("../../../assets/NotoSansSC-Regular.otf");
 
         let mut fonts = egui::FontDefinitions::default();
@@ -910,7 +926,7 @@ impl ViewerApp {
             "noto_sc".to_owned(),
             egui::FontData::from_static(NOTO_SANS_SC).into(),
         );
-        // JP → SC の順にフォールバック（JP にないグリフを SC で補完）
+        // Fallback order JP -> SC (SC supplies glyphs missing from JP).
         let proportional = fonts
             .families
             .get_mut(&egui::FontFamily::Proportional)
@@ -926,7 +942,7 @@ impl ViewerApp {
         ctx.set_fonts(fonts);
     }
 
-    /// スプラッシュ画像を埋め込み PNG からデコードし egui テクスチャとして登録
+    /// Decode the splash image from the embedded PNG and register it as an `egui` texture.
     fn load_splash_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
         static SPLASH_PNG: &[u8] = include_bytes!("../../../assets/popone_image.png");
         let image = image::load_from_memory(SPLASH_PNG).ok()?.into_rgba8();
@@ -936,8 +952,8 @@ impl ViewerApp {
         Some(ctx.load_texture("splash", color_image, egui::TextureOptions::LINEAR))
     }
 
-    /// v0 デザイン準拠のダークテーマを適用
-    /// hex 文字列を Color32 に変換（デフォルト値つき）
+    /// Applies the v0-design-conformant dark theme.
+    /// Converts a hex string to `Color32` (with a default).
     fn theme_color(opt: &Option<String>, default: egui::Color32) -> egui::Color32 {
         opt.as_ref()
             .and_then(|s| persistence::ThemeConfig::parse_hex(s))
@@ -957,51 +973,51 @@ impl ViewerApp {
         let active_color =
             Self::theme_color(&theme.active, egui::Color32::from_rgb(0x2A, 0x5A, 0x8A));
 
-        // パネル・ウィンドウ背景
+        // Panel / window background.
         visuals.panel_fill = panel_bg;
         visuals.window_fill = panel_bg;
 
-        // ボーダー
+        // Border.
         let border_stroke = egui::Stroke::new(1.0, border);
         visuals.window_stroke = border_stroke;
 
-        // ウィジェット共通テキスト色
+        // Common widget text color.
         let fg = egui::Stroke::new(1.0, text_color);
 
-        // noninteractive（ラベル・セパレータ等）
+        // noninteractive (labels, separators, etc.).
         visuals.widgets.noninteractive.bg_stroke = border_stroke;
         visuals.widgets.noninteractive.fg_stroke = fg;
 
-        // inactive（ボタン通常時）
+        // inactive (button at rest).
         visuals.widgets.inactive.bg_fill = widget_bg;
         visuals.widgets.inactive.weak_bg_fill = widget_bg;
         visuals.widgets.inactive.bg_stroke = border_stroke;
         visuals.widgets.inactive.fg_stroke = fg;
 
-        // hovered（ホバー時）: アクセントカラー
+        // hovered: accent color.
         visuals.widgets.hovered.bg_fill = accent;
         visuals.widgets.hovered.weak_bg_fill = accent;
         visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent);
         visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
 
-        // active（クリック中）
+        // active (while pressed).
         visuals.widgets.active.bg_fill = active_color;
         visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, active_color);
         visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
 
-        // open（展開中のComboBox等）
+        // open (expanded ComboBox, etc.).
         visuals.widgets.open.bg_fill = egui::Color32::from_rgb(0x2A, 0x2A, 0x2A);
         visuals.widgets.open.bg_stroke = border_stroke;
         visuals.widgets.open.fg_stroke = fg;
 
-        // セレクション/アクセント
+        // Selection / accent.
         visuals.selection.bg_fill = accent;
         visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
 
-        // 極端な背景色（TextEdit内部等）
+        // Extreme background (e.g., interior of `TextEdit`).
         visuals.extreme_bg_color = egui::Color32::from_rgb(0x15, 0x15, 0x15);
 
-        // スクロールバーを細く
+        // Make the scrollbar thinner.
         let mut spacing = ctx.style().spacing.clone();
         spacing.scroll.bar_width = 6.0;
 
@@ -1019,8 +1035,8 @@ impl ViewerApp {
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
 
-        // GPU リソース構築（IrTexture から直接アップロード）
-        // 初回ロード時は material_display 未初期化のためデフォルト値使用
+        // GPU resource build (uploaded directly from `IrTexture`).
+        // On first load, `material_display` is not yet initialized, so use defaults.
         let display = if self.material_display.len() == ir.materials.len() {
             self.material_display.clone()
         } else {
@@ -1031,7 +1047,7 @@ impl ViewerApp {
         self.finish_load_with_gpu(ir, gpu_model, source, false)
     }
 
-    /// GPU テクスチャアップロードを分割して実行する版（BG パース完了後に使用）
+    /// Variant that splits GPU texture uploads across frames (used after BG parse completes).
     pub(crate) fn start_deferred_gpu_build(
         &mut self,
         ir: IrModel,
@@ -1046,8 +1062,9 @@ impl ViewerApp {
         };
         let mat_flags = Self::extract_per_mat_vecs(&display);
 
-        // reload_snapshot が Some なら「reload_current 経由」であることをキャプチャし、
-        // GPU ビルド分割を経て finish_load_with_gpu まで確実に運ぶ (review_004 [P2] 対応)。
+        // If `reload_snapshot` is `Some`, capture "via `reload_current`" status and
+        // carry it through the split GPU build all the way to `finish_load_with_gpu`
+        // (review_004 [P2]).
         let is_reload = self.reload_snapshot.is_some();
         self.pending.gpu_build = Some(pending::PendingGpuBuild {
             gpu_textures: Vec::with_capacity(ir.textures.len()),
@@ -1063,9 +1080,10 @@ impl ViewerApp {
         });
     }
 
-    /// Append 操作の GPU ビルドを遅延実行する版。
-    /// IR マージは即時実行し、マージ済み IR をフレーム分割テクスチャアップロードに回す。
-    /// ビルド完了までは `self.loaded = None`（一時的にモデル非表示）。
+    /// Deferred-execution version of an append operation's GPU build.
+    /// IR merge runs immediately; the merged IR is fed into the frame-split
+    /// texture-upload pipeline. Until the build completes `self.loaded = None`
+    /// (model is temporarily hidden).
     pub(crate) fn start_deferred_append_gpu_build(
         &mut self,
         other_ir: IrModel,
@@ -1086,7 +1104,7 @@ impl ViewerApp {
         );
     }
 
-    /// Append 操作の GPU ビルドを遅延実行（PkgAppend ペイロード付き版）
+    /// Deferred-execution append GPU build (variant carrying a `PkgAppend` payload).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn start_deferred_append_gpu_build_ext(
         &mut self,
@@ -1111,7 +1129,7 @@ impl ViewerApp {
         let tex_count_before = loaded.ir.textures.len();
 
         let ir_snapshot = pending::IrRollbackSnapshot::capture(&loaded.ir);
-        // ヒューマノイド補完（finish_append_ext と同じ処理）
+        // Humanoid completion (same logic as `finish_append_ext`).
         let other_has_humanoid = other_ir.bones.iter().any(|b| b.vrm_bone_name.is_some());
         if !other_has_humanoid {
             let names: Vec<(usize, &str)> = other_ir
@@ -1136,7 +1154,7 @@ impl ViewerApp {
         let (merged_bones, new_bones) = loaded.ir.merge(other_ir);
         log::info!("[gpu_build] IR merge done in {}ms (merged_bones={merged_bones}, new_bones={new_bones})", t_merge.elapsed().as_millis());
 
-        // material_display を resize
+        // Resize `material_display`.
         let mc = loaded.ir.materials.len();
         self.material_display
             .resize_with(mc, MaterialDisplayState::default);
@@ -1144,7 +1162,7 @@ impl ViewerApp {
 
         let anim_snapshot = pending::AnimationSnapshot::capture(self.anim.state.as_ref());
 
-        // loaded を分解: IR (マージ済み) + GPU モデル + 所有権フィールド
+        // Decompose `loaded`: IR (merged) + GPU model + ownership fields.
         let rollback_gpu_model = loaded.gpu_model;
         let ownership = pending::LoadedModelOwnership {
             source: loaded.source,
@@ -1187,21 +1205,21 @@ impl ViewerApp {
             post_kind: None,
             path,
             ir: merged_ir,
-            source: helpers::ReloadableSource::File(std::path::PathBuf::new()), // ダミー（append 完了時に primary_source を使用）
+            source: helpers::ReloadableSource::File(std::path::PathBuf::new()), // dummy (the primary source is used on append completion)
             append_info: Some(Box::new(append_info)),
             cpu_prep_rx: None,
-            is_reload: false, // append は reload ではない
+            is_reload: false, // append is not a reload
         });
     }
 
-    /// Append GPU ビルド失敗時に元のモデルにロールバックする。
-    /// マージ済み IR を truncate で元に戻し、旧 GPU モデルを復元する。
+    /// Roll back to the original model when an append GPU build fails.
+    /// Truncates the merged IR back to the prior state and restores the old GPU model.
     pub(crate) fn rollback_append(&mut self, mut ir: IrModel, ai: pending::AppendGpuBuildInfo) {
         log::info!("Rolling back append: restoring original model via truncate");
         let mat_count = ai.ir_snapshot.material_count;
         ai.ir_snapshot.rollback(&mut ir);
 
-        // LoadedModel を旧 GPU モデル + truncate 済み IR で再構築
+        // Rebuild `LoadedModel` with the old GPU model + truncated IR.
         let mat_cache = Self::build_mat_cache(&ir, &ai.rollback_gpu_model);
         let stats_cache = CachedStats::new(&ir);
         let own = ai.ownership;
@@ -1218,18 +1236,19 @@ impl ViewerApp {
             mat_cache,
             stats_cache,
         });
-        // material_display を元のサイズに戻す
+        // Restore `material_display` to its original size.
         self.material_display.truncate(mat_count);
-        // レンダラキャッシュ無効化
+        // Invalidate renderer caches.
         if let Some(ref mut renderer) = self.renderer {
             renderer.invalidate_visualization_cache();
             renderer.invalidate_normal_cache();
         }
     }
 
-    /// 遅延 GPU ビルド完了後の Append 後処理。
-    /// `PendingGpuBuild` から取り出したマージ済み IR + 構築済み GPU モデルと、
-    /// `AppendGpuBuildInfo` に保存しておいた旧 LoadedModel 情報から LoadedModel を再構築する。
+    /// Append post-processing run after the deferred GPU build completes.
+    /// Rebuilds `LoadedModel` from the merged IR + built GPU model taken from
+    /// `PendingGpuBuild`, plus the old-`LoadedModel` info stashed in
+    /// `AppendGpuBuildInfo`.
     pub(crate) fn finish_deferred_append(
         &mut self,
         ir: IrModel,
@@ -1237,7 +1256,7 @@ impl ViewerApp {
         mut ai: pending::AppendGpuBuildInfo,
     ) {
         let _t = std::time::Instant::now();
-        // レンダラー初期化（まだなければ）
+        // Initialize the renderer if not yet present.
         if self.renderer.is_none() {
             let device = &self.render_state.device;
             let queue = &self.render_state.queue;
@@ -1252,7 +1271,7 @@ impl ViewerApp {
             _t.elapsed().as_millis()
         );
 
-        // MMD リソース構築
+        // Build MMD resources.
         let t1 = std::time::Instant::now();
         let emissive_vec: Vec<bool> = self.material_display.iter().map(|d| d.emissive).collect();
         if let Some(ref renderer) = self.renderer {
@@ -1264,7 +1283,7 @@ impl ViewerApp {
             t1.elapsed().as_millis()
         );
 
-        // viewport テクスチャ解放
+        // Release the viewport texture.
         if let Some(tex_id) = self.viewport_texture_id.take() {
             let mut renderer = self.render_state.renderer.write();
             renderer.free_texture(&tex_id);
@@ -1284,7 +1303,7 @@ impl ViewerApp {
             t2.elapsed().as_millis()
         );
 
-        // MaterialGroup: 旧グループ + 新規グループ
+        // MaterialGroup: existing groups + the newly added group.
         let mut own = ai.ownership;
         let prev_draw_end: usize = own
             .material_groups
@@ -1298,7 +1317,7 @@ impl ViewerApp {
             draw_range: prev_draw_end..gpu_model.draws.len(),
         });
 
-        // appended_models に追加
+        // Append to `appended_models`.
         let display_path = ai.append_source.display_path().to_path_buf();
         own.appended_models.push(AppendedModel {
             source: ai.append_source,
@@ -1306,7 +1325,7 @@ impl ViewerApp {
             pkg_model: ai.pkg_locator,
         });
 
-        // LoadedModel を再構築
+        // Rebuild `LoadedModel`.
         self.loaded = Some(LoadedModel {
             ir,
             gpu_model,
@@ -1321,18 +1340,18 @@ impl ViewerApp {
             prefab_entry_path: own.prefab_entry_path,
         });
 
-        // last_dir 更新
+        // Update `last_dir`.
         if let Some(dir) = display_path.parent() {
             self.tex.last_dir = Some(dir.to_path_buf());
         }
 
-        // レンダラーのキャッシュ無効化
+        // Invalidate renderer caches.
         let t3 = std::time::Instant::now();
         if let Some(ref mut renderer) = self.renderer {
             renderer.invalidate_visualization_cache();
             renderer.invalidate_normal_cache();
             renderer.mark_sort_dirty();
-            // グリッドを更新
+            // Update the grid.
             if let Some(ref loaded) = self.loaded {
                 let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
                 renderer.rebuild_grid(&self.render_state.device, bbox_min, bbox_max);
@@ -1343,7 +1362,7 @@ impl ViewerApp {
             t3.elapsed().as_millis()
         );
 
-        // アニメーション状態を再構築
+        // Rebuild the animation state.
         let t4 = std::time::Instant::now();
         if let Some(anim_arc) = ai.anim_snapshot.animation_arc.take() {
             if let Some(ref loaded) = self.loaded {
@@ -1358,7 +1377,7 @@ impl ViewerApp {
             t4.elapsed().as_millis()
         );
 
-        // シェーダー状態を正規化
+        // Normalize the shader state.
         let t5 = std::time::Instant::now();
         self.normalize_shader_state();
         log::info!(
@@ -1390,7 +1409,7 @@ impl ViewerApp {
             ));
         }
 
-        // PkgAppend 後処理（テクスチャリネーム・テクスチャマッチング等）
+        // PkgAppend post-processing (texture rename, texture matching, etc.).
         let t6 = std::time::Instant::now();
         if let Some(payload) = ai.pkg_append_payload {
             self.apply_pkg_append_post(
@@ -1407,7 +1426,7 @@ impl ViewerApp {
         log::info!("[append_detail] TOTAL: {}ms", _t.elapsed().as_millis());
     }
 
-    /// PkgAppend 遅延 GPU ビルド完了後の後処理
+    /// Post-processing after the PkgAppend deferred GPU build completes.
     fn apply_pkg_append_post(
         &mut self,
         payload: pending::PkgAppendPayload,
@@ -1419,7 +1438,7 @@ impl ViewerApp {
             self.suppress_tex_match = true;
         }
 
-        // appended_models の最後のインデックスで pkg_prefix を構築
+        // Build `pkg_prefix` using the last index of `appended_models`.
         let appended_count = self
             .loaded
             .as_ref()
@@ -1450,7 +1469,7 @@ impl ViewerApp {
                 } else {
                     self.tex.pkg_textures = Some(pkg_textures_to_add);
                 }
-                // 新規追加分のみサムネイル生成（全再構築を回避）
+                // Generate thumbnails only for newly added entries (avoid full rebuild).
                 self.append_pkg_thumb_cache(thumb_start);
             }
         }
@@ -1479,7 +1498,7 @@ impl ViewerApp {
 
         self.suppress_tex_match = false;
 
-        // バッチ進捗トースト（成功メッセージを上書き）
+        // Batch progress toast (overwrites the success message).
         if let Some((current, total)) = payload.batch_progress {
             let name = payload.pkg_model_name.as_deref().unwrap_or("?");
             self.convert_message = Some(ConvertMessage::success(
@@ -1494,10 +1513,10 @@ impl ViewerApp {
         }
     }
 
-    /// シェーダー状態を現在のモデルに合わせて正規化
+    /// Normalize the shader state for the currently loaded model.
     ///
-    /// - Auto: モデル形式に応じて Standard/MMD を自動判定
-    /// - Mtoon/Unlit/GGX/Normal/MMD: ユーザー選択を維持（整合性チェックのみ）
+    /// - Auto: pick Standard/MMD automatically based on the model format.
+    /// - Mtoon/Unlit/GGX/Normal/MMD: keep the user's selection (consistency check only).
     pub(crate) fn normalize_shader_state(&mut self) {
         let has_mmd = self.loaded.as_ref().is_some_and(|l| {
             l.gpu_model
@@ -1507,7 +1526,7 @@ impl ViewerApp {
         });
 
         if self.display.auto_shader {
-            // Auto モード: モデル形式に合わせて MMD パスを自動判定
+            // Auto mode: pick the MMD path automatically based on the model format.
             self.display.shader_override = ShaderOverride::Default;
             if !has_mmd {
                 self.display.use_mmd_path = false;
@@ -1522,7 +1541,7 @@ impl ViewerApp {
                 self.display.use_mmd_path = is_pmx_pmd;
             }
         } else {
-            // ユーザー明示選択: MMD リソースがなければ use_mmd_path だけ落とす
+            // Explicit user selection: drop only `use_mmd_path` when there are no MMD resources.
             if !has_mmd && self.display.use_mmd_path {
                 self.display.use_mmd_path = false;
             }
@@ -1536,16 +1555,17 @@ impl ViewerApp {
         source: ReloadableSource,
         is_reload: bool,
     ) -> anyhow::Result<()> {
-        // 材質編集ドロワー（§A / P2 対応 / review_004 [P2] 完全対応）: 明示的 reload
-        // （A スタンス変換・T スタンス変換・reload_current 経由）のときだけ前回の
-        // 材質編集状態を保持し、それ以外（新規ロード・同じファイルを再オープン等）では
-        // 破棄する。
+        // Material edit drawer (§A / P2 / review_004 [P2] full): keep the previous
+        // material-edit state only on an explicit reload (A-stance / T-stance
+        // conversion or via `reload_current`). Discard it otherwise (new load,
+        // re-opening the same file, etc.).
         //
-        // `is_reload` は BG パイプライン経由では `PendingGpuBuild.is_reload` から渡され、
-        // 同期パス（直接 finish_load_with_gpu を呼ぶ経路）では `false` が渡される。
-        // `PendingGpuBuild.is_reload` は `start_deferred_gpu_build` 時点の
-        // `self.reload_snapshot.is_some()` をキャプチャしているため、GPU ビルド分割の
-        // 数フレームにわたるタイミング問題を回避できる。
+        // `is_reload` is passed from `PendingGpuBuild.is_reload` via the BG
+        // pipeline; through synchronous paths (where `finish_load_with_gpu` is
+        // called directly) `false` is passed. `PendingGpuBuild.is_reload`
+        // captures `self.reload_snapshot.is_some()` at the time of
+        // `start_deferred_gpu_build`, which avoids the multi-frame timing
+        // problem of split GPU builds.
         log::debug!(
             "finish_load_with_gpu: is_reload={}, material_overrides={}",
             is_reload,
@@ -1558,7 +1578,7 @@ impl ViewerApp {
             self.slot_texture_paths.clear();
         }
 
-        // レンダラー初期化（まだなければ）または可視化キャッシュ無効化
+        // Initialize the renderer if absent, or invalidate the visualization cache.
         if self.renderer.is_none() {
             let device = &self.render_state.device;
             let queue = &self.render_state.queue;
@@ -1568,46 +1588,47 @@ impl ViewerApp {
             renderer.mark_sort_dirty();
         }
 
-        // 材質ごとのフラグを先に初期化（MMD リソース構築で使用するため）
+        // Initialize per-material flags first (used during MMD resource build).
         self.material_display = Self::default_material_display(&ir);
 
-        // MMD リソース構築
+        // Build MMD resources.
         let emissive_vec: Vec<bool> = self.material_display.iter().map(|d| d.emissive).collect();
         self.prepare_mmd_for_model(&mut gpu_model, &ir, &emissive_vec);
 
-        // テクスチャ割り当て履歴クリア（別モデル読み込み時）
+        // Clear texture-assignment history (when loading a different model).
         self.tex.assignments.clear();
         self.tex.pkg_assignments.clear();
-        // 非同期テクスチャダイアログが開いていれば結果を破棄
-        // (前モデルの material index が stale になるのを防ぐ)
+        // If an async texture dialog is open, discard its result
+        // (prevents the previous model's material index from going stale).
         if self.tex.pending_file_dialog.is_some() {
             self.tex.pending_file_dialog = None;
         }
-        // PSD→PNG バックグラウンド変換を破棄（前モデルの tex_idx が stale になるのを防ぐ）
+        // Discard PSD->PNG background conversions (prevents the previous model's tex_idx from going stale).
         self.tex.pending_psd_conversions.clear();
-        // v0.5.2 [review_01 P1] 対応: 前モデルのサムネイル TextureId を解放する。
-        // これを呼ばないと、新旧モデルのテクスチャ数が一致した場合に
-        // `sync_ir_thumb_cache()` が長さ比較で early return し、
-        // 材質編集ウィンドウで前モデルのサムネイルが別モデルの画像として表示される。
+        // v0.5.2 [review_01 P1]: release the previous model's thumbnail `TextureId`s.
+        // Without this, when the old and new models happen to have the same
+        // texture count, `sync_ir_thumb_cache()` early-returns on the length
+        // check, and the material edit window ends up displaying the previous
+        // model's thumbnails for a different model.
         self.clear_ir_thumb_cache();
-        // L3: pending_tex_preview の egui TextureId を正しく解放してから破棄
+        // L3: properly release the egui `TextureId` held by `pending_tex_preview` before discarding.
         if let Some(preview) = self.tex.pending_preview.take() {
             self.cancel_tex_preview_inner(preview);
         }
-        // L1: 前モデルの viewport テクスチャIDを解放
+        // L1: release the previous model's viewport texture ID.
         if let Some(tex_id) = self.viewport_texture_id.take() {
             let mut renderer = self.render_state.renderer.write();
             renderer.free_texture(&tex_id);
         }
 
-        // モーフスライダ初期化
+        // Initialize morph sliders.
         self.morph_weights = vec![0.0; ir.morphs.len()];
         self.morph_dirty = false;
-        // 材質表示フラグ初期化（DrawCall数 = 材質数ではない場合があるのでdraws数に合わせる）
+        // Initialize material visibility flags (DrawCall count may differ from material count, so size to draws.len).
         self.material_visibility = vec![true; gpu_model.draws.len()];
         self.export.export_visible_only = false;
         self.material_filter.clear();
-        // カメラをモデルのバウンディングボックスにフィット
+        // Fit the camera to the model's bounding box.
         let (bbox_min, bbox_max) = gpu_model.bbox();
         self.camera.reset_to_bbox_with_margin(
             bbox_min,
@@ -1615,16 +1636,16 @@ impl ViewerApp {
             self.last_viewport_width,
             self.last_viewport_height,
         );
-        // グリッドをモデルサイズに合わせて再構築
+        // Rebuild the grid to match the model size.
         if let Some(ref mut renderer) = self.renderer {
             renderer.rebuild_grid(&self.render_state.device, bbox_min, bbox_max);
             renderer.mark_sort_dirty();
         }
-        // ビューポートサイズ確定後に refit（初回ロード時はサイズが未確定の場合がある）
+        // Refit after the viewport size is settled (size may be undetermined on first load).
         self.pending.refit = true;
 
-        // デフォルト出力パス: converted_modelXX/ ディレクトリ内に .pmx
-        // output_base_dir が設定されていればそちらを優先
+        // Default output path: a `.pmx` inside `converted_modelXX/`.
+        // Prefer `output_base_dir` if set.
         let path = source.display_path();
         let base_dir = self
             .export
@@ -1632,12 +1653,13 @@ impl ViewerApp {
             .as_deref()
             .unwrap_or_else(|| path.parent().unwrap_or(std::path::Path::new(".")));
         let converted_dir = crate::next_converted_dir(base_dir);
-        // モデル表示名の初期値（拡張子なし）:
-        //   - 通常のファイル (FBX/VRM/PMX/...) → そのファイル名
-        //   - アーカイブ (zip/7z/unitypackage) → アーカイブファイル名
-        //     (ReloadableSource::Archive の display_path はアーカイブ本体を指す)
-        //   - Prefab は後段（file_io.rs の PkgInitial/同期 Prefab ロード経路）で Prefab 名に上書き
-        //   - 追加 (append) はこの関数を経由しないため自動的に維持される
+        // Initial display name for the model (no extension):
+        //   - Normal file (FBX/VRM/PMX/...) -> that file name.
+        //   - Archive (zip/7z/unitypackage) -> the archive file name
+        //     (`ReloadableSource::Archive::display_path` points to the archive itself).
+        //   - Prefab is overwritten later with the Prefab name (PkgInitial /
+        //     synchronous Prefab load path in `file_io.rs`).
+        //   - Append does not pass through this function and is preserved automatically.
         let initial_display_name = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -1648,11 +1670,11 @@ impl ViewerApp {
         let pmx_name = format!("{initial_display_name}.pmx");
         self.export.pmx_output_path = converted_dir.join(&pmx_name).to_string_lossy().into_owned();
 
-        // キャッシュ構築
+        // Build caches.
         let mat_cache = Self::build_mat_cache(&ir, &gpu_model);
         let stats_cache = CachedStats::new(&ir);
 
-        // テクスチャ割当ログ出力
+        // Emit texture-assignment logs.
         ir.log_texture_assignments();
 
         let model_name = ir.name.clone();
@@ -1677,23 +1699,23 @@ impl ViewerApp {
             prefab_entry_path: None,
         });
 
-        // 新規ロード時: サイドパネルを情報タブに戻す
+        // On a new load: return the side panel to the Info tab.
         self.side_panel_tab = SidePanelTab::Info;
-        // 新規ロード時: UV 編集状態もリセット（メッシュ/頂点Index が変わるため再利用不可）
+        // On a new load: also reset the UV edit state (cannot be reused because mesh/vertex indices change).
         self.uv_edit.reset();
         self.uv_edit_window_open = false;
-        // 旧モデルの TextureView に紐付いていた egui TextureId を free（GPU リークを防ぐ）
+        // Free the egui `TextureId` bound to the previous model's `TextureView` (prevents GPU leaks).
         if let Some((_, tex_id)) = self.uv_edit_bg_tex.take() {
             let mut renderer = self.render_state.renderer.write();
             renderer.free_texture(&tex_id);
         }
-        // 新規ロード時: シェーダーを初期値にリセットしてからモデル形式に応じて正規化
+        // On a new load: reset the shader to its initial value, then normalize for the model format.
         self.display.shader_override = ShaderOverride::Default;
         self.display.use_mmd_path = false;
         self.display.auto_shader = true;
         self.normalize_shader_state();
 
-        // ウィンドウタイトル更新（model_display_name ベース）
+        // Update the window title (based on `model_display_name`).
         self.window_title = Some(format!(
             "POPONE Model Viewer v{} - {}",
             env!("CARGO_PKG_VERSION"),
@@ -1704,22 +1726,27 @@ impl ViewerApp {
             renderer.invalidate_normal_cache();
         }
 
-        // 材質編集ドロワー（§H）: ロード直後の IR 材質値を pristine としてスナップショット。
-        // 「初期値に戻す」で pristine に復元する経路が使う。
-        // **重要**: override の apply_to 実行前にキャプチャしないと、apply 後の値が
-        // pristine になってしまい「初期値」の意味をなさなくなる。
+        // Material edit drawer (§H): snapshot the IR material values right after
+        // load as pristine. Used by the "Reset to default" path that restores
+        // from pristine.
+        // **Important**: capture before the override's `apply_to`, otherwise
+        // the post-apply values would become pristine, defeating the "initial
+        // values" meaning.
         if let Some(loaded) = self.loaded.as_ref() {
             self.pristine_materials = loaded.ir.materials.clone();
         }
 
-        // 材質編集ドロワー（§A / A スタンス対応）: reload なら `material_overrides` を
-        // 新 IR に一括再適用し、該当材質を dirty に立てて次フレームで bind group を再生成する。
-        // Step 2 では §E の全セクション（影 / アウトライン / リム / MatCap / UV アニメ /
-        // エミッシブ / 法線 / その他）のパラメータが `MaterialParamOverride` に集約されている
-        // ので、この 1 経路で A スタンス / T スタンス変換を挟んだ編集値保持がすべて機能する。
+        // Material edit drawer (§A / A-stance support): on reload, reapply
+        // `material_overrides` to the new IR in a batch, mark the matching
+        // materials dirty, and rebuild bind groups on the next frame.
+        // In Step 2, every §E section (shade / outline / rim / MatCap / UV
+        // anim / emissive / normal / other) is consolidated into
+        // `MaterialParamOverride`, so this single path handles edit-value
+        // retention across A-stance / T-stance conversions for all sections.
         if is_reload && !self.material_overrides.is_empty() {
-            // `self.material_overrides` と `self.loaded` の同時借用を避けるため、先に適用対象の
-            // (mat_idx, override_clone) リストを作ってから `loaded` を mut で借用する。
+            // To avoid simultaneous borrows of `self.material_overrides` and
+            // `self.loaded`, build the `(mat_idx, override_clone)` list first,
+            // then borrow `loaded` mutably.
             let override_list: Vec<(usize, material_edit::MaterialParamOverride)> = self
                 .material_overrides
                 .iter()
@@ -1738,9 +1765,10 @@ impl ViewerApp {
             }
         }
 
-        // Step 4-16b / review_016 対応: 非 BaseColor テクスチャスロット割当の reload 復元。
-        // slot_texture_paths に記録されたファイルパスを再読込し、assign_texture_core で
-        // GPU にアップロード + IrMaterial のスロットフィールドに設定する。
+        // Step 4-16b / review_016: reload restoration of non-BaseColor texture
+        // slot assignments. Re-read file paths recorded in
+        // `slot_texture_paths`, then `assign_texture_core` uploads to the GPU
+        // and sets the slot fields on `IrMaterial`.
         if is_reload && !self.slot_texture_paths.is_empty() {
             let paths: Vec<(
                 (usize, crate::intermediate::types::TextureSlot),
@@ -1770,7 +1798,7 @@ impl ViewerApp {
         Ok(())
     }
 
-    /// MMD リソースを GpuModel に構築
+    /// Build MMD resources on the `GpuModel`.
     fn prepare_mmd_for_model(
         &self,
         gpu_model: &mut super::mesh::GpuModel,
@@ -1783,7 +1811,7 @@ impl ViewerApp {
         }
     }
 
-    /// smooth_normals 切り替え時に GPU モデルを再構築
+    /// Rebuild the GPU model when `smooth_normals` is toggled.
     pub fn rebuild_gpu_model(&mut self) {
         let Some(loaded) = &self.loaded else { return };
         let device = &self.render_state.device;
@@ -1792,7 +1820,7 @@ impl ViewerApp {
         let mat_flags = Self::extract_per_mat_vecs(&self.material_display);
         match super::mesh::build_gpu_model_from_ir(&loaded.ir, device, queue, &mat_flags) {
             Ok(mut new_model) => {
-                // MMD リソース構築
+                // Build MMD resources.
                 if let Some(ref renderer) = self.renderer {
                     renderer.prepare_mmd_resources(
                         device,
@@ -1802,7 +1830,7 @@ impl ViewerApp {
                     );
                 }
                 let mat_cache = Self::build_mat_cache(&loaded.ir, &new_model);
-                // draw数が同じなら材質表示状態を保持
+                // Preserve the material visibility state if the draw count is unchanged.
                 if self.material_visibility.len() != new_model.draws.len() {
                     self.material_visibility = vec![true; new_model.draws.len()];
                 }
@@ -1815,7 +1843,7 @@ impl ViewerApp {
                     renderer.invalidate_normal_cache();
                     renderer.mark_sort_dirty();
                 }
-                // アニメーション状態を新しい gpu_model で再構築
+                // Rebuild the animation state with the new `gpu_model`.
                 if let (Some(ref loaded), Some(ref old_anim)) = (&self.loaded, &self.anim.state) {
                     let mut new_state = AnimationState::new(
                         Arc::clone(&old_anim.animation),
@@ -1837,7 +1865,7 @@ impl ViewerApp {
         }
     }
 
-    /// ロード済みモデルの bbox でカメラをリセットする
+    /// Reset the camera using the loaded model's bbox.
     fn camera_reset_to_model(&mut self) {
         if let Some(ref loaded) = self.loaded {
             let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
@@ -1850,7 +1878,7 @@ impl ViewerApp {
         }
     }
 
-    /// ロード済みモデルの bbox にカメラをフィットさせる
+    /// Fit the camera to the loaded model's bbox.
     fn camera_fit_to_model(&mut self) {
         if let Some(ref loaded) = self.loaded {
             let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
@@ -1863,16 +1891,19 @@ impl ViewerApp {
         }
     }
 
-    /// 材質ごとのデフォルト表示状態を生成（HDR emissive はエミッシブ OFF）
+    /// Generate the default per-material display state (HDR emissive defaults to OFF).
     fn default_material_display(ir: &IrModel) -> Vec<MaterialDisplayState> {
-        // HDR エミッシブ材質（emissive_factor のいずれか成分が 1.0 超）は
-        // デフォルトで emission OFF にする。
-        // シェーダーは `lit = lighting + rim + emissive` と加算するため、
-        // 係数 > 1.0 だと表面全体に flat な明るさが加わり、例えば lilToon
-        // Screen ブレンドを 0.5 減衰した後でも辛うじて > 1.0 になる材質
-        // （Shinano_face の attenuated [0.89, 0.96, 1.06] など）がテクスチャを
-        // 覆い隠して白飛びする。ユーザーが手動で ON にすれば従来通り有効化できる。
-        // v0.2.40 で一度削除したが、HDR 材質のビューア表示不具合を招いたため復活。
+        // HDR emissive materials (any `emissive_factor` component > 1.0)
+        // default to emission OFF.
+        // The shader composes as `lit = lighting + rim + emissive`, so when
+        // the factor > 1.0 a flat brightness is added across the whole
+        // surface. For example, lilToon Screen-blend materials that are
+        // barely > 1.0 even after a 0.5 attenuation (e.g. Shinano_face's
+        // attenuated [0.89, 0.96, 1.06]) end up covering the texture and
+        // blowing out to white. Users can still enable it manually for the
+        // original behavior.
+        // Removed in v0.2.40 once but restored because it caused viewer
+        // display bugs for HDR materials.
         ir.materials
             .iter()
             .map(|m| {
@@ -1886,7 +1917,7 @@ impl ViewerApp {
             .collect()
     }
 
-    /// `material_display` から `MaterialBuildFlags` を展開する
+    /// Expand `MaterialBuildFlags` from `material_display`.
     fn extract_per_mat_vecs(display: &[MaterialDisplayState]) -> super::mesh::MaterialBuildFlags {
         super::mesh::MaterialBuildFlags {
             smooth: display.iter().map(|d| d.smooth_normals).collect(),
@@ -1896,7 +1927,7 @@ impl ViewerApp {
         }
     }
 
-    /// `material_display` が材質数と一致すればそのまま展開し、不一致ならデフォルト値で生成
+    /// Expand `material_display` when it matches the material count; otherwise generate defaults.
     fn per_mat_or_default_display(
         display: &[MaterialDisplayState],
         mat_count: usize,
@@ -1908,12 +1939,14 @@ impl ViewerApp {
         }
     }
 
-    /// 材質編集ドロワー（§C / §E-1）: 指定材質を「次フレームで bind group 再生成」対象に追加する。
+    /// Material edit drawer (§C / §E-1): mark the specified material for
+    /// "rebuild bind group on the next frame".
     ///
-    /// ロード経路（material_display の再構築箇所）で `material_dirty` を逐一リサイズする代わりに、
-    /// このヘルパが必要に応じて `Vec<bool>` を拡張する。古いモデルで立ったフラグが残る懸念は
-    /// `apply_pending_material_rebuilds` 側で `ir.materials.len()` にクランプして処理するため、
-    /// 安全側に倒している。
+    /// Instead of resizing `material_dirty` at every load path
+    /// (`material_display` rebuild sites), this helper extends the
+    /// `Vec<bool>` on demand. Concerns about leftover flags from older
+    /// models are mitigated on the `apply_pending_material_rebuilds` side
+    /// by clamping to `ir.materials.len()`, biased toward safety.
     pub fn mark_material_dirty(&mut self, mat_idx: usize) {
         let needed = mat_idx + 1;
         if self.material_dirty.len() < needed {
@@ -1922,16 +1955,18 @@ impl ViewerApp {
         self.material_dirty[mat_idx] = true;
     }
 
-    /// 材質編集ドロワー（§C）: 立った `material_dirty` を拾って rebuild_material_bind_groups を
-    /// 呼び出し、標準パスと MMD 互換パスの両方で bind group を再生成する。
+    /// Material edit drawer (§C): pick up set `material_dirty` flags and call
+    /// `rebuild_material_bind_groups`, regenerating bind groups on both the
+    /// standard path and the MMD-compatible path.
     ///
-    /// `update()` 内で UI 描画後・wgpu 描画前に呼び出され、1 フレームで dirty が全消化される。
+    /// Called inside `update()` after UI drawing and before wgpu rendering;
+    /// every dirty entry is fully consumed within a single frame.
     fn apply_pending_material_rebuilds(&mut self) {
         if !self.material_dirty.iter().any(|&d| d) {
             return;
         }
         let Some(renderer) = self.renderer.as_ref() else {
-            // renderer 未初期化（スプラッシュ中等）では dirty を握りつぶす
+            // When the renderer is not yet initialized (e.g. during the splash), squash dirty flags.
             self.material_dirty.fill(false);
             return;
         };
@@ -1944,13 +1979,13 @@ impl ViewerApp {
         let queue = &self.render_state.queue;
         let mat_count = loaded.ir.materials.len();
         let flags = Self::per_mat_or_default_display(&self.material_display, mat_count);
-        // 古いモデルの dirty が残っている可能性があるので ir.materials.len() にクランプ
+        // Clamp to `ir.materials.len()` because dirty entries from an older model may remain.
         let dirty_len = self.material_dirty.len().min(mat_count);
 
         for mat_idx in 0..dirty_len {
             if self.material_dirty[mat_idx] {
-                // テクスチャ変更を伴うかどうかで uniform_only を判定
-                // material_dirty はテクスチャ変更時にも立つため、常に full rebuild を行う
+                // Decide `uniform_only` based on whether textures may change.
+                // `material_dirty` is also set on texture changes, so always do a full rebuild.
                 renderer.rebuild_material_bind_groups(
                     device,
                     queue,
@@ -1958,15 +1993,19 @@ impl ViewerApp {
                     &loaded.ir,
                     mat_idx,
                     &flags,
-                    false, // uniform_only: テクスチャ変更の可能性があるため full rebuild
+                    false, // uniform_only: textures may change, so do a full rebuild.
                 );
 
-                // v0.5.1 レビュー [P2] 対応: 材質エディタ編集値が Expression の新しいベース値になる仕様を実装。
+                // v0.5.1 review [P2]: material editor edits become the new
+                // Expression base value.
                 //
-                // 旧実装は material_base_values をモデルロード時に一度だけキャプチャしており、
-                // 材質エディタで diffuse / emissive / shade / rim / matcap / UV を編集後に
-                // Expression を再生すると、合成基準が「編集後」ではなく「ロード時」のままだった。
-                // dirty 時に `MaterialBaseValues::from_ir()` で再キャプチャして最新値を反映する。
+                // The old implementation captured `material_base_values`
+                // only once at model load. After editing diffuse / emissive
+                // / shade / rim / matcap / UV in the material editor,
+                // playing an Expression composed from "load time" rather
+                // than "post-edit". Re-capture via
+                // `MaterialBaseValues::from_ir()` on dirty to reflect the
+                // latest values.
                 if let Some(mat) = loaded.ir.materials.get(mat_idx) {
                     if mat_idx < loaded.gpu_model.material_base_values.len() {
                         loaded.gpu_model.material_base_values[mat_idx] =
@@ -1975,17 +2014,22 @@ impl ViewerApp {
                 }
             }
         }
-        // すべての dirty を消化（リサイズが古くてクランプ外でも全消去）
+        // Consume all dirty entries (clears even out-of-clamp older entries).
         self.material_dirty.fill(false);
 
-        // v0.5.1 レビュー 02 [P1] 対応: 材質編集の rebuild 後に Expression 材質バインドを
-        // 再適用する。旧実装では dirty 対象材質の uniform は base 値のみ書き込まれており、
-        // 手動モーフで非ゼロの Expression が保持されているケースでは「編集した瞬間に
-        // Expression の材質反映が消える」不具合があった（次フレームの update_animation で
-        // 上書きされるが、再生停止中・手動モーフ単独時は復帰しない）。
+        // v0.5.1 review 02 [P1]: reapply the Expression material bind after a
+        // material-edit rebuild. The old implementation only wrote base
+        // values to the uniform of dirty materials, so when a non-zero
+        // Expression was held by manual morphs there was a bug where "the
+        // Expression material effect disappears the moment you edit"
+        // (overwritten on the next frame's `update_animation`, but does not
+        // recover while playback is stopped or only manual morphs are
+        // active).
         //
-        // accumulate_expression_materials は Material morph が参照する全材質を dirty 扱いに
-        // するため、編集対象外の材質でも Expression 影響下なら正しく再適用される。
+        // `accumulate_expression_materials` treats every material referenced
+        // by Material morphs as dirty, so even materials not currently being
+        // edited are reapplied correctly when they are under Expression
+        // influence.
         if self.morph_weights.iter().any(|w| w.abs() > 1e-6) {
             let mat_count = loaded.ir.materials.len();
             let dirty_params = crate::viewer::mesh::accumulate_expression_materials(
@@ -2008,7 +2052,7 @@ impl ViewerApp {
         }
     }
 
-    /// VRM の IrTexture（raw ピクセル）を PNG エンコード済みに変換
+    /// Convert VRM `IrTexture`s (raw pixels) into PNG-encoded form.
     pub(crate) fn encode_ir_textures_as_png(ir: &mut IrModel, images: &[gltf::image::Data]) {
         use crate::intermediate::types::TextureData;
         use image::ImageEncoder;
@@ -2016,7 +2060,7 @@ impl ViewerApp {
             if let Some(img_data) = images.get(i) {
                 let (w, h) = (img_data.width, img_data.height);
                 let bytes = tex.data.as_bytes();
-                // RGBA 画像を構築
+                // Build the RGBA image.
                 let rgba_img: Option<image::RgbaImage> = if bytes.len() == (w * h * 4) as usize {
                     image::ImageBuffer::from_raw(w, h, bytes.to_vec())
                 } else if bytes.len() == (w * h * 3) as usize {
@@ -2052,12 +2096,12 @@ impl ViewerApp {
         }
     }
 
-    /// PSD データを PNG に変換（crate::psd::psd_to_png に委譲）
+    /// Convert PSD data to PNG (delegates to `crate::psd::psd_to_png`).
     pub(crate) fn psd_to_png(psd_data: &[u8]) -> anyhow::Result<Vec<u8>> {
         crate::psd::psd_to_png(psd_data)
     }
 
-    /// ViewportInfo からウィンドウ状態をキャッシュし、初回フレームで位置を検証・適用
+    /// Cache window state from `ViewportInfo`; on the first frame validate and apply the position.
     fn update_viewport_config(&mut self, ctx: &egui::Context) {
         let mut restore_pos: Option<egui::Pos2> = None;
 
@@ -2066,10 +2110,11 @@ impl ViewerApp {
             let maximized = vp.maximized.unwrap_or(false);
             let minimized = vp.minimized.unwrap_or(false);
 
-            // 初回フレーム: 保���された位置を無条件で復元
-            // egui の monitor_size は「今ウィンドウがいるモニター」のサイズしか返さないため、
-            // サブディスプレイへの復元判���には使えない。
-            // サイズが正の値であれば常に復元を試みる。
+            // First frame: unconditionally restore the saved position.
+            // `egui`'s `monitor_size` only returns the size of "the monitor
+            // the window is currently on", so it cannot be used to decide
+            // restoration to a sub-display. Always attempt restoration if
+            // the size is positive.
             if !self.pending_window_restore.validated {
                 if let Some(ref saved) = self.pending_window_restore.saved_config {
                     if saved.width >= 10.0 && saved.height >= 10.0 {
@@ -2080,13 +2125,13 @@ impl ViewerApp {
                 self.pending_window_restore.validated = true;
             }
 
-            // 最大化・最小化中は位置・サイズを更新しない
+            // Do not update position / size while maximized or minimized.
             if maximized || minimized {
                 return;
             }
 
-            // 位置: outer_rect（OuterPosition との座標系一致）
-            // サイズ: inner_rect（with_inner_size との座標系一致、ドリフト防止）
+            // Position: `outer_rect` (matches the `OuterPosition` coordinate system).
+            // Size: `inner_rect` (matches the `with_inner_size` coordinate system; prevents drift).
             if let (Some(outer), Some(inner)) = (vp.outer_rect, vp.inner_rect) {
                 let win = self
                     .app_config
@@ -2107,13 +2152,13 @@ impl ViewerApp {
             }
         });
 
-        // ctx.input() の外で viewport コマンドを送信
+        // Send the viewport command outside `ctx.input()`.
         if let Some(pos) = restore_pos {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
         }
     }
 
-    /// アニメーション状態の更新（ボーン適用 + モーフ適用）
+    /// Update the animation state (apply bones + apply morphs).
     fn update_animation(&mut self, dt: f32, ctx: &egui::Context) {
         if let Some(ref mut anim) = self.anim.state {
             if anim.playing {
@@ -2135,7 +2180,7 @@ impl ViewerApp {
                     &loaded.ir,
                 );
 
-                // Expression 材質バインドの GPU 反映
+                // GPU reflection of the Expression material bind.
                 let mat_count = loaded.ir.materials.len();
                 let flags = Self::per_mat_or_default_display(&self.material_display, mat_count);
                 let dirty_params = crate::viewer::mesh::accumulate_expression_materials(
@@ -2168,9 +2213,10 @@ impl ViewerApp {
 
 impl eframe::App for ViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // ウォッチドッグ: 最小化中は update() の呼び出しが保証されないため pause し、
-        // 通常時は tick で応答性を記録する。idle 時も 3 秒間隔で repaint を予約して
-        // ハートビートを維持する（フリーズ時はスレッド自体がブロックされ実行されない）。
+        // Watchdog: while minimized, `update()` is not guaranteed to be called,
+        // so pause; in normal cases, tick to record responsiveness. Even when
+        // idle, schedule a repaint every 3 s to keep the heartbeat alive (on a
+        // freeze the thread itself blocks and is never executed).
         if ctx.input(|i| i.viewport().minimized == Some(true)) {
             self.heartbeat.pause();
         } else {
@@ -2178,14 +2224,15 @@ impl eframe::App for ViewerApp {
         }
         ctx.request_repaint_after(Duration::from_secs(3));
 
-        // ダークテーマ: new() での設定が eframe の初期化で上書きされる場合があるため
-        // update() 初回で再適用する（以降はフラグで1回のみ）
+        // Dark theme: `new()`'s settings can be overwritten by eframe's
+        // initialization, so reapply on the first `update()` (subsequent
+        // frames skip via the flag).
         if !self.dark_theme_applied {
             Self::setup_dark_theme(ctx, &self.app_config.theme);
             self.dark_theme_applied = true;
         }
 
-        // IPC: 別プロセスからのファイルパス受信
+        // IPC: receive file paths from other processes.
         #[cfg(target_os = "windows")]
         while let Ok(path) = self.ipc_receiver.try_recv() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -2203,18 +2250,18 @@ impl eframe::App for ViewerApp {
             }
         }
 
-        // セッション設定: ViewportInfo キャッシュ + 初回位置検証
+        // Session settings: ViewportInfo cache + first-frame position validation.
         self.update_viewport_config(ctx);
 
-        // ホバー状態リセット（UIフレーム中に再設定される）
+        // Reset hover state (re-set during the UI frame).
         self.hovered_draw_indices.clear();
 
-        // ウィンドウタイトル更新
+        // Apply pending window title update.
         if let Some(title) = self.window_title.take() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
         }
 
-        // FPS計測（フレームカウント方式: 直近1秒のフレーム数から算出）
+        // FPS measurement (frame-count method: derived from the frame count over the last 1 s).
         let now = Instant::now();
         let dt = if let Some(&last) = self.frame_times.back() {
             now.duration_since(last).as_secs_f32()
@@ -2222,7 +2269,7 @@ impl eframe::App for ViewerApp {
             0.0
         };
         self.frame_times.push_back(now);
-        // 1秒より古いエントリを除去
+        // Drop entries older than 1 s.
         let window = Duration::from_secs(1);
         while self
             .frame_times
@@ -2231,7 +2278,7 @@ impl eframe::App for ViewerApp {
         {
             self.frame_times.pop_front();
         }
-        // 表示FPS・ms更新（0.5秒ごと、ちらつき防止）
+        // Update displayed FPS / ms (every 0.5 s; prevents flicker).
         if now.duration_since(self.fps_last_update).as_secs_f32() >= 0.5 {
             if self.frame_times.len() >= 2 {
                 let span = now
@@ -2245,7 +2292,7 @@ impl eframe::App for ViewerApp {
             self.fps_last_update = now;
         }
 
-        // GPU ウォームアップ: スプラッシュ表示中にパイプラインを段階的に事前生成
+        // GPU warmup: pre-create pipelines in stages while the splash is shown.
         if self.loaded.is_none()
             && self.pending.gpu_build.is_none()
             && !matches!(self.warmup_phase, WarmupPhase::Complete)
@@ -2259,7 +2306,8 @@ impl eframe::App for ViewerApp {
         let (is_hover_image, is_hover_model) = self.process_drag_and_drop(ctx);
         self.process_keyboard_shortcuts(ctx);
 
-        // ダークテーマ: パネル背景を明示的に設定（テーマ自体は new() で1回だけ設定済み）
+        // Dark theme: explicitly set the panel background here (the theme itself
+        // was set once in `new()`).
         let dark_panel = self.theme_panel_bg;
         let dark_border = egui::Stroke::new(1.0, self.theme_border);
         let panel_frame = egui::Frame::new()
@@ -2267,18 +2315,19 @@ impl eframe::App for ViewerApp {
             .stroke(dark_border)
             .inner_margin(egui::Margin::same(4));
 
-        // トップバー
+        // Top bar.
         egui::TopBottomPanel::top("top_bar")
             .frame(panel_frame)
             .show(ctx, |bar| {
                 bar.horizontal(|ui| {
-                    // トップバーボタン: 通常時は透明背景、ホバー時はグローバルテーマのブルーが効く
+                    // Top-bar button: transparent background normally; the
+                    // global theme's blue takes effect on hover.
                     let border33 = self.theme_border;
                     ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
                     ui.visuals_mut().widgets.inactive.bg_fill = egui::Color32::TRANSPARENT;
                     ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border33);
 
-                    // ダークテーマ用メニューボタンヘルパー（.fill() を使わずビジュアルに任せる）
+                    // Menu-button helper for the dark theme (lets the visuals win, no `.fill()`).
                     let menu_btn = |ui: &mut egui::Ui, label: &str| -> egui::Response {
                         let btn = egui::Button::new(
                             egui::RichText::new(label)
@@ -2304,14 +2353,16 @@ impl eframe::App for ViewerApp {
                         .on_hover_text(t!("viewer.topbar.log_tooltip"))
                         .clicked()
                     {
-                        // toggle_visible は閉じる際に last_geometry を apply_geometry に
-                        // スナップショットするので、再度開いたとき同じ位置で開く
+                        // `toggle_visible` snapshots `last_geometry` into
+                        // `apply_geometry` on close, so the next open uses the
+                        // same position.
                         let mut m = self.log_viewer.lock().unwrap_or_else(|p| p.into_inner());
                         m.toggle_visible();
                     }
 
-                    // モデル名（編集可能）。タイトルバー表示 + PMX 出力ファイル名の両方に反映。
-                    // 右側パネルの「モデル名:」TextEdit と同じ値を共有する。
+                    // Model name (editable). Reflected in both the title bar
+                    // and the PMX output file name. Shares its value with the
+                    // "Model name:" TextEdit on the right panel.
                     if self.loaded.is_some() {
                         ui.separator();
                         ui.label(
@@ -2331,7 +2382,7 @@ impl eframe::App for ViewerApp {
                         }
                     }
 
-                    // 右端にフィット/リセットボタン + 右パネル幅可変トグル
+                    // Fit / Reset buttons + right-panel resizable toggle on the right edge.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if menu_btn(ui, &t!("viewer.topbar.reset"))
                             .on_hover_text(t!("viewer.topbar.reset_tooltip"))
@@ -2345,9 +2396,10 @@ impl eframe::App for ViewerApp {
                         {
                             self.camera_fit_to_model();
                         }
-                        // 右ツールパネルの幅をユーザードラッグでリサイズ可能にするトグル。
-                        // ON: 280..=600 px をドラッグで可変。OFF: 280 px に固定。
-                        // 現在の状態を `selected()` でハイライトして視覚化。
+                        // Toggle that makes the right tool panel's width
+                        // user-resizable via drag.
+                        // ON: variable in 280..=600 px via drag. OFF: fixed at 280 px.
+                        // The current state is highlighted via `selected()`.
                         let resizable_label =
                             egui::RichText::new(t!("viewer.topbar.panel_resizable_label"))
                                 .color(egui::Color32::WHITE)
@@ -2365,21 +2417,23 @@ impl eframe::App for ViewerApp {
                 });
             });
 
-        // 右側パネル
+        // Right side panel.
         ui::show_side_panel(ctx, self);
 
-        // 材質編集による dirty フラグを消化（§C）:
-        // UI 操作で立った material_dirty を見て rebuild_material_bind_groups を呼び、
-        // 同フレーム内に標準パスと MMD 互換パスの bind group を両方更新する。
-        // ※ 材質編集パネル本体は status_bar/shortcut_hints の追加後に呼ぶことで
-        //    積み上げ順「最下=status_bar / 中=shortcut_hints / 上=編集パネル」を確保する。
+        // Consume material-edit dirty flags (§C):
+        // Look at `material_dirty` set by UI actions and call
+        // `rebuild_material_bind_groups` to update bind groups on both the
+        // standard path and the MMD-compatible path within the same frame.
+        // Note: the material-edit panel itself is added after
+        // `status_bar` / `shortcut_hints` so the stacking order ends up
+        // "bottom = status_bar / middle = shortcut_hints / top = edit panel".
         self.apply_pending_material_rebuilds();
 
-        // テクスチャD&Dダイアログ + プレビュー同期
+        // Texture D&D dialog + preview sync.
         ui::show_texture_drop_dialog(ctx, self);
         self.sync_tex_preview();
 
-        // ステータスバー: ファイルパス + 統計
+        // Status bar: file path + statistics.
         egui::TopBottomPanel::bottom("status_bar")
             .frame(panel_frame)
             .show(ctx, |ui| {
@@ -2430,7 +2484,7 @@ impl eframe::App for ViewerApp {
                 });
             });
 
-        // ショートカットヒントバー（ステータスバーの上）
+        // Shortcut hint bar (above the status bar).
         egui::TopBottomPanel::bottom("shortcut_hints")
             .frame(panel_frame)
             .show(ctx, |ui| {
@@ -2452,15 +2506,17 @@ impl eframe::App for ViewerApp {
                 });
             });
 
-        // 材質編集パネル（v0.5.3）: ショートカットヒントバーの直上に固定表示。
-        // editing_material_index が Some のときのみ TopBottomPanel が出現し、
-        // [編] アイコンOFFまたは [×] でパネル自体が消える（中央ビューポートが拡張される）。
+        // Material edit panel (v0.5.3): pinned right above the shortcut hint bar.
+        // The `TopBottomPanel` appears only when `editing_material_index` is
+        // `Some`. The panel itself disappears when the [Edit] icon is OFF or
+        // when [x] is pressed (the central viewport then expands).
         ui::show_material_editor_window(ctx, self);
-        // UV 編集ウィンドウ (v0.5.5 Phase 1): 材質編集パネル側のボタンから開く。
-        // フローティング `egui::Window` で、Id を固定して複数インスタンス化を防止。
+        // UV edit window (v0.5.5 Phase 1): opened from a button on the material
+        // edit panel. Floating `egui::Window` with a fixed Id to prevent
+        // multiple instances.
         ui::show_uv_edit_window(ctx, self);
 
-        // 中央ビューポート
+        // Central viewport.
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill({
                 let b = (self.display.bg_brightness * 255.0).clamp(0.0, 255.0) as u8;
@@ -2472,25 +2528,25 @@ impl eframe::App for ViewerApp {
                     return;
                 }
 
-                // カメラ操作
+                // Camera input.
                 let response = viewport.allocate_rect(
                     egui::Rect::from_min_size(viewport.cursor().min, available),
                     egui::Sense::click_and_drag(),
                 );
                 self.camera.handle_input(ctx, &response);
 
-                // ダブルクリック: モデルにフィット
+                // Double-click: fit to the model.
                 if response.double_clicked() {
                     self.camera_fit_to_model();
                 }
 
-                // モーフウェイト変更検知 → 頂点バッファ更新
+                // Morph-weight change detection -> vertex buffer update.
                 if self.morph_dirty {
                     if let Some(ref mut loaded) = self.loaded {
                         let queue = &self.render_state.queue;
                         loaded.gpu_model.apply_morphs(&self.morph_weights, queue);
 
-                        // Expression 材質バインド: スライダー操作時も反映
+                        // Expression material bind: also applied when the slider moves.
                         let mat_count = loaded.ir.materials.len();
                         let flags =
                             Self::per_mat_or_default_display(&self.material_display, mat_count);
@@ -2520,7 +2576,7 @@ impl eframe::App for ViewerApp {
                     }
                 }
 
-                // 3D描画（renderer を take して &mut で使い、戻す）
+                // 3D rendering (take the renderer, use it as &mut, then return it).
                 if let Some(ref loaded) = self.loaded {
                     let width = (available.x * ctx.pixels_per_point()) as u32;
                     let height = (available.y * ctx.pixels_per_point()) as u32;
@@ -2558,7 +2614,7 @@ impl eframe::App for ViewerApp {
 
                             self.renderer = Some(renderer);
 
-                            // egui に表示
+                            // Show on egui.
                             let uv = egui::Rect::from_min_max(
                                 egui::pos2(0.0, 0.0),
                                 egui::pos2(1.0, 1.0),
@@ -2573,12 +2629,12 @@ impl eframe::App for ViewerApp {
                     }
                 }
 
-                // スプラッシュ画像（モデル未ロード時にビューポート中央に角丸で表示）
+                // Splash image (rounded-corner display at the viewport center while no model is loaded).
                 if self.loaded.is_none() {
                     if let Some(ref tex) = self.splash_texture {
                         let tex_size = tex.size_vec2();
                         let rect = response.rect;
-                        // ビューポートに収まるようスケール
+                        // Scale to fit the viewport.
                         let scale = (rect.width() / tex_size.x)
                             .min(rect.height() / tex_size.y)
                             .min(1.0);
@@ -2591,7 +2647,7 @@ impl eframe::App for ViewerApp {
                     }
                 }
 
-                // ドロップオーバーレイ
+                // Drop overlay.
                 if self.drag_hovering {
                     let rect = response.rect;
                     let has_model = self.loaded.is_some();
@@ -2637,17 +2693,17 @@ impl eframe::App for ViewerApp {
                     );
                 }
 
-                // ビューポートのサイズを記録（フィット計算用）
+                // Record the viewport size (for fit computation).
                 self.last_viewport_width = response.rect.width();
                 self.last_viewport_height = response.rect.height();
 
-                // 初回ロード時の refit（ビューポートサイズ確定後）
+                // Refit on first load (after the viewport size is settled).
                 if self.pending.refit {
                     self.pending.refit = false;
                     self.camera_reset_to_model();
                 }
 
-                // カメラ情報（左上、テキスト直接描画）
+                // Camera info (top-left, drawn as raw text).
                 if self.loaded.is_some() {
                     let rect = response.rect;
                     let cam_info = format!(
@@ -2668,7 +2724,7 @@ impl eframe::App for ViewerApp {
                     );
                 }
 
-                // FPS表示（右上オーバーレイ）
+                // FPS display (top-right overlay).
                 {
                     let rect = response.rect;
                     let fps_text =
@@ -2682,7 +2738,7 @@ impl eframe::App for ViewerApp {
                     );
                 }
 
-                // Aスタンス/Tスタンス変換失敗時の常時警告（操作ヒントの上）
+                // Persistent warning when A-stance / T-stance conversion fails (above the operation hints).
                 if self.normalize_pose || self.normalize_to_tstance {
                     if let Some(ref loaded) = self.loaded {
                         use crate::intermediate::types::AStanceResult;
@@ -2717,8 +2773,9 @@ impl eframe::App for ViewerApp {
                     }
                 }
 
-                // 操作ヒント（左下、2行で常時表示）
-                // 未読込時のみビューポートにヒント表示（読込後はステータスバーに集約）
+                // Operation hints (bottom-left, two lines, always visible).
+                // Only show hints in the viewport while no model is loaded
+                // (after loading, hints move to the status bar).
                 if self.loaded.is_none() {
                     let rect = response.rect;
                     viewport.painter().text(
@@ -2730,11 +2787,11 @@ impl eframe::App for ViewerApp {
                     );
                 }
 
-                // プログレスオーバーレイ（読み込み中 / 変換中）
+                // Progress overlay (loading / converting).
                 self.paint_progress_overlay(viewport, response.rect, ctx);
                 self.update_progress_flags(ctx);
 
-                // 結果メッセージオーバーレイ（5秒フェードアウト）
+                // Result-message overlay (5 s fade-out).
                 if let Some(ref cm) = self.convert_message {
                     let elapsed = cm.elapsed_secs();
                     let display_secs = 5.0_f32;
@@ -2776,7 +2833,7 @@ impl eframe::App for ViewerApp {
                             ),
                         };
                         let rect = response.rect;
-                        // 背景帯
+                        // Background band.
                         let text_galley = viewport.painter().layout_no_wrap(
                             msg.to_string(),
                             egui::FontId::proportional(14.0),
@@ -2793,7 +2850,7 @@ impl eframe::App for ViewerApp {
                             0.0,
                             egui::Color32::from_rgba_unmultiplied(0, 0, 0, a),
                         );
-                        // テキスト
+                        // Text.
                         viewport.painter().text(
                             egui::pos2(rect.left() + 12.0, bar_rect.center().y),
                             egui::Align2::LEFT_CENTER,
@@ -2804,7 +2861,7 @@ impl eframe::App for ViewerApp {
                         ctx.request_repaint();
                     }
                 }
-                // タイムアウトでメッセージクリア
+                // Clear the message on timeout.
                 if self
                     .convert_message
                     .as_ref()
@@ -2814,24 +2871,25 @@ impl eframe::App for ViewerApp {
                 }
             });
 
-        // ログビュアーウインドウ（OS 別ウインドウ）を描画
-        // visible == false なら何もしない
+        // Render the log viewer window (a separate OS window).
+        // No-op when `visible == false`.
         self.show_log_viewer(ctx);
     }
 
     fn on_exit(&mut self) {
-        // 通常終了時はログバッファをファイルに書き出さない。
-        // 「パニックログ以外は保存しない」方針のため。panic 時は main.rs の
-        // panic フックが `flush_log_buffer` 経由で `panic_*.log` を独立に生成する。
-        // ユーザが明示的に保存したい場合はログビュアー内の「ログ保存」ボタンを使う。
+        // On normal exit do not flush the log buffer to a file.
+        // Policy: "save nothing other than panic logs". On panic, the
+        // panic hook in `main.rs` independently generates `panic_*.log`
+        // via `flush_log_buffer`. Users who explicitly want to save can
+        // use the "Save log" button inside the log viewer.
 
-        // ログビュアーの表示状態・位置・サイズ・フィルタを config に反映
+        // Reflect the log viewer's visibility / position / size / filter into the config.
         {
             let m = self.log_viewer.lock().unwrap_or_else(|p| p.into_inner());
             self.app_config.log_viewer = m.export_config();
         }
 
-        // ディレクトリパスを config に反映
+        // Reflect directory paths into the config.
         self.app_config.directory.last_model = self
             .last_model_dir
             .as_ref()
@@ -2842,7 +2900,7 @@ impl eframe::App for ViewerApp {
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned());
 
-        // 表示オプション（永続化対象のみ）を config に反映
+        // Reflect display options (persisted ones only) into the config.
         self.app_config.display.white_texture_fallback = self.display.white_texture_fallback;
         self.app_config.display.panel_resizable = self.display.panel_resizable;
         self.app_config.display.panel_width = self.display.panel_width;
