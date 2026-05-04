@@ -1,4 +1,4 @@
-//! ファイル読み込み、D&D処理、reload、append、アニメーション読み込み
+//! File loading, drag-and-drop handling, reload, append, and animation loading.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ use super::{
     ViewerApp,
 };
 
-/// FBX ファイルのメッシュ・アニメーション有無
+/// Whether the FBX file contains mesh and/or animation data.
 struct FbxContentInfo {
     has_mesh: bool,
     has_anim: bool,
@@ -39,8 +39,9 @@ struct FbxContentInfo {
 use super::helpers::TextureSource;
 use super::OrbitCamera;
 
-/// ファイル拡張子から判定するファイル形式。
-/// 拡張子判定を1箇所に集約し、3箇所の分岐での漏れを防止する。
+/// File format inferred from the file extension.
+/// Centralising extension dispatch in one place prevents drift across the three
+/// independent branches that used to inspect extensions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileFormat {
     Vrm,
@@ -58,7 +59,7 @@ pub enum FileFormat {
     Unknown,
 }
 
-/// 拡張子文字列（小文字化済み）から `FileFormat` を判定する。
+/// Resolve a `FileFormat` from a lowercased extension string.
 pub(super) fn detect_format(ext: &str) -> FileFormat {
     match ext {
         "vrm" | "glb" | "gltf" => FileFormat::Vrm,
@@ -76,17 +77,17 @@ pub(super) fn detect_format(ext: &str) -> FileFormat {
     }
 }
 
-/// バックグラウンドロードの入力ソースを表す enum。
-/// 将来 `ArchiveEntry` / `Reload` バリアントを追加して
-/// アーカイブ内パースやリロードの BG 化を統一する。
+/// Input source for a background load.
+/// Future `ArchiveEntry` / `Reload` variants will unify in-archive parsing and
+/// reload paths under the same background-load pipeline.
 pub(super) enum CpuParseInput {
-    /// 通常のファイルロード（temp ファイルの場合は preloaded 付き）
+    /// Ordinary file load (with `preloaded` data when the source is a temp file).
     File {
         path: PathBuf,
         format: FileFormat,
         preloaded: Option<super::helpers::PreloadedData>,
     },
-    /// アーカイブ内モデル（BGスレッドで解凍+パース）
+    /// Model nested inside an archive (decompressed and parsed on the BG thread).
     ArchiveModel {
         archive_data: Arc<[u8]>,
         format: crate::archive::ArchiveFormat,
@@ -98,7 +99,7 @@ pub(super) enum CpuParseInput {
         normalize_pose: bool,
         normalize_to_tstance: bool,
     },
-    /// UnityPackage 内モデル（FBX/VRM/Prefab）
+    /// Model inside a UnityPackage (FBX / VRM / Prefab).
     PkgModel {
         assets: Arc<Vec<crate::unitypackage::ExtractedAsset>>,
         model_index: usize,
@@ -114,13 +115,13 @@ pub(super) enum CpuParseInput {
         /// Whether a model is already loaded (for FBX anim check)
         has_loaded_model: bool,
     },
-    /// UnityPackage ファイル入口（ファイル読み込み + index 構築を BG で実行）
+    /// UnityPackage file entry point (reads the file and builds the index on the BG thread).
     UnityPackageIndex {
         path: PathBuf,
         preloaded: Option<super::helpers::PreloadedData>,
         append: bool,
     },
-    /// アーカイブファイル入口（ファイル読み込み + モデル一覧化を BG で実行）
+    /// Archive file entry point (reads the file and lists its contained models on the BG thread).
     ArchiveIndex {
         path: PathBuf,
         preloaded: Option<super::helpers::PreloadedData>,
@@ -128,15 +129,16 @@ pub(super) enum CpuParseInput {
     },
 }
 
-/// BGスレッドでテクスチャを事前デコード（Encoded → RawRgba）。
-/// メインスレッドの `upload_textures_from_ir` は RawRgba をそのまま GPU 転送するだけになり、
-/// 画像デコード分の UI フリーズを排除する。
-/// キャンセルされた場合は途中で打ち切り、残りは Encoded のままメインスレッドでフォールバック。
+/// Pre-decode textures on the BG thread (Encoded → RawRgba).
+/// The main thread's `upload_textures_from_ir` then just uploads RawRgba straight
+/// to the GPU, eliminating the UI freeze caused by image decoding on the UI thread.
+/// On cancellation we bail out early; any leftover textures stay as Encoded and
+/// fall back to main-thread decoding.
 fn pre_decode_textures(ir: &mut IrModel, cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>) {
     use crate::intermediate::types::TextureData;
 
     for tex in &mut ir.textures {
-        // テクスチャごとにキャンセル確認
+        // Check cancellation per texture.
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             log::info!(
                 "Pre-decode cancelled, {} textures remaining as Encoded",
@@ -163,10 +165,10 @@ fn pre_decode_textures(ir: &mut IrModel, cancel: &std::sync::Arc<std::sync::atom
                         width,
                         height,
                     };
-                    // PSD はデコード後 PNG として出力する必要がある（image crate は PSD エンコード未対応）。
-                    // ここでファイル名と MIME を PNG に更新することで、後段の
-                    // write_all_textures_from_ir_opt_cancel が拡張子だけを見て誤って psd_to_png を
-                    // 呼び生 RGBA を PSD 扱いしてしまう不具合を防ぐ。
+                    // PSD must be exported as PNG once decoded (the image crate has no PSD encoder).
+                    // Updating the filename and MIME to PNG here prevents a downstream bug where
+                    // write_all_textures_from_ir_opt_cancel inspects only the extension and would
+                    // mistakenly call psd_to_png on the now-raw-RGBA payload.
                     if is_psd {
                         let stem = std::path::Path::new(&tex.filename)
                             .file_stem()
@@ -191,14 +193,14 @@ fn pre_decode_textures(ir: &mut IrModel, cancel: &std::sync::Arc<std::sync::atom
                         e,
                         data.len()
                     );
-                    // デコード失敗時は Encoded のまま残す（メインスレッドでフォールバック）
+                    // On decode failure leave the texture as Encoded (main thread will retry).
                 }
             }
         }
     }
 }
 
-/// アーカイブバンドルから IrModel を構築（BGスレッド用フリー関数）
+/// Build an IrModel from an archive bundle (free function used from the BG thread).
 fn build_ir_from_archive_bundle_bg(
     bundle: &crate::archive::ModelBundle,
     source_path: &Path,
@@ -330,17 +332,17 @@ fn build_ir_from_archive_bundle_bg(
             Ok(ir)
         }
         ArchiveModelKind::UnityPackage => {
-            // load_model_from_archive / cpu_parse_source で先に分岐済み。ここに到達することはない
+            // load_model_from_archive / cpu_parse_source already branched out earlier; unreachable here.
             anyhow::bail!("UnityPackage は build_ir_from_archive_bundle_bg では処理できません")
         }
     }
 }
 
-/// バックグラウンドスレッドで実行する CPU パース（`&self` 不要のフリー関数）。
-/// ファイル読込 + パース → `(IrModel, ReloadableSource, Option<BgLoadKind>)` を返す。
-/// 3番目の要素が `Some` の場合、spawn 側の `kind` を上書きする（アーカイブ用）。
-/// GPU リソース構築は行わない。テクスチャは事前デコードして RawRgba に変換し、
-/// メインスレッドの GPU アップロード時のデコードコストを排除する。
+/// CPU-side parse executed on a background thread (free function — no `&self` required).
+/// Reads the file and parses it, returning `(IrModel, ReloadableSource, Option<BgLoadKind>)`.
+/// When the third element is `Some`, it overrides the spawning side's `kind` (used by archives).
+/// Does no GPU resource construction. Textures are pre-decoded into RawRgba so the main
+/// thread's GPU upload pays no decode cost.
 pub(super) fn cpu_parse_source(
     input: CpuParseInput,
     normalize_pose: bool,
@@ -353,7 +355,7 @@ pub(super) fn cpu_parse_source(
 )> {
     let result = cpu_parse_source_inner(input, normalize_pose, normalize_to_tstance, cancel)?;
     let (mut ir, source, kind) = result;
-    // ダミー IrModel を返す kind バリアントはデコード不要
+    // BgLoadKind variants that return a dummy IrModel don't need texture pre-decoding.
     if !matches!(
         kind,
         Some(super::pending::BgLoadKind::ArchivePreparedUnityPackage { .. })
@@ -365,7 +367,7 @@ pub(super) fn cpu_parse_source(
     Ok((ir, source, kind))
 }
 
-/// cpu_parse_source の本体
+/// Body of `cpu_parse_source`.
 fn cpu_parse_source_inner(
     input: CpuParseInput,
     normalize_pose: bool,
@@ -378,7 +380,7 @@ fn cpu_parse_source_inner(
 )> {
     use super::helpers::ReloadableSource;
 
-    // キャンセルチェック用クロージャ
+    // Closure for cancellation checks.
     let check_cancel = |cancel: &Arc<std::sync::atomic::AtomicBool>| -> anyhow::Result<()> {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             anyhow::bail!("bg load cancelled");
@@ -406,7 +408,7 @@ fn cpu_parse_source_inner(
                 crate::archive::extract_model_bundle(&archive_data, format, contents, model_index)?;
             check_cancel(cancel)?;
 
-            // UnityPackage: BGスレッドで pkg_index を構築し、メインスレッドへ渡す
+            // UnityPackage: build pkg_index on the BG thread and hand it to the main thread.
             if kind == crate::archive::ArchiveModelKind::UnityPackage {
                 let pkg_index = Arc::new(crate::unitypackage::build_unity_package_index(
                     &bundle.model.data,
@@ -469,7 +471,7 @@ fn cpu_parse_source_inner(
             let is_temp =
                 is_temp_path(path) || preloaded.as_ref().is_some_and(|pl| pl.path == *path);
 
-            // preloaded があればそこからバイト列を取得、なければディスクから読む
+            // Prefer bytes from `preloaded` when available; otherwise read from disk.
             let read_data = |p: &Path| -> anyhow::Result<Arc<[u8]>> {
                 if let Some(ref pl) = preloaded {
                     if pl.path == *p {
@@ -529,8 +531,8 @@ fn cpu_parse_source_inner(
                         normalize_pose,
                     )?;
                     check_cancel(cancel)?;
-                    // 生 RGBA のまま IrTexture に格納（vrm::extract で設定済み）。
-                    // PNG エンコードは GPU アップロード後に必要になった時点（PMX エクスポート等）で行う。
+                    // Keep textures as raw RGBA inside IrTexture (already set by vrm::extract).
+                    // PNG encoding is deferred until it is actually needed after upload (e.g. PMX export).
                     let source = if is_temp {
                         let data = read_data(path)?;
                         ReloadableSource::Snapshot {
@@ -558,10 +560,10 @@ fn cpu_parse_source_inner(
                     Ok((ir, source, None))
                 }
                 FileFormat::Pmx => {
-                    // 非 temp: ディスク直読み（pmx_to_ir が sph/spa 等も含め全拡張子を読める）
-                    // temp: preloaded.aux_files を使って pmx_to_ir_with_aux
+                    // Non-temp: read from disk directly (pmx_to_ir handles every aux extension, sph/spa etc.).
+                    // Temp: use preloaded.aux_files via pmx_to_ir_with_aux.
                     let pmx_dir = path.parent().unwrap_or(Path::new("."));
-                    // aux_files を1回だけ clone し、モデルロードとソース構築の両方で使い回す
+                    // Clone aux_files once and reuse it for both model load and source construction.
                     let aux = if is_temp {
                         preloaded
                             .as_ref()
@@ -606,9 +608,9 @@ fn cpu_parse_source_inner(
                     Ok((ir, source, None))
                 }
                 FileFormat::Pmd => {
-                    // 非 temp: ディスク直読み（pmd_to_ir が sph/spa 等も含め全拡張子を読める）
-                    // temp: preloaded.aux_files を使って pmd_to_ir_with_aux
-                    // aux_files を1回だけ clone し、モデルロードとソース構築の両方で使い回す
+                    // Non-temp: read from disk directly (pmd_to_ir handles every aux extension, sph/spa etc.).
+                    // Temp: use preloaded.aux_files via pmd_to_ir_with_aux.
+                    // Clone aux_files once and reuse it for both model load and source construction.
                     let aux = if is_temp {
                         preloaded
                             .as_ref()
@@ -725,12 +727,12 @@ fn cpu_parse_source_inner(
             let source = source_override
                 .unwrap_or_else(|| ReloadableSource::File(source_path.to_path_buf()));
 
-            // PkgModelLocator 構築用: assets 消費前に pathname を取得
+            // For building PkgModelLocator: capture pathname before assets are consumed.
             let asset_pathname: Option<String> =
                 assets.get(model_index).map(|a| a.pathname.clone());
 
             if append {
-                // ── アペンドモード ──
+                // ── Append mode ──
                 let mut pkg_unmatched: Vec<usize> = Vec::new();
                 let mut pkg_model_name: Option<String> = None;
                 let mut pkg_textures_to_add: Vec<(String, Arc<[u8]>)> = Vec::new();
@@ -887,7 +889,7 @@ fn cpu_parse_source_inner(
                 return Ok((ir, source, Some(BgLoadKind::PkgAppend(Box::new(payload)))));
             }
 
-            // ── 通常ロード (append=false) ──
+            // ── Normal load (append=false) ──
             match model_type {
                 PkgModelType::Fbx => {
                     check_cancel(cancel)?;
@@ -949,7 +951,7 @@ fn cpu_parse_source_inner(
                     )?;
                     check_cancel(cancel)?;
 
-                    // テクスチャ埋め込み
+                    // Embed textures into the IR.
                     let unmatched = if let Some(ref prepared) = pkg_textures_new {
                         let prefab_label = format!(
                             "prefab({})",
@@ -968,7 +970,7 @@ fn cpu_parse_source_inner(
                         crate::unitypackage::embed_textures_into_ir(&mut ir, &textures_legacy)
                     };
 
-                    // pkg_material_keys 構築
+                    // Build pkg_material_keys.
                     let pkg_keys = if let Some(ref idx) = pkg_index {
                         let fbx_guid = idx
                             .entries
@@ -1201,7 +1203,7 @@ fn cpu_parse_source_inner(
             let is_temp =
                 is_temp_path(&path) || preloaded.as_ref().is_some_and(|pl| pl.path == path);
 
-            // ファイル読み込み
+            // Read the file.
             let archive_data: Arc<[u8]> = if let Some(ref pl) = preloaded {
                 if pl.path == path {
                     Arc::clone(&pl.main_bytes)
@@ -1214,14 +1216,14 @@ fn cpu_parse_source_inner(
 
             check_cancel(cancel)?;
 
-            // UnityPackageIndex を構築
+            // Build the UnityPackageIndex.
             let pkg_index = Arc::new(crate::unitypackage::build_unity_package_index(
                 &archive_data,
             )?);
 
             check_cancel(cancel)?;
 
-            // ExtractedAsset リストを構築
+            // Build the ExtractedAsset list.
             let assets: Vec<crate::unitypackage::ExtractedAsset> = pkg_index
                 .entries
                 .iter()
@@ -1231,10 +1233,10 @@ fn cpu_parse_source_inner(
                 })
                 .collect();
 
-            // モデルリストを構築
+            // Build the model list.
             let model_list = super::helpers::build_pkg_model_list(&assets);
 
-            // 一時ファイルの場合はアーカイブデータをスナップショット
+            // For temp files, snapshot the archive data for reload.
             let archive_snapshot = if is_temp { Some(archive_data) } else { None };
 
             let bg_kind = super::pending::BgLoadKind::UnityPackageIndexed {
@@ -1247,7 +1249,7 @@ fn cpu_parse_source_inner(
                 append,
             };
 
-            // ダミー IrModel/source を返す（apply_bg_load_result で kind のフィールドを使用）
+            // Return dummy IrModel/source (apply_bg_load_result reads fields from `kind` instead).
             let ir = IrModel::default();
             let source = ReloadableSource::File(path);
             Ok((ir, source, Some(bg_kind)))
@@ -1262,7 +1264,7 @@ fn cpu_parse_source_inner(
             let is_temp =
                 is_temp_path(&path) || preloaded.as_ref().is_some_and(|pl| pl.path == path);
 
-            // ファイル読み込み
+            // Read the file.
             let archive_data: Arc<[u8]> = if let Some(ref pl) = preloaded {
                 if pl.path == path {
                     Arc::clone(&pl.main_bytes)
@@ -1279,13 +1281,13 @@ fn cpu_parse_source_inner(
             let format = crate::archive::archive_format_from_ext(&ext)
                 .with_context(|| t!("error.unsupported_archive_format", ext = ext).into_owned())?;
 
-            // アーカイブ内モデル一覧を取得
+            // List the models contained in the archive.
             let contents = crate::archive::list_models(&archive_data, format)?;
 
             check_cancel(cancel)?;
 
-            // 7z: 展開済みエントリがあれば元の圧縮データを解放（メモリピーク削減）
-            // リロードにはディスク再読み込みを使用（is_temp の場合は保持）
+            // 7z: once entries are extracted, release the compressed payload to reduce memory peak.
+            // Reload re-reads from disk (kept in memory only when is_temp).
             let archive_data = if format == crate::archive::ArchiveFormat::SevenZ && !is_temp {
                 log::debug!(
                     "7z: releasing {} bytes of compressed data (entries already extracted)",
@@ -1312,13 +1314,13 @@ fn cpu_parse_source_inner(
     } // match input
 }
 
-/// v0.5.6: UV モーフ offsets の reload 退避用スナップショット (1 モーフ分)。
+/// v0.5.6: snapshot of one UV morph's offsets, retained across reload (per-morph entry).
 ///
-/// Codex review 0.5.6/04 P1 対応: 旧版は `HashMap<name, ...>` でキー衝突時に
-/// 後勝ち上書きで編集内容が失われていた（同名 UV morph は VRM/glTF で実在する）。
-/// 現在は Vec で全 UV morph を順序保存し、復元時は `(name, name_en, channel)` の
-/// 完全一致 + 未使用フラグで一意マッチングするため、同名衝突があっても N 番目の
-/// morph に N 番目の offsets が正しく戻る。
+/// Codex review 0.5.6/04 P1 fix: the previous `HashMap<name, ...>` lost edits on key
+/// collisions via last-write-wins (duplicate UV-morph names exist in VRM/glTF).
+/// Now we keep all UV morphs in a Vec in order, and restoration matches uniquely by
+/// `(name, name_en, channel)` plus an unused flag. Even with duplicate names, the
+/// N-th morph correctly receives the N-th offsets back.
 #[derive(Clone)]
 struct UvMorphOffsetEntry {
     name: String,
@@ -1329,8 +1331,8 @@ struct UvMorphOffsetEntry {
 
 type UvMorphOffsetsSnapshot = Vec<UvMorphOffsetEntry>;
 
-/// `reload_current` で退避・復元するフィールドをまとめた構造体。
-/// 新フィールド追加時の漏れを防止する。
+/// Bag of fields that `reload_current` saves and restores around a reload.
+/// Centralising them here prevents drift when new state is added.
 pub(crate) struct ReloadSnapshot {
     appended_models: Vec<AppendedModel>,
     camera: OrbitCamera,
@@ -1341,9 +1343,9 @@ pub(crate) struct ReloadSnapshot {
     pmx_output_path: String,
     model_display_name: String,
     export_visible_only: bool,
-    /// リロード前にユーザーが開いていたサイドパネルタブ。
-    /// finish_load_with_gpu が一旦 Info にリセットした後、復元時に書き戻すことで
-    /// [出力] タブ等での再ロード操作後もタブが維持される。
+    /// Side-panel tab the user had open before reload.
+    /// `finish_load_with_gpu` resets it to Info; we restore it here so the user
+    /// stays on, e.g., the Export tab after triggering a reload from there.
     side_panel_tab: super::SidePanelTab,
     tex_assignments: HashMap<usize, TextureSource>,
     pkg_tex_assignments: HashMap<usize, String>,
@@ -1355,26 +1357,27 @@ pub(crate) struct ReloadSnapshot {
     )>,
     vrma_active_index: Option<usize>,
     display: DisplaySettings,
-    /// v0.5.5: 頂点単位 UV 編集 overrides（reload 経路で保持するため）。
-    /// reload 時に `finish_load_with_gpu` が `uv_edit.reset()` を呼ぶため、
-    /// ここに退避しておき `restore_snapshot_on_success` で IR と GPU に再適用する。
-    /// Phase 3 A-1: VertexKey が `(mi, vi, uv_set)` 3 要素化。
+    /// v0.5.5: per-vertex UV edit overrides, kept across reload.
+    /// `finish_load_with_gpu` calls `uv_edit.reset()` during reload, so we stash
+    /// them here and reapply to both IR and GPU in `restore_snapshot_on_success`.
+    /// Phase 3 A-1: VertexKey was widened to the triple `(mi, vi, uv_set)`.
     uv_edit_overrides: HashMap<(u32, u32, u8), [f32; 2]>,
     uv_edit_active_material: usize,
     uv_edit_window_open: bool,
-    /// v0.5.6 (Codex review 0.5.6/03 P1 対応): 旧 IR の UV モーフ offsets を退避し、
-    /// reload 成功時に新 IR の同名モーフへ書き戻すことで未保存の UV モーフ編集
-    /// （`write_displayed_uv` が旧 IR に直接書き込んだ分）を失わない。
-    /// キー: morph `name_en`（空なら `name`）、値: (channel, Vec<(global_vi, [f32;4])>)。
+    /// v0.5.6 (Codex review 0.5.6/03 P1 fix): preserves the old IR's UV-morph offsets so
+    /// unsaved UV-morph edits — those `write_displayed_uv` wrote directly into the old IR —
+    /// can be written back into the matching morph of the new IR after a successful reload.
+    /// Key: morph `name_en` (falls back to `name`); value: `(channel, Vec<(global_vi, [f32;4])>)`.
     uv_morph_offsets: UvMorphOffsetsSnapshot,
 }
 
 impl ViewerApp {
-    /// preloaded の aux_files があればそれを移動（clone回避）、なければディスクから再帰収集する
+    /// Move `aux_files` out of `preloaded` when available (avoiding a clone),
+    /// otherwise gather them recursively from disk.
     pub(super) fn take_or_collect_aux(&mut self, path: &Path) -> HashMap<PathBuf, Arc<[u8]>> {
         if let Some(ref pl) = self.preloaded {
             if pl.path == path {
-                // preloaded から aux_files を移動（HashMap の再割り当て回避）
+                // Move aux_files out of preloaded (avoids re-allocating the HashMap).
                 let pl = self.preloaded.take().expect("preloaded confirmed Some");
                 self.preloaded = Some(PreloadedData {
                     path: pl.path,
@@ -1391,13 +1394,13 @@ impl ViewerApp {
         aux
     }
 
-    /// temp先読みデータがあればそれを、なければファイルから読む
+    /// Return temp-preloaded bytes when available, otherwise read from disk.
     pub(super) fn read_or_preloaded(&self, path: &Path) -> anyhow::Result<Arc<[u8]>> {
         if let Some(ref pl) = self.preloaded {
             if pl.path == path {
                 return Ok(Arc::clone(&pl.main_bytes));
             }
-            // aux_files も確認（サブファイル参照用）
+            // Also check aux_files for sub-file references.
             if let Some(data) = pl.aux_files.get(path) {
                 return Ok(Arc::clone(data));
             }
@@ -1405,7 +1408,7 @@ impl ViewerApp {
         Ok(std::fs::read(path)?.into())
     }
 
-    /// FBX ファイルのメッシュ・アニメーション有無を判定
+    /// Inspect an FBX file for the presence of mesh and animation data.
     fn inspect_fbx(&self, path: &Path) -> FbxContentInfo {
         let data = match self.read_or_preloaded(path) {
             Ok(d) => d,
@@ -1423,9 +1426,9 @@ impl ViewerApp {
         }
     }
 
-    /// ロード dispatch のメインスレッドルーティング。
-    /// アニメーション判定、FBX choice、archive/pkg は既存の同期パスに振り分け、
-    /// モデルパースのみバックグラウンドスレッドに送る。
+    /// Main-thread routing for load dispatches.
+    /// Animation detection, FBX choice, and archive/pkg flows take the existing
+    /// synchronous paths; only raw model parsing is offloaded to the BG thread.
     pub(super) fn route_load_dispatch(
         &mut self,
         dispatch: super::pending::PendingLoadDispatch,
@@ -1439,10 +1442,11 @@ impl ViewerApp {
         let ext = crate::path_ext_lower(&path);
         let format = detect_format(&ext);
 
-        // 先に dispatch 種別を判定する。
-        // アニメーション単体の要求（既存モデルに適用する vrma/.anim/gltf-anim/anim-only FBX）は
-        // 進行中モデルロードに依存するため、ここでキャンセルしてはいけない。
-        // 代わりに bg_load 進行中なら拒否する（アニメ適用先モデルが未確定のため）。
+        // Decide the dispatch kind first.
+        // Animation-only requests (vrma / .anim / gltf-anim / anim-only FBX applied to
+        // the currently loaded model) depend on an in-flight model load, so we must
+        // not cancel it here. We reject the request instead when a bg_load is running
+        // (the animation has no defined target model yet).
         let is_anim_only_request = !append
             && match ext.as_str() {
                 "vrma" => true,
@@ -1462,8 +1466,9 @@ impl ViewerApp {
 
         if is_anim_only_request {
             if let Some(prior) = prior_loading {
-                // モデルロード進行中にアニメ要求が来た場合、キャンセルしてしまうと
-                // アニメ適用先のモデルが消えて両方失敗する。拒否して現行ロードを守る。
+                // If an animation request arrives while a model load is in flight,
+                // cancelling would erase the target model and fail both. Reject the
+                // request and keep the current load alive.
                 log::warn!(
                     "Cannot load animation while model load is in progress: {}",
                     path.display()
@@ -1471,13 +1476,14 @@ impl ViewerApp {
                 self.convert_message = Some(ConvertMessage::failure(
                     t!("viewer.toast.precondition.busy_loading").into_owned(),
                 ));
-                // prior Loading を bg_state に戻して現行ロードを保護
+                // Put the prior Loading back into bg_state to protect the current load.
                 self.pending.bg_state = BackgroundLoadState::Loading(prior);
                 return;
             }
-            // bg_load 非進行中: アニメ要求を既存モデルに適用する通常フローへ進む（キャンセル不要）
+            // No bg_load in flight: fall through to the normal flow that applies the animation
+            // to the existing model (no cancellation needed).
         } else {
-            // モデルロード要求: 進行中の bg_load があればキャンセルして新規を受け入れる。
+            // Model load request: cancel any in-flight bg_load and accept the new one.
             if let Some(old) = prior_loading {
                 old.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                 log::info!(
@@ -1485,16 +1491,16 @@ impl ViewerApp {
                     old.request_id,
                     path.display()
                 );
-                // old はここで drop、受信チャネルもクローズされる
+                // `old` is dropped here, which also closes its receiver channel.
             }
         }
 
-        // dispatch.preloaded を self.preloaded に一時セット（既存メソッドとの互換性）
+        // Stash dispatch.preloaded into self.preloaded for compatibility with existing methods.
         self.preloaded = dispatch.preloaded;
 
-        // append モード
+        // Append mode.
         if append {
-            // unitypackage / archive はバックグラウンドで index 構築
+            // unitypackage / archive build their index on the BG thread.
             if format == FileFormat::UnityPackage
                 || format == FileFormat::Zip
                 || format == FileFormat::SevenZ
@@ -1502,22 +1508,22 @@ impl ViewerApp {
                 self.spawn_bg_index_load(path, format, true);
                 return;
             }
-            // その他のフォーマットはバ��クグラウンドパース
+            // Other formats: parse on the BG thread.
             self.spawn_bg_load(path, BgLoadKind::Append, format);
             return;
         }
 
-        // --- 以下、通常ロード ---
+        // --- Below: normal (non-append) load ---
 
-        // 読み込み時はプレビュー中の bind group を復元してからクリア
+        // On load, restore any preview bind group then clear it.
         self.cancel_tex_match_preview();
-        // unitypackage以外の読み込み時はパッケージテクスチャをクリア
+        // Clear package textures unless we're loading another unitypackage.
         if format != FileFormat::UnityPackage {
             self.tex.pkg_textures = None;
             self.clear_pkg_thumb_cache();
         }
 
-        // アニメーションファイルの判定（即時実行、BG 不要）
+        // Detect animation-only files (handled inline; no BG needed).
         if ext == "vrma" {
             self.try_load_vrma(&path);
             return;
@@ -1535,7 +1541,7 @@ impl ViewerApp {
             return;
         }
 
-        // FBX: メッシュ+アニメーション両方含むなら選択ダイアログ
+        // FBX with both mesh and animation: open the choice dialog.
         if format == FileFormat::Fbx {
             let info = self.inspect_fbx(&path);
             if info.has_mesh && info.has_anim {
@@ -1559,7 +1565,7 @@ impl ViewerApp {
             }
         }
 
-        // archive / unitypackage はバックグラウンドで index 構築
+        // archive / unitypackage build their index on the BG thread.
         if format == FileFormat::UnityPackage {
             self.tex.pkg_textures = None;
             self.clear_pkg_thumb_cache();
@@ -1575,12 +1581,12 @@ impl ViewerApp {
             return;
         }
 
-        // FBX auto-animation 判定（BG 完了後に自動適用するかどうか）
+        // FBX auto-animation: whether to auto-apply animation after BG load completes.
         let auto_fbx_anim = format == FileFormat::Fbx && self.inspect_fbx(&path).has_anim;
 
-        // スタンスのみ事前リセット（シェーダーは finish_load_with_gpu 成功時にリセット）
-        // ただしリロード経由の dispatch では、ユーザーが [出力] タブ等で設定した
-        // Aスタンス/Tスタンス変換フラグを保持する必要があるのでスキップする。
+        // Pre-reset stance flags (shader state is reset by finish_load_with_gpu on success).
+        // For reload-driven dispatches, skip this so the user's A/T-stance conversion choices
+        // (e.g. set on the Export tab) survive the reload.
         if !is_reload {
             self.normalize_pose = false;
             self.normalize_to_tstance = false;
@@ -1596,12 +1602,12 @@ impl ViewerApp {
         );
     }
 
-    /// BG スレッドで `cpu_parse_source` を実行する共通ヘルパー。
-    /// 旧 Loading のキャンセル、request_id/cancel/channel 作成、BgLoadHandle セット、
-    /// スレッド起動を一箇所に集約する。
+    /// Shared helper that runs `cpu_parse_source` on a BG thread.
+    /// Centralises cancellation of any prior Loading, request_id / cancel / channel
+    /// creation, BgLoadHandle wiring, and thread spawn.
     ///
-    /// `post_map` は BG スレッド内で `BgLoadResult` を最終調整するクロージャ。
-    /// 例: `NeedsFbxChoice` に `archive_snapshot` を後付けする場合に使用。
+    /// `post_map` is a closure run on the BG thread to make final tweaks to the
+    /// `BgLoadResult` — for example, attaching `archive_snapshot` to a NeedsFbxChoice.
     fn spawn_bg_task(
         &mut self,
         input: CpuParseInput,
@@ -1613,7 +1619,7 @@ impl ViewerApp {
         use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
 
-        // 残存している旧 Loading があればキャンセル（route_load_dispatch 以外の経路保険）
+        // Cancel any leftover prior Loading (safety net for paths that bypass route_load_dispatch).
         if let BackgroundLoadState::Loading(old) =
             std::mem::replace(&mut self.pending.bg_state, BackgroundLoadState::Idle)
         {
@@ -1649,7 +1655,7 @@ impl ViewerApp {
         });
     }
 
-    /// バックグラウンドスレッドで CPU パースを実行する。
+    /// Run CPU-side parsing on a BG thread.
     fn spawn_bg_load(
         &mut self,
         path: PathBuf,
@@ -1665,7 +1671,7 @@ impl ViewerApp {
         self.spawn_bg_task(input, kind, path, |_| {});
     }
 
-    /// UnityPackage / アーカイブの入口処理（ファイル読み込み + index 構築）をバックグラウンドで実行する。
+    /// Run the entry-point work for UnityPackage / archive (file read + index build) on a BG thread.
     fn spawn_bg_index_load(&mut self, path: PathBuf, format: FileFormat, append: bool) {
         use super::pending::BgLoadKind;
 
@@ -1683,11 +1689,11 @@ impl ViewerApp {
                 append,
             }
         };
-        // index load は常に kind_override を返すため fallback は使われない
+        // Index loads always return a kind_override, so the fallback is never used.
         self.spawn_bg_task(input, BgLoadKind::ArchiveInitial, path, |_| {});
     }
 
-    /// アーカイブ内モデルをバックグラウンドスレッドで解凍+パースする。
+    /// Decompress and parse an in-archive model on a BG thread.
     pub(super) fn spawn_bg_archive_load(&mut self, p: PendingArchiveLoad) {
         use super::pending::BgLoadKind;
 
@@ -1712,19 +1718,19 @@ impl ViewerApp {
         self.spawn_bg_task(input, fallback, result_path, |_| {});
     }
 
-    /// UnityPackage 内モデルをバックグラウンドスレッドでパースする。
+    /// Parse a model contained in a UnityPackage on a BG thread.
     pub(super) fn spawn_bg_pkg_load(&mut self, p: PendingPkgModelLoad) {
         use super::pending::BgLoadKind;
 
-        // skip_anim_check が true（execute_fbx_choice 確定後）の場合、
-        // NeedsFbxChoice ループを防ぐため has_loaded_model を false に
+        // When skip_anim_check is true (after execute_fbx_choice has resolved), force
+        // has_loaded_model to false to prevent looping back into NeedsFbxChoice.
         let has_loaded_model = if p.skip_anim_check {
             false
         } else {
             self.loaded.is_some()
         };
 
-        // source_override を構築（nested_archive_source > archive_snapshot > None）
+        // Build source_override with priority: nested_archive_source > archive_snapshot > None.
         let source_override = if let Some(nested) = p.nested_archive_source {
             Some(nested)
         } else if let Some(ref snap) = p.archive_snapshot {
@@ -1759,14 +1765,14 @@ impl ViewerApp {
             BgLoadKind::ArchiveInitial
         };
         self.spawn_bg_task(input, fallback, result_path, move |bg_result| {
-            // NeedsFbxChoice のペイロードに archive_snapshot を設定
+            // Attach archive_snapshot to the NeedsFbxChoice payload.
             if let BgLoadKind::NeedsFbxChoice(ref mut payload) = bg_result.kind {
                 payload.archive_snapshot = archive_snapshot;
             }
         });
     }
 
-    /// バックグラウンドパース結果の後処理（basic path: direct / append）。
+    /// Post-processing for BG parse results (basic path: direct load / append).
     pub(super) fn apply_bg_load_result(
         &mut self,
         result: super::pending::BgLoadResult,
@@ -1788,7 +1794,7 @@ impl ViewerApp {
                 );
             }
             BgLoadKind::Append => {
-                // 座標系互換チェック
+                // Coordinate-system compatibility check.
                 if let Some(ref loaded) = self.loaded {
                     let host_fmt = loaded.ir.source_format;
                     let other_fmt = result.ir.source_format;
@@ -1824,7 +1830,7 @@ impl ViewerApp {
                 );
             }
             BgLoadKind::ArchiveAppend => {
-                // 座標系互換チェック
+                // Coordinate-system compatibility check.
                 if let Some(ref loaded) = self.loaded {
                     let host_fmt = loaded.ir.source_format;
                     let other_fmt = result.ir.source_format;
@@ -1922,18 +1928,18 @@ impl ViewerApp {
                 }
             }
             BgLoadKind::PkgInitial(mut payload) => {
-                // GPU ビルド前の前処理（selected_fbx_name, pkg_textures 等）
+                // Pre-GPU-build setup: selected_fbx_name, pkg_textures, etc.
                 self.selected_fbx_name = payload.fbx_name.clone();
                 self.selected_pkg_model = payload.pkg_model_locator.clone();
 
-                // pkg_textures を設定（payload から取り出して即時反映）
+                // Move pkg_textures out of the payload and apply immediately.
                 let pkg_tex = std::mem::take(&mut payload.pkg_textures_legacy);
                 if !pkg_tex.is_empty() {
                     self.tex.pkg_textures = Some(pkg_tex);
                     self.rebuild_pkg_thumb_cache();
                 }
 
-                // GPU ビルドは遅延実行（後処理は apply_gpu_build_post で実施）
+                // The GPU build itself is deferred; finalisation happens in apply_gpu_build_post.
                 self.start_deferred_gpu_build(
                     result.ir,
                     result.source,
@@ -1955,7 +1961,7 @@ impl ViewerApp {
                 );
             }
             BgLoadKind::NeedsFbxChoice(payload) => {
-                // FBX choice ダイアログを表示（ユーザーがモデル/アニメ/両方を選択）
+                // Show the FBX choice dialog so the user can pick model / animation / both.
                 self.pending.fbx_choice = Some(PendingFbxChoice {
                     path: PathBuf::from(&payload.fbx_name),
                     load_model: true,
@@ -2066,7 +2072,8 @@ impl ViewerApp {
         Ok(())
     }
 
-    /// GPU フレーム分割ビルド完了後の後処理（`process_pending_tasks` から呼ばれる）
+    /// Post-processing after the deferred per-frame GPU build completes
+    /// (called from `process_pending_tasks`).
     pub(super) fn apply_gpu_build_post(
         &mut self,
         post_kind: Option<super::pending::BgLoadKind>,
@@ -2099,15 +2106,15 @@ impl ViewerApp {
                 self.anim.active_index = None;
             }
             Some(BgLoadKind::PkgInitial(payload)) => {
-                // finish_load_with_gpu 後に pkg_material_keys を設定
+                // Set pkg_material_keys after finish_load_with_gpu has populated `loaded`.
                 if !payload.pkg_material_keys.is_empty() {
                     if let Some(ref mut loaded) = self.loaded {
                         loaded.pkg_material_keys = payload.pkg_material_keys;
                     }
                 }
 
-                // Prefab: prefab_name / prefab_entry_path を設定し、
-                // model_display_name を Prefab 名（拡張子除去＋サニタイズ）に上書き
+                // Prefab: set prefab_name / prefab_entry_path, then overwrite
+                // model_display_name with the prefab name (extension stripped and sanitized).
                 let new_display_name: Option<String> = if let Some(ref mut loaded) = self.loaded {
                     if let Some(ref prefab_filename) = payload.prefab_name {
                         let stem = std::path::Path::new(prefab_filename)
@@ -2129,7 +2136,7 @@ impl ViewerApp {
                     self.refresh_derived_from_display_name();
                 }
 
-                // Prefab: fbx_ranges から MaterialGroup を構築
+                // Prefab: build MaterialGroup from fbx_ranges.
                 if payload.fbx_ranges.len() > 1 {
                     if let Some(ref mut loaded) = self.loaded {
                         let mut new_groups = Vec::with_capacity(payload.fbx_ranges.len());
@@ -2156,7 +2163,7 @@ impl ViewerApp {
                     }
                 }
 
-                // 未割当材質のテクスチャ選択ダイアログ
+                // Texture-picker dialog for materials still without an assigned texture.
                 if !payload.unmatched_indices.is_empty()
                     && self.tex.pkg_textures.is_some()
                     && !payload.suppress_tex_match
@@ -2174,12 +2181,12 @@ impl ViewerApp {
                     });
                 }
 
-                // アニメーションをクリア
+                // Clear any previously bound animation.
                 self.anim.state = None;
                 self.anim.library.clear();
                 self.anim.active_index = None;
 
-                // バッチ進捗トースト
+                // Batch-progress toast.
                 if let Some((current, total)) = payload.batch_progress {
                     let name = payload.fbx_name.as_deref().unwrap_or("?");
                     self.convert_message = Some(ConvertMessage::success(
@@ -2197,7 +2204,7 @@ impl ViewerApp {
                 log::info!("Model loaded from pkg (deferred gpu): {}", path.display());
             }
             _ => {
-                // 他の kind は遅延パスを使用しない
+                // Other kinds do not use the deferred GPU path.
                 log::warn!(
                     "Unexpected post_kind in apply_gpu_build_post: {}",
                     path.display()
@@ -2206,30 +2213,30 @@ impl ViewerApp {
         }
     }
 
-    /// 旧同期ロード経路（archive/reload 等の同期フォールバック用に残存）。
-    /// 新規 direct load は route_load_dispatch → spawn_bg_load を使用する。
+    /// Legacy synchronous load path, kept as a fallback for archive/reload flows.
+    /// New direct loads should go through route_load_dispatch → spawn_bg_load.
     #[allow(dead_code)]
     pub(super) fn load_file(&mut self, path: PathBuf) {
         log::info!("Open file: {}", path.display());
         let ext = crate::path_ext_lower(&path);
         let format = detect_format(&ext);
 
-        // 読み込み時はプレビュー中の bind group を復元してからクリア
+        // On load, restore any preview bind group then clear it.
         self.cancel_tex_match_preview();
-        // unitypackage以外の読み込み時はパッケージテクスチャをクリア
+        // Clear package textures unless we're loading another unitypackage.
         if format != FileFormat::UnityPackage {
             self.tex.pkg_textures = None;
             self.clear_pkg_thumb_cache();
         }
 
-        // アニメーションファイルの判定
+        // Animation-only file detection.
         if ext == "vrma" {
             self.try_load_vrma(&path);
             return;
         }
-        // GLB/glTF: モデルが読み込み済みの場合、アニメーションとして開くか確認
+        // GLB / glTF: when a model is already loaded, ask whether to open as animation.
         if (ext == "glb" || ext == "gltf") && self.loaded.is_some() {
-            // アニメーションが含まれるか先に確認
+            // Pre-check whether the file actually contains animation data.
             if let Ok(anims) = vrm::animation::load_gltf_animation(&path) {
                 if !anims.is_empty() {
                     self.try_load_gltf_animation(&path);
@@ -2237,17 +2244,17 @@ impl ViewerApp {
                 }
             }
         }
-        // Unity .anim: アニメーションとして読み込む
+        // Unity .anim: always load as animation.
         if ext == "anim" && self.loaded.is_some() {
             self.try_load_unity_animation(&path);
             return;
         }
 
-        // FBX: メッシュ+アニメーション両方含むなら選択ダイアログ（初回ロード時も対象）
+        // FBX with both mesh and animation: show the choice dialog (also on the very first load).
         if format == FileFormat::Fbx {
             let info = self.inspect_fbx(&path);
             if info.has_mesh && info.has_anim {
-                // 両方含む → 選択ダイアログを表示
+                // Both present → show the choice dialog.
                 self.pending.fbx_choice = Some(PendingFbxChoice {
                     path: path.clone(),
                     load_model: true,
@@ -2257,7 +2264,7 @@ impl ViewerApp {
                 });
                 return;
             } else if !info.has_mesh && info.has_anim {
-                // アニメーションのみ
+                // Animation only.
                 if self.loaded.is_some() {
                     self.try_load_fbx_animation(&path);
                 } else {
@@ -2267,10 +2274,10 @@ impl ViewerApp {
                 }
                 return;
             }
-            // メッシュのみ or どちらもなし → モデルとして読み込み（下へ続行）
+            // Mesh only, or neither → fall through and load as a model.
         }
 
-        // OBJ/STL: インポートオプションダイアログを表示
+        // OBJ / STL: show the import-options dialog before loading.
         if format == FileFormat::Obj || format == FileFormat::Stl {
             use super::pending::{ImportUnit, PendingImportOptions};
             let (default_unit, default_z_up) = match format {
@@ -2292,9 +2299,9 @@ impl ViewerApp {
         self.load_file_as_model(path);
     }
 
-    /// モデルとしてファイルを読み込む（FBX選択ダイアログ不要時のパス）
+    /// Load a file as a model (path used when the FBX choice dialog is not needed).
     fn load_file_as_model(&mut self, path: PathBuf) {
-        // スタンスのみ事前リセット（シェーダーは finish_load_with_gpu 成功時にリセット）
+        // Pre-reset stance flags only (shader state is reset by finish_load_with_gpu on success).
         self.normalize_pose = false;
         self.normalize_to_tstance = false;
 
@@ -2315,7 +2322,7 @@ impl ViewerApp {
 
         match result {
             Ok(()) => {
-                // アーカイブ系は一覧化完了（モデル選択はまだ）、それ以外はモデルロード完了
+                // Archives have only finished listing (model selection still pending); other formats are fully loaded.
                 match format {
                     FileFormat::UnityPackage => {
                         log::info!("Unitypackage indexed: {}", path.display());
@@ -2332,7 +2339,7 @@ impl ViewerApp {
                 self.anim.library.clear();
                 self.anim.active_index = None;
 
-                // FBXモデル読み込み後、同じファイルにアニメーションがあれば自動適用
+                // After loading the FBX as a model, auto-apply any animation found in the same file.
                 if format == FileFormat::Fbx && self.inspect_fbx(&path).has_anim {
                     self.try_load_fbx_animation(&path);
                 }
@@ -2349,14 +2356,14 @@ impl ViewerApp {
         }
     }
 
-    /// OBJ/STL インポートオプションダイアログの結果を実行
+    /// Run the OBJ / STL import-options dialog result.
     pub fn execute_import_with_options(&mut self, opts: super::pending::PendingImportOptions) {
         let scale = opts.unit.scale();
         let z_up = opts.z_up;
         let path = opts.path;
         self.preloaded = opts.preloaded;
 
-        // スタンスのみ事前リセット
+        // Pre-reset stance flags only.
         self.normalize_pose = false;
         self.normalize_to_tstance = false;
 
@@ -2375,7 +2382,7 @@ impl ViewerApp {
         }
     }
 
-    /// FBX読み込み方法選択ダイアログの結果を実行
+    /// Run the FBX load-mode choice dialog result.
     pub fn execute_fbx_choice(&mut self, choice: PendingFbxChoice) {
         let PendingFbxChoice {
             path,
@@ -2392,7 +2399,7 @@ impl ViewerApp {
             (false, false) => return,
         };
 
-        // AnimationOnly は軽い処理なので同期実行
+        // AnimationOnly is cheap; run it synchronously.
         if mode == FbxLoadMode::AnimationOnly {
             if let Some(pkg) = pkg_context {
                 if let Some(asset) = pkg.assets.get(pkg.fbx_index) {
@@ -2430,9 +2437,9 @@ impl ViewerApp {
             return;
         }
 
-        // ModelOnly / Both → BGスレッドでパース
+        // ModelOnly / Both → parse on the BG thread.
         if let Some(pkg) = pkg_context {
-            // unitypackage 経由: source_override を構築して PendingPkgModelLoad → BG
+            // Via unitypackage: build source_override and dispatch as PendingPkgModelLoad → BG.
             let source_override = if let Some(nested) = pkg.nested_archive_source {
                 Some(nested)
             } else if let Some(ref snap) = pkg.archive_snapshot {
@@ -2449,7 +2456,7 @@ impl ViewerApp {
                 fbx_index: pkg.fbx_index,
                 model_type: super::helpers::PkgModelType::Fbx,
                 source_path: pkg.source_path,
-                shown: true, // spawn 即実行
+                shown: true, // spawn immediately
                 append: false,
                 suppress_tex_match: false,
                 archive_snapshot: pkg.archive_snapshot,
@@ -2459,7 +2466,7 @@ impl ViewerApp {
                 skip_anim_check: true,
             });
         } else {
-            // ファイル直接 → spawn_bg_load
+            // Direct file → spawn_bg_load.
             self.preloaded = preloaded;
             let auto_fbx_anim = mode == FbxLoadMode::Both;
             self.cancel_tex_match_preview();
@@ -2499,16 +2506,16 @@ impl ViewerApp {
     }
 
     fn try_load_unitypackage(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
-        // ファイル消失前に一時パス判定を確定（canonicalize がファイル存在を前提とするため）
+        // Decide is_temp before the file may disappear (canonicalize requires the file to exist).
         let is_temp =
             is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path);
         let archive_data: Arc<[u8]> = self.read_or_preloaded(path)?;
 
-        // Phase 3: UnityPackageIndex を構築（Prefab テクスチャ解決用）
+        // Phase 3: build UnityPackageIndex (used for Prefab texture resolution).
         let pkg_index = Arc::new(crate::unitypackage::build_unity_package_index(
             &archive_data,
         )?);
-        // 既存コードとの互換性のため ExtractedAsset も構築（Arc 共有でコピー回避）
+        // Also build ExtractedAsset for compatibility with the existing API (shares Arc; no copy).
         let assets: Vec<crate::unitypackage::ExtractedAsset> = pkg_index
             .entries
             .iter()
@@ -2518,14 +2525,14 @@ impl ViewerApp {
             })
             .collect();
 
-        // 一時ファイルの場合はアーカイブデータをスナップショット
+        // For temp files, snapshot the archive data so reload can find it.
         let snapshot = if is_temp {
             Some(Arc::clone(&archive_data))
         } else {
             None
         };
 
-        // FBX と VRM を統合したモデルリストを構築
+        // Build a unified model list (FBX + VRM).
         let model_list = build_pkg_model_list(&assets);
 
         if model_list.is_empty() {
@@ -2533,7 +2540,7 @@ impl ViewerApp {
         }
 
         if model_list.len() == 1 {
-            // モデルが1つだけ → プログレス表示後に遅延ロード
+            // Exactly one model → defer loading until after the progress UI shows.
             let (idx, _, model_type) = model_list[0];
             self.pending.pkg_load = Some(PendingPkgModelLoad {
                 assets: Arc::new(assets),
@@ -2550,7 +2557,7 @@ impl ViewerApp {
                 skip_anim_check: false,
             });
         } else {
-            // 複数 → 選択ダイアログを表示
+            // Multiple models → show the selection dialog.
             log::info!("Found {} models in .unitypackage:", model_list.len());
             for (_, name, mtype) in &model_list {
                 log::info!("  {:?}: {}", mtype, name);
@@ -2570,15 +2577,15 @@ impl ViewerApp {
         Ok(())
     }
 
-    /// unitypackage をアペンドモードで読み込み
+    /// Load a unitypackage in append mode.
     #[allow(dead_code)]
     fn try_load_unitypackage_for_append(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
-        // ファイル消失前に一時パス判定を確定（canonicalize がファイル存在を前提とするため）
+        // Decide is_temp before the file may disappear (canonicalize requires the file to exist).
         let is_temp =
             is_temp_path(path) || self.preloaded.as_ref().is_some_and(|pl| pl.path == path);
         let archive_data: Arc<[u8]> = self.read_or_preloaded(path)?;
 
-        // Phase 3: UnityPackageIndex を構築
+        // Phase 3: build UnityPackageIndex.
         let pkg_index = Arc::new(crate::unitypackage::build_unity_package_index(
             &archive_data,
         )?);
@@ -2591,7 +2598,7 @@ impl ViewerApp {
             })
             .collect();
 
-        // 一時ファイルの場合はアーカイブデータをスナップショット
+        // For temp files, snapshot the archive data so reload can find it.
         let snapshot = if is_temp {
             Some(Arc::clone(&archive_data))
         } else {
@@ -2636,12 +2643,12 @@ impl ViewerApp {
         Ok(())
     }
 
-    /// アーカイブ（ZIP/7z）を読み込み
+    /// Load an archive (ZIP / 7z).
     fn try_load_archive(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         self.try_load_archive_impl(path, false)
     }
 
-    /// アーカイブをアペンドモードで読み込み
+    /// Load an archive in append mode.
     #[allow(dead_code)]
     fn try_load_archive_for_append(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         self.try_load_archive_impl(path, true)
@@ -2667,7 +2674,7 @@ impl ViewerApp {
         }
 
         if contents.models.len() == 1 {
-            // モデルが1つだけ → 遅延ロード
+            // Exactly one model → defer loading.
             self.pending.archive_load = Some(PendingArchiveLoad {
                 archive_data,
                 format,
@@ -2679,7 +2686,7 @@ impl ViewerApp {
                 is_temp,
             });
         } else {
-            // 複数 → 選択ダイアログ
+            // Multiple models → show the selection dialog.
             log::info!("Found {} models in archive:", contents.models.len());
             for (_, p, _, kind) in &contents.models {
                 log::info!("  [{}] {}", kind.label(), p.display());
@@ -2696,7 +2703,8 @@ impl ViewerApp {
         Ok(())
     }
 
-    /// アーカイブからモデルを読み込み（同期フォールバック。通常は spawn_bg_archive_load を使用）
+    /// Synchronous fallback for loading a model from an archive
+    /// (the normal path is `spawn_bg_archive_load`).
     #[allow(dead_code)]
     pub(super) fn load_model_from_archive(
         &mut self,
@@ -2718,7 +2726,7 @@ impl ViewerApp {
             pending.model_index,
         )?;
 
-        // UnityPackage: 二重展開 → 既存の unitypackage フローへ接続
+        // UnityPackage: double-extract and feed back into the existing unitypackage flow.
         if kind == crate::archive::ArchiveModelKind::UnityPackage {
             return self.load_unitypackage_from_archive(
                 bundle.model.data,
@@ -2751,7 +2759,8 @@ impl ViewerApp {
         }
     }
 
-    /// アーカイブ内 .unitypackage を展開し、既存の unitypackage 読み込みフローへ接続（同期フォールバック）
+    /// Extract a .unitypackage nested inside an archive and feed it into the existing
+    /// unitypackage loading flow (synchronous fallback).
     #[allow(dead_code)]
     fn load_unitypackage_from_archive(
         &mut self,
@@ -2762,9 +2771,9 @@ impl ViewerApp {
         append: bool,
         entry_path: PathBuf,
     ) -> anyhow::Result<()> {
-        // UnityPackageIndex を構築（Prefab 解決に必要）
+        // Build the UnityPackageIndex (required for Prefab resolution).
         let pkg_index = Arc::new(crate::unitypackage::build_unity_package_index(&pkg_data)?);
-        // 既存コードとの互換性のため ExtractedAsset も構築（Arc 共有でコピー回避）
+        // Also build ExtractedAsset for compatibility with the existing API (shares Arc; no copy).
         let assets: Vec<crate::unitypackage::ExtractedAsset> = pkg_index
             .entries
             .iter()
@@ -2774,20 +2783,20 @@ impl ViewerApp {
             })
             .collect();
 
-        // VRM / FBX を検出
+        // Detect VRM / FBX entries.
         let model_list = build_pkg_model_list(&assets);
         if model_list.is_empty() {
             anyhow::bail!(".unitypackage 内に VRM / FBX ファイルが見つかりません");
         }
 
-        // アーカイブスナップショット（一時ファイルの場合のみ保持）
+        // Archive snapshot (kept only for temp files).
         let archive_snapshot = if is_temp {
             Some(Arc::clone(&archive_data))
         } else {
             None
         };
 
-        // リロード時に Archive 経由で二重展開するための情報
+        // Information needed to re-extract through Archive on reload.
         let nested_archive_source = Some(ReloadableSource::Archive {
             original_path: source_path.clone(),
             archive_bytes: if is_temp { Some(archive_data) } else { None },
@@ -2837,7 +2846,7 @@ impl ViewerApp {
         Ok(())
     }
 
-    /// アーカイブバンドルから IrModel を構築（フリー関数へ委譲）
+    /// Build an IrModel from an archive bundle (delegates to the free function).
     fn build_ir_from_archive_bundle(
         &self,
         bundle: &crate::archive::ModelBundle,
@@ -2851,7 +2860,7 @@ impl ViewerApp {
         )
     }
 
-    /// ReloadableSource::Archive からIrModelを構築（reload/append共通）
+    /// Build an IrModel from a `ReloadableSource::Archive` (shared by reload and append).
     fn load_ir_from_archive_source(
         &self,
         original_path: &Path,
@@ -2873,7 +2882,7 @@ impl ViewerApp {
 
         let contents = crate::archive::list_models(data, format)?;
 
-        // selected_entry_path で同じモデルを再選択
+        // Re-locate the same model by `selected_entry_path`.
         let model_index = contents
             .models
             .iter()
@@ -2887,11 +2896,11 @@ impl ViewerApp {
             })?;
 
         let bundle = crate::archive::extract_model_bundle(data, format, contents, model_index)?;
-        let _ = inner_kind; // bundle.kind を使用
+        let _ = inner_kind; // use bundle.kind instead
         self.build_ir_from_archive_bundle(&bundle, original_path)
     }
 
-    /// アーカイブ(ZIP/7z)内の .unitypackage データを取り出す
+    /// Extract the .unitypackage payload from inside an archive (ZIP / 7z).
     fn extract_pkg_from_archive(
         original_path: &Path,
         archive_bytes: Option<&Arc<[u8]>>,
@@ -2927,7 +2936,8 @@ impl ViewerApp {
         Ok(bundle.model.data)
     }
 
-    /// リロード時の unitypackage 同期アペンド（遅延処理を避け、テクスチャ復元も行う）
+    /// Synchronous unitypackage append for the reload path
+    /// (avoids deferred work and also restores texture assignments).
     fn reload_append_unitypackage(
         &mut self,
         source: &ReloadableSource,
@@ -2935,7 +2945,7 @@ impl ViewerApp {
         pkg_model: Option<&crate::unitypackage::PkgModelLocator>,
         saved_pkg_tex_assignments: &HashMap<usize, String>,
     ) {
-        // Arc 参照で済むケースではコピーを避け、所有権が必要なパスのみ Vec を確保
+        // Avoid copying when an Arc reference suffices; only allocate Vec on owned paths.
         use std::borrow::Cow;
         let archive_data: Cow<'_, [u8]> = match source {
             ReloadableSource::Snapshot { main_bytes, .. } => Cow::Borrowed(main_bytes),
@@ -2953,7 +2963,7 @@ impl ViewerApp {
                 inner_kind,
             } => {
                 if *inner_kind == crate::archive::ArchiveModelKind::UnityPackage {
-                    // アーカイブ内 .unitypackage: 二重展開
+                    // .unitypackage nested in an archive: double-extract.
                     match Self::extract_pkg_from_archive(
                         original_path,
                         archive_bytes.as_ref(),
@@ -2979,9 +2989,9 @@ impl ViewerApp {
             }
         };
         let path = source.display_path();
-        // pkg_index を先に構築し、assets をそこから導出する
-        // （extract_all_assets と build_unity_package_index は HashMap イテレーション順序が
-        //   非決定的なため、別々に構築するとインデックスがずれる）
+        // Build pkg_index first, then derive assets from it.
+        // (extract_all_assets and build_unity_package_index iterate a HashMap in a
+        //  non-deterministic order, so building them independently would mis-align indices.)
         let pkg_index_for_reload =
             match crate::unitypackage::build_unity_package_index(&archive_data) {
                 Ok(idx) => Arc::new(idx),
@@ -2999,11 +3009,11 @@ impl ViewerApp {
             })
             .collect();
 
-        // pkg_model (GUID/パス) → pkg_model_name (basename) → selected_fbx_name (basename) の優先順で照合
+        // Match in priority order: pkg_model (GUID/path) → pkg_model_name (basename) → selected_fbx_name (basename).
         let fbx_list = crate::unitypackage::find_fbx_list(&assets);
         let vrm_list = crate::unitypackage::find_vrm_list(&assets);
 
-        // 1. GUID/パスベースの正確な照合
+        // 1. Exact match by GUID / path.
         let found_by_locator = pkg_model.and_then(|loc| {
             crate::unitypackage::find_asset_by_pathname(&assets, &loc.pathname)
                 .map(|idx| (idx, loc.kind))
@@ -3012,7 +3022,7 @@ impl ViewerApp {
         let (model_index, model_type) = if let Some(found) = found_by_locator {
             found
         } else {
-            // 2. basename フォールバック
+            // 2. Basename fallback.
             let search_name = pkg_model_name.or(self.selected_fbx_name.as_deref());
             if let Some(prev_name) = search_name {
                 if let Some((idx, _)) = fbx_list.iter().find(|(_, name)| name == prev_name) {
@@ -3037,21 +3047,21 @@ impl ViewerApp {
             }
         };
 
-        // マージ前の材質オフセットを記録
+        // Record the material offset before merging.
         let mat_offset = self
             .loaded
             .as_ref()
             .map(|l| l.ir.materials.len())
             .unwrap_or(0);
 
-        // 同期的にアペンド
-        // sourceがArchiveの場合はsource_overrideとして渡す
+        // Append synchronously.
+        // When the source is Archive, pass it through as source_override.
         let source_override = match source {
             ReloadableSource::Archive { .. } => Some(source.clone()),
             ReloadableSource::Snapshot { .. } => Some(source.clone()),
             _ => None,
         };
-        // Prefab append 用に pkg_index を渡す（reload 冒頭で構築済みのものを再利用）
+        // Pass pkg_index for Prefab append (reuses the one built at the top of reload).
         let pkg_index = if model_type == PkgModelType::Prefab {
             Some(pkg_index_for_reload)
         } else {
@@ -3066,9 +3076,9 @@ impl ViewerApp {
             pkg_index,
         );
 
-        // 追加材質に対するpkgテクスチャ割り当てを復元
+        // Restore pkg-texture assignments for the newly appended materials.
         if !saved_pkg_tex_assignments.is_empty() {
-            // 割り当て対象を先に収集（借用解放のため）
+            // Collect the assignments to restore first (so the borrow is released before the loop).
             let assignments_to_restore: Vec<(usize, String, Vec<u8>)> = {
                 let pkg_src = self.tex.pkg_textures.as_deref().unwrap_or(&[]);
                 let name_to_data: HashMap<&str, &[u8]> = pkg_src
@@ -3094,14 +3104,14 @@ impl ViewerApp {
                 if self.assign_texture_data_to_material(*mat_idx, tex_name, data) {
                     self.tex.pkg_assignments.insert(*mat_idx, tex_name.clone());
                 } else {
-                    // 復元失敗 → 不正な履歴を除去
+                    // Restoration failed → drop the now-invalid history entry.
                     self.tex.pkg_assignments.remove(mat_idx);
                 }
             }
         }
     }
 
-    /// 展開済みアセットから指定FBXをロード
+    /// Load the specified FBX from already-extracted assets.
     pub fn load_fbx_from_assets(
         &mut self,
         assets: &[crate::unitypackage::ExtractedAsset],
@@ -3111,7 +3121,7 @@ impl ViewerApp {
         source_override: Option<ReloadableSource>,
         pkg_index: Option<&UnityPackageIndex>,
     ) -> anyhow::Result<()> {
-        // pkg_index が与えられた場合は prepare_pkg_fbx + embed_textures_with_prefab を使用
+        // When pkg_index is provided, use prepare_pkg_fbx + embed_textures_with_prefab.
         let (fbx_data, fbx_name, textures_legacy, pkg_textures_new, _unmatched_precomputed) =
             if let Some(idx) = pkg_index {
                 let prepared = crate::unitypackage::prepare_pkg_fbx(idx, fbx_index)?;
@@ -3121,7 +3131,7 @@ impl ViewerApp {
                     .to_string_lossy()
                     .to_string();
                 let fbx_data = Arc::clone(&prepared.fbx_data);
-                // PackageTexture → (String, Arc<[u8]>) 変換（既存 pkg_textures 形式）
+                // Convert PackageTexture → (String, Arc<[u8]>) (the legacy pkg_textures shape).
                 let legacy_textures: Vec<(String, Arc<[u8]>)> = prepared
                     .textures
                     .iter()
@@ -3152,8 +3162,8 @@ impl ViewerApp {
         let load_animation = matches!(mode, FbxLoadMode::AnimationOnly | FbxLoadMode::Both);
 
         if load_model {
-            // unitypackage 経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
-            // テクスチャは embed_textures_with_prefab / embed_textures_into_ir で埋め込む
+            // Via unitypackage: pass fbx_path=None to disable nearby-texture search.
+            // Textures are embedded via embed_textures_with_prefab / embed_textures_into_ir.
             let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
                 &fbx_data,
                 None,
@@ -3161,7 +3171,7 @@ impl ViewerApp {
                 self.normalize_to_tstance,
             )?;
 
-            // テクスチャ埋め込み: pkg_index 経由なら embed_textures_with_prefab を使用
+            // Embed textures: use embed_textures_with_prefab when pkg_index is available.
             let unmatched = if let Some(ref prepared) = pkg_textures_new {
                 let prefab_label = format!(
                     "prefab({})",
@@ -3180,13 +3190,13 @@ impl ViewerApp {
                 crate::unitypackage::embed_textures_into_ir(&mut ir, &textures_legacy)
             };
 
-            // テクスチャをアプリ状態に保持
+            // Keep textures in the app state.
             if !textures_legacy.is_empty() {
                 self.tex.pkg_textures = Some(textures_legacy);
                 self.rebuild_pkg_thumb_cache();
             }
 
-            // pkg_material_keys の構築（pkg_index がある場合のみ）
+            // Build pkg_material_keys (only when pkg_index is available).
             let pkg_keys = if let Some(idx) = pkg_index {
                 let fbx_guid = idx
                     .entries
@@ -3214,22 +3224,23 @@ impl ViewerApp {
                 .unwrap_or_else(|| ReloadableSource::File(source_path.to_path_buf()));
             self.finish_load(ir, source)?;
 
-            // finish_load 後に pkg_material_keys を設定
+            // Set pkg_material_keys after finish_load has populated `loaded`.
             if !pkg_keys.is_empty() {
                 if let Some(ref mut loaded) = self.loaded {
                     loaded.pkg_material_keys = pkg_keys;
                 }
             }
 
-            // モデル読み込み時はアニメーションをクリア
+            // Clear any previously bound animation when loading a model.
             self.anim.state = None;
             self.anim.library.clear();
             self.anim.active_index = None;
 
-            // 未割当材質がある場合、手動割当ダイアログを開く（リロード中は抑制）
+            // If any materials remain unassigned, open the manual-assign dialog
+            // (suppressed during reload).
             if !unmatched.is_empty() && self.tex.pkg_textures.is_some() && !self.suppress_tex_match
             {
-                // 既存プレビューがあれば先に復元
+                // Restore any existing preview first.
                 self.cancel_tex_match_preview();
                 let count = unmatched.len();
                 self.tex.pending_match = Some(PendingTexMatch {
@@ -3272,7 +3283,7 @@ impl ViewerApp {
         Ok(())
     }
 
-    /// 展開済みアセットから指定VRMをロード
+    /// Load the specified VRM from already-extracted assets.
     pub fn load_vrm_from_assets(
         &mut self,
         assets: &[crate::unitypackage::ExtractedAsset],
@@ -3280,7 +3291,7 @@ impl ViewerApp {
         source_path: &std::path::Path,
         source_override: Option<ReloadableSource>,
     ) -> anyhow::Result<()> {
-        // assets 消費前に pathname を取得（reload 時の正確な再選択用）
+        // Capture pathname before assets are consumed (needed for accurate reload re-selection).
         let vrm_pathname: Option<String> = assets.get(vrm_index).map(|a| a.pathname.clone());
         let (vrm_data, vrm_name) = crate::unitypackage::take_vrm(assets, vrm_index)?;
         log::info!(
@@ -3289,7 +3300,7 @@ impl ViewerApp {
             vrm_data.len() / 1024
         );
         self.selected_fbx_name = Some(vrm_name.clone());
-        // VRM は Prefab テクスチャマッピング対象外だが、reload 時のモデル再選択には pathname が必要
+        // VRM doesn't need Prefab texture mapping, but reload still needs pathname to re-pick the model.
         self.selected_pkg_model = vrm_pathname.map(|path| crate::unitypackage::PkgModelLocator {
             guid: "".into(),
             pathname: path.into(),
@@ -3323,7 +3334,8 @@ impl ViewerApp {
         self.finish_load_with_gpu(ir, gpu_model, source, false)
     }
 
-    /// Prefab エントリから参照先 FBX を解決してロード（複数 FBX マージ対応）
+    /// Resolve the referenced FBX(s) from a Prefab entry and load them
+    /// (supports merging multiple FBX files into a single model).
     pub fn load_prefab_from_assets(
         &mut self,
         _assets: &[crate::unitypackage::ExtractedAsset],
@@ -3336,7 +3348,7 @@ impl ViewerApp {
             .as_ref()
             .context("Prefab ロードには pkg_index が必要です")?;
 
-        // Prefab から全 FBX GUID とマテリアル解決結果を取得
+        // Pull every FBX GUID plus its material-resolution result from the prefab.
         let resolve_result = crate::unitypackage::resolve_single_prefab(pkg, prefab_index)?;
 
         log::info!(
@@ -3344,14 +3356,14 @@ impl ViewerApp {
             resolve_result.entries.len()
         );
 
-        // Prefab ファイル名を保存（ファイル階層表示用）
+        // Save the prefab filename (used by the file-hierarchy display).
         let prefab_filename = std::path::Path::new(&pkg.entries[prefab_index].pathname)
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
 
-        // テクスチャ収集
+        // Collect textures.
         let textures: Vec<crate::unitypackage::PackageTexture> = pkg
             .entries
             .iter()
@@ -3377,7 +3389,7 @@ impl ViewerApp {
             })
             .collect();
 
-        // レガシー形式のテクスチャリストも構築（pkg_textures 用）
+        // Also build the legacy-shaped texture list (used by pkg_textures).
         let legacy_textures: Vec<(String, Arc<[u8]>)> = textures
             .iter()
             .map(|t| (t.display_name.to_string(), Arc::clone(&t.data)))
@@ -3386,7 +3398,7 @@ impl ViewerApp {
         let mut base_ir: Option<crate::intermediate::types::IrModel> = None;
         let mut all_pkg_keys: Vec<Option<crate::unitypackage::PkgMaterialKey>> = Vec::new();
         let mut all_unmatched: Vec<usize> = Vec::new();
-        // FBX ごとの材質範囲を追跡（MaterialGroup 分割用）
+        // Track each FBX's material range (used to split MaterialGroup).
         let mut fbx_ranges: Vec<(String, usize, usize)> = Vec::new(); // (name, mat_start, mat_count)
 
         for (i, fbx_entry_info) in resolve_result.entries.iter().enumerate() {
@@ -3405,7 +3417,7 @@ impl ViewerApp {
                 fbx_entry_info.fbx_guid
             );
 
-            // unitypackage 経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
+            // Via unitypackage: pass fbx_path=None to disable nearby-texture search.
             let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
                 &fbx_data,
                 None,
@@ -3421,7 +3433,7 @@ impl ViewerApp {
                 &prefab_label,
             );
 
-            // pkg_material_keys 構築
+            // Build pkg_material_keys.
             let instance_id = crate::unitypackage::BASE_INSTANCE_ID;
             let model_guid: Arc<str> = fbx_entry_info.fbx_guid.as_str().into();
             let keys: Vec<_> = ir
@@ -3438,16 +3450,16 @@ impl ViewerApp {
                 .collect();
 
             if let Some(ref mut base) = base_ir {
-                // 2つ目以降: merge
+                // Second and subsequent FBX: merge into the base.
                 let mat_offset = base.materials.len();
                 let mat_count = ir.materials.len();
                 base.merge(ir);
                 fbx_ranges.push((fbx_name, mat_offset, mat_count));
-                // unmatched のインデックスを offset
+                // Offset unmatched indices into the base material space.
                 all_unmatched.extend(unmatched.iter().map(|&idx| idx + mat_offset));
                 all_pkg_keys.extend(keys);
             } else {
-                // 最初の FBX: ベースモデル
+                // First FBX becomes the base model.
                 let mat_count = ir.materials.len();
                 fbx_ranges.push((fbx_name.clone(), 0, mat_count));
                 self.selected_fbx_name = Some(fbx_name);
@@ -3464,7 +3476,7 @@ impl ViewerApp {
 
         let ir = base_ir.context("Prefab に有効な FBX が見つかりません")?;
 
-        // テクスチャをアプリ状態に保持
+        // Keep textures in the app state.
         if !legacy_textures.is_empty() {
             self.tex.pkg_textures = Some(legacy_textures);
             self.rebuild_pkg_thumb_cache();
@@ -3474,7 +3486,7 @@ impl ViewerApp {
             source_override.unwrap_or_else(|| ReloadableSource::File(source_path.to_path_buf()));
         self.finish_load(ir, source)?;
 
-        // finish_load 後に Prefab 情報と per-FBX MaterialGroup を設定
+        // After finish_load, apply Prefab metadata and per-FBX MaterialGroup splits.
         if let Some(ref mut loaded) = self.loaded {
             loaded.prefab_name = Some(prefab_filename);
             loaded.prefab_entry_path = Some(pkg.entries[prefab_index].pathname.clone());
@@ -3483,12 +3495,12 @@ impl ViewerApp {
                 loaded.pkg_material_keys = all_pkg_keys;
             }
 
-            // 複数 FBX がある場合、単一 MaterialGroup を FBX 別に分割
+            // When there are multiple FBX, split the single MaterialGroup per FBX.
             if fbx_ranges.len() > 1 {
                 let mut new_groups = Vec::with_capacity(fbx_ranges.len());
                 for (name, mat_start, mat_count) in &fbx_ranges {
                     let mat_range = *mat_start..*mat_start + *mat_count;
-                    // draw_range: 材質インデックスが範囲内に含まれる draw を検索
+                    // draw_range: locate draws whose material_index falls in this range.
                     let mut draw_start = usize::MAX;
                     let mut draw_end = 0usize;
                     for (di, draw) in loaded.gpu_model.draws.iter().enumerate() {
@@ -3510,8 +3522,8 @@ impl ViewerApp {
             }
         }
 
-        // Prefab 名が確定したので、model_display_name を Prefab 名ベースに上書きし、
-        // タイトルバーと PMX 出力ファイル名の両方を差し替える
+        // Now that the Prefab name is fixed, overwrite model_display_name with the prefab name
+        // so both the title bar and the PMX output filename pick it up.
         if let Some(ref loaded) = self.loaded {
             if let Some(ref prefab_filename) = loaded.prefab_name {
                 let stem = std::path::Path::new(prefab_filename)
@@ -3525,12 +3537,12 @@ impl ViewerApp {
         }
         self.refresh_derived_from_display_name();
 
-        // モデル読み込み時はアニメーションをクリア
+        // Clear any previously bound animation when loading a model.
         self.anim.state = None;
         self.anim.library.clear();
         self.anim.active_index = None;
 
-        // 未割当材質がある場合、手動割当ダイアログを開く
+        // If any materials remain unassigned, open the manual-assign dialog.
         if !all_unmatched.is_empty() && self.tex.pkg_textures.is_some() && !self.suppress_tex_match
         {
             self.cancel_tex_match_preview();
@@ -3549,7 +3561,7 @@ impl ViewerApp {
         Ok(())
     }
 
-    /// 拡張子に基づいてアニメーションファイルを読み込む
+    /// Load an animation file based on its extension.
     pub fn load_animation_file(&mut self, path: &std::path::Path) {
         let ext = crate::path_ext_lower(path);
         match ext.as_str() {
@@ -3580,7 +3592,7 @@ impl ViewerApp {
                 let state = AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
                 log::info!("VRMALoad success: {}", path.display());
 
-                // ライブラリに追加（重複パスは上書き）
+                // Add to library (entries with the same path overwrite the existing one).
                 let path_buf = path.to_path_buf();
                 if let Some(idx) = self
                     .anim
@@ -3609,7 +3621,7 @@ impl ViewerApp {
         }
     }
 
-    /// FBXファイルからアニメーションを読み込む
+    /// Load animation data from an FBX file.
     pub fn try_load_fbx_animation(&mut self, path: &std::path::Path) {
         if self.loaded.is_none() {
             self.convert_message = Some(ConvertMessage::failure(
@@ -3624,7 +3636,7 @@ impl ViewerApp {
         };
         match anim_result {
             Ok(anims) if anims.is_empty() => {
-                // 空配列 → no-op（成功メッセージも出さない）
+                // Empty array → no-op (do not show a success toast either).
                 log::debug!("FBX animation: empty (skipped)");
             }
             Ok(anims) => {
@@ -3646,7 +3658,7 @@ impl ViewerApp {
                     let state =
                         AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
 
-                    // ライブラリに追加
+                    // Add to library.
                     self.anim
                         .library
                         .push((display_name.clone(), path_buf.clone(), anim));
@@ -3668,7 +3680,7 @@ impl ViewerApp {
         }
     }
 
-    /// Unity .animファイルからアニメーションを読み込む
+    /// Load animation data from a Unity .anim file.
     pub fn try_load_unity_animation(&mut self, path: &std::path::Path) {
         if self.loaded.is_none() {
             self.convert_message = Some(ConvertMessage::failure(
@@ -3708,7 +3720,7 @@ impl ViewerApp {
         }
     }
 
-    /// GLB/glTFファイルからアニメーションを読み込む
+    /// Load animation data from a GLB / glTF file.
     pub fn try_load_gltf_animation(&mut self, path: &std::path::Path) {
         if self.loaded.is_none() {
             self.convert_message = Some(ConvertMessage::failure(
@@ -3737,7 +3749,7 @@ impl ViewerApp {
                     let state =
                         AnimationState::new(Arc::clone(&anim), &loaded.ir, &loaded.gpu_model);
 
-                    // ライブラリに追加
+                    // Add to library.
                     self.anim
                         .library
                         .push((display_name.clone(), path_buf.clone(), anim));
@@ -3759,7 +3771,7 @@ impl ViewerApp {
         }
     }
 
-    /// VRMAライブラリからインデックス指定で切り替え
+    /// Switch the active VRMA in the library by index.
     pub fn switch_vrma(&mut self, index: usize) {
         if let Some((_, _, ref anim)) = self.anim.library.get(index) {
             if let Some(ref loaded) = self.loaded {
@@ -3778,7 +3790,7 @@ impl ViewerApp {
             let pmx_model = crate::pmx::reader::read_pmx_from_data(&main_data)?;
             let pmx_dir = path.parent().unwrap_or(Path::new("."));
 
-            // 補助ファイル（テクスチャ）を収集: preloaded.aux_files を優先
+            // Gather aux files (textures); prefer preloaded.aux_files.
             let mut aux = HashMap::new();
             let preloaded_aux = self
                 .preloaded
@@ -3788,7 +3800,7 @@ impl ViewerApp {
             for tex_path in &pmx_model.textures {
                 let normalized = tex_path.replace('\\', "/");
                 let key = PathBuf::from(&normalized);
-                // preloaded aux_files からの取得を優先
+                // Prefer preloaded aux_files when available.
                 if let Some(data) = preloaded_aux.and_then(|a| a.get(&key)) {
                     aux.insert(key, Arc::clone(data));
                 } else {
@@ -3844,14 +3856,14 @@ impl ViewerApp {
                 let pmd_model = crate::pmd::reader::read_pmd_from_data(&main_data)?;
                 let pmd_dir = path.parent().unwrap_or(Path::new("."));
 
-                // 補助ファイル（テクスチャ + .txt）を収集: preloaded.aux_files を優先
+                // Gather aux files (textures + .txt); prefer preloaded.aux_files.
                 let mut aux = HashMap::new();
                 let preloaded_aux = self
                     .preloaded
                     .as_ref()
                     .filter(|pl| pl.path == path)
                     .map(|pl| &pl.aux_files);
-                // テクスチャ
+                // Textures.
                 for mat in &pmd_model.materials {
                     if mat.texture_name.is_empty() {
                         continue;
@@ -3865,7 +3877,7 @@ impl ViewerApp {
                     if aux.contains_key(&key) {
                         continue;
                     }
-                    // preloaded aux_files からの取得を優先
+                    // Prefer preloaded aux_files when available.
                     if let Some(data) = preloaded_aux.and_then(|a| a.get(&key)) {
                         aux.insert(key, Arc::clone(data));
                     } else {
@@ -3875,7 +3887,7 @@ impl ViewerApp {
                         }
                     }
                 }
-                // .txt ファイル
+                // .txt sidecar file.
                 let txt_path = path.with_extension("txt");
                 let txt_name = txt_path.file_name().map(PathBuf::from).unwrap_or_default();
                 if let Some(data) = preloaded_aux.and_then(|a| a.get(&txt_name)) {
@@ -4017,7 +4029,7 @@ impl ViewerApp {
     }
 
     fn try_load_vrm(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
-        // .gltf は外部バッファ参照を持つためスナップショット化しない（.glb/.vrm のみ対象）
+        // .gltf can reference external buffers, so don't snapshot it (limit snapshotting to .glb / .vrm).
         let ext_lower = crate::path_ext_lower(path);
         let source = if (is_temp_path(path)
             || self.preloaded.as_ref().is_some_and(|pl| pl.path == path))
@@ -4077,29 +4089,30 @@ impl ViewerApp {
         let gpu_model =
             super::super::mesh::build_gpu_model(&ir, &glb.images, device, queue, &mat_flags)?;
 
-        // IrTexture を PNG エンコード済みに変換（convert_ir_to_pmx で統一的に使えるように）
+        // Convert IrTexture to PNG-encoded form so convert_ir_to_pmx can consume it uniformly.
         Self::encode_ir_textures_as_png(&mut ir, &glb.images);
 
         self.finish_load_with_gpu(ir, gpu_model, source, false)
     }
 
-    /// リロード前の状態をスナップショットとして退避する。
+    /// Snapshot the pre-reload state so we can restore it later.
     fn save_reload_snapshot(&mut self) -> ReloadSnapshot {
-        // v0.5.6 (Codex review 0.5.6/01 P1 対応): UV モーフ編集中は対象モーフの
-        // ウェイトが 1.0 に固定されている。snapshot を取る前に元ウェイトへ復元
-        // しておかないと、reload 後に編集モードが解除されたまま 1.0 が恒久化する。
-        // `switch_active_morph(None, ...)` がウェイト復元と active_morph クリアを同時に行う。
+        // v0.5.6 (Codex review 0.5.6/01 P1 fix): while UV-morph editing is active,
+        // the target morph's weight is pinned at 1.0. If we don't restore the original
+        // weight before snapshotting, exit-from-edit gets lost across reload and the
+        // morph stays permanently at 1.0. `switch_active_morph(None, ...)` both
+        // restores the weight and clears active_morph in one call.
         let was_morph_editing = self.uv_edit.active_morph.is_some();
         self.uv_edit
             .switch_active_morph(None, &mut self.morph_weights);
-        // v0.5.6 (Codex review 0.5.6/02 P1 対応): UV モーフ編集中の `overrides` は
-        // 「base + morph offset」の表示値を持つため、reload 後に `apply_to_ir` で
-        // base UV へ書き戻すと、元の base UV に morph offset が焼き込まれて壊れる
-        // （次に morph を有効にすると offset が二重に効く）。morph 編集結果は
-        // `write_displayed_uv` 経由で IR に直接反映済みのため、新 IR 構築では
-        // いずれにせよ失われる。失敗復元で旧 IR が残るケースでも IR 自体に
-        // 編集が反映済みなので overrides を base として書き戻す必要はない。
-        // よって morph 編集中の reload では overrides 系の状態を全てクリアする。
+        // v0.5.6 (Codex review 0.5.6/02 P1 fix): during UV-morph editing, `overrides`
+        // holds the displayed value `base + morph offset`. Writing it back to the base
+        // UV via `apply_to_ir` after reload would bake the morph offset into the base
+        // (and re-enabling the morph would then double-apply the offset). Morph edits
+        // are already pushed into the IR by `write_displayed_uv`, and a freshly built
+        // IR would lose the overrides anyway. Even on failure-restore where the old IR
+        // survives, the IR already carries the edit, so we don't need to restore
+        // overrides as base. So during morph-edit reload, just clear all overrides state.
         if was_morph_editing {
             self.uv_edit.overrides.clear();
             self.uv_edit.pristine_uvs.clear();
@@ -4115,13 +4128,15 @@ impl ViewerApp {
             .as_ref()
             .map(|l| l.appended_models.clone())
             .unwrap_or_default();
-        // v0.5.6 (Codex review 0.5.6/03 P1 対応): 旧 IR の全 UV モーフ offsets を
-        // 退避しておき、reload 成功時に新 IR の同名モーフへ書き戻す。これにより
-        // `write_displayed_uv` で旧 IR に直接書き込まれた未保存編集が reload で
-        // 消えるのを防ぐ。編集していないモーフは同値上書きで no-op になるだけ。
-        // v0.5.6 (Codex review 0.5.6/04 P1 対応): 同名 UV morph の衝突に対応するため
-        // HashMap から Vec に変更（出現順で全保存）。復元側で `(name, name_en, channel)`
-        // + 未使用フラグによる一意マッチングを行う。
+        // v0.5.6 (Codex review 0.5.6/03 P1 fix): snapshot every UV-morph offsets from
+        // the old IR and re-apply them to the matching morph of the new IR on a successful
+        // reload. This prevents unsaved edits made directly to the old IR by
+        // `write_displayed_uv` from disappearing across reload. Morphs that weren't
+        // edited get an identical-value overwrite (effectively a no-op).
+        // v0.5.6 (Codex review 0.5.6/04 P1 fix): switched from HashMap to Vec to handle
+        // duplicate UV-morph names (saving every entry in encounter order). The
+        // restoration side matches uniquely by `(name, name_en, channel)` plus an
+        // unused flag.
         let uv_morph_offsets: UvMorphOffsetsSnapshot = self
             .loaded
             .as_ref()
@@ -4162,7 +4177,7 @@ impl ViewerApp {
             vrma_library: std::mem::take(&mut self.anim.library),
             vrma_active_index: self.anim.active_index.take(),
             display: self.display.clone(),
-            // v0.5.5: reload で新しい IR が組まれた後に再適用するため、現在の overrides を退避
+            // v0.5.5: stash the current overrides so they can be re-applied after a new IR is built on reload.
             uv_edit_overrides: std::mem::take(&mut self.uv_edit.overrides),
             uv_edit_active_material: self.uv_edit.active_material,
             uv_edit_window_open: self.uv_edit_window_open,
@@ -4170,8 +4185,8 @@ impl ViewerApp {
         }
     }
 
-    /// リロード失敗時にスナップショットから状態を復元する。
-    /// 旧モデルがそのまま残るので、`save_reload_snapshot` で退避した全フィールドをそのまま書き戻す。
+    /// Restore state from the snapshot when a reload fails.
+    /// The old model stays loaded, so write back every field that `save_reload_snapshot` captured.
     pub(super) fn restore_snapshot_on_failure(&mut self, snap: ReloadSnapshot) {
         self.camera = snap.camera;
         self.morph_weights = snap.morph_weights;
@@ -4182,8 +4197,8 @@ impl ViewerApp {
         self.export.pmx_output_path = snap.pmx_output_path;
         self.export.model_display_name = snap.model_display_name;
         self.export.export_visible_only = snap.export_visible_only;
-        // [出力] タブ等からの再ロード失敗時、finish_load_with_gpu に到達していなければ
-        // side_panel_tab は変わっていないが、途中まで進んだ場合の取りこぼしを防ぐため復元する
+        // When a reload triggered from e.g. the Export tab fails before finish_load_with_gpu,
+        // side_panel_tab hasn't been touched, but restore it anyway to cover partially-progressed runs.
         self.side_panel_tab = snap.side_panel_tab;
         if let Some(pkg) = snap.pkg_textures {
             self.tex.pkg_textures = Some(pkg);
@@ -4193,8 +4208,8 @@ impl ViewerApp {
         self.anim.library = snap.vrma_library;
         self.anim.active_index = snap.vrma_active_index;
         self.display = snap.display;
-        // v0.5.5: リロード失敗時は旧モデルがそのまま残るので overrides を書き戻す。
-        // 旧 IR の頂点 UV も旧モデル内で保持されているため、apply_to_ir も呼び直して整合を取る。
+        // v0.5.5: on reload failure the old model is still loaded, so write overrides back.
+        // The old IR's per-vertex UV is still inside the old model, so re-call apply_to_ir to keep them in sync.
         self.uv_edit.overrides = snap.uv_edit_overrides;
         self.uv_edit.active_material = snap.uv_edit_active_material;
         self.uv_edit_window_open = snap.uv_edit_window_open;
@@ -4204,30 +4219,30 @@ impl ViewerApp {
         self.suppress_tex_match = false;
     }
 
-    /// リロード成功後にスナップショットから状態を復元する。
+    /// Restore state from the snapshot after a successful reload.
     fn restore_snapshot_on_success(&mut self, snap: ReloadSnapshot) {
-        // pkg_textures を復元
+        // Restore pkg_textures.
         if self.tex.pkg_textures.is_none() {
             self.tex.pkg_textures = snap.pkg_textures;
         }
 
-        // カメラ復元（リロード時はカメラリセットしない）
+        // Restore the camera (reload should never reset the camera).
         self.camera = snap.camera;
         self.pending.refit = false;
 
-        // モーフ数が一致する場合のみ復元
+        // Only restore morph weights when the morph count matches.
         if snap.morph_weights.len() == self.morph_weights.len() {
             self.morph_weights = snap.morph_weights;
             self.morph_dirty = true;
         }
-        // 材質数が一致する場合のみ復元
+        // Only restore material flags when the material count matches.
         if snap.material_visibility.len() == self.material_visibility.len() {
             self.material_visibility = snap.material_visibility;
         }
         if snap.material_display.len() == self.material_display.len() {
             self.material_display = snap.material_display;
         }
-        // per-mat フラグが復元された場合、GPU モデルを再構築して反映
+        // If any per-material flags were restored, rebuild the GPU model to apply them.
         if self.material_display.iter().any(|d| d.smooth_normals)
             || self.material_display.iter().any(|d| d.clear_normals)
             || self.material_display.iter().any(|d| !d.normal_map)
@@ -4239,13 +4254,13 @@ impl ViewerApp {
         self.export.pmx_output_path = snap.pmx_output_path;
         self.export.model_display_name = snap.model_display_name;
         self.export.export_visible_only = snap.export_visible_only;
-        // リロードで復元した model_display_name をタイトルバーに反映
+        // Reflect the restored model_display_name into the title bar.
         self.refresh_derived_from_display_name();
-        // 再ロード前に開いていたサイドパネルタブを復元
-        // （finish_load_with_gpu は新規ロードと同じ扱いで Info に戻すので、後追いで上書き）
+        // Restore the side-panel tab the user had open before reload.
+        // (finish_load_with_gpu treats reload like a fresh load and resets to Info, so we overwrite that.)
         self.side_panel_tab = snap.side_panel_tab;
 
-        // テクスチャ割り当てを復元（ファイルパス分のみ。pkg分はreload_unitypackage内で処理済み）
+        // Restore texture assignments (file-path entries only; pkg entries are handled inside reload_unitypackage).
         let saved_link = self.tex.link_same_name;
         self.tex.link_same_name = false;
         self.tex.assignments = HashMap::new();
@@ -4261,32 +4276,33 @@ impl ViewerApp {
         }
         self.tex.link_same_name = saved_link;
 
-        // VRMAライブラリを復元し、アクティブなアニメーションを再構築
+        // Restore the VRMA library and rebuild the active animation.
         if !snap.vrma_library.is_empty() {
             self.anim.library = snap.vrma_library;
             if let Some(idx) = snap.vrma_active_index {
                 self.switch_vrma(idx);
             }
         }
-        // 表示設定を復元（シェーダーオーバーライド・ライト・Bloom 等）
+        // Restore display settings (shader overrides, lights, bloom, etc.).
         self.display = snap.display;
-        // v0.5.5: 頂点 UV 編集 overrides を復元し、IR 書き込み + GPU vertex buffer 再同期。
-        // `finish_load_with_gpu` が reset() した直後に上書きするため、ここが「真の復元点」。
-        // 新 IR のメッシュ/頂点数が変わった場合は `apply_to_ir` 内で範囲外を自動スキップする。
+        // v0.5.5: restore per-vertex UV edit overrides — write back into IR and re-sync the GPU vertex buffer.
+        // We overwrite right after `finish_load_with_gpu` calls `reset()`, so this is the real restoration point.
+        // When the new IR's mesh/vertex counts have changed, `apply_to_ir` silently skips out-of-range entries.
         self.uv_edit.overrides = snap.uv_edit_overrides;
         self.uv_edit.active_material = snap.uv_edit_active_material;
         self.uv_edit_window_open = snap.uv_edit_window_open;
         let queue = self.render_state.queue.clone();
         if let Some(loaded) = self.loaded.as_mut() {
             self.uv_edit.apply_to_ir(&mut loaded.ir);
-            // v0.5.6 (Codex review 0.5.6/03 P1 対応): 旧 IR で編集された UV モーフ offsets を
-            // 新 IR の同名モーフに書き戻す。`name_en` 優先でマッチング（無ければ `name`）。
-            // 未保存の UV モーフ編集（write_displayed_uv で旧 IR に直接書き込まれた分）を
-            // 失わないための復元。編集していないモーフは同値上書きで no-op。
-            // v0.5.6 (Codex review 0.5.6/04 P1 対応): 同名 UV morph が複数あっても
-            // 正しく N 番目に復元するため、未使用フラグ + 完全一致マッチングで処理する。
-            // マッチング条件: `name` と `name_en` の両方一致、かつ `channel` 一致、かつ未使用。
-            // 旧 HashMap 方式では同名衝突で片方の編集内容が失われていた。
+            // v0.5.6 (Codex review 0.5.6/03 P1 fix): write the UV-morph offsets edited in
+            // the old IR back into the matching morph of the new IR. Match preferentially
+            // on `name_en`, falling back to `name`. This preserves unsaved UV-morph edits
+            // (those that were written directly into the old IR by write_displayed_uv).
+            // Unedited morphs get an identical-value overwrite (no-op).
+            // v0.5.6 (Codex review 0.5.6/04 P1 fix): when multiple UV morphs share a name,
+            // restore the N-th correctly by tracking an unused flag plus exact match.
+            // Match condition: both `name` and `name_en` match, `channel` matches, entry unused.
+            // The old HashMap approach lost one side's edits whenever names collided.
             if !snap.uv_morph_offsets.is_empty() {
                 let mut used = vec![false; snap.uv_morph_offsets.len()];
                 let mut restored = 0usize;
@@ -4324,31 +4340,31 @@ impl ViewerApp {
             }
             loaded.gpu_model.sync_uvs_from_ir(&loaded.ir, &queue);
         }
-        // リロード完了: テクスチャ選択ダイアログ抑制を解除
+        // Reload complete: lift the texture-picker suppression.
         self.suppress_tex_match = false;
     }
 
-    /// 現在読み込み中のVRMを再読み込みする（オプション変更時）
-    /// カメラ・モーフ・材質表示などの状態は保持する
+    /// Reload the currently-loaded VRM (e.g., after option changes).
+    /// State such as camera, morphs, and material visibility is preserved.
     pub fn reload_current(&mut self) {
         if self.loaded.is_none() {
             return;
         }
-        // リロード前にプレビューを復元（旧モデルの GPU リソースが有効な間に実行）
+        // Restore the preview before reload (while the old model's GPU resources are still valid).
         self.cancel_tex_match_preview();
-        // リロード中はテクスチャ選択ダイアログを抑制
+        // Suppress the texture-picker dialog during reload.
         self.suppress_tex_match = true;
         let Some(loaded) = self.loaded.as_ref() else {
             return;
         };
         let source = loaded.source.clone();
 
-        // スナップショットに状態を退避
+        // Snapshot the current state for restoration.
         let snap = self.save_reload_snapshot();
 
         let ext = source.extension_lower();
 
-        // Archive/UnityPackage: 同期パスを維持（状態管理が複雑なため）
+        // Archive / UnityPackage: keep the synchronous path (state management is too complex otherwise).
         match &source {
             ReloadableSource::Archive {
                 inner_kind,
@@ -4379,7 +4395,7 @@ impl ViewerApp {
             _ => {}
         }
 
-        // File/Snapshot: BG パイプライン経由で非ブロッキング リロード
+        // File / Snapshot: non-blocking reload via the BG pipeline.
         let (path, preloaded) = match &source {
             ReloadableSource::File(path) => (path.clone(), None),
             ReloadableSource::Snapshot {
@@ -4395,18 +4411,18 @@ impl ViewerApp {
                 (original_path.clone(), preloaded)
             }
             ReloadableSource::Archive { .. } => {
-                // Archive (非 UnityPackage) は同期フォールバック
+                // Archive (non-UnityPackage) takes the synchronous fallback.
                 let result = self.reload_from_source(&source);
                 self.finish_reload_sync(result, snap);
                 return;
             }
         };
 
-        // BG ロード完了後にスナップショットを復元するため保存
+        // Stash the snapshot for restoration after the BG load completes.
         self.reload_snapshot = Some(snap);
 
-        // 既存の BG パイプラインにディスパッチ
-        // is_reload: true でユーザーが設定した normalize_pose 等を保持させる
+        // Hand off to the existing BG pipeline.
+        // is_reload: true keeps user-set flags (normalize_pose, etc.) intact.
         self.pending
             .bg_state
             .submit_dispatch(super::pending::PendingLoadDispatch {
@@ -4418,7 +4434,7 @@ impl ViewerApp {
             });
     }
 
-    /// 同期リロードの完了処理（Archive/UnityPackage パス用）
+    /// Finalisation for the synchronous reload path (Archive / UnityPackage).
     fn finish_reload_sync(&mut self, result: anyhow::Result<()>, snap: ReloadSnapshot) {
         if let Err(e) = result {
             log::error!("Reload failed: {e}");
@@ -4432,7 +4448,7 @@ impl ViewerApp {
         self.restore_snapshot_on_success(snap);
     }
 
-    /// BG リロード完了後のスナップショット復元（GPU ビルド完了後に呼ばれる）
+    /// Snapshot restoration after the BG reload (called once the GPU build completes).
     pub(super) fn finish_reload_from_snapshot(&mut self) {
         let Some(snap) = self.reload_snapshot.take() else {
             return;
@@ -4441,7 +4457,7 @@ impl ViewerApp {
         self.restore_snapshot_on_success(snap);
     }
 
-    /// 追加モデルを再マージする（リロード完了後に実行）
+    /// Re-merge the previously appended models (run after reload completes).
     fn remerge_appended_models(&mut self, snap: &ReloadSnapshot) {
         let has_appended = self
             .loaded
@@ -4493,10 +4509,10 @@ impl ViewerApp {
         }
     }
 
-    /// ReloadableSource からモデルを再読み込み（load_file の UI 分岐を回避）
+    /// Reload a model from a `ReloadableSource` (bypasses the UI branching in `load_file`).
     fn reload_from_source(&mut self, source: &ReloadableSource) -> anyhow::Result<()> {
-        // source を直接参照で match し、finish_load の直前で1回だけ clone する
-        // （従来の source_clone + source_clone.clone() による二重クローンを排除）
+        // Match on `source` by reference and clone exactly once just before finish_load.
+        // (Eliminates the previous double-clone from `source_clone + source_clone.clone()`.)
         let result: anyhow::Result<()> = (|| {
             match source {
                 ReloadableSource::File(path) => {
@@ -4519,8 +4535,9 @@ impl ViewerApp {
                     let ext = crate::path_ext_lower(original_path);
                     match detect_format(&ext) {
                         FileFormat::Fbx => {
-                            // 外部テクスチャがある場合、ユニーク名の一時ディレクトリに復元（TempDir の Drop で自動削除）。
-                            // 固定名だと BG ロード並行時にディレクトリが衝突するため、tempfile で毎回ユニーク名を生成する。
+                            // When external textures exist, materialise them under a unique temp directory
+                            // (auto-deleted by TempDir's Drop). A fixed name would collide between concurrent
+                            // BG loads, so we use tempfile to generate a fresh unique name each time.
                             let temp_dir = if !aux_files.is_empty() {
                                 let td = tempfile::Builder::new()
                                     .prefix("popone_fbx_reload_")
@@ -4548,7 +4565,7 @@ impl ViewerApp {
                                 self.normalize_pose,
                                 self.normalize_to_tstance,
                             )?;
-                            // temp_dir はここでスコープ終了 → TempDir::drop が自動削除する
+                            // temp_dir goes out of scope here → TempDir::drop auto-deletes the directory.
                             drop(temp_dir);
                             self.finish_load(ir, source.clone())
                         }
@@ -4665,9 +4682,9 @@ impl ViewerApp {
                     inner_kind,
                 } => {
                     if *inner_kind == crate::archive::ArchiveModelKind::UnityPackage {
-                        // アーカイブ内 .unitypackage: 二重展開してリロード
-                        // （reload_current 経由では saved_pkg_textures/assignments が渡されるため、
-                        //   ここでは空デフォルトを使用）
+                        // .unitypackage nested in an archive: double-extract for reload.
+                        // (reload_current passes its own saved_pkg_textures / assignments,
+                        //  so here we just use empty defaults.)
                         return self.reload_archive_unitypackage(
                             original_path,
                             archive_bytes.as_ref(),
@@ -4696,14 +4713,14 @@ impl ViewerApp {
         result
     }
 
-    /// ReloadableSource から追加モデルを読み込み（リロード時用）
+    /// Load an appended model from a `ReloadableSource` (used during reload).
     fn append_model_from_source(
         &mut self,
         source: &ReloadableSource,
         pkg_model_name: Option<&str>,
         pkg_model: Option<&crate::unitypackage::PkgModelLocator>,
     ) {
-        // アーカイブ内 .unitypackage は専用パスで処理
+        // .unitypackage nested inside an archive takes its own dedicated path.
         if let ReloadableSource::Archive { inner_kind, .. } = source {
             if *inner_kind == crate::archive::ArchiveModelKind::UnityPackage {
                 self.reload_append_unitypackage(source, pkg_model_name, pkg_model, &HashMap::new());
@@ -4771,7 +4788,7 @@ impl ViewerApp {
                     let ext = crate::path_ext_lower(original_path);
                     match detect_format(&ext) {
                         FileFormat::Fbx => {
-                            // 固定名だと BG ロード並行時にディレクトリが衝突するため、tempfile で毎回ユニーク名を生成する。
+                            // A fixed name would collide between concurrent BG loads, so use tempfile to generate a fresh unique name each time.
                             let temp_dir = if !aux_files.is_empty() {
                                 let td = tempfile::Builder::new()
                                     .prefix("popone_fbx_reload_")
@@ -4799,7 +4816,7 @@ impl ViewerApp {
                                 self.normalize_pose,
                                 self.normalize_to_tstance,
                             )?;
-                            drop(temp_dir); // TempDir::drop で自動削除
+                            drop(temp_dir); // TempDir::drop auto-deletes the directory.
                             Ok(ir)
                         }
                         FileFormat::Pmx => {
@@ -4898,7 +4915,7 @@ impl ViewerApp {
                     selected_entry_path,
                     inner_kind,
                 } => {
-                    // UnityPackage は早期に処理済み（ここに到達しない）
+                    // UnityPackage was handled earlier; we never reach here for it.
                     self.load_ir_from_archive_source(
                         original_path,
                         archive_bytes.as_ref(),
@@ -4935,7 +4952,7 @@ impl ViewerApp {
         }
     }
 
-    /// unitypackage 再読み込み（FBX/VRM再展開 + テクスチャ復元）
+    /// Reload a unitypackage (re-extract the FBX / VRM and restore texture assignments).
     #[allow(clippy::type_complexity)]
     fn reload_unitypackage(
         &mut self,
@@ -4967,7 +4984,7 @@ impl ViewerApp {
         };
         let path = source.display_path();
 
-        // Prefab モデルの場合は Prefab パスで再読み込み
+        // For Prefab models, reload via the Prefab path.
         if let Some(prefab_path) = self
             .loaded
             .as_ref()
@@ -4986,7 +5003,7 @@ impl ViewerApp {
 
         let assets = crate::unitypackage::extract_all_assets(&archive_data)?;
 
-        // 現在のモデルが VRM の場合は VRM として再読み込み
+        // If the current model is a VRM, reload it as VRM.
         let is_vrm = self.loaded.as_ref().is_some_and(|l| {
             !matches!(
                 l.ir.source_format,
@@ -4999,7 +5016,7 @@ impl ViewerApp {
             if vrm_list.is_empty() {
                 anyhow::bail!(".unitypackage 内に VRM ファイルが見つかりません");
             }
-            // GUID/パスベース → basename フォールバック
+            // GUID / path match → basename fallback.
             let vrm_idx = self
                 .selected_pkg_model
                 .as_ref()
@@ -5021,7 +5038,7 @@ impl ViewerApp {
             return self.load_vrm_from_assets(&assets, vrm_idx, path, source_override);
         }
 
-        // 初回ロードで Prefab 対応テクスチャマッピングが使われたか判定
+        // Did the initial load use Prefab-aware texture mapping?
         let use_prefab_mapping = self
             .loaded
             .as_ref()
@@ -5032,7 +5049,7 @@ impl ViewerApp {
             anyhow::bail!(".unitypackage 内に FBX ファイルが見つかりません");
         }
 
-        // GUID/パスベース → basename フォールバック
+        // GUID / path match → basename fallback.
         let fbx_idx = self
             .selected_pkg_model
             .as_ref()
@@ -5048,11 +5065,11 @@ impl ViewerApp {
             .unwrap_or(fbx_list[0].0);
 
         if use_prefab_mapping {
-            // Prefab 対応パス: UnityPackageIndex を構築し prepare_pkg_fbx で Prefab テクスチャ解決
+            // Prefab-aware path: build UnityPackageIndex and let prepare_pkg_fbx resolve textures.
             let pkg_index = std::sync::Arc::new(crate::unitypackage::build_unity_package_index(
                 &archive_data,
             )?);
-            // selected_pkg_model の GUID → pkg_index 内インデックス → パス照合 → フォールバック
+            // selected_pkg_model GUID → pkg_index lookup → pathname match → fallback.
             let pkg_fbx_idx = self
                 .selected_pkg_model
                 .as_ref()
@@ -5075,7 +5092,7 @@ impl ViewerApp {
                 prepared.textures.len()
             );
 
-            // unitypackage 経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
+            // Via unitypackage: pass fbx_path=None to disable nearby-texture search.
             let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
                 &prepared.fbx_data,
                 None,
@@ -5083,7 +5100,7 @@ impl ViewerApp {
                 self.normalize_to_tstance,
             )?;
 
-            // Prefab 対応テクスチャ埋め込み
+            // Prefab-aware texture embedding.
             let prefab_label = format!(
                 "prefab({})",
                 std::path::Path::new(&*prepared.model.pathname)
@@ -5098,7 +5115,7 @@ impl ViewerApp {
                 &prefab_label,
             );
 
-            // pkg_textures を legacy 形式で保持
+            // Keep pkg_textures in the legacy shape.
             let legacy_textures: Vec<(String, Arc<[u8]>)> = prepared
                 .textures
                 .iter()
@@ -5109,7 +5126,7 @@ impl ViewerApp {
                 self.rebuild_pkg_thumb_cache();
             }
 
-            // 手動割当の復元（GPU構築前にIrModelに適用）
+            // Restore manual assignments (apply to IrModel before the GPU build).
             if !saved_pkg_tex_assignments.is_empty() {
                 let pkg_src = self.tex.pkg_textures.as_deref().unwrap_or(&[]);
                 let name_to_data: HashMap<&str, &[u8]> = pkg_src
@@ -5171,7 +5188,7 @@ impl ViewerApp {
                 }
             }
 
-            // pkg_material_keys を再構築
+            // Rebuild pkg_material_keys.
             let pkg_keys: Vec<Option<crate::unitypackage::PkgMaterialKey>> = {
                 let fbx_guid: std::sync::Arc<str> = prepared.model.guid.as_ref().into();
                 let instance_id = crate::unitypackage::BASE_INSTANCE_ID;
@@ -5197,7 +5214,7 @@ impl ViewerApp {
                 None => ReloadableSource::File(path.to_path_buf()),
             };
             let result = self.finish_load(ir, reload_source);
-            // finish_load がクリアするので、その後に復元
+            // finish_load clears these, so restore them afterwards.
             self.tex.pkg_assignments = saved_pkg_tex_assignments.clone();
             if let Some(ref mut loaded) = self.loaded {
                 loaded.pkg_material_keys = pkg_keys;
@@ -5205,7 +5222,7 @@ impl ViewerApp {
             return result;
         }
 
-        // 通常パス: 単純名前マッチング
+        // Normal path: simple name-based matching.
         let (fbx_data, fbx_name, textures) =
             crate::unitypackage::take_fbx_and_textures(&assets, fbx_idx)?;
         log::info!(
@@ -5214,7 +5231,7 @@ impl ViewerApp {
             textures.len()
         );
 
-        // unitypackage 経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
+        // Via unitypackage: pass fbx_path=None to disable nearby-texture search.
         let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
             &fbx_data,
             None,
@@ -5222,7 +5239,7 @@ impl ViewerApp {
             self.normalize_to_tstance,
         )?;
 
-        // テクスチャ埋め込み
+        // Embed textures into the IR.
         let tex_source = if !textures.is_empty() {
             &textures
         } else if let Some(ref pkg) = saved_pkg_textures {
@@ -5232,7 +5249,7 @@ impl ViewerApp {
         };
         crate::unitypackage::embed_textures_into_ir(&mut ir, tex_source);
 
-        // 手動割当の復元（GPU構築前にIrModelに適用）
+        // Restore manual assignments (apply to IrModel before the GPU build).
         let pkg_src = if !textures.is_empty() {
             &textures
         } else {
@@ -5312,12 +5329,12 @@ impl ViewerApp {
             None => ReloadableSource::File(path.to_path_buf()),
         };
         let result = self.finish_load(ir, reload_source);
-        // finish_load がクリアするので、その後に復元
+        // finish_load clears these, so restore them afterwards.
         self.tex.pkg_assignments = saved_pkg_tex_assignments.clone();
         result
     }
 
-    /// Prefab モデルのリロード（pkg_index を再構築して load_prefab_from_assets を呼び直す）
+    /// Reload a Prefab model (rebuild pkg_index and re-invoke load_prefab_from_assets).
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn reload_as_prefab(
         &mut self,
@@ -5340,7 +5357,7 @@ impl ViewerApp {
                 anyhow::anyhow!("Prefab エントリが見つかりません: {}", prefab_entry_path)
             })?;
 
-        // リロード後も Archive ソースを維持（snapshot があれば Snapshot、なければ元の Archive を引き継ぐ）
+        // Keep the Archive source after reload (use Snapshot when available, otherwise carry over the original Archive).
         let source_override: Option<ReloadableSource> = if let Some(snap) = snapshot {
             Some(ReloadableSource::Snapshot {
                 original_path: path.to_path_buf(),
@@ -5353,7 +5370,7 @@ impl ViewerApp {
 
         self.load_prefab_from_assets(&[], prefab_index, path, source_override, Some(pkg_index))?;
 
-        // pkg テクスチャが load_prefab_from_assets 内で設定されなかった場合に復元
+        // Restore pkg textures if load_prefab_from_assets didn't set them.
         if self.tex.pkg_textures.is_none() {
             if let Some(ref saved) = saved_pkg_textures {
                 self.tex.pkg_textures = Some(saved.clone());
@@ -5361,8 +5378,8 @@ impl ViewerApp {
             }
         }
 
-        // 手動テクスチャ割当を GPU モデル構築後に復元
-        // （借用チェッカー対策: データを先に収集してから適用）
+        // Restore manual texture assignments after the GPU model is built.
+        // (Collect the data first so the borrow checker stays happy when applying.)
         if !saved_pkg_tex_assignments.is_empty() {
             let assignments_to_restore: Vec<(usize, String, Vec<u8>)> = {
                 let pkg_src = self.tex.pkg_textures.as_deref().unwrap_or(&[]);
@@ -5389,7 +5406,7 @@ impl ViewerApp {
         Ok(())
     }
 
-    /// アーカイブ(ZIP/7z)内 .unitypackage のリロード
+    /// Reload a .unitypackage that lives inside an archive (ZIP / 7z).
     #[allow(clippy::type_complexity)]
     fn reload_archive_unitypackage(
         &mut self,
@@ -5430,7 +5447,7 @@ impl ViewerApp {
 
         let pkg_data = bundle.model.data;
 
-        // Prefab モデルの場合は Prefab パスで再読み込み
+        // For Prefab models, reload via the Prefab path.
         if let Some(prefab_path) = self
             .loaded
             .as_ref()
@@ -5462,7 +5479,7 @@ impl ViewerApp {
             if vrm_list.is_empty() {
                 anyhow::bail!(".unitypackage 内に VRM ファイルが見つかりません");
             }
-            // GUID/パスベース → basename フォールバック
+            // GUID / path match → basename fallback.
             let vrm_idx = self
                 .selected_pkg_model
                 .as_ref()
@@ -5489,7 +5506,7 @@ impl ViewerApp {
             anyhow::bail!(".unitypackage 内に FBX ファイルが見つかりません");
         }
 
-        // GUID/パスベース → basename フォールバック
+        // GUID / path match → basename fallback.
         let fbx_idx = self
             .selected_pkg_model
             .as_ref()
@@ -5512,7 +5529,7 @@ impl ViewerApp {
             textures.len()
         );
 
-        // unitypackage 経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
+        // Via unitypackage: pass fbx_path=None to disable nearby-texture search.
         let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
             &fbx_data,
             None,
@@ -5605,7 +5622,7 @@ impl ViewerApp {
     }
 
     pub(super) fn open_file_dialog(&mut self, ctx: &egui::Context) {
-        // ダイアログが既にオープン中なら無視
+        // Skip if a dialog is already open.
         if self.pending.file_dialog.is_some() {
             return;
         }
@@ -5653,9 +5670,9 @@ impl ViewerApp {
         self.pending.file_dialog = Some((super::pending::FileDialogKind::Open, rx));
     }
 
-    /// モデル追加読み込みダイアログ
+    /// Append-model file dialog.
     pub(super) fn open_append_dialog(&mut self, ctx: &egui::Context) {
-        // ダイアログが既にオープン中なら無視
+        // Skip if a dialog is already open.
         if self.pending.file_dialog.is_some() {
             return;
         }
@@ -5698,7 +5715,7 @@ impl ViewerApp {
         self.pending.file_dialog = Some((super::pending::FileDialogKind::Append, rx));
     }
 
-    /// モデルを既存モデルに追加（マージ）
+    /// Append (merge) another model into the currently loaded one.
     #[allow(dead_code)]
     pub(super) fn append_model(&mut self, path: PathBuf) {
         log::info!("Append file: {}", path.display());
@@ -5914,12 +5931,12 @@ impl ViewerApp {
                             aux.insert(txt_name, Arc::from(data.into_boxed_slice()));
                         }
                     } else if ext == "obj" || ext == "x" {
-                        // OBJ/DirectX: 同ディレクトリの画像 + MTL を収集
+                        // OBJ / DirectX: collect images + MTL from the same directory.
                         if let Some(dir) = path.parent() {
                             collect_image_files_recursive(dir, dir, &mut aux);
                         }
                     }
-                    // STL: aux 不要（テクスチャ・MTL なし）
+                    // STL needs no aux files (no textures, no MTL).
                     ReloadableSource::Snapshot {
                         original_path: path.clone(),
                         main_bytes: main_data.into(),
@@ -5939,7 +5956,7 @@ impl ViewerApp {
         }
     }
 
-    /// VRMファイルを IrModel として読み込む（追加用・GPU構築なし）
+    /// Load a VRM file as an IrModel (for append flows; no GPU build).
     fn load_vrm_as_ir(&mut self, path: &std::path::Path) -> anyhow::Result<IrModel> {
         let glb = if self.preloaded.as_ref().is_some_and(|pl| pl.path == path) {
             let data = self.read_or_preloaded(path)?;
@@ -5964,8 +5981,8 @@ impl ViewerApp {
         Ok(ir)
     }
 
-    /// unitypackage 内のモデルを既存モデルに追加（アペンド）
-    /// unitypackage 内モデルを既存モデルに追加。成功時 true を返す。
+    /// Append a model contained in a unitypackage onto the currently loaded model.
+    /// Returns true on success.
     pub(super) fn append_from_pkg(
         &mut self,
         assets: &[crate::unitypackage::ExtractedAsset],
@@ -5980,7 +5997,7 @@ impl ViewerApp {
         let mut pkg_unmatched: Vec<usize> = Vec::new();
         let mut pkg_model_name: Option<String> = None;
         let mut pkg_textures_to_add: Vec<(String, Arc<[u8]>)> = Vec::new();
-        // PkgModelLocator 構築用: assets 消費前に pathname を取得
+        // For building PkgModelLocator: capture pathname before assets are consumed.
         let asset_pathname: Option<String> = assets.get(model_index).map(|a| a.pathname.clone());
         let ir_result: anyhow::Result<IrModel> = (|| -> anyhow::Result<IrModel> {
             match model_type {
@@ -5993,7 +6010,7 @@ impl ViewerApp {
                         textures.len()
                     );
                     pkg_model_name = Some(fbx_name.clone());
-                    // unitypackage 経由: fbx_path=None で FBX 近傍テクスチャ検索を無効化
+                    // Via unitypackage: pass fbx_path=None to disable nearby-texture search.
                     let mut ir = crate::fbx::extract::extract_ir_model_from_fbx_with_options(
                         &fbx_data,
                         None,
@@ -6047,7 +6064,7 @@ impl ViewerApp {
                         .to_string_lossy()
                         .to_string();
 
-                    // テクスチャ収集
+                    // Collect textures.
                     let textures: Vec<crate::unitypackage::PackageTexture> = pkg
                         .entries
                         .iter()
@@ -6073,7 +6090,7 @@ impl ViewerApp {
                         })
                         .collect();
 
-                    // レガシー形式テクスチャリスト（pkg_textures 追加用）
+                    // Legacy-shaped texture list (used to extend pkg_textures).
                     pkg_textures_to_add = textures
                         .iter()
                         .map(|t| (t.display_name.to_string(), Arc::clone(&t.data)))
@@ -6145,10 +6162,10 @@ impl ViewerApp {
                     .as_ref()
                     .map(|l| l.ir.textures.len())
                     .unwrap_or(0);
-                // 安定キー構築（pathname ベース — GUID は ExtractedAsset 経路では利用不可）
+                // Build a stable key (pathname-based — GUID is unavailable through the ExtractedAsset path).
                 let pkg_locator = asset_pathname.map(|path| {
                     crate::unitypackage::PkgModelLocator {
-                        guid: "".into(), // ExtractedAsset 経由では GUID なし
+                        guid: "".into(), // No GUID via ExtractedAsset.
                         pathname: path.into(),
                         kind: model_type,
                     }
@@ -6199,7 +6216,7 @@ impl ViewerApp {
                     && self.tex.pkg_textures.is_some()
                     && !self.suppress_tex_match
                 {
-                    // 既存プレビューがあれば先に復元
+                    // Restore any existing preview first.
                     self.cancel_tex_match_preview();
                     let global_unmatched: Vec<usize> =
                         pkg_unmatched.iter().map(|&i| i + mat_offset).collect();
@@ -6280,7 +6297,7 @@ impl ViewerApp {
             .map(|b| (b.children.clone(), b.vrm_bone_name.clone()))
             .collect();
 
-        // other側にヒューマノイド情報がなければ original_name で再検出して補完
+        // If `other` lacks humanoid info, re-detect from original_name and fill it in.
         let other_has_humanoid = other_ir.bones.iter().any(|b| b.vrm_bone_name.is_some());
         if !other_has_humanoid {
             let names: Vec<(usize, &str)> = other_ir
@@ -6305,7 +6322,7 @@ impl ViewerApp {
 
         let device = &self.render_state.device;
         let queue = &self.render_state.queue;
-        // merge後は材質数が変わるため material_display を resize
+        // Material count changes after merge, so resize material_display.
         let mc = loaded.ir.materials.len();
         self.material_display
             .resize_with(mc, MaterialDisplayState::default);
@@ -6356,7 +6373,7 @@ impl ViewerApp {
                     renderer.invalidate_visualization_cache();
                     renderer.invalidate_normal_cache();
                     renderer.mark_sort_dirty();
-                    // append 後のグリッドを更新（巨大モデル追加時にグリッドを拡大）
+                    // Refresh the grid after append (it grows when a large model is added).
                     let (bbox_min, bbox_max) = loaded.gpu_model.bbox();
                     renderer.rebuild_grid(&self.render_state.device, bbox_min, bbox_max);
                 }
@@ -6426,11 +6443,11 @@ impl ViewerApp {
                 ));
             }
         }
-        // loaded の借用スコープ外でシェーダー状態を正規化（ユーザー選択維持）
+        // Normalize shader state outside the `loaded` borrow scope (preserving the user's selections).
         self.normalize_shader_state();
     }
 
-    /// ドラッグ＆ドロップ処理。(画像ホバー中, モデルホバー中) を返す
+    /// Drag-and-drop handling. Returns `(image_hovering, model_hovering)`.
     pub(super) fn process_drag_and_drop(&mut self, ctx: &egui::Context) -> (bool, bool) {
         let (dropped_files, hover_ext, shift_held) = ctx.input(|i| {
             let hover_ext = i
@@ -6485,8 +6502,8 @@ impl ViewerApp {
                         | "7z"
                 );
 
-                // temp/非temp を統一して PendingLoadDispatch に投入
-                // temp ファイルの先読みは BG スレッドに委譲（UI スレッドをブロックしない）
+                // Unify temp / non-temp paths through a single PendingLoadDispatch.
+                // Pre-reading temp files is offloaded to the BG thread so the UI thread never blocks.
                 let append = shift_held && has_loaded_model && is_appendable;
                 self.pending
                     .bg_state
@@ -6515,7 +6532,7 @@ impl ViewerApp {
         (is_hover_image, is_hover_model)
     }
 
-    /// キーボードショートカット処理
+    /// Keyboard shortcut handling.
     pub(super) fn process_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
         use super::super::gpu::{DrawMode, LightMode};
         let wants_kb = ctx.wants_keyboard_input();
