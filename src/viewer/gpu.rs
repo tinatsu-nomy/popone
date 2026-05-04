@@ -7,18 +7,18 @@ use super::camera::OrbitCamera;
 use super::mesh::{DrawCall, GpuModel, MaterialBuildFlags, RenderQueue};
 use crate::intermediate::types::{CullMode, IrModel};
 
-/// MMD ライティングのアンビエントスケール（154/255 ≈ 0.604）
+/// MMD lighting ambient scale (154/255 ~= 0.604).
 const MMD_LIGHT_AMBIENT: f32 = 154.0 / 255.0;
-/// MMD ライトのデフォルト強度（mmd_ambient_scale 算出の基準値）
+/// Default MMD light intensity (the reference for `mmd_ambient_scale` derivation).
 const MMD_DEFAULT_LIGHT_INTENSITY: f32 = 0.7;
-/// ボーン表示の外側（通常）半径係数
+/// Outer (normal) radius coefficient for bone display.
 const BONE_DISPLAY_RADIUS: f32 = 0.004;
-/// ボーン表示の内側（移動ボーン）半径係数
+/// Inner (movement bone) radius coefficient for bone display.
 const BONE_JOINT_RADIUS: f32 = 0.0022;
-/// ボーン・物理表示の球セグメント数
+/// Number of sphere segments for bone / physics display.
 const SPHERE_SEGMENTS: u32 = 16;
 
-/// bool を f32 に変換（シェーダー uniform 用）
+/// Convert `bool` to `f32` (for shader uniforms).
 #[inline]
 fn b2f(b: bool) -> f32 {
     if b {
@@ -28,7 +28,7 @@ fn b2f(b: bool) -> f32 {
     }
 }
 
-/// 材質用 BindGroupLayout を作成（共通定義、gpu.rs と mesh.rs で共有）
+/// Create the material `BindGroupLayout` (shared between gpu.rs and mesh.rs).
 pub fn create_material_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("material_bgl"),
@@ -45,7 +45,7 @@ pub fn create_material_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGro
     })
 }
 
-/// テクスチャ用 BindGroupLayout を作成（共通定義）
+/// Create the texture `BindGroupLayout` (shared definition).
 pub fn create_texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("texture_bgl"),
@@ -70,12 +70,13 @@ pub fn create_texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGrou
     })
 }
 
-// encase::ShaderType derive マクロが内部的に `check` 関数を生成し dead_code 警告が出るため、
-// サブモジュールで #![allow(dead_code)] を適用して抑制する。
+// `encase::ShaderType` derive macro internally emits a `check` function that
+// triggers `dead_code` warnings, so suppress it in a submodule with
+// `#![allow(dead_code)]`.
 mod encase_uniforms {
     #![allow(dead_code)]
 
-    /// カメラ uniform バッファ
+    /// Camera uniform buffer.
     #[derive(Clone, encase::ShaderType)]
     pub struct CameraUniform {
         pub view_proj: glam::Mat4,
@@ -89,29 +90,29 @@ mod encase_uniforms {
         // encase auto-pads vec3 trailing 4 bytes
         pub view_row1: glam::Vec3,
         pub mmd_ambient_scale: f32,
-        /// 累積時間（秒、UVアニメーション用）
+        /// Accumulated time (seconds; for UV animation).
         pub time: f32,
-        /// アスペクト比 (width / height)（MToon アウトライン: 1/aspect で X 補正）
+        /// Aspect ratio (width / height) (MToon outline: X is corrected by 1/aspect).
         pub aspect: f32,
-        /// 射影行列 [1][1] = 1/tan(halfFov)（MToon アウトライン距離クランプ用）
+        /// Projection matrix [1][1] = 1/tan(halfFov) (for MToon outline distance clamping).
         pub proj_11: f32,
         // encase auto-pads to align next vec3
-        /// SH ベース GI の均一化値: (rawGi(up) + rawGi(down)) / 2（CPU 事前計算）
+        /// SH-based GI equalized value: (rawGi(up) + rawGi(down)) / 2 (CPU-precomputed).
         pub gi_equalized: glam::Vec3,
-        /// 透視投影フラグ（1.0 = 透視, 0.0 = 正射影）
+        /// Perspective projection flag (1.0 = perspective, 0.0 = orthographic).
         pub is_perspective: f32,
-        /// カメラ前方ベクトル（正射影時の view direction 用）
+        /// Camera forward vector (used as view direction in orthographic mode).
         pub camera_forward: glam::Vec3,
         // encase auto-pads vec3 trailing 4 bytes
-        /// ライト色 RGB (linear)
+        /// Light color RGB (linear).
         pub light_color: glam::Vec3,
         // encase auto-pads vec3 trailing 4 bytes
-        /// 環境光 Ground 色 RGB (linear, 半球 ambient 補間用)
+        /// Ambient ground color RGB (linear; for hemisphere ambient interpolation).
         pub ambient_ground: glam::Vec3,
         // encase auto-pads vec3 trailing 4 bytes (struct tail)
     }
 
-    /// 材質 uniform バッファ（MToon パラメータ含む）
+    /// Material uniform buffer (includes MToon parameters).
     #[derive(Clone, encase::ShaderType)]
     pub struct MaterialUniform {
         pub diffuse: glam::Vec4,
@@ -137,10 +138,10 @@ mod encase_uniforms {
         pub uv_anim_scroll_y: f32,
         pub uv_anim_rotation: f32,
         pub has_uv_anim_mask: f32,
-        /// MASK モード時の alphaCutoff（0.0 = 無効）
+        /// `alphaCutoff` for MASK mode (0.0 = disabled).
         pub alpha_cutoff: f32,
-        // --- テクスチャ UV パラメータ（texCoord + KHR_texture_transform）---
-        // 各テクスチャ: [tex_coord, offset.x, offset.y, rotation] + [scale.x, scale.y, 0, 0]
+        // --- Texture UV parameters (texCoord + KHR_texture_transform) ---
+        // Per texture: [tex_coord, offset.x, offset.y, rotation] + [scale.x, scale.y, 0, 0]
         pub base_uv_a: glam::Vec4,
         pub base_uv_b: glam::Vec4,
         pub shade_uv_a: glam::Vec4,
@@ -157,25 +158,25 @@ mod encase_uniforms {
         pub has_emissive_tex: f32,
         pub emissive_uv_a: glam::Vec4,
         pub emissive_uv_b: glam::Vec4,
-        // --- 法線マップパラメータ ---
+        // --- Normal map parameters ---
         pub has_normal_tex: f32,
         pub normal_scale: f32,
         pub gi_equalization_factor: f32,
-        /// outlineWidthTexture 参照チャネル（0.0=R, 1.0=G, 2.0=B）
+        /// `outlineWidthTexture` source channel (0.0=R, 1.0=G, 2.0=B).
         pub outline_width_channel: f32,
         pub normal_uv_a: glam::Vec4,
         pub normal_uv_b: glam::Vec4,
-        /// uvAnimationMaskTexture 参照チャネル（0.0=R, 1.0=G, 2.0=B）
+        /// `uvAnimationMaskTexture` source channel (0.0=R, 1.0=G, 2.0=B).
         pub uv_anim_mask_channel: f32,
         // encase auto-pads 3 x f32 to align next vec4
-        // --- matcapTexture UV パラメータ（KHR_texture_transform）---
+        // --- matcapTexture UV parameters (KHR_texture_transform) ---
         pub matcap_uv_a: glam::Vec4,
         pub matcap_uv_b: glam::Vec4,
     }
 }
 pub use encase_uniforms::{CameraUniform, MaterialUniform};
 
-/// MMD 材質 uniform バッファ
+/// MMD material uniform buffer.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct MmdMaterialUniform {
@@ -187,20 +188,20 @@ pub struct MmdMaterialUniform {
     pub flags: u32, // bit0=has_sphere, bit1=sphere_add, bit2=has_toon
     pub edge_color: [f32; 4],
     pub edge_size: f32,
-    /// PMX/PMD 自己発光色（Bloom 用、derive_pmx_bloom で算出）
+    /// PMX/PMD self-emission color (for Bloom; derived in `derive_pmx_bloom`).
     pub bloom_emissive: [f32; 3],
 }
 
-/// 頂点フォーマット
+/// Vertex format.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
-    /// TEXCOORD_1（セカンダリUV、MToon 補助テクスチャ用）。UV1 なしなら UV0 コピー。
+    /// TEXCOORD_1 (secondary UV; for MToon auxiliary textures). When UV1 is absent, copies UV0.
     pub uv1: [f32; 2],
-    /// 接線ベクトル（xyz=tangent方向, w=handedness ±1）
+    /// Tangent vector (xyz = tangent direction, w = handedness +/- 1).
     pub tangent: [f32; 4],
 }
 
@@ -245,7 +246,7 @@ impl Vertex {
     }
 }
 
-/// 可視化バッファの共通パターン（GPU バッファ + 容量 + 頂点数）
+/// Common pattern for visualization buffers (GPU buffer + capacity + vertex count).
 struct DynamicBuffer {
     buf: Option<wgpu::Buffer>,
     capacity: usize,
@@ -253,7 +254,7 @@ struct DynamicBuffer {
 }
 
 impl DynamicBuffer {
-    /// 空の DynamicBuffer を作成
+    /// Create an empty `DynamicBuffer`.
     fn new() -> Self {
         Self {
             buf: None,
@@ -262,8 +263,8 @@ impl DynamicBuffer {
         }
     }
 
-    /// 作業バッファの内容を GPU にアップロードする。
-    /// 容量不足なら新規バッファを作成し、十分なら既存バッファに書き込む。
+    /// Upload the staging buffer's contents to the GPU.
+    /// Allocate a new buffer if capacity is insufficient; otherwise write into the existing buffer.
     fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, data: &[u8], label: &str) {
         if data.len() > self.capacity {
             self.buf = Some(
@@ -280,7 +281,7 @@ impl DynamicBuffer {
     }
 }
 
-/// グリッド用頂点
+/// Grid vertex.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct GridVertex {
@@ -309,7 +310,7 @@ impl GridVertex {
     }
 }
 
-/// WGSL 共通: CameraUniform 構造体定義（全シェーダーで共有）
+/// WGSL common: `CameraUniform` struct definition (shared across all shaders).
 macro_rules! wgsl_camera_uniform {
     () => {
         r#"struct CameraUniform {
@@ -335,7 +336,7 @@ macro_rules! wgsl_camera_uniform {
     };
 }
 
-/// WGSL 共通: MmdMaterialUniform 構造体定義（MMD シェーダーで共有）
+/// WGSL common: `MmdMaterialUniform` struct definition (shared across MMD shaders).
 macro_rules! wgsl_mmd_material_uniform {
     () => {
         r#"struct MmdMaterialUniform {
@@ -359,7 +360,7 @@ struct MmdFsOutput {
     };
 }
 
-/// WGSL 共通: MaterialUniform 構造体定義（基本シェーダーで共有）
+/// WGSL common: `MaterialUniform` struct definition (shared across base shaders).
 macro_rules! wgsl_material_uniform {
     () => {
         r#"struct MaterialUniform {
@@ -416,7 +417,7 @@ macro_rules! wgsl_material_uniform {
     };
 }
 
-/// WGSL 共通: MToon テクスチャバインディング宣言（メイン/アウトラインシェーダーで共有）
+/// WGSL common: MToon texture binding declarations (shared between main / outline shaders).
 macro_rules! wgsl_mtoon_bindings {
     () => {
         r#"
@@ -444,17 +445,18 @@ macro_rules! wgsl_mtoon_bindings {
     };
 }
 
-/// WGSL 共通: MToon ヘルパー関数群（メイン/アウトラインシェーダーで共有）
-/// apply_texture_transform, resolve_mtoon_uv, apply_uv_anim_core, select_channel, apply_normal_map
+/// WGSL common: MToon helper functions (shared between main / outline shaders).
+/// `apply_texture_transform`, `resolve_mtoon_uv`, `apply_uv_anim_core`,
+/// `select_channel`, `apply_normal_map`.
 macro_rules! wgsl_mtoon_helpers {
     () => {
         r#"
-/// KHR_texture_transform 適用（uv_a = [texCoord, offset.x, offset.y, rotation], uv_b = [scale.x, scale.y, 0, 0]）
+/// Apply KHR_texture_transform (uv_a = [texCoord, offset.x, offset.y, rotation], uv_b = [scale.x, scale.y, 0, 0]).
 fn apply_texture_transform(uv: vec2<f32>, uv_a: vec4<f32>, uv_b: vec4<f32>) -> vec2<f32> {
     let offset = vec2<f32>(uv_a.y, uv_a.z);
     let rotation = uv_a.w;
     let scale = vec2<f32>(uv_b.x, uv_b.y);
-    // scale/rotation が既定値なら早期リターン
+    // Early return if scale/rotation/offset are all defaults.
     if abs(rotation) < 0.00001 && abs(scale.x - 1.0) < 0.00001 && abs(scale.y - 1.0) < 0.00001
        && abs(offset.x) < 0.00001 && abs(offset.y) < 0.00001 {
         return uv;
@@ -466,24 +468,24 @@ fn apply_texture_transform(uv: vec2<f32>, uv_a: vec4<f32>, uv_b: vec4<f32>) -> v
     return rotated + offset;
 }
 
-/// MToon 補助テクスチャ用 UV 解決: texCoord 選択 → KHR_texture_transform
-/// UVアニメーション対象テクスチャは animated UV を渡し、非対象は raw UV を渡す
+/// UV resolution for MToon auxiliary textures: texCoord selection -> KHR_texture_transform.
+/// Pass animated UVs for textures subject to UV animation; raw UVs otherwise.
 fn resolve_mtoon_uv(uv0: vec2<f32>, uv1: vec2<f32>, uv_a: vec4<f32>, uv_b: vec4<f32>) -> vec2<f32> {
     let base_uv = select(uv0, uv1, u32(uv_a.x) == 1u);
     return apply_texture_transform(base_uv, uv_a, uv_b);
 }
 
-/// UVアニメーション（スクロール+回転）の計算本体（マスク値は呼び出し元で決定）
-/// UniVRM互換順序: scroll → pivot(-0.5) → rotation → pivot(+0.5)
-/// ※ VRM仕様書は rotate→scroll だが、UniVRM 実装は scroll→rotate。互換性を優先
-/// UniVRM: vrmc_materials_mtoon_geometry_uv.hlsl — rotate(uv + translate - pivot) + pivot
+/// Body of UV animation (scroll + rotate); the mask value is decided by the caller.
+/// UniVRM-compatible order: scroll -> pivot(-0.5) -> rotation -> pivot(+0.5).
+/// Note: the VRM spec is rotate -> scroll, but UniVRM implements scroll -> rotate. Compatibility wins.
+/// UniVRM: vrmc_materials_mtoon_geometry_uv.hlsl - rotate(uv + translate - pivot) + pivot.
 fn apply_uv_anim_core(uv: vec2<f32>, anim_mask: f32) -> vec2<f32> {
     let translate = vec2<f32>(
         camera.time * material.uv_anim_scroll_x,
         camera.time * material.uv_anim_scroll_y,
     ) * anim_mask;
 
-    // 2π 周期で wrap して長時間稼働時の float 精度劣化を防止（UniVRM 準拠）
+    // Wrap with a 2*PI period to avoid float precision loss during long-running sessions (UniVRM-compliant).
     let tau = 6.28318530718;
     let turns = (camera.time * material.uv_anim_rotation * anim_mask) / tau;
     let angle = fract(turns) * tau;
@@ -497,7 +499,7 @@ fn apply_uv_anim_core(uv: vec2<f32>, anim_mask: f32) -> vec2<f32> {
     ) + vec2<f32>(0.5);
 }
 
-/// テクセルからチャネル選択（0=R, 1=G, 2=B）
+/// Select a channel from a texel (0=R, 1=G, 2=B).
 fn select_channel(texel: vec4<f32>, ch: f32) -> f32 {
     if ch < 0.5 {
         return texel.r;
@@ -507,17 +509,18 @@ fn select_channel(texel: vec4<f32>, ch: f32) -> f32 {
     return texel.b;
 }
 
-/// 頂点接線から TBN 行列を構築して法線マップを適用（UniVRM MToon_GetTangentToWorld 準拠）
-/// tangent.w の符号で bitangent の向きを制御（ミラー UV 対応）
+/// Build a TBN matrix from the vertex tangent and apply the normal map
+/// (per UniVRM `MToon_GetTangentToWorld`).
+/// The sign of tangent.w controls the bitangent direction (mirror UV handling).
 fn apply_normal_map(base_n: vec3<f32>, tangent: vec4<f32>, normal_uv: vec2<f32>) -> vec3<f32> {
-    // ゼロ接線ガード: 退化した tangent では法線マップをスキップし基底法線を返す
+    // Zero-tangent guard: skip the normal map and return the base normal for degenerate tangents.
     if dot(tangent.xyz, tangent.xyz) < 1e-6 {
         return normalize(base_n);
     }
     let normal_sample = textureSample(t_normal, s_normal, normal_uv).xyz * 2.0 - 1.0;
     let n = normalize(base_n);
     let t = normalize(tangent.xyz);
-    // UniVRM 準拠: tangent.w を二値化して NaN 回避（vrmc_materials_mtoon_utility.hlsl:64）
+    // UniVRM-compliant: binarize tangent.w to avoid NaN (vrmc_materials_mtoon_utility.hlsl:64).
     let tangent_sign = select(-1.0, 1.0, tangent.w > 0.0);
     let b = normalize(cross(n, t) * tangent_sign);
     let scaled_normal = vec3<f32>(
@@ -569,22 +572,22 @@ fn vs_main(
     return out;
 }
 
-/// アルファモード処理（OPAQUE / MASK+A2C / BLEND）
+/// Alpha mode handling (OPAQUE / MASK+A2C / BLEND).
 fn apply_alpha_mode(alpha: f32, cutoff: f32) -> f32 {
     if cutoff < -0.75 {
-        // OPAQUE: テクスチャ alpha をそのまま返す
-        // VRM OPAQUE 材質はテクスチャ alpha=1.0 のため影響なし
-        // PMX/PMD 材質ではテクスチャ alpha による透過が反映される
+        // OPAQUE: return the texture alpha as is.
+        // No effect on VRM OPAQUE materials since texture alpha = 1.0.
+        // For PMX/PMD materials, transparency from texture alpha is reflected.
         if alpha <= 0.001 { discard; }
         return alpha;
     }
     if cutoff >= -0.25 {
-        // MASK + AlphaToCoverage（UniVRM vrmc_materials_mtoon_geometry_alpha.hlsl 準拠）
+        // MASK + AlphaToCoverage (per UniVRM vrmc_materials_mtoon_geometry_alpha.hlsl).
         let a2c_alpha = (alpha - cutoff) / max(fwidth(alpha), 1e-5) + 0.5;
         if a2c_alpha < cutoff { discard; }
         return 1.0;
     }
-    // BLEND: 完全透明ピクセルを破棄（深度汚染防止）
+    // BLEND: discard fully transparent pixels (prevents depth pollution).
     if alpha <= 0.001 { discard; }
     return alpha;
 }
@@ -596,11 +599,11 @@ struct FsOutput {
 
 @fragment
 fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput {
-    // doubleSided 材質の背面法線反転（UniVRM 準拠: 法線マップ適用前に反転）
+    // Backface normal flip for doubleSided materials (UniVRM-compliant: flip before normal mapping).
     let face_sign = select(-1.0, 1.0, is_front);
     var n = normalize(in.normal) * face_sign;
 
-    // --- MToon UVアニメーション事前計算（normalTexture にも適用: 仕様準拠）---
+    // --- MToon UV-animation precomputation (also applied to normalTexture per spec) ---
     var anim_uv = in.uv;
     var anim_uv1 = in.uv1;
     if material.is_mtoon > 0.5 {
@@ -618,16 +621,16 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
         }
     }
 
-    // 法線マップ適用（MToon: animated UV, 非MToon: raw UV）
+    // Normal-map application (MToon: animated UV, non-MToon: raw UV).
     if material.has_normal_tex > 0.5 {
         let normal_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.normal_uv_a, material.normal_uv_b);
         n = apply_normal_map(n, in.tangent, normal_uv);
     }
 
-    // === シェーダーオーバーライド ===
-    // プレビュー用モードではテクスチャ alpha をそのまま使用（PMX/PMD の OPAQUE 材質でも透過を反映）
+    // === Shader override ===
+    // Preview modes use the texture alpha as is (transparency is reflected even for PMX/PMD OPAQUE materials).
     if camera.shader_mode == 1u {
-        // Normal: ジオメトリ法線→RGB
+        // Normal: geometric normal -> RGB.
         let base_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.base_uv_a, material.base_uv_b);
         let raw_alpha = textureSample(t_diffuse, s_diffuse, base_uv).a * material.diffuse.a;
         if raw_alpha <= 0.001 { discard; }
@@ -638,7 +641,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
         return out_n;
     }
     if camera.shader_mode == 2u {
-        // Unlit: テクスチャ色のみ、ライティングなし
+        // Unlit: texture color only, no lighting.
         let base_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.base_uv_a, material.base_uv_b);
         let tex = textureSample(t_diffuse, s_diffuse, base_uv);
         let c = tex * material.diffuse;
@@ -649,7 +652,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
         return out_u;
     }
     if camera.shader_mode == 3u {
-        // GGX Preview: 簡易 Cook-Torrance スペキュラ
+        // GGX Preview: simplified Cook-Torrance specular.
         let base_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.base_uv_a, material.base_uv_b);
         let tex = textureSample(t_diffuse, s_diffuse, base_uv);
         let base_color = tex * material.diffuse;
@@ -693,7 +696,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
 
         let direct = (diffuse_brdf + specular) * camera.light_intensity * camera.light_color * n_dot_l;
 
-        // 半球アンビエント
+        // Hemisphere ambient.
         let hemi_t = n.y * 0.5 + 0.5;
         let ambient = mix(camera.ambient_ground, camera.ambient, vec3<f32>(hemi_t));
         let indirect = base_color.rgb * ambient;
@@ -709,17 +712,17 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
     var bloom_color: vec3<f32> = vec3<f32>(0.0);
     if material.is_mtoon > 0.5 {
 
-        // テクスチャサンプリング（UVアニメーション + texCoord/KHR_texture_transform 適用）
+        // Texture sampling (apply UV animation + texCoord/KHR_texture_transform).
         let base_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.base_uv_a, material.base_uv_b);
         let tex_color = textureSample(t_diffuse, s_diffuse, base_uv);
         let base_color = tex_color * material.diffuse;
         out_alpha = base_color.a;
 
-        // dot(N,L) — 仕様準拠: [-1, 1] レンジ（half-lambert ではない）
-        // camera.light_dir は光の進行方向（光源→表面）なので反転して表面→光源方向にする
+        // dot(N,L) - spec-compliant: [-1, 1] range (not half-lambert).
+        // `camera.light_dir` is the light direction of travel (source -> surface), so invert to (surface -> source).
         let dot_nl = dot(n, -camera.light_dir);
 
-        // shadeMultiplyTexture 適用（UV Animation 対象）
+        // shadeMultiplyTexture (subject to UV animation).
         var shade_mul = vec3<f32>(1.0);
         if material.has_shade_multiply_tex > 0.5 {
             let shade_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.shade_uv_a, material.shade_uv_b);
@@ -727,7 +730,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
         }
         let shade = material.shade_color * shade_mul;
 
-        // shadingShiftTexture 適用（UV Animation 対象、UniVRM 準拠）
+        // shadingShiftTexture (subject to UV animation; UniVRM-compliant).
         var shading = dot_nl + material.shading_shift;
         if material.has_shading_shift_tex > 0.5 {
             let shift_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.shift_uv_a, material.shift_uv_b);
@@ -735,24 +738,24 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
             shading += shift_tex * material.shading_shift_tex_scale;
         }
 
-        // MToon 2色トゥーン: linearstep で lit/shade を補間（仕様準拠）
+        // MToon 2-tone toon: interpolate lit/shade with linearstep (spec-compliant).
         let edge0 = -1.0 + material.shading_toony;
         let edge1 = 1.0 - material.shading_toony;
         let t = clamp((shading - edge0) / max(edge1 - edge0, 0.001), 0.0, 1.0);
         lit = mix(shade, base_color.rgb, t);
 
-        // ライティング: direct と GI（indirect）を分離（UniVRM 準拠）
-        // direct = toon_color * directLightColor（ForwardBase: shadow=1）
-        // indirect = litColor * lerp(passthroughGi, uniformedGi, giEqualizationFactor)
-        // 半球 ambient: sky/ground を最終法線Y成分で補間（SH 近似）
+        // Lighting: separate direct from GI (indirect) (UniVRM-compliant).
+        // direct = toon_color * directLightColor (ForwardBase: shadow=1).
+        // indirect = litColor * lerp(passthroughGi, uniformedGi, giEqualizationFactor).
+        // Hemisphere ambient: interpolate sky/ground by the final normal's Y component (SH approximation).
         let hemi_t = n.y * 0.5 + 0.5;
         let raw_indirect = mix(camera.ambient_ground, camera.ambient, vec3<f32>(hemi_t));
         let gi = mix(raw_indirect, camera.gi_equalized, material.gi_equalization_factor);
         let direct_light = camera.light_intensity * camera.light_color;
         let lighting = lit * direct_light + lit * gi;
 
-        // --- リムライティング + MatCap ---
-        // 透視投影: camera_pos → world_pos、正射影: camera_forward（UniVRM 準拠）
+        // --- Rim lighting + MatCap ---
+        // Perspective: camera_pos -> world_pos. Orthographic: camera_forward (UniVRM-compliant).
         var v: vec3<f32>;
         if camera.is_perspective > 0.5 {
             v = normalize(camera.camera_pos - in.world_pos);
@@ -761,9 +764,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
         }
         var rim = vec3<f32>(0.0);
 
-        // MatCap: ビュー空間法線からUV算出（UV Animation 非対象）
-        // UniVRM 準拠: right = cross(viewDir, worldUp), up = cross(right, viewDir)
-        // KHR_texture_transform は最終 matcap UV に適用
+        // MatCap: derive UV from view-space normal (not subject to UV animation).
+        // UniVRM-compliant: right = cross(viewDir, worldUp), up = cross(right, viewDir).
+        // KHR_texture_transform is applied to the final matcap UV.
         if material.has_matcap > 0.5 {
             let world_view_x = normalize(vec3<f32>(-v.z, 0.0, v.x));
             let world_view_y = cross(world_view_x, v);
@@ -772,7 +775,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
             rim = material.matcap_factor * textureSample(t_matcap, s_matcap, matcap_uv).rgb;
         }
 
-        // パラメトリックリム: フレネル効果
+        // Parametric rim: Fresnel effect.
         let ndotv = dot(n, v);
         let parametric_rim = pow(
             saturate(1.0 - ndotv + material.rim_lift),
@@ -780,18 +783,18 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
         );
         rim = rim + parametric_rim * material.rim_color;
 
-        // rimMultiplyTexture 適用（UV Animation 対象）
+        // rimMultiplyTexture (subject to UV animation).
         if material.has_rim_multiply_tex > 0.5 {
             let rim_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.rim_uv_a, material.rim_uv_b);
             rim *= textureSample(t_rim_multiply, s_rim_multiply, rim_uv).rgb;
         }
 
-        // リムのライティング混合（VRM 1.0 仕様: rim * lerp(white, lighting, mix)）
-        // UniVRM 準拠: rim には未均一化の raw indirect を使用（GI equalization 非適用）
+        // Rim lighting mix (VRM 1.0 spec: rim * lerp(white, lighting, mix)).
+        // UniVRM-compliant: use the raw (non-equalized) indirect for rim (GI equalization not applied).
         let rim_light_factor = direct_light + raw_indirect;
         let rim_lit = rim * mix(vec3<f32>(1.0), rim_light_factor, material.rim_lighting_mix);
 
-        // emissive（glTF 標準 + MToon 仕様: baseCol = lighting + emissive + rim）
+        // emissive (glTF standard + MToon spec: baseCol = lighting + emissive + rim).
         var emissive = material.emissive_factor;
         if material.has_emissive_tex > 0.5 {
             let emissive_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.emissive_uv_a, material.emissive_uv_b);
@@ -801,7 +804,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
         bloom_color = emissive;
         lit = lighting + rim_lit + emissive;
     } else {
-        // 非MToon: 既存 Half-Lambert（texCoord + KHR_texture_transform 適用）
+        // Non-MToon: existing Half-Lambert (texCoord + KHR_texture_transform applied).
         let half_lambert = dot(n, -camera.light_dir) * 0.5 + 0.5;
         let base_uv = resolve_mtoon_uv(in.uv, in.uv1, material.base_uv_a, material.base_uv_b);
         let tex_color = textureSample(t_diffuse, s_diffuse, base_uv);
@@ -812,7 +815,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
         lit = base_color.rgb * light;
         out_alpha = base_color.a;
 
-        // 非 MToon でも emissive は glTF 標準として適用（texCoord + KHR_texture_transform 適用）
+        // Apply emissive even for non-MToon as per glTF standard (texCoord + KHR_texture_transform applied).
         var emissive = material.emissive_factor;
         if material.has_emissive_tex > 0.5 {
             let emissive_uv = resolve_mtoon_uv(in.uv, in.uv1, material.emissive_uv_a, material.emissive_uv_b);
@@ -831,7 +834,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput 
 "#
 );
 
-/// MMD メインシェーダー共通部（頂点シェーダー + ライティング本体）
+/// MMD main shader common part (vertex shader + lighting body).
 macro_rules! wgsl_mmd_main_body {
     () => {
         r#"
@@ -865,8 +868,8 @@ fn vs_mmd(
     out.normal = normal;
     out.uv = uv;
     out.world_pos = position;
-    // スフィアUV: ビュー空間法線の XY を [0,1] にマッピング
-    // X反転座標系のため normalWv.x を反転
+    // Sphere UV: map XY of the view-space normal to [0, 1].
+    // Invert `normalWv.x` because the coordinate system has X flipped.
     let vn_x = dot(normal, camera.view_row0);
     let vn_y = dot(normal, camera.view_row1);
     out.sphere_uv = vec2<f32>(vn_x * -0.5 + 0.5, vn_y * -0.5 + 0.5);
@@ -876,19 +879,19 @@ fn vs_mmd(
 fn compute_mmd_lighting(in: MmdVertexOutput) -> vec4<f32> {
     let n = normalize(in.normal);
 
-    // ライティング:
+    // Lighting:
     // AmbientColor = saturate(MaterialAmbient * LightAmbient + MaterialEmissive)
-    // PMX ambient は D3D の emissive に相当、PMX diffuse は D3D の ambient に相当
-    // LightAmbient = mmd_ambient_scale × light_color (ライト色調・強度を反映)
+    // PMX ambient corresponds to D3D's emissive; PMX diffuse corresponds to D3D's ambient.
+    // LightAmbient = mmd_ambient_scale * light_color (reflects light tone / intensity).
     let mmd_light = vec3<f32>(camera.mmd_ambient_scale) * camera.light_color;
     let base_color = clamp(material.diffuse_rgb * mmd_light + material.ambient, vec3<f32>(0.0), vec3<f32>(1.0));
 
-    // テクスチャサンプリング
+    // Texture sampling.
     let tex_color = textureSample(t_diffuse, s_diffuse, in.uv);
     var out_rgb = base_color * tex_color.rgb;
     var out_a = tex_color.a * material.alpha;
 
-    // スフィアマップ (RGB のみ、アルファは影響させない)
+    // Sphere map (RGB only; alpha is unaffected).
     let has_sphere = (material.flags & 1u) != 0u;
     let sphere_add  = (material.flags & 2u) != 0u;
     if has_sphere {
@@ -900,7 +903,7 @@ fn compute_mmd_lighting(in: MmdVertexOutput) -> vec4<f32> {
         }
     }
 
-    // トゥーン (NdotL依存サンプリング + 乗算)
+    // Toon (NdotL-dependent sampling + multiply).
     let has_toon = (material.flags & 4u) != 0u;
     if has_toon {
         let lightNormal = dot(n, -camera.light_dir);
@@ -910,11 +913,11 @@ fn compute_mmd_lighting(in: MmdVertexOutput) -> vec4<f32> {
         out_a *= toon_color.a;
     }
 
-    // アルファテスト
+    // Alpha test.
     if out_a < ALPHA_DISCARD_THRESHOLD { discard; }
 
-    // スペキュラ (最後に加算、トゥーンの影響を受けない)
-    // LightSpecular = mmd_ambient_scale × light_color
+    // Specular (added last; not affected by toon).
+    // LightSpecular = mmd_ambient_scale * light_color.
     let spec_color = material.specular * mmd_light;
     var eye_dir: vec3<f32>;
     if camera.is_perspective > 0.5 {
@@ -932,7 +935,7 @@ fn compute_mmd_lighting(in: MmdVertexOutput) -> vec4<f32> {
     };
 }
 
-/// MMD エッジシェーダー共通部（頂点シェーダー）
+/// MMD edge shader common part (vertex shader).
 macro_rules! wgsl_mmd_edge_body {
     () => {
         r#"
@@ -967,7 +970,7 @@ fn vs_edge(
     };
 }
 
-/// MMD エッジシェーダー（inverted hull 法、sRGB版）
+/// MMD edge shader (inverted hull method; sRGB version).
 const MMD_EDGE_SHADER_SRC: &str = concat!(
     wgsl_camera_uniform!(),
     "\n",
@@ -976,7 +979,7 @@ const MMD_EDGE_SHADER_SRC: &str = concat!(
     r#"
 @fragment
 fn fs_edge() -> MmdFsOutput {
-    // sRGBレンダーターゲットの自動エンコードを打ち消す
+    // Cancel out the sRGB render target's automatic encoding.
     let c = material.edge_color;
     var out: MmdFsOutput;
     out.color = vec4<f32>(pow(max(c.rgb, vec3<f32>(0.0)), vec3<f32>(2.2)), c.a);
@@ -986,7 +989,7 @@ fn fs_edge() -> MmdFsOutput {
 "#
 );
 
-/// MMD メインシェーダー（sRGB版: pow(2.2) でガンマ補正）
+/// MMD main shader (sRGB version: gamma-correct via pow(2.2)).
 const MMD_MAIN_SHADER_SRC: &str = concat!(
     wgsl_camera_uniform!(),
     "\n",
@@ -996,7 +999,7 @@ const MMD_MAIN_SHADER_SRC: &str = concat!(
 @fragment
 fn fs_mmd(in: MmdVertexOutput) -> MmdFsOutput {
     let result = compute_mmd_lighting(in);
-    // sRGBレンダーターゲットの自動エンコードを打ち消す（MMDはガンマ空間で計算）
+    // Cancel the sRGB render target's automatic encoding (MMD computes in gamma space).
     let output = pow(max(result.rgb, vec3<f32>(0.0)), vec3<f32>(2.2));
     var out: MmdFsOutput;
     out.color = vec4<f32>(output, result.a);
@@ -1006,7 +1009,7 @@ fn fs_mmd(in: MmdVertexOutput) -> MmdFsOutput {
 "#
 );
 
-/// MMD エッジシェーダー Unorm 版（pow(2.2) 除去 — ガンマ空間直接出力）
+/// MMD edge shader Unorm version (pow(2.2) removed - direct gamma-space output).
 const MMD_EDGE_SHADER_UNORM_SRC: &str = concat!(
     wgsl_camera_uniform!(),
     "\n",
@@ -1015,7 +1018,7 @@ const MMD_EDGE_SHADER_UNORM_SRC: &str = concat!(
     r#"
 @fragment
 fn fs_edge() -> MmdFsOutput {
-    // Unorm ターゲット: ガンマ空間値をそのまま出力（pow(2.2) 不要）
+    // Unorm target: emit gamma-space values directly (no pow(2.2) needed).
     var out: MmdFsOutput;
     out.color = material.edge_color;
     out.bloom = vec4<f32>(0.0);
@@ -1024,7 +1027,7 @@ fn fs_edge() -> MmdFsOutput {
 "#
 );
 
-/// MMD メインシェーダー Unorm 版（pow(2.2) 除去 — ガンマ空間直接出力）
+/// MMD main shader Unorm version (pow(2.2) removed - direct gamma-space output).
 const MMD_MAIN_SHADER_UNORM_SRC: &str = concat!(
     wgsl_camera_uniform!(),
     "\n",
@@ -1034,7 +1037,7 @@ const MMD_MAIN_SHADER_UNORM_SRC: &str = concat!(
 @fragment
 fn fs_mmd(in: MmdVertexOutput) -> MmdFsOutput {
     let result = compute_mmd_lighting(in);
-    // Unorm ターゲット: ガンマ空間値をそのまま出力（pow(2.2) 不要）
+    // Unorm target: emit gamma-space values directly (no pow(2.2) needed).
     var out: MmdFsOutput;
     out.color = vec4<f32>(clamp(result.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), result.a);
     out.bloom = vec4<f32>(material.bloom_emissive_r, material.bloom_emissive_g, material.bloom_emissive_b, result.a);
@@ -1043,7 +1046,7 @@ fn fs_mmd(in: MmdVertexOutput) -> MmdFsOutput {
 "#
 );
 
-/// グリッドシェーダー共通部（頂点シェーダー）
+/// Grid shader common part (vertex shader).
 macro_rules! wgsl_grid_body {
     () => {
         r#"
@@ -1068,7 +1071,7 @@ fn vs_grid(
     };
 }
 
-/// グリッドシェーダー Unorm 版（linear_to_srgb 変換付き）
+/// Grid shader Unorm version (with `linear_to_srgb` conversion).
 const GRID_SHADER_UNORM_SRC: &str = concat!(
     wgsl_camera_uniform!(),
     wgsl_grid_body!(),
@@ -1087,7 +1090,7 @@ fn fs_grid(in: VertexOutput) -> @location(0) vec4<f32> {
 "#
 );
 
-/// ワイヤーフレームオーバーレイ用シェーダー（黒色で描画）
+/// Wireframe overlay shader (drawn in black).
 const WIRE_OVERLAY_SHADER_SRC: &str = concat!(
     wgsl_camera_uniform!(),
     "\n",
@@ -1141,9 +1144,11 @@ fn fs_highlight_fill(in: VertexOutput) -> FsOutput {
 "#
 );
 
-/// MToon アウトラインシェーダー共通部（inverted hull 法）
-/// 本体と同等の MToon ライティング計算を行い、outlineLightingMixFactor で混合する
-/// バインディング宣言とヘルパー関数は wgsl_mtoon_bindings! / wgsl_mtoon_helpers! で共通化
+/// MToon outline shader common part (inverted hull method).
+/// Performs MToon lighting equivalent to the main shader and blends it via
+/// `outlineLightingMixFactor`.
+/// Binding declarations and helper functions are shared via
+/// `wgsl_mtoon_bindings!` / `wgsl_mtoon_helpers!`.
 macro_rules! wgsl_outline_body {
     () => {
         r#"
@@ -1156,14 +1161,14 @@ struct OutlineVertexOutput {
     @location(4) tangent: vec4<f32>,
 };
 
-/// UV Animation を適用（頂点シェーダー用、UV0/UV1 ペア対応）
-/// 戻り値: vec4(anim_uv0.xy, anim_uv1.zw)
+/// Apply UV animation (for vertex shaders; supports UV0/UV1 pair).
+/// Return value: vec4(anim_uv0.xy, anim_uv1.zw).
 fn apply_uv_animation_pair(uv0: vec2<f32>, uv1: vec2<f32>) -> vec4<f32> {
     let has_uv_anim = material.uv_anim_scroll_x != 0.0
         || material.uv_anim_scroll_y != 0.0
         || material.uv_anim_rotation != 0.0;
     if !has_uv_anim { return vec4<f32>(uv0, uv1); }
-    // マスクテクスチャ用UV（texCoord+transform、UV Animation 非対象）
+    // UV for the mask texture (texCoord + transform; not subject to UV animation).
     let uv_mask_uv = resolve_mtoon_uv(uv0, uv1, material.uv_mask_uv_a, material.uv_mask_uv_b);
     var mask = 1.0;
     if material.has_uv_anim_mask > 0.5 {
@@ -1182,34 +1187,35 @@ fn vs_outline(
 ) -> OutlineVertexOutput {
     var out: OutlineVertexOutput;
     let n = normalize(normal);
-    // outlineWidthMultiplyTexture: UV Animation 対象、texCoord+transform 適用（UV0/UV1 ペア）
+    // outlineWidthMultiplyTexture: subject to UV animation, applies texCoord + transform (UV0/UV1 pair).
     let anim_pair = apply_uv_animation_pair(uv, uv1_in);
     let width_uv = resolve_mtoon_uv(anim_pair.xy, anim_pair.zw, material.outline_uv_a, material.outline_uv_b);
     let width_tex = select_channel(textureSampleLevel(t_outline_width, s_outline_width, width_uv, 0.0), material.outline_width_channel);
     let width = material.outline_width * width_tex;
     if material.outline_mode > 1.5 {
-        // screenCoordinates: clip 空間で法線方向にオフセット（UniVRM 準拠）
+        // screenCoordinates: offset along the normal in clip space (UniVRM-compliant).
         let clip = camera.view_proj * vec4<f32>(position, 1.0);
-        // ビュー空間法線
+        // View-space normal.
         let nv_x = dot(camera.view_row0, n);
         let nv_y = dot(camera.view_row1, n);
         let view_row2 = cross(camera.view_row0, camera.view_row1);
         let nv_z = dot(view_row2, n);
-        // UniVRM 準拠: 先に正規化 → 後から aspect で X 引き伸ばし
+        // UniVRM-compliant: normalize first, then stretch X by `aspect`.
         let raw = vec2<f32>(nv_x, nv_y);
         let len = length(raw);
         var projected = select(vec2<f32>(0.0), raw / len, len > 0.0001);
-        // 距離クランプ: 広角カメラでの太すぎ防止（UniVRM MToon_GetOutlineVertex_ScreenCoordinatesWidthMultiplier 準拠）
+        // Distance clamp: prevent excessively thick outlines on wide cameras
+        // (per UniVRM `MToon_GetOutlineVertex_ScreenCoordinatesWidthMultiplier`).
         let max_view_frustum_plane_height = 2.0;
         let width_scaled_max_distance = max_view_frustum_plane_height * camera.proj_11 * 0.5;
         let width_multiplier = min(clip.w, width_scaled_max_distance);
         projected *= 2.0 * width * width_multiplier;
         projected.x /= camera.aspect;
-        // カメラ正面法線の抑制（正面向き頂点の XY ずれを防ぐ）
+        // Suppress camera-facing normals (prevents XY drift for front-facing vertices).
         projected *= saturate(1.0 - nv_z * nv_z);
         out.clip_position = vec4<f32>(clip.xy + projected, clip.zw);
     } else {
-        // worldCoordinates: ワールド空間でメートル単位
+        // worldCoordinates: meters in world space.
         let expanded = position + n * width;
         out.clip_position = camera.view_proj * vec4<f32>(expanded, 1.0);
     }
@@ -1221,15 +1227,15 @@ fn vs_outline(
     return out;
 }
 
-/// 本体シェーダーと同等の MToon ライティング計算（アウトライン用）
-/// 返り値: vec4(表面シェーディング結果 RGB, 処理済みアルファ)
-/// alphaMode に基づく discard もここで実行（UniVRM 準拠: アウトラインにも適用）
+/// MToon lighting equivalent to the main shader (for outline use).
+/// Return value: vec4(surface shading RGB, processed alpha).
+/// `alphaMode`-based `discard` is applied here as well (UniVRM-compliant: also applied to outlines).
 fn compute_mtoon_surface_lighting(n: vec3<f32>, uv: vec2<f32>, uv1: vec2<f32>, world_pos: vec3<f32>) -> vec4<f32> {
-    // --- UVアニメーション ---
+    // --- UV animation ---
     let has_uv_anim = material.uv_anim_scroll_x != 0.0
         || material.uv_anim_scroll_y != 0.0
         || material.uv_anim_rotation != 0.0;
-    // マスクテクスチャ用UV（texCoord+transform、UV Animation 非対象）
+    // UV for the mask texture (texCoord + transform; not subject to UV animation).
     let uv_mask_uv = resolve_mtoon_uv(uv, uv1, material.uv_mask_uv_a, material.uv_mask_uv_b);
     var anim_mask = 1.0;
     if has_uv_anim && material.has_uv_anim_mask > 0.5 {
@@ -1238,30 +1244,30 @@ fn compute_mtoon_surface_lighting(n: vec3<f32>, uv: vec2<f32>, uv1: vec2<f32>, w
     let anim_uv = select(uv, apply_uv_anim_core(uv, anim_mask), has_uv_anim);
     let anim_uv1 = select(uv1, apply_uv_anim_core(uv1, anim_mask), has_uv_anim);
 
-    // テクスチャサンプリング（UVアニメーション + texCoord/KHR_texture_transform 適用）
+    // Texture sampling (apply UV animation + texCoord/KHR_texture_transform).
     let base_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.base_uv_a, material.base_uv_b);
     let tex_color = textureSample(t_diffuse, s_diffuse, base_uv);
     let base_color = tex_color * material.diffuse;
 
-    // alphaMode 処理（本体 fs_main と同一ロジック）
+    // alphaMode handling (same logic as main `fs_main`).
     var out_alpha = base_color.a;
     if material.alpha_cutoff < -0.75 {
         out_alpha = 1.0;
     } else if material.alpha_cutoff >= -0.25 {
-        // MASK + AlphaToCoverage（UniVRM 準拠、fs_main と同一）
+        // MASK + AlphaToCoverage (UniVRM-compliant; same as `fs_main`).
         let a2c_alpha = (out_alpha - material.alpha_cutoff)
             / max(fwidth(out_alpha), 1e-5) + 0.5;
         if a2c_alpha < material.alpha_cutoff { discard; }
-        out_alpha = 1.0; // UniVRM 準拠: A2C はカバレッジ制御のみ、最終 alpha は不透明
+        out_alpha = 1.0; // UniVRM-compliant: A2C is coverage control only; final alpha is opaque.
     } else {
         if out_alpha <= 0.001 { discard; }
     }
 
-    // dot(N,L) — 仕様準拠: [-1, 1] レンジ
-    // camera.light_dir は光の進行方向（光源→表面）なので反転して表面→光源方向にする
+    // dot(N,L) - spec-compliant: [-1, 1] range.
+    // `camera.light_dir` is the light direction of travel (source -> surface), so invert to (surface -> source).
     let dot_nl = dot(n, -camera.light_dir);
 
-    // shadeMultiplyTexture 適用（UV Animation 対象）
+    // shadeMultiplyTexture (subject to UV animation).
     var shade_mul = vec3<f32>(1.0);
     if material.has_shade_multiply_tex > 0.5 {
         let shade_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.shade_uv_a, material.shade_uv_b);
@@ -1269,7 +1275,7 @@ fn compute_mtoon_surface_lighting(n: vec3<f32>, uv: vec2<f32>, uv1: vec2<f32>, w
     }
     let shade = material.shade_color * shade_mul;
 
-    // shadingShiftTexture 適用（UV Animation 対象、UniVRM 準拠）
+    // shadingShiftTexture (subject to UV animation; UniVRM-compliant).
     var shading = dot_nl + material.shading_shift;
     if material.has_shading_shift_tex > 0.5 {
         let shift_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.shift_uv_a, material.shift_uv_b);
@@ -1277,22 +1283,22 @@ fn compute_mtoon_surface_lighting(n: vec3<f32>, uv: vec2<f32>, uv1: vec2<f32>, w
         shading += shift_tex * material.shading_shift_tex_scale;
     }
 
-    // MToon 2色トゥーン: linearstep で lit/shade を補間（仕様準拠）
+    // MToon 2-tone toon: interpolate lit/shade with linearstep (spec-compliant).
     let edge0 = -1.0 + material.shading_toony;
     let edge1 = 1.0 - material.shading_toony;
     let t = clamp((shading - edge0) / max(edge1 - edge0, 0.001), 0.0, 1.0);
     let toon_color = mix(shade, base_color.rgb, t);
 
-    // ライティング: direct と GI（indirect）を分離（UniVRM 準拠）
-    // 半球 ambient: sky/ground を最終法線Y成分で補間（SH 近似）
+    // Lighting: separate direct from GI (indirect) (UniVRM-compliant).
+    // Hemisphere ambient: interpolate sky/ground by the final normal's Y component (SH approximation).
     let hemi_t_o = n.y * 0.5 + 0.5;
     let raw_indirect = mix(camera.ambient_ground, camera.ambient, vec3<f32>(hemi_t_o));
     let gi = mix(raw_indirect, camera.gi_equalized, material.gi_equalization_factor);
     let direct_light = camera.light_intensity * camera.light_color;
     let lighting = toon_color * direct_light + toon_color * gi;
 
-    // --- リムライティング + MatCap ---
-    // 透視投影: camera_pos → world_pos、正射影: camera_forward（UniVRM 準拠）
+    // --- Rim lighting + MatCap ---
+    // Perspective: camera_pos -> world_pos. Orthographic: camera_forward (UniVRM-compliant).
     var v: vec3<f32>;
     if camera.is_perspective > 0.5 {
         v = normalize(camera.camera_pos - world_pos);
@@ -1301,9 +1307,9 @@ fn compute_mtoon_surface_lighting(n: vec3<f32>, uv: vec2<f32>, uv1: vec2<f32>, w
     }
     var rim = vec3<f32>(0.0);
 
-    // MatCap: ビュー空間法線からUV算出（UV Animation 非対象）
-    // UniVRM 準拠: right = cross(viewDir, worldUp), up = cross(right, viewDir)
-    // KHR_texture_transform は最終 matcap UV に適用
+    // MatCap: derive UV from view-space normal (not subject to UV animation).
+    // UniVRM-compliant: right = cross(viewDir, worldUp), up = cross(right, viewDir).
+    // KHR_texture_transform is applied to the final matcap UV.
     if material.has_matcap > 0.5 {
         let world_view_x = normalize(vec3<f32>(-v.z, 0.0, v.x));
         let world_view_y = cross(world_view_x, v);
@@ -1312,7 +1318,7 @@ fn compute_mtoon_surface_lighting(n: vec3<f32>, uv: vec2<f32>, uv1: vec2<f32>, w
         rim = material.matcap_factor * textureSample(t_matcap, s_matcap, matcap_uv).rgb;
     }
 
-    // パラメトリックリム: フレネル効果
+    // Parametric rim: Fresnel effect.
     let ndotv = dot(n, v);
     let parametric_rim = pow(
         saturate(1.0 - ndotv + material.rim_lift),
@@ -1320,18 +1326,18 @@ fn compute_mtoon_surface_lighting(n: vec3<f32>, uv: vec2<f32>, uv1: vec2<f32>, w
     );
     rim = rim + parametric_rim * material.rim_color;
 
-    // rimMultiplyTexture 適用（UV Animation 対象）
+    // rimMultiplyTexture (subject to UV animation).
     if material.has_rim_multiply_tex > 0.5 {
         let rim_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.rim_uv_a, material.rim_uv_b);
         rim *= textureSample(t_rim_multiply, s_rim_multiply, rim_uv).rgb;
     }
 
-    // リムのライティング混合（VRM 1.0 仕様: rim * lerp(white, lighting, mix)）
-    // UniVRM 準拠: rim には未均一化の raw indirect を使用（GI equalization 非適用）
+    // Rim lighting mix (VRM 1.0 spec: rim * lerp(white, lighting, mix)).
+    // UniVRM-compliant: use the raw (non-equalized) indirect for rim (GI equalization not applied).
     let rim_light_factor = direct_light + raw_indirect;
     let rim_lit = rim * mix(vec3<f32>(1.0), rim_light_factor, material.rim_lighting_mix);
 
-    // emissive（UniVRM 準拠: baseCol = lighting + emissive + rim）
+    // emissive (UniVRM-compliant: baseCol = lighting + emissive + rim).
     var emissive_out = material.emissive_factor;
     if material.has_emissive_tex > 0.5 {
         let emissive_uv = resolve_mtoon_uv(anim_uv, anim_uv1, material.emissive_uv_a, material.emissive_uv_b);
@@ -1344,8 +1350,10 @@ fn compute_mtoon_surface_lighting(n: vec3<f32>, uv: vec2<f32>, uv1: vec2<f32>, w
     };
 }
 
-/// WGSL 共通: fs_outline フラグメントシェーダー本体（sRGB/Unorm の出力式のみパラメータ化）
-/// $output_expr: sRGB 版では `lit`、Unorm 版では `clamp(lit, vec3<f32>(0.0), vec3<f32>(1.0))`
+/// WGSL common: `fs_outline` fragment shader body (only the output expression
+/// is parameterized for sRGB/Unorm).
+/// `$output_expr`: in the sRGB version, `lit`; in the Unorm version,
+/// `clamp(lit, vec3<f32>(0.0), vec3<f32>(1.0))`.
 macro_rules! wgsl_fs_outline {
     ($output_expr:expr) => {
         concat!(r#"
@@ -1357,10 +1365,10 @@ struct FsOutput {
 @fragment
 fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) -> FsOutput {
     let base = material.outline_color;
-    // doubleSided 背面法線反転（UniVRM 準拠）
+    // doubleSided backface normal flip (UniVRM-compliant).
     let face_sign = select(-1.0, 1.0, is_front);
     var n = normalize(in.normal) * face_sign;
-    // UVアニメーション事前計算（normalTexture にも適用: 仕様準拠）
+    // UV-animation precomputation (also applied to normalTexture per spec).
     var anim_uv_o = in.uv;
     var anim_uv1_o = in.uv1;
     let has_uv_anim_o = material.uv_anim_scroll_x != 0.0
@@ -1375,14 +1383,14 @@ fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) ->
         anim_uv_o = apply_uv_anim_core(in.uv, anim_mask_o);
         anim_uv1_o = apply_uv_anim_core(in.uv1, anim_mask_o);
     }
-    // 法線マップ適用（animated UV）
+    // Normal-map application (animated UV).
     if material.has_normal_tex > 0.5 {
         let normal_uv = resolve_mtoon_uv(anim_uv_o, anim_uv1_o, material.normal_uv_a, material.normal_uv_b);
         n = apply_normal_map(n, in.tangent, normal_uv);
     }
-    // 本体と同等の MToon ライティング計算結果を取得（アルファ処理・discard 含む）
+    // Get the MToon lighting result equivalent to the main shader (includes alpha handling / discard).
     let surface = compute_mtoon_surface_lighting(n, in.uv, in.uv1, in.world_pos);
-    // UniVRM 準拠: outlineColor * lerp(1, baseCol, outlineLightingMix)
+    // UniVRM-compliant: outlineColor * lerp(1, baseCol, outlineLightingMix).
     let lit = base.rgb * mix(vec3<f32>(1.0), surface.rgb, material.outline_lighting_mix);
     var out: FsOutput;
     out.color = vec4<f32>("#, $output_expr, r#", surface.a);
@@ -1393,8 +1401,9 @@ fn fs_outline(in: OutlineVertexOutput, @builtin(front_facing) is_front: bool) ->
     };
 }
 
-/// MToon アウトラインシェーダー（sRGB版）
-/// 本体と同等の MToon ライティングを計算し、outlineLightingMixFactor で混合
+/// MToon outline shader (sRGB version).
+/// Computes MToon lighting equivalent to the main shader and blends via
+/// `outlineLightingMixFactor`.
 const OUTLINE_SHADER_SRC: &str = concat!(
     wgsl_camera_uniform!(),
     "\n",
@@ -1405,8 +1414,9 @@ const OUTLINE_SHADER_SRC: &str = concat!(
     wgsl_fs_outline!("lit"),
 );
 
-/// MToon アウトラインシェーダー Unorm版（clamp で 0..1 に制限）
-/// 本体と同等の MToon ライティングを計算し、outlineLightingMixFactor で混合
+/// MToon outline shader Unorm version (clamps to 0..1).
+/// Computes MToon lighting equivalent to the main shader and blends via
+/// `outlineLightingMixFactor`.
 const OUTLINE_SHADER_UNORM_SRC: &str = concat!(
     wgsl_camera_uniform!(),
     "\n",
@@ -1428,27 +1438,28 @@ fn fs_grid(in: VertexOutput) -> @location(0) vec4<f32> {
 "#
 );
 
-/// 描画パラメータ（render_to_texture に渡す設定をまとめた構造体）
+/// Render parameters (settings bundled for `render_to_texture`).
 pub struct RenderParams<'a> {
     pub camera: &'a OrbitCamera,
     pub width: u32,
     pub height: u32,
-    /// 中央ビューポート上に被さる下部オーバーレイ（材質編集パネル等）の実 px 高。
-    /// view_proj/proj_11 で FOV を補正してパネル開閉前後のモデル見た目サイズを保つ。
+    /// Pixel height of the bottom overlay (e.g. material edit panel) over the
+    /// central viewport. `view_proj` / `proj_11` compensate FOV so the model's
+    /// on-screen size is preserved across panel open/close.
     pub overlay_h_pixels: f32,
     pub material_visibility: &'a [bool],
     pub display: &'a super::app::DisplaySettings,
-    /// アニメーション済みボーングローバル行列（glTF空間、None=レストポーズ）
+    /// Animated bone global matrices (glTF space; `None` = rest pose).
     pub animated_bone_globals: Option<&'a [glam::Mat4]>,
-    /// VRM 0.0 かどうか（座標変換用）
+    /// Whether this is VRM 0.0 (for coordinate conversion).
     pub is_vrm0: bool,
-    /// 累積時間（秒、UVアニメーション用）
+    /// Accumulated time (seconds; for UV animation).
     pub time: f32,
-    /// ホバー中の draw_index 群（オレンジワイヤーフレームでハイライト表示）
+    /// `draw_index` set being hovered (highlighted with an orange wireframe).
     pub hovered_draw_indices: &'a [usize],
 }
 
-/// 描画モード
+/// Draw mode.
 #[derive(Clone, Copy, PartialEq)]
 pub enum DrawMode {
     Solid,
@@ -1456,14 +1467,14 @@ pub enum DrawMode {
     SolidWireframe,
 }
 
-/// ライトモード
+/// Light mode.
 #[derive(Clone, Copy, PartialEq)]
 pub enum LightMode {
     CameraFollow,
     Fixed,
 }
 
-/// フラグメントシェーダーのオーバーライドモード（GPU uniform に渡す値）
+/// Fragment-shader override mode (the value passed to the GPU uniform).
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u32)]
 pub enum ShaderOverride {
@@ -1474,35 +1485,35 @@ pub enum ShaderOverride {
     GgxPreview = 3,
 }
 
-/// UI ドロップダウン用
+/// For the UI dropdown.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShaderSelection {
     #[default]
-    Auto, // モデル形式に応じて Standard/MMD を自動選択
-    Mtoon, // MToon/Lambert 強制（PMX/PMD でも Standard パス）
+    Auto, // pick Standard / MMD automatically based on the model format
+    Mtoon, // force MToon / Lambert (use Standard path even for PMX / PMD)
     Unlit,
     GgxPreview,
     Normal,
     Mmd,
 }
 
-/// サンプル数ごとのパイプラインセット
+/// Pipeline set per sample count.
 struct PipelineSet {
     pipeline_cull: wgpu::RenderPipeline,
     pipeline_no_cull: wgpu::RenderPipeline,
     pipeline_wireframe: Option<wgpu::RenderPipeline>,
-    /// ワイヤーフレームオーバーレイ（Solid+Wire用、depth bias付き）
+    /// Wireframe overlay (for Solid+Wire; with depth bias).
     pipeline_wire_overlay: Option<wgpu::RenderPipeline>,
-    /// 材質ホバーハイライト（オレンジワイヤーフレーム）
+    /// Material hover highlight (orange wireframe).
     pipeline_highlight: Option<wgpu::RenderPipeline>,
     pipeline_mask_cull: wgpu::RenderPipeline,
     pipeline_mask_no_cull: wgpu::RenderPipeline,
     pipeline_alpha_cull: wgpu::RenderPipeline,
     pipeline_alpha_no_cull: wgpu::RenderPipeline,
-    /// 半透明 + デプス書込あり（MToon transparentWithZWrite）
+    /// Translucent + depth write enabled (MToon `transparentWithZWrite`).
     pipeline_alpha_zwrite_cull: wgpu::RenderPipeline,
     pipeline_alpha_zwrite_no_cull: wgpu::RenderPipeline,
-    /// VRM 0.x _CullMode=Front 用（前面カリング）
+    /// For VRM 0.x `_CullMode=Front` (front-face culling).
     pipeline_front_cull: wgpu::RenderPipeline,
     pipeline_mask_front_cull: wgpu::RenderPipeline,
     pipeline_alpha_front_cull: wgpu::RenderPipeline,
@@ -1510,29 +1521,29 @@ struct PipelineSet {
     pipeline_grid: wgpu::RenderPipeline,
     pipeline_bone: wgpu::RenderPipeline,
     pipeline_line_overlay: wgpu::RenderPipeline,
-    // MMD パイプライン
+    // MMD pipelines.
     pipeline_mmd_main_cull: Option<wgpu::RenderPipeline>,
     pipeline_mmd_main_no_cull: Option<wgpu::RenderPipeline>,
     pipeline_mmd_alpha_cull: Option<wgpu::RenderPipeline>,
     pipeline_mmd_alpha_no_cull: Option<wgpu::RenderPipeline>,
     pipeline_mmd_edge: Option<wgpu::RenderPipeline>,
-    // MToon アウトラインパイプライン（inverted hull 法、Front cull）
+    // MToon outline pipeline (inverted hull method; front cull).
     pipeline_outline: wgpu::RenderPipeline,
-    // MToon アウトラインパイプライン（BLEND 用、ZWrite OFF）
+    // MToon outline pipeline (for BLEND; ZWrite OFF).
     pipeline_outline_blend: wgpu::RenderPipeline,
-    // MToon アウトラインパイプライン（MASK 用、AlphaToCoverage 有効）
+    // MToon outline pipeline (for MASK; AlphaToCoverage enabled).
     pipeline_outline_mask: wgpu::RenderPipeline,
 }
 
-/// 補助テクスチャスロットで「未割当」を表すためのデフォルト TextureView 集合。
+/// Set of default `TextureView`s representing "unassigned" auxiliary texture slots.
 ///
-/// `GpuRenderer::new()` で一度だけ生成し、`rebuild_material_bind_groups()` から
-/// 参照するだけで bind group を作れるようにする（§D / TODO-4）。モデルごとに
-/// 複製しないため、GpuRenderer に持たせている。
+/// Created once in `GpuRenderer::new()`; `rebuild_material_bind_groups()` only
+/// references them to build bind groups (§D / TODO-4). Held on `GpuRenderer`
+/// since they are not duplicated per model.
 ///
-/// - `white_srgb`: shade / rim / outline width などの sRGB スロット既定値
-/// - `black_srgb`: matcap の既定値（加算ゼロ）
-/// - `flat_normal_unorm`: normal map の既定値（(0,0,1) 相当）
+/// - `white_srgb`: default for sRGB slots like shade / rim / outline width.
+/// - `black_srgb`: default for matcap (zero contribution).
+/// - `flat_normal_unorm`: default for normal map (equivalent to (0, 0, 1)).
 pub struct DefaultViews {
     pub white_srgb: wgpu::TextureView,
     pub black_srgb: wgpu::TextureView,
@@ -1540,15 +1551,15 @@ pub struct DefaultViews {
 }
 
 pub struct GpuRenderer {
-    /// MSAA パイプラインセット (sample_count=4, sRGB) — 遅延生成
+    /// MSAA pipeline set (sample_count=4, sRGB) - lazily created.
     pipelines_msaa_srgb: Option<PipelineSet>,
-    /// 非MSAA パイプラインセット (sample_count=1, sRGB) — 遅延生成
+    /// Non-MSAA pipeline set (sample_count=1, sRGB) - lazily created.
     pipelines_no_msaa_srgb: Option<PipelineSet>,
-    /// MSAA パイプラインセット (sample_count=4, Unorm) — 遅延生成
+    /// MSAA pipeline set (sample_count=4, Unorm) - lazily created.
     pipelines_msaa_unorm: Option<PipelineSet>,
-    /// 非MSAA パイプラインセット (sample_count=1, Unorm) — 遅延生成
+    /// Non-MSAA pipeline set (sample_count=1, Unorm) - lazily created.
     pipelines_no_msaa_unorm: Option<PipelineSet>,
-    // パイプライン遅延生成用リソース
+    // Resources for lazy pipeline creation.
     shader: wgpu::ShaderModule,
     grid_shader_srgb: wgpu::ShaderModule,
     grid_shader_unorm: wgpu::ShaderModule,
@@ -1564,97 +1575,97 @@ pub struct GpuRenderer {
     mmd_edge_pipeline_layout: wgpu::PipelineLayout,
     mmd_main_pipeline_layout: wgpu::PipelineLayout,
     supports_wireframe: bool,
-    /// カメラ uniform バッファ
+    /// Camera uniform buffer.
     camera_buf: wgpu::Buffer,
-    /// カメラ bind group
+    /// Camera bind group.
     camera_bind_group: wgpu::BindGroup,
-    /// カメラ bind group layout（BindGroup の lifetime 維持に必要）
+    /// Camera bind group layout (kept to maintain the BindGroup's lifetime).
     #[expect(dead_code)]
     camera_bgl: wgpu::BindGroupLayout,
-    /// テクスチャ bind group layout
+    /// Texture bind group layout.
     texture_bgl: wgpu::BindGroupLayout,
-    /// 材質 bind group layout
+    /// Material bind group layout.
     material_bgl: wgpu::BindGroupLayout,
-    /// デフォルト白テクスチャ bind group
+    /// Default white-texture bind group.
     default_tex_bind_group: wgpu::BindGroup,
-    /// MToon 補助テクスチャ bind group layout (group 3)
+    /// MToon auxiliary texture bind group layout (group 3).
     mtoon_aux_bgl: wgpu::BindGroupLayout,
-    /// デフォルト MToon 補助 bind group（matcap=黒、他=白）
+    /// Default MToon auxiliary bind group (matcap = black, others = white).
     default_mtoon_aux_bind_group: wgpu::BindGroup,
-    /// 共通テクスチャサンプラー（毎回生成を回避）
+    /// Shared texture sampler (avoids per-frame creation).
     default_sampler: wgpu::Sampler,
-    /// 材質編集時の bind group 再生成に使う「未割当」デフォルト TextureView 集合（§D）
+    /// "Unassigned" default `TextureView` set used when rebuilding bind groups during material edit (§D).
     default_views: DefaultViews,
-    /// グリッド頂点バッファ
+    /// Grid vertex buffer.
     grid_vbuf: wgpu::Buffer,
     grid_vertex_count: u32,
-    /// ボーンテールバッファ（LineList、テール三角形）
+    /// Bone-tail buffer (LineList; tail triangles).
     bone_tail: DynamicBuffer,
-    /// ボーン塗りつぶしバッファ（TriangleList、マーカー塗り面）
+    /// Bone-fill buffer (TriangleList; marker fill faces).
     bone_fill: DynamicBuffer,
-    /// ボーン外枠バッファ（LineList、マーカー外枠線）
+    /// Bone-outline buffer (LineList; marker outlines).
     bone_line: DynamicBuffer,
-    /// SpringBone頂点バッファ
+    /// SpringBone vertex buffer.
     spring: DynamicBuffer,
-    /// ジョイント面バッファ（TriangleList）
+    /// Joint face buffer (TriangleList).
     joint: DynamicBuffer,
-    /// ジョイントエッジバッファ（LineList）
+    /// Joint edge buffer (LineList).
     joint_edge: DynamicBuffer,
-    /// 法線表示頂点バッファ
+    /// Normal-display vertex buffer.
     normal: DynamicBuffer,
-    /// 法線キャッシュ無効フラグ（true = 再生成が必要）
+    /// Normal-cache invalidation flag (true = needs regeneration).
     normal_dirty: bool,
-    /// 法線キャッシュ用: 前回の normal_length
+    /// Normal cache: previous `normal_length`.
     normal_cache_length: f32,
-    /// 法線キャッシュ用: 前回の material_visibility
+    /// Normal cache: previous `material_visibility`.
     normal_cache_visibility: Vec<bool>,
-    /// オフスクリーンテクスチャキャッシュ
+    /// Offscreen texture cache.
     offscreen: Option<OffscreenTarget>,
-    /// 現在の MSAA 有効状態
+    /// Current MSAA-enabled state.
     current_msaa: bool,
-    /// ボーンテール頂点生成用作業バッファ
+    /// Working buffer for generating bone-tail vertices.
     bone_tail_work: Vec<GridVertex>,
-    /// ボーン塗りつぶし頂点生成用作業バッファ
+    /// Working buffer for generating bone-fill vertices.
     bone_fill_work: Vec<GridVertex>,
-    /// ボーン外枠線頂点生成用作業バッファ
+    /// Working buffer for generating bone-outline vertices.
     bone_work: Vec<GridVertex>,
-    /// 法線頂点生成用作業バッファ
+    /// Working buffer for generating normal vertices.
     normal_work: Vec<GridVertex>,
-    /// 法線頂点dedup用作業バッファ
+    /// Working buffer used to dedupe normal vertices.
     normal_seen: std::collections::HashSet<(u32, u32, u32, u32, u32, u32)>,
-    /// 法線頂点可視フラグ作業バッファ
+    /// Working buffer for normal-vertex visibility flags.
     normal_visible_work: Vec<bool>,
-    /// SpringBone頂点生成用作業バッファ
+    /// Working buffer for generating SpringBone vertices.
     spring_work: Vec<GridVertex>,
     joint_work: Vec<GridVertex>,
     joint_edge_work: Vec<GridVertex>,
-    /// ボーン頂点キャッシュ: 前回のカメラ位置
+    /// Bone-vertex cache: previous camera position.
     bone_cache_eye: Vec3,
-    /// ボーン頂点キャッシュ: 前回のボーン不透明度
+    /// Bone-vertex cache: previous bone opacity.
     bone_cache_opacity: f32,
-    /// SpringBone/Joint キャッシュ: 前回のSpringBone不透明度
+    /// SpringBone / Joint cache: previous SpringBone opacity.
     spring_cache_opacity: f32,
-    /// SpringBone/Joint キャッシュ: 前回のジョイント不透明度
+    /// SpringBone / Joint cache: previous joint opacity.
     joint_cache_opacity: f32,
-    /// SpringBone/Joint キャッシュ: 前回の align_rigid_rotation
+    /// SpringBone / Joint cache: previous `align_rigid_rotation`.
     spring_cache_align: bool,
-    /// 前フレームでアニメーションが有効だったか（Some→None 遷移検出用）
+    /// Whether animation was enabled in the previous frame (for Some -> None transition detection).
     cache_had_anim: bool,
-    /// 半透明ソート用: DrawCall 重心の作業バッファ
+    /// Translucent sort: working buffer for DrawCall centroids.
     work_draw_centers: Vec<glam::Vec3>,
-    /// 半透明ソート用: ソート済みインデックスの作業バッファ
+    /// Translucent sort: working buffer for sorted indices.
     work_sorted_indices: Vec<usize>,
-    /// 半透明ソートキャッシュ: 前回ソート時のカメラ eye 位置
+    /// Translucent sort cache: camera eye at the previous sort.
     cache_sort_eye: Option<glam::Vec3>,
-    /// 半透明ソートキャッシュ: 前回ソート時の DrawCall 数
+    /// Translucent sort cache: DrawCall count at the previous sort.
     cache_sort_draw_count: usize,
-    /// 半透明ソートキャッシュ: 前回の頂点ポインタ（アニメーション変更検出用）
+    /// Translucent sort cache: previous vertex pointer (for animation change detection).
     cache_sort_vert_ptr: usize,
-    /// 半透明ソート強制再計算フラグ
+    /// Translucent sort force-recompute flag.
     sort_dirty: bool,
-    /// encase uniform シリアライズ用再利用バッファ（毎フレーム heap allocation 回避）
+    /// Reusable buffer for encase uniform serialization (avoids per-frame heap allocation).
     encase_work: Vec<u8>,
-    // MMD リソース
+    // MMD resources.
     mmd_material_bgl: wgpu::BindGroupLayout,
     mmd_aux_bgl: wgpu::BindGroupLayout,
     #[expect(dead_code)]
@@ -1662,11 +1673,11 @@ pub struct GpuRenderer {
     shared_toon_textures_unorm: [wgpu::TextureView; 10],
     shared_toon_sampler: wgpu::Sampler,
     default_mmd_aux_bind_group: wgpu::BindGroup,
-    /// Bloom ポストエフェクト
+    /// Bloom post effect.
     bloom: super::bloom::BloomPass,
 }
 
-/// MSAA サンプル数
+/// MSAA sample count.
 const MSAA_SAMPLE_COUNT: u32 = 4;
 
 struct OffscreenTarget {
@@ -1678,10 +1689,10 @@ struct OffscreenTarget {
     msaa_color_view_unorm: Option<wgpu::TextureView>,
     _depth: wgpu::Texture,
     depth_view: wgpu::TextureView,
-    /// MRT bloom source テクスチャ (Rgba8Unorm, linear, sample_count=1)
+    /// MRT bloom source texture (Rgba8Unorm, linear, sample_count=1).
     _bloom_source: wgpu::Texture,
     bloom_source_view: wgpu::TextureView,
-    /// MRT bloom source MSAA テクスチャ（MSAA 有効時のみ）
+    /// MRT bloom source MSAA texture (only when MSAA is enabled).
     _msaa_bloom_source: Option<wgpu::Texture>,
     msaa_bloom_source_view: Option<wgpu::TextureView>,
     width: u32,
@@ -1690,12 +1701,12 @@ struct OffscreenTarget {
 }
 
 impl GpuRenderer {
-    /// 材質編集時の bind group 再生成から参照する「未割当」既定 view 集合（§D）。
+    /// Default "unassigned" view set referenced when rebuilding bind groups during material edit (§D).
     pub fn default_views(&self) -> &DefaultViews {
         &self.default_views
     }
 
-    /// 共通サンプラー。材質編集 UI の rebuild 経路からも使えるよう公開する（§D）。
+    /// Shared sampler. Public so it can be used from the material-edit UI rebuild path (§D).
     pub fn default_sampler(&self) -> &wgpu::Sampler {
         &self.default_sampler
     }
@@ -1742,10 +1753,10 @@ impl GpuRenderer {
         // Default white texture
         let default_tex_bind_group = create_white_texture_bind_group(device, queue, &texture_bgl);
 
-        // MToon 補助テクスチャ bind group layout (group 3)
+        // MToon auxiliary texture bind group layout (group 3).
         let mtoon_aux_bgl = create_mtoon_aux_bind_group_layout(device);
 
-        // Default MToon 補助 bind group（matcap=黒、他=白、normal=フラット）
+        // Default MToon aux bind group (matcap = black, others = white, normal = flat).
         let black_view = create_black_texture_view(device, queue);
         let (white_srgb_view, _white_unorm_view) = create_white_texture_view(device, queue);
         let flat_normal_view = create_flat_normal_texture_view(device, queue);
@@ -1762,47 +1773,48 @@ impl GpuRenderer {
             AuxTexEntry {
                 view: &black_view,
                 sampler: s,
-            }, // matcap: 黒
+            }, // matcap: black
             AuxTexEntry {
                 view: &white_srgb_view,
                 sampler: s,
-            }, // shade_multiply: 白
+            }, // shade_multiply: white
             AuxTexEntry {
                 view: &white_srgb_view,
                 sampler: s,
-            }, // shading_shift: 白
+            }, // shading_shift: white
             AuxTexEntry {
                 view: &white_srgb_view,
                 sampler: s,
-            }, // rim_multiply: 白
+            }, // rim_multiply: white
             AuxTexEntry {
                 view: &white_srgb_view,
                 sampler: s,
-            }, // uv_anim_mask: 白
+            }, // uv_anim_mask: white
             AuxTexEntry {
                 view: &white_srgb_view,
                 sampler: s,
-            }, // outline_width: 白
+            }, // outline_width: white
             AuxTexEntry {
                 view: &white_srgb_view,
                 sampler: s,
-            }, // emissive: 白
+            }, // emissive: white
             AuxTexEntry {
                 view: &flat_normal_view,
                 sampler: s,
-            }, // normal: フラット
+            }, // normal: flat
         );
 
-        // §D: bind group 生成で使い終わった view を DefaultViews に集約し、
-        // GpuRenderer が所有する。材質編集による rebuild_material_bind_groups
-        // から「未割当」スロット用に参照できるようになる。
+        // §D: aggregate the views consumed by bind-group creation into
+        // `DefaultViews` and have `GpuRenderer` own them. This lets
+        // `rebuild_material_bind_groups` (driven by material edits) reference
+        // them as "unassigned" slots.
         let default_views = DefaultViews {
             white_srgb: white_srgb_view,
             black_srgb: black_view,
             flat_normal_unorm: flat_normal_view,
         };
 
-        // Shader modules（パイプライン遅延生成のため保持）
+        // Shader modules (kept for lazy pipeline creation).
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mesh_shader"),
             source: wgpu::ShaderSource::Wgsl(SHADER_SRC.into()),
@@ -1883,7 +1895,7 @@ impl GpuRenderer {
             ],
         });
 
-        // MMD シェーダーモジュール（sRGB 版: pow(2.2) 付き）
+        // MMD shader modules (sRGB version: with pow(2.2)).
         let mmd_edge_shader_srgb = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mmd_edge_shader"),
             source: wgpu::ShaderSource::Wgsl(MMD_EDGE_SHADER_SRC.into()),
@@ -1893,7 +1905,7 @@ impl GpuRenderer {
             source: wgpu::ShaderSource::Wgsl(MMD_MAIN_SHADER_SRC.into()),
         });
 
-        // MMD シェーダーモジュール（Unorm 版: pow(2.2) 除去）
+        // MMD shader modules (Unorm version: pow(2.2) removed).
         let mmd_edge_shader_unorm = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mmd_edge_shader_unorm"),
             source: wgpu::ShaderSource::Wgsl(MMD_EDGE_SHADER_UNORM_SRC.into()),
@@ -1903,7 +1915,7 @@ impl GpuRenderer {
             source: wgpu::ShaderSource::Wgsl(MMD_MAIN_SHADER_UNORM_SRC.into()),
         });
 
-        // MToon アウトラインシェーダー（sRGB 版 / Unorm 版）
+        // MToon outline shaders (sRGB / Unorm versions).
         let outline_shader_srgb = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("outline_shader"),
             source: wgpu::ShaderSource::Wgsl(OUTLINE_SHADER_SRC.into()),
@@ -1913,13 +1925,13 @@ impl GpuRenderer {
             source: wgpu::ShaderSource::Wgsl(OUTLINE_SHADER_UNORM_SRC.into()),
         });
 
-        // グリッドシェーダー（Unorm 版: linear_to_srgb 付き）
+        // Grid shader (Unorm version: with `linear_to_srgb`).
         let grid_shader_unorm = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("grid_shader_unorm"),
             source: wgpu::ShaderSource::Wgsl(GRID_SHADER_UNORM_SRC.into()),
         });
 
-        // MMD パイプラインレイアウト
+        // MMD pipeline layouts.
         let mmd_edge_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("mmd_edge_pl"),
@@ -1933,7 +1945,7 @@ impl GpuRenderer {
                 push_constant_ranges: &[],
             });
 
-        // 共有トゥーンテクスチャ (toon01-10)
+        // Shared toon textures (toon01-10).
         let shared_toon_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("toon_sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -1945,7 +1957,7 @@ impl GpuRenderer {
         let (shared_toon_textures, shared_toon_textures_unorm) =
             generate_shared_toon_textures(device, queue);
 
-        // デフォルト MMD aux bind group (白sphere + 白toon、Unorm ビュー)
+        // Default MMD aux bind group (white sphere + white toon; Unorm views).
         let (_white_view_srgb, white_view_unorm) = create_white_texture_view(device, queue);
         let default_mmd_aux_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("default_mmd_aux_bg"),
@@ -1977,9 +1989,9 @@ impl GpuRenderer {
             log::warn!("POLYGON_MODE_LINE not supported: wireframe disabled");
         }
 
-        // パイプラインセットは遅延生成（初回描画時に必要なセットのみ作成）
+        // Pipeline sets are created lazily (only the ones needed at first draw).
 
-        // 共通サンプラー（テクスチャ bind group 作成時に使い回す）
+        // Shared sampler (reused when creating texture bind groups).
         let default_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("default_sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -2075,12 +2087,12 @@ impl GpuRenderer {
         }
     }
 
-    /// 半透明ソートの強制再計算フラグを立てる（モデル追加・リロード時に呼ぶ）
+    /// Set the translucent-sort force-recompute flag (call on model append / reload).
     pub fn mark_sort_dirty(&mut self) {
         self.sort_dirty = true;
     }
 
-    /// モデルの bbox に合わせてグリッドバッファを再構築する
+    /// Rebuild the grid buffer to match the model's bbox.
     pub fn rebuild_grid(&mut self, device: &wgpu::Device, bbox_min: Vec3, bbox_max: Vec3) {
         let (extent, step) = super::grid::compute_grid_params(bbox_min, bbox_max);
         let (grid_verts, grid_vertex_count) =
@@ -2093,7 +2105,7 @@ impl GpuRenderer {
         self.grid_vertex_count = grid_vertex_count;
     }
 
-    /// 可視化バッファのキャッシュを無効化（モデル再読み込み時に呼ぶ）
+    /// Invalidate the visualization-buffer cache (call on model reload).
     pub fn invalidate_visualization_cache(&mut self) {
         self.bone_cache_eye = Vec3::ZERO;
         self.bone_cache_opacity = -1.0;
@@ -2158,8 +2170,8 @@ impl GpuRenderer {
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
             write_mask: wgpu::ColorWrites::ALL,
         };
-        // MASK 用: blend なし（UniVRM MToonValidator 準拠: SrcBlend=One, DstBlend=Zero）
-        // AlphaToCoverage がカバレッジマスクを制御するため、アルファブレンドは不要
+        // For MASK: no blend (UniVRM MToonValidator-compliant: SrcBlend=One, DstBlend=Zero).
+        // AlphaToCoverage controls the coverage mask, so alpha blending is unnecessary.
         let color_target_mask = wgpu::ColorTargetState {
             format: target_format,
             blend: None,
@@ -2179,7 +2191,7 @@ impl GpuRenderer {
             stencil: Default::default(),
             bias: Default::default(),
         };
-        // アウトライン用 depth bias（UniVRM Offset 1,1 相当）— Reverse-Z で符号反転
+        // Outline depth bias (equivalent to UniVRM Offset 1,1) - sign flipped for Reverse-Z.
         let outline_bias = wgpu::DepthBiasState {
             constant: -1,
             slope_scale: -1.0,
@@ -2206,7 +2218,7 @@ impl GpuRenderer {
             write_mask: wgpu::ColorWrites::ALL,
         };
 
-        // bloom MRT ターゲット（emissive-only、Rgba8Unorm linear）
+        // bloom MRT target (emissive-only; Rgba8Unorm linear).
         let bloom_target = wgpu::ColorTargetState {
             format: bloom_format,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -2375,7 +2387,7 @@ impl GpuRenderer {
             None
         };
 
-        // ワイヤーフレームオーバーレイ（Solid+Wire用: depth bias でZファイティング回避）
+        // Wireframe overlay (for Solid+Wire: depth bias avoids Z-fighting).
         let pipeline_wire_overlay = if supports_wireframe {
             let depth_bias = wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
@@ -2388,7 +2400,7 @@ impl GpuRenderer {
                     clamp: 0.0,
                 },
             };
-            // ワイヤーオーバーレイ用カラーターゲット（アルファブレンド）
+            // Color target for the wire overlay (alpha blend).
             let wire_color_target = wgpu::ColorTargetState {
                 format: target_format,
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -2427,7 +2439,7 @@ impl GpuRenderer {
             None
         };
 
-        // ハイライト用パイプライン（半透明オレンジ塗りつぶし）
+        // Highlight pipeline (translucent orange fill).
         let pipeline_highlight = {
             let highlight_depth = wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
@@ -2527,7 +2539,7 @@ impl GpuRenderer {
                 cache: None,
             });
 
-        // BLEND + ZWrite On パイプライン（MToon transparentWithZWrite 用）
+        // BLEND + ZWrite On pipeline (for MToon `transparentWithZWrite`).
         let pipeline_alpha_zwrite_cull =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(&format!("mesh_alpha_zwrite_cull{suffix}")),
@@ -2584,7 +2596,7 @@ impl GpuRenderer {
                 cache: None,
             });
 
-        // VRM 0.x _CullMode=Front 用パイプライン（前面カリング）
+        // Pipeline for VRM 0.x `_CullMode=Front` (front-face culling).
         let front_cull_primitive = wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
             cull_mode: Some(wgpu::Face::Front),
@@ -2783,7 +2795,7 @@ impl GpuRenderer {
                 cache: None,
             });
 
-        // MMD エッジパイプライン: Front cull, 2スロット頂点バッファ
+        // MMD edge pipeline: Front cull, 2-slot vertex buffer.
         let edge_vertex_buffers = &[
             Vertex::layout(),
             wgpu::VertexBufferLayout {
@@ -2825,7 +2837,7 @@ impl GpuRenderer {
             },
         ));
 
-        // MMD メインパイプライン（4種: cull/no_cull × opaque/alpha）
+        // MMD main pipelines (4 variants: cull / no_cull * opaque / alpha).
         let pipeline_mmd_main_cull = Some(device.create_render_pipeline(
             &wgpu::RenderPipelineDescriptor {
                 label: Some(&format!("mmd_main_cull{suffix}")),
@@ -2939,8 +2951,8 @@ impl GpuRenderer {
             },
         ));
 
-        // MToon アウトラインパイプライン: Front cull (inverted hull)
-        // edge_scale は GPU 側で outlineWidthMultiplyTexture をサンプリングするため不要
+        // MToon outline pipeline: Front cull (inverted hull).
+        // `edge_scale` is unnecessary because the GPU samples `outlineWidthMultiplyTexture`.
         let outline_vertex_buffers = &[Vertex::layout()];
         let pipeline_outline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(&format!("outline{suffix}")),
@@ -2968,7 +2980,7 @@ impl GpuRenderer {
             multiview: None,
             cache: None,
         });
-        // BLEND 用アウトラインパイプライン（ZWrite OFF）
+        // Outline pipeline for BLEND (ZWrite OFF).
         let pipeline_outline_blend =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(&format!("outline_blend{suffix}")),
@@ -2996,7 +3008,7 @@ impl GpuRenderer {
                 multiview: None,
                 cache: None,
             });
-        // MASK 用アウトラインパイプライン（AlphaToCoverage 有効）
+        // Outline pipeline for MASK (AlphaToCoverage enabled).
         let pipeline_outline_mask =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(&format!("outline_mask{suffix}")),
@@ -3058,14 +3070,14 @@ impl GpuRenderer {
         }
     }
 
-    /// ワイヤーフレーム対応かどうか
+    /// Whether wireframe is supported.
     pub fn supports_wireframe(&self) -> bool {
         self.supports_wireframe
     }
 
-    /// 必要なパイプラインセットが未生成なら遅延生成する
+    /// Lazily create the required pipeline set if not yet present.
     pub(crate) fn ensure_pipelines(&mut self, device: &wgpu::Device, use_unorm: bool, msaa: bool) {
-        // 既に生成済みなら何もしない
+        // Skip if already created.
         let already = match (msaa, use_unorm) {
             (true, false) => self.pipelines_msaa_srgb.is_some(),
             (false, false) => self.pipelines_no_msaa_srgb.is_some(),
@@ -3084,8 +3096,8 @@ impl GpuRenderer {
         }
     }
 
-    /// 現在の MSAA 設定と Unorm フラグに応じたパイプラインセットを取得
-    /// （事前に ensure_pipelines を呼んでおくこと）
+    /// Get the pipeline set matching the current MSAA setting and Unorm flag
+    /// (call `ensure_pipelines` beforehand).
     fn pipelines(&self, use_unorm: bool) -> &PipelineSet {
         match (self.current_msaa, use_unorm) {
             (true, false) => self
@@ -3107,34 +3119,34 @@ impl GpuRenderer {
         }
     }
 
-    /// テクスチャ bind group layout への参照
+    /// Reference to the texture bind group layout.
     pub fn texture_bgl(&self) -> &wgpu::BindGroupLayout {
         &self.texture_bgl
     }
 
-    /// 材質 bind group layout への参照
+    /// Reference to the material bind group layout.
     pub fn material_bgl(&self) -> &wgpu::BindGroupLayout {
         &self.material_bgl
     }
 
-    /// MToon 補助テクスチャ bind group layout への参照
+    /// Reference to the MToon auxiliary texture bind group layout.
     pub fn mtoon_aux_bgl(&self) -> &wgpu::BindGroupLayout {
         &self.mtoon_aux_bgl
     }
 
-    /// 共通サンプラーへの参照
+    /// Reference to the shared sampler.
     pub fn sampler(&self) -> &wgpu::Sampler {
         &self.default_sampler
     }
 
-    /// 法線キャッシュを無効化（モデル変更・法線再計算時に呼ぶ）
+    /// Invalidate the normal cache (call on model change / normal recomputation).
     pub fn invalidate_normal_cache(&mut self) {
         self.normal_dirty = true;
         self.normal_cache_visibility.clear();
         self.normal_cache_length = 0.0;
     }
 
-    /// オフスクリーンテクスチャを確保（サイズ変更または MSAA 切り替え時に再作成）
+    /// Ensure the offscreen texture is allocated (recreate on size change or MSAA toggle).
     fn ensure_offscreen(&mut self, device: &wgpu::Device, width: u32, height: u32, msaa: bool) {
         self.current_msaa = msaa;
         let need_recreate = self
@@ -3147,7 +3159,7 @@ impl GpuRenderer {
             return;
         }
 
-        // offscreen テクスチャ再作成に伴い Bloom の外部依存キャッシュを無効化
+        // Invalidate Bloom's external cache when offscreen textures are recreated.
         self.bloom.invalidate_external_cache();
 
         let tex_size = wgpu::Extent3d {
@@ -3156,7 +3168,7 @@ impl GpuRenderer {
             depth_or_array_layers: 1,
         };
 
-        // MSAA カラーテクスチャ（マルチサンプル、描画先）— MSAA 有効時のみ
+        // MSAA color texture (multisampled, render target) - only when MSAA is enabled.
         let (msaa_tex, msaa_view, msaa_view_unorm) = if msaa {
             let t = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("offscreen_msaa_color"),
@@ -3178,7 +3190,7 @@ impl GpuRenderer {
             (None, None, None)
         };
 
-        // リゾルブ先カラーテクスチャ（sample_count=1、egui表示用）
+        // Resolve target color texture (sample_count=1, for egui display).
         let color = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen_color"),
             size: tex_size,
@@ -3195,7 +3207,7 @@ impl GpuRenderer {
             ..Default::default()
         });
 
-        // デプステクスチャ（MSAA 時はマルチサンプル）
+        // Depth texture (multisampled when MSAA is enabled).
         let depth = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen_depth"),
             size: tex_size,
@@ -3208,7 +3220,7 @@ impl GpuRenderer {
         });
         let depth_view = depth.create_view(&Default::default());
 
-        // MRT bloom source テクスチャ (Rgba8Unorm, linear)
+        // MRT bloom source texture (Rgba8Unorm, linear).
         let bloom_format = wgpu::TextureFormat::Rgba8Unorm;
         let (msaa_bloom_tex, msaa_bloom_view) = if msaa {
             let t = device.create_texture(&wgpu::TextureDescriptor {
@@ -3257,7 +3269,7 @@ impl GpuRenderer {
         });
     }
 
-    /// 可視化バッファ（ボーン・法線・剛体・ジョイント）の頂点生成と GPU アップロード
+    /// Generate visualization buffer vertices (bones / normals / rigid bodies / joints) and upload them to GPU.
     fn prepare_visualization_buffers(
         &mut self,
         device: &wgpu::Device,
@@ -3266,12 +3278,12 @@ impl GpuRenderer {
         ir: &IrModel,
         params: &RenderParams,
     ) {
-        // アニメーション状態遷移を検出（Some→None でレストポーズに戻す必要がある）
+        // Detect animation state transitions (Some -> None requires reverting to the rest pose).
         let has_anim = params.animated_bone_globals.is_some();
         let anim_just_cleared = self.cache_had_anim && !has_anim;
         self.cache_had_anim = has_anim;
 
-        // ボーン頂点を更新（変化時のみ）
+        // Update bone vertices (only when changed).
         if params.display.show_bones && !ir.bones.is_empty() {
             let eye = params.camera.eye();
             let bone_changed = self.bone_line.vertex_count == 0
@@ -3293,7 +3305,7 @@ impl GpuRenderer {
                     params.display.bone_opacity,
                     params.animated_bone_globals,
                 );
-                // テールバッファ（LineList）
+                // Tail buffer (LineList).
                 self.bone_tail.vertex_count = self.bone_tail_work.len() as u32;
                 self.bone_tail.upload(
                     device,
@@ -3301,7 +3313,7 @@ impl GpuRenderer {
                     bytemuck::cast_slice(&self.bone_tail_work),
                     "bone_tail_vbuf",
                 );
-                // 塗りバッファ（TriangleList）
+                // Fill buffer (TriangleList).
                 self.bone_fill.vertex_count = self.bone_fill_work.len() as u32;
                 self.bone_fill.upload(
                     device,
@@ -3309,7 +3321,7 @@ impl GpuRenderer {
                     bytemuck::cast_slice(&self.bone_fill_work),
                     "bone_fill_vbuf",
                 );
-                // 外枠バッファ（LineList）
+                // Outline buffer (LineList).
                 self.bone_line.vertex_count = self.bone_work.len() as u32;
                 self.bone_line.upload(
                     device,
@@ -3320,7 +3332,7 @@ impl GpuRenderer {
             }
         }
 
-        // 法線表示頂点を更新（入力が変わった時、またはアニメーション中に再生成）
+        // Update normal-display vertices (regenerate when input changes or during animation).
         if params.display.show_normals {
             let length_changed =
                 (params.display.normal_length - self.normal_cache_length).abs() > 1e-6;
@@ -3350,12 +3362,12 @@ impl GpuRenderer {
             }
         } else {
             if self.normal.vertex_count > 0 {
-                self.normal_dirty = true; // 再表示時に再生成するためフラグを立てる
+                self.normal_dirty = true; // Mark dirty so we regenerate on the next show.
             }
             self.normal.vertex_count = 0;
         }
 
-        // SpringBone/Joint共通: ボーンデルタを1回だけ計算
+        // Common to SpringBone/Joint: compute bone deltas only once.
         let need_spring = params.display.show_spring_bones
             && (!ir.physics.rigid_bodies.is_empty() || !ir.physics.joints.is_empty());
         let need_joint = params.display.show_joints && !ir.physics.joints.is_empty();
@@ -3365,7 +3377,7 @@ impl GpuRenderer {
             None
         };
 
-        // SpringBone頂点を毎フレーム更新
+        // Update SpringBone vertices every frame.
         if !params.display.show_spring_bones
             || (ir.physics.rigid_bodies.is_empty() && ir.physics.joints.is_empty())
         {
@@ -3398,7 +3410,7 @@ impl GpuRenderer {
             }
         }
 
-        // ジョイント頂点を毎フレーム更新
+        // Update joint vertices every frame.
         if !params.display.show_joints || ir.physics.joints.is_empty() {
             self.joint.vertex_count = 0;
             self.joint_edge.vertex_count = 0;
@@ -3418,7 +3430,7 @@ impl GpuRenderer {
                     &bone_deltas,
                     params.is_vrm0,
                 );
-                // 面バッファ（TriangleList）
+                // Face buffer (TriangleList).
                 self.joint.vertex_count = self.joint_work.len() as u32;
                 self.joint.upload(
                     device,
@@ -3426,7 +3438,7 @@ impl GpuRenderer {
                     bytemuck::cast_slice(&self.joint_work),
                     "joint_vbuf",
                 );
-                // エッジバッファ（LineList）
+                // Edge buffer (LineList).
                 self.joint_edge.vertex_count = self.joint_edge_work.len() as u32;
                 self.joint_edge.upload(
                     device,
@@ -3438,7 +3450,7 @@ impl GpuRenderer {
         }
     }
 
-    /// オフスクリーンにモデルを描画し、結果テクスチャの egui TextureId を返す
+    /// Render the model to the offscreen texture and return its egui `TextureId`.
     #[allow(clippy::too_many_arguments)]
     pub fn render_to_texture(
         &mut self,
@@ -3450,30 +3462,30 @@ impl GpuRenderer {
         params: &RenderParams,
         cached_id: &mut Option<eframe::egui::TextureId>,
     ) -> (eframe::egui::TextureId, ()) {
-        // オフスクリーンテクスチャの確保（サイズ変更または MSAA 切り替え時に再作成）
+        // Ensure the offscreen texture (recreate on size change or MSAA toggle).
         self.ensure_offscreen(device, params.width, params.height, params.display.msaa);
 
-        // 可視化バッファの準備（ボーン・法線・剛体・ジョイント）
+        // Prepare visualization buffers (bones / normals / rigid bodies / joints).
         self.prepare_visualization_buffers(device, queue, model, ir, params);
 
         let mmd_mode = params.display.use_mmd_path;
         let mmd_edge_enabled = params.display.mmd_edge_enabled;
-        // ワイヤーフレーム/シェーダーオーバーライド時は MMD パスを使わず既存パイプラインにフォールバック
+        // For wireframe / shader override, fall back to existing pipelines instead of the MMD path.
         let mmd_solid = mmd_mode
             && params.display.draw_mode == DrawMode::Solid
             && params.display.shader_override == ShaderOverride::Default;
 
-        // MMD 描画が必要かどうかを事前チェック
+        // Check upfront whether MMD drawing is needed.
         let has_mmd_draws = mmd_solid
             && model.draws.iter().any(|d| {
                 d.render_style == super::mesh::RenderStyle::Mmd
                     && d.mmd_material_bind_group.is_some()
             });
 
-        // Unorm フレーム判定: MMD 専用パスに完全に乗るフレームのみ
+        // Decide Unorm frame: only when the frame fully runs on the MMD-dedicated path.
         let use_unorm = can_use_unorm_frame(model, params.material_visibility, mmd_solid);
 
-        // パイプラインセットの遅延生成（未作成なら初回のみコンパイル）
+        // Lazily create the pipeline set (compiled only on first use).
         self.ensure_pipelines(device, use_unorm, self.current_msaa);
 
         let offscreen = self
@@ -3481,7 +3493,7 @@ impl GpuRenderer {
             .as_ref()
             .expect("already initialized by ensure_offscreen");
 
-        // カメラユニフォーム更新（再利用バッファで heap allocation 回避）
+        // Update the camera uniform (reuse buffer to avoid heap allocation).
         let cam_uniform = Self::build_camera_uniform(params);
         self.encase_work.clear();
         let mut encase_buf = encase::UniformBuffer::new(&mut self.encase_work);
@@ -3493,11 +3505,11 @@ impl GpuRenderer {
             label: Some("offscreen_encoder"),
         });
 
-        // take で借用衝突を回避（self.pipelines() が self 全体を immutable borrow するため）
+        // Use `take` to avoid borrow conflicts (`self.pipelines()` borrows all of `self` immutably).
         let mut work_draw_centers = std::mem::take(&mut self.work_draw_centers);
         let mut work_sorted_indices = std::mem::take(&mut self.work_sorted_indices);
 
-        // 描画順インデックス構築
+        // Build the draw-order index.
         let pending_sort_cache = self.build_draw_queue(
             model,
             params,
@@ -3507,7 +3519,7 @@ impl GpuRenderer {
 
         let ps = self.pipelines(use_unorm);
 
-        // カラービュー選択: use_unorm に応じて Unorm / sRGB ビュー
+        // Color view selection: Unorm / sRGB view depending on `use_unorm`.
         let (color_view, resolve_target): (&wgpu::TextureView, Option<&wgpu::TextureView>) =
             if use_unorm {
                 if let Some(ref msaa_view_unorm) = offscreen.msaa_color_view_unorm {
@@ -3521,14 +3533,14 @@ impl GpuRenderer {
                 (&offscreen.color_view, None)
             };
 
-        // クリアカラー補正: Unorm ターゲットに書く値は egui が sRGB デコードするため事前エンコード
+        // Clear-color compensation: pre-encode values written to the Unorm target because egui sRGB-decodes them.
         let bg = if use_unorm {
             linear_to_srgb_f64(params.display.bg_brightness as f64)
         } else {
             params.display.bg_brightness as f64
         };
 
-        // bloom source ビュー選択（MRT 2つ目のターゲット、常に Rgba8Unorm）
+        // bloom source view selection (the second MRT target, always Rgba8Unorm).
         let (bloom_view, bloom_resolve): (&wgpu::TextureView, Option<&wgpu::TextureView>) =
             if offscreen.msaa {
                 if let Some(ref msaa_bv) = offscreen.msaa_bloom_source_view {
@@ -3540,7 +3552,7 @@ impl GpuRenderer {
                 (&offscreen.bloom_source_view, None)
             };
 
-        // ===== Pass 1 (MRT): メッシュ描画 — color + bloom_source の 2 ターゲット =====
+        // ===== Pass 1 (MRT): mesh drawing - 2 targets (color + bloom_source) =====
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(if use_unorm {
@@ -3582,7 +3594,7 @@ impl GpuRenderer {
                 ..Default::default()
             });
 
-            // Standard メッシュ描画（空モデルの場合はスキップ）
+            // Standard mesh draw (skipped for empty models).
             if !model.draws.is_empty() {
                 pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
                 pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
@@ -3602,7 +3614,7 @@ impl GpuRenderer {
                 );
             }
 
-            // MMD 描画（材質インデックス順 — PMX の描画順序を維持）
+            // MMD draw (material-index order - preserves PMX's draw order).
             if has_mmd_draws && !model.draws.is_empty() {
                 Self::draw_mmd_meshes(
                     &mut pass,
@@ -3617,7 +3629,7 @@ impl GpuRenderer {
                 );
             }
 
-            // 材質ホバーハイライト（オレンジワイヤーフレーム）
+            // Material hover highlight (orange wireframe).
             Self::draw_highlight(
                 &mut pass,
                 model,
@@ -3629,14 +3641,17 @@ impl GpuRenderer {
             );
         } // end Pass 1 (MRT)
 
-        // ===== Pass 2 (1ターゲット): グリッド + オーバーレイ（法線・ボーン・剛体・ジョイント）=====
-        // NOTE: MSAA 有効時、LoadOp::Load はタイルベース GPU（Intel iGPU 等）で MSAA カラー
-        // テクスチャの VRAM→タイル読み戻しが発生し帯域コストがかかる。
-        // Pass 1 (MRT: 2ターゲット) と統合すればレンダーパス開始を1回に削減できるが、
-        // オーバーレイパイプラインが1ターゲットで作成されているため MRT 互換化
-        // （2番目のターゲットに write_mask::EMPTY を追加）が必要になる。
-        // 現時点では実測での問題報告がなく、パイプライン複雑化のコストに見合わないため
-        // 現状維持とする。将来 MSAA+タイル GPU で帯域がボトルネックになった場合に再検討。
+        // ===== Pass 2 (single target): grid + overlays (normals / bones / rigid bodies / joints) =====
+        // NOTE: when MSAA is enabled, `LoadOp::Load` causes a VRAM -> tile
+        // readback of the MSAA color texture on tile-based GPUs (Intel iGPU
+        // etc.), which incurs bandwidth cost.
+        // Merging with Pass 1 (MRT: 2 targets) would reduce render-pass starts
+        // to one, but the overlay pipelines are created with a single target,
+        // so MRT compatibility (adding `write_mask::EMPTY` on the second
+        // target) would be required.
+        // No measured issues have been reported so far, and the cost of
+        // complicating the pipeline is not worth it; keep as is. Revisit if
+        // bandwidth becomes a bottleneck on future MSAA + tile GPUs.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("pass2_overlay"),
@@ -3662,11 +3677,11 @@ impl GpuRenderer {
             self.draw_overlays(&mut pass, params, ps);
         } // end Pass 2 (overlay)
 
-        // 作業バッファを返却（容量を保持して次フレームで再利用）
+        // Return work buffers (preserve capacity for reuse on the next frame).
         self.work_draw_centers = work_draw_centers;
         self.work_sorted_indices = work_sorted_indices;
 
-        // 半透明ソートキャッシュ更新（ps 借用解放後にまとめて書き込み）
+        // Update the translucent-sort cache (write all at once after the `ps` borrow is released).
         if let Some((eye, draw_count, vert_ptr)) = pending_sort_cache {
             self.cache_sort_eye = Some(eye);
             self.cache_sort_draw_count = draw_count;
@@ -3674,7 +3689,7 @@ impl GpuRenderer {
             self.sort_dirty = false;
         }
 
-        // --- Bloom ポストエフェクト ---
+        // --- Bloom post effect ---
         let bloom_enabled = params.display.bloom_enabled && params.display.bloom_intensity > 0.0;
         if bloom_enabled {
             self.bloom.execute(
@@ -3693,7 +3708,7 @@ impl GpuRenderer {
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        // テクスチャ登録（bloom 有効時は composite 出力を、無効時は offscreen をそのまま使う）
+        // Register the texture (use the composite output when bloom is on; the offscreen view otherwise).
         let present_view = if bloom_enabled {
             self.bloom.composite_view().unwrap_or(&offscreen.color_view)
         } else {
@@ -3722,10 +3737,10 @@ impl GpuRenderer {
     }
 
     // -----------------------------------------------------------------------
-    // render_to_texture ヘルパー群
+    // `render_to_texture` helpers
     // -----------------------------------------------------------------------
 
-    /// カメラユニフォームを構築する
+    /// Build the camera uniform.
     fn build_camera_uniform(params: &RenderParams) -> CameraUniform {
         let viewport_w = params.width as f32;
         let viewport_h = params.height as f32;
@@ -3769,9 +3784,9 @@ impl GpuRenderer {
         }
     }
 
-    /// 描画順インデックスをソートする（半透明のカメラ距離ソート含む）
+    /// Sort the draw-order index (includes camera-distance sorting for translucents).
     ///
-    /// ソートが行われた場合は `Some((eye, draw_count, vert_ptr))` を返す。
+    /// Returns `Some((eye, draw_count, vert_ptr))` if a sort was performed.
     fn build_draw_queue(
         &self,
         model: &GpuModel,
@@ -3852,7 +3867,7 @@ impl GpuRenderer {
         Some((eye, draw_count, vert_ptr))
     }
 
-    /// MToon 4段階描画（Standard RenderStyle のメッシュ描画 + アウトライン）
+    /// MToon 4-phase drawing (mesh draw for Standard RenderStyle + outline).
     #[allow(clippy::too_many_arguments)]
     fn draw_standard_meshes<'a>(
         pass: &mut wgpu::RenderPass<'a>,
@@ -3967,7 +3982,7 @@ impl GpuRenderer {
                     0..1,
                 );
 
-                // BLEND/BlendZWrite: サーフェス直後にアウトライン描画（インターリーブ）
+                // BLEND / BlendZWrite: draw the outline immediately after the surface (interleaved).
                 if interleave_outline
                     && !use_wireframe
                     && params.display.outline_enabled
@@ -4004,7 +4019,7 @@ impl GpuRenderer {
                 }
             }
 
-            // OPAQUE/MASK: アウトラインをフェーズ後にまとめて描画
+            // OPAQUE / MASK: draw outlines all at once after the phase.
             if !interleave_outline
                 && !use_wireframe
                 && params.display.outline_enabled
@@ -4059,7 +4074,7 @@ impl GpuRenderer {
             }
         }
 
-        // Solid+Wire オーバーレイ
+        // Solid+Wire overlay.
         if use_solid_wire {
             let wire_pl = ps
                 .pipeline_wire_overlay
@@ -4092,7 +4107,7 @@ impl GpuRenderer {
         }
     }
 
-    /// MMD 描画パス（材質インデックス順）
+    /// MMD draw pass (material-index order).
     #[allow(clippy::too_many_arguments)]
     fn draw_mmd_meshes<'a>(
         pass: &mut wgpu::RenderPass<'a>,
@@ -4188,7 +4203,7 @@ impl GpuRenderer {
                 0..1,
             );
 
-            // 不透明材質のエッジをその場で描画（Wire モードではスキップ）
+            // Draw the edge for opaque materials inline (skipped in Wire mode).
             if !use_wireframe && can_edge && !draw.is_alpha && draw.has_edge {
                 if let (Some(ref mmd_mat_bg), Some(edge_scale_buf), Some(edge_pipeline)) = (
                     &draw.mmd_material_bind_group,
@@ -4206,7 +4221,7 @@ impl GpuRenderer {
                         0,
                         0..1,
                     );
-                    // エッジ描画後にメインバッファを復元
+                    // Restore the main buffer after edge drawing.
                     pass.set_vertex_buffer(0, model.vertex_buf.slice(..));
                     pass.set_index_buffer(model.index_buf.slice(..), wgpu::IndexFormat::Uint32);
                 }
@@ -4214,7 +4229,7 @@ impl GpuRenderer {
         }
     }
 
-    /// 材質ホバーハイライト描画（オレンジワイヤーフレーム）
+    /// Material hover-highlight draw (orange wireframe).
     fn draw_highlight<'a>(
         pass: &mut wgpu::RenderPass<'a>,
         model: &'a GpuModel,
@@ -4252,14 +4267,14 @@ impl GpuRenderer {
         }
     }
 
-    /// Pass 2: グリッド + 可視化オーバーレイ（法線・ボーン・剛体・ジョイント）
+    /// Pass 2: grid + visualization overlays (normals / bones / rigid bodies / joints).
     fn draw_overlays<'p>(
         &'p self,
         pass: &mut wgpu::RenderPass<'p>,
         params: &RenderParams,
         ps: &'p PipelineSet,
     ) {
-        // グリッド描画
+        // Grid draw.
         if params.display.show_grid {
             pass.set_pipeline(&ps.pipeline_grid);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -4267,7 +4282,7 @@ impl GpuRenderer {
             pass.draw(0..self.grid_vertex_count, 0..1);
         }
 
-        // 法線表示（LineList オーバーレイ）
+        // Normal display (LineList overlay).
         if params.display.show_normals && self.normal.vertex_count > 0 {
             if let Some(ref buf) = self.normal.buf {
                 pass.set_pipeline(&ps.pipeline_line_overlay);
@@ -4277,7 +4292,7 @@ impl GpuRenderer {
             }
         }
 
-        // ボーン描画（3段階: テール → 塗り → 外枠）
+        // Bone draw (3 phases: tail -> fill -> outline).
         if params.display.show_bones {
             if self.bone_tail.vertex_count > 0 {
                 if let Some(ref buf) = self.bone_tail.buf {
@@ -4305,7 +4320,7 @@ impl GpuRenderer {
             }
         }
 
-        // 剛体描画
+        // Rigid-body draw.
         if params.display.show_spring_bones && self.spring.vertex_count > 0 {
             if let Some(ref buf) = self.spring.buf {
                 pass.set_pipeline(&ps.pipeline_line_overlay);
@@ -4315,7 +4330,7 @@ impl GpuRenderer {
             }
         }
 
-        // ジョイント描画
+        // Joint draw.
         if params.display.show_joints {
             if self.joint.vertex_count > 0 {
                 if let Some(ref buf) = self.joint.buf {
@@ -4336,7 +4351,7 @@ impl GpuRenderer {
         }
     }
 
-    /// MMD 用 GPU リソースを DrawCall に構築（全 GPU モデル生成経路から呼ぶ）
+    /// Build MMD GPU resources on `DrawCall`s (called from all GPU-model creation paths).
     pub fn prepare_mmd_resources(
         &self,
         device: &wgpu::Device,
@@ -4346,7 +4361,7 @@ impl GpuRenderer {
     ) {
         use super::mesh::RenderStyle;
 
-        // draws を一時的に取り出して借用衝突を回避
+        // Take `draws` temporarily to avoid borrow conflicts.
         let mut draws = std::mem::take(&mut model.draws);
         let gpu_textures_unorm = &model.gpu_texture_views_unorm;
 
@@ -4360,11 +4375,12 @@ impl GpuRenderer {
         model.draws = draws;
     }
 
-    /// 1 つの DrawCall に対する MMD 互換パスの bind group 3 系統（material / texture / aux）を
-    /// 再生成する（§C）。
+    /// Rebuild the 3 bind groups (material / texture / aux) of the
+    /// MMD-compatible path for a single `DrawCall` (§C).
     ///
-    /// `prepare_mmd_resources` の一括処理と `rebuild_material_bind_groups` の per-material
-    /// 経路の両方から呼ばれる。`RenderStyle::Mmd` 以外が渡された場合は何もせず早期 return する。
+    /// Called from both the bulk processing in `prepare_mmd_resources` and the
+    /// per-material path in `rebuild_material_bind_groups`. Early-returns
+    /// without doing anything if not `RenderStyle::Mmd`.
     fn rebuild_mmd_for_draw(
         &self,
         device: &wgpu::Device,
@@ -4433,7 +4449,7 @@ impl GpuRenderer {
         draw.mmd_material_buf = Some(buf);
         draw.mmd_material_bind_group = Some(bind_group);
 
-        // MMD メインテクスチャ bind group（Unorm ビュー）
+        // MMD main texture bind group (Unorm view).
         let mmd_tex_bg = mat.texture_index.and_then(|ti| {
             gpu_textures_unorm.get(ti).map(|unorm_view| {
                 create_texture_bind_group(device, &self.texture_bgl, unorm_view, tex_sampler)
@@ -4441,7 +4457,7 @@ impl GpuRenderer {
         });
         draw.mmd_texture_bind_group = mmd_tex_bg;
 
-        // sphere/toon aux bind group（Unorm ビュー）
+        // sphere / toon aux bind group (Unorm view).
         let sphere_view = mat
             .sphere_texture_index
             .and_then(|i| gpu_textures_unorm.get(i));
@@ -4453,7 +4469,7 @@ impl GpuRenderer {
                     .map(|i| &self.shared_toon_textures_unorm[i as usize])
             });
 
-        // sphere/toon がない場合は shared_toon_textures_unorm[0]（白グラデ）をフォールバック
+        // Fallback to `shared_toon_textures_unorm[0]` (white gradient) when sphere / toon is absent.
         let sv = sphere_view.unwrap_or(&self.shared_toon_textures_unorm[0]);
         let tv = toon_view.unwrap_or(&self.shared_toon_textures_unorm[0]);
 
@@ -4482,20 +4498,28 @@ impl GpuRenderer {
         draw.mmd_aux_bind_group = Some(aux_bg);
     }
 
-    /// 材質編集ドロワーからの dirty 通知を受けて、1 材質ぶんの全 bind group を再生成する（§C）。
+    /// On a dirty notification from the material edit drawer, rebuild all
+    /// bind groups for one material (§C).
     ///
-    /// 標準パス（material_bind_group + mtoon_aux_bind_group）と MMD 互換パス
-    /// （mmd_material/mmd_texture/mmd_aux の 3 系統）の両方を同時に更新する。
-    /// `use_mmd_path` 切替時に編集が片方のパスで消えないように、必ず両方を走らせる。
+    /// Updates both the standard path (`material_bind_group` +
+    /// `mtoon_aux_bind_group`) and the MMD-compatible path
+    /// (`mmd_material` / `mmd_texture` / `mmd_aux` - 3 groups) at the same
+    /// time. Always runs both so edits don't disappear on one path when
+    /// `use_mmd_path` is toggled.
     ///
-    /// 現行 `DrawCall` は `wgpu::BindGroup` のみを保持して `wgpu::Buffer` ハンドルを持たないため
-    /// `queue.write_buffer` による部分更新は構造上不可能。bind group ごと再生成する方針で割り切り
-    /// （プラン §C に明記、将来最適化は DrawCall.material_buf 追加で別 PR にて実施）。
-    /// 材質パラメータの変更を GPU に反映する。
+    /// The current `DrawCall` only holds `wgpu::BindGroup` and does not have
+    /// a `wgpu::Buffer` handle, so structurally `queue.write_buffer` partial
+    /// updates are impossible. Decided to rebuild whole bind groups instead
+    /// (documented in plan §C; future optimization could add
+    /// `DrawCall.material_buf` in a separate PR).
+    /// Reflects material-parameter changes on the GPU.
     ///
-    /// - `uniform_only = true`: カラー/スカラーのみ変更。`queue.write_buffer` で部分更新し、
-    ///   bind group 再生成をスキップする（材質エディタのスライダー操作、Expression 材質バインド用）。
-    /// - `uniform_only = false`: テクスチャ変更を含む。bind group + aux bind group を再生成する。
+    /// - `uniform_only = true`: only color / scalar values change. Performs a
+    ///   partial update via `queue.write_buffer` and skips bind-group
+    ///   rebuilds (used for material-editor slider edits and Expression
+    ///   material bind).
+    /// - `uniform_only = false`: includes texture changes. Rebuilds the bind
+    ///   group + aux bind group.
     #[allow(clippy::too_many_arguments)]
     pub fn rebuild_material_bind_groups(
         &self,
@@ -4517,11 +4541,11 @@ impl GpuRenderer {
         }
         let mat = &ir.materials[mat_idx];
 
-        // §C: 純関数で params / aux_refs を計算
+        // §C: compute params / aux_refs as pure functions.
         let params = build_material_params_for(mat, mat_idx, flags);
 
         if uniform_only {
-            // ファストパス: buffer 書き込みのみ、bind group 再生成なし
+            // Fast path: buffer write only; no bind-group rebuild.
             for draw in &mut model.draws {
                 if draw.material_index == mat_idx {
                     write_material_buffer(queue, &draw.material_buf, &params);
@@ -4530,10 +4554,10 @@ impl GpuRenderer {
             return;
         }
 
-        // フルパス: bind group 再生成（テクスチャ変更時）
+        // Full path: rebuild bind groups (texture changes).
         let aux_refs = build_aux_refs_for(mat);
 
-        // 借用衝突を回避するため draws を一時的に奪う（prepare_mmd_resources と同じパターン）
+        // Take `draws` temporarily to avoid borrow conflicts (same pattern as `prepare_mmd_resources`).
         let mut draws = std::mem::take(&mut model.draws);
         let gpu_texture_views = &model.gpu_texture_views;
         let gpu_texture_views_unorm = &model.gpu_texture_views_unorm;
@@ -4543,19 +4567,23 @@ impl GpuRenderer {
                 continue;
             }
 
-            // 標準パス: material uniform buffer を更新
+            // Standard path: update the material uniform buffer.
             write_material_buffer(queue, &draw.material_buf, &params);
 
-            // v0.5.1 レビュー [P1] 対応: 標準パスの texture_bind_group（BaseColor）も再生成する。
-            // 旧実装は aux / mmd のみ更新していたため、pristine 復元や texture_index の変更が
-            // GPU 側に反映されず、古い BaseColor テクスチャ bind が画面に残る不具合があった。
+            // v0.5.1 review [P1]: also rebuild the standard path's
+            // `texture_bind_group` (BaseColor). The old implementation only
+            // updated aux / mmd, so pristine restoration and `texture_index`
+            // changes were not reflected on the GPU; the previous BaseColor
+            // texture bind remained on screen.
             //
-            // レビュー 04 [P1] 対応: 情報源を初回 DrawCall 構築と揃える（mesh.rs:1256）。
-            // 旧実装は `mat.base_color_tex_info` のみを参照していたが、PMX/PMD 材質は
-            // `texture_index` を持つ一方で `base_color_tex_info` が None のため、
-            // full rebuild で `texture_bind_group = None` になり白テクスチャに後退していた。
-            // 修正: `texture_index` を優先し、サンプラーは `base_color_tex_info.sampler` があれば
-            // それ、なければデフォルト `IrSamplerInfo` にフォールバック。
+            // Review 04 [P1]: align the source of truth with the initial
+            // `DrawCall` construction (mesh.rs:1256). The old implementation
+            // only referenced `mat.base_color_tex_info`, but PMX / PMD
+            // materials have `texture_index` while `base_color_tex_info` is
+            // None, so a full rebuild left `texture_bind_group = None` and
+            // regressed to a white texture. Fix: prefer `texture_index`, and
+            // for the sampler use `base_color_tex_info.sampler` if present;
+            // otherwise fall back to the default `IrSamplerInfo`.
             draw.texture_bind_group = mat.texture_index.and_then(|tex_idx| {
                 gpu_texture_views.get(tex_idx).map(|srgb_view| {
                     let sampler_info = mat
@@ -4568,7 +4596,7 @@ impl GpuRenderer {
                 })
             });
 
-            // 標準パス: mtoon_aux_bind_group（aux_refs が Some の材質のみ）
+            // Standard path: `mtoon_aux_bind_group` (only for materials whose `aux_refs` is `Some`).
             if let Some(refs) = &aux_refs {
                 draw.mtoon_aux_bind_group = Some(rebuild_mtoon_aux_bind_group(
                     device,
@@ -4582,7 +4610,7 @@ impl GpuRenderer {
                 draw.mtoon_aux_bind_group = None;
             }
 
-            // MMD 互換パス: RenderStyle::Mmd のみ（prepare_mmd_resources と同じ条件）
+            // MMD-compatible path: only `RenderStyle::Mmd` (same condition as `prepare_mmd_resources`).
             if draw.render_style == RenderStyle::Mmd {
                 self.rebuild_mmd_for_draw(
                     device,
@@ -4597,19 +4625,19 @@ impl GpuRenderer {
         model.draws = draws;
     }
 
-    /// MMD Material BGL への参照（外部用）
+    /// Reference to the MMD material BGL (for external use).
     pub fn mmd_material_bgl(&self) -> &wgpu::BindGroupLayout {
         &self.mmd_material_bgl
     }
 
-    /// デフォルト MMD aux bind group への参照
+    /// Reference to the default MMD aux bind group.
     pub fn default_mmd_aux_bind_group(&self) -> &wgpu::BindGroup {
         &self.default_mmd_aux_bind_group
     }
 }
 
-/// MMD 専用パスに完全に乗るフレームかどうかを判定
-/// true の場合 Unorm レンダーターゲットを使用し、ガンマ空間で正確な描画を行う
+/// Decide whether the frame fully runs on the MMD-dedicated path.
+/// When true, use the Unorm render target for accurate gamma-space rendering.
 fn can_use_unorm_frame(model: &GpuModel, visible: &[bool], mmd_solid: bool) -> bool {
     if !mmd_solid {
         return false;
@@ -4629,7 +4657,7 @@ fn can_use_unorm_frame(model: &GpuModel, visible: &[bool], mmd_solid: bool) -> b
     has_visible_mmd
 }
 
-/// 正規 sRGB 変換（f64精度、クリアカラー補正用）
+/// Canonical sRGB conversion (f64 precision; for clear-color compensation).
 fn linear_to_srgb_f64(v: f64) -> f64 {
     if v <= 0.0031308 {
         v * 12.92
@@ -4638,7 +4666,7 @@ fn linear_to_srgb_f64(v: f64) -> f64 {
     }
 }
 
-/// 1x1 白テクスチャ bind group を作成
+/// Create a 1x1 white-texture bind group.
 fn create_white_texture_bind_group(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -4701,7 +4729,7 @@ fn create_white_texture_bind_group(
     })
 }
 
-/// テクスチャ bind group を作成（外部から呼ぶ）
+/// Create a texture bind group (for external callers).
 pub fn create_texture_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -4724,9 +4752,9 @@ pub fn create_texture_bind_group(
     })
 }
 
-/// 材質 bind group を作成
-/// IrTextureInfo から MaterialUniform 用 UV パラメータをパック
-/// 返り値: ([tex_coord, offset.x, offset.y, rotation], [scale.x, scale.y, 0, 0])
+/// Create the material bind group.
+/// Pack UV parameters for `MaterialUniform` from `IrTextureInfo`.
+/// Return value: ([tex_coord, offset.x, offset.y, rotation], [scale.x, scale.y, 0, 0]).
 pub fn pack_uv_params(
     info: Option<&crate::intermediate::types::IrTextureInfo>,
 ) -> ([f32; 4], [f32; 4]) {
@@ -4739,7 +4767,7 @@ pub fn pack_uv_params(
     }
 }
 
-/// `create_material_bind_group` に渡すマテリアルパラメータ群
+/// Material parameters passed to `create_material_bind_group`.
 pub struct MaterialParams {
     pub diffuse: [f32; 4],
     pub shade_color: [f32; 3],
@@ -4783,8 +4811,9 @@ pub struct MaterialParams {
     pub matcap_uv: ([f32; 4], [f32; 4]),
 }
 
-/// `MaterialParams` を `MaterialUniform` に変換し encase でシリアライズする。
-/// `create_material_buffer_and_bind_group` / `write_material_buffer` の共通パス。
+/// Convert `MaterialParams` to `MaterialUniform` and serialize via encase.
+/// Shared path for `create_material_buffer_and_bind_group` /
+/// `write_material_buffer`.
 pub fn serialize_material_uniform(params: &MaterialParams) -> Vec<u8> {
     let p = params;
     let uniform = MaterialUniform {
@@ -4843,9 +4872,10 @@ pub fn serialize_material_uniform(params: &MaterialParams) -> Vec<u8> {
     encase_buf.into_inner()
 }
 
-/// 材質 uniform バッファ（`UNIFORM | COPY_DST`）と bind group を同時に作成する。
-/// モデルロード時に使用。返された `wgpu::Buffer` は `DrawCall.material_buf` に保持し、
-/// `write_material_buffer` で per-frame 部分更新が可能。
+/// Create the material uniform buffer (`UNIFORM | COPY_DST`) and its bind
+/// group at the same time. Used at model load. The returned `wgpu::Buffer`
+/// is stored in `DrawCall.material_buf` and supports per-frame partial
+/// updates via `write_material_buffer`.
 pub fn create_material_buffer_and_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -4868,16 +4898,17 @@ pub fn create_material_buffer_and_bind_group(
     (buf, bg)
 }
 
-/// 既存の材質 uniform バッファに新しいパラメータを書き込む。
-/// bind group 再生成なしで GPU 上の材質パラメータを更新する。
-/// Expression 材質バインドや材質エディタのカラー/スカラー変更時に使用。
+/// Write new parameters into an existing material uniform buffer.
+/// Updates GPU-side material parameters without rebuilding the bind group.
+/// Used by Expression material bind and the material editor for color /
+/// scalar edits.
 pub fn write_material_buffer(queue: &wgpu::Queue, buf: &wgpu::Buffer, params: &MaterialParams) {
     let bytes = serialize_material_uniform(params);
     queue.write_buffer(buf, 0, &bytes);
 }
 
-/// 後方互換シム: `create_material_bind_group` のシグネチャを維持。
-/// 新規コードでは `create_material_buffer_and_bind_group` を使うこと。
+/// Backward-compatibility shim: keeps the `create_material_bind_group`
+/// signature. New code should use `create_material_buffer_and_bind_group`.
 pub fn create_material_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -4887,9 +4918,9 @@ pub fn create_material_bind_group(
     bg
 }
 
-/// MToon 補助テクスチャ bind group layout (group 3) を作成
-/// テクスチャごとに sampler を持つ（glTF の texture 単位 sampler に準拠）
-/// binding 2n: sampler, binding 2n+1: texture_2d（8 テクスチャ × 2 = 16 bindings）
+/// Create the MToon auxiliary texture bind group layout (group 3).
+/// Has a sampler per texture (matches glTF's per-texture sampler model).
+/// binding 2n: sampler, binding 2n+1: texture_2d (8 textures * 2 = 16 bindings).
 fn create_mtoon_aux_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     let frag = wgpu::ShaderStages::FRAGMENT;
     let vert_frag = wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX;
@@ -4922,9 +4953,9 @@ fn create_mtoon_aux_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupL
             tex_entry(5, frag),          // t_shading_shift
             sampler_entry(6, frag),      // s_rim_multiply
             tex_entry(7, frag),          // t_rim_multiply
-            sampler_entry(8, vert_frag), // s_uv_anim_mask（頂点シェーダーからも参照）
+            sampler_entry(8, vert_frag), // s_uv_anim_mask (also referenced from the vertex shader)
             tex_entry(9, vert_frag),     // t_uv_anim_mask
-            sampler_entry(10, vert),     // s_outline_width（頂点シェーダーのみ）
+            sampler_entry(10, vert),     // s_outline_width (vertex shader only)
             tex_entry(11, vert),         // t_outline_width
             sampler_entry(12, frag),     // s_emissive
             tex_entry(13, frag),         // t_emissive
@@ -4934,13 +4965,13 @@ fn create_mtoon_aux_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupL
     })
 }
 
-/// 補助テクスチャ 1 枚分（テクスチャビュー + サンプラー）
+/// One auxiliary texture (texture view + sampler).
 pub struct AuxTexEntry<'a> {
     pub view: &'a wgpu::TextureView,
     pub sampler: &'a wgpu::Sampler,
 }
 
-/// MToon 補助テクスチャ bind group を作成（テクスチャごとに sampler を持つ）
+/// Create the MToon auxiliary texture bind group (one sampler per texture).
 #[allow(clippy::too_many_arguments)]
 pub fn create_mtoon_aux_bind_group(
     device: &wgpu::Device,
@@ -5026,12 +5057,12 @@ pub fn create_mtoon_aux_bind_group(
     })
 }
 
-/// MToon 補助テクスチャ bind group layout を公開で作成
+/// Public wrapper that creates the MToon auxiliary texture bind group layout.
 pub fn create_mtoon_aux_bind_group_layout_pub(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     create_mtoon_aux_bind_group_layout(device)
 }
 
-/// 1x1 白テクスチャの sRGB TextureView を作成（MToon 補助 bind group デフォルト用）
+/// Create the sRGB `TextureView` for a 1x1 white texture (default for the MToon aux bind group).
 pub fn create_white_texture_view_srgb(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -5040,7 +5071,7 @@ pub fn create_white_texture_view_srgb(
     srgb
 }
 
-/// 1x1 黒テクスチャの TextureView を作成（公開版）
+/// Create the `TextureView` for a 1x1 black texture (public version).
 pub fn create_black_texture_view_pub(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -5048,8 +5079,8 @@ pub fn create_black_texture_view_pub(
     create_black_texture_view(device, queue)
 }
 
-/// 1x1 白テクスチャの TextureView を作成（MMD デフォルト用）
-/// 戻り値: (sRGB ビュー, Unorm ビュー)
+/// Create the `TextureView` for a 1x1 white texture (MMD default).
+/// Return value: (sRGB view, Unorm view).
 fn create_white_texture_view(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -5095,7 +5126,7 @@ fn create_white_texture_view(
     (srgb_view, unorm_view)
 }
 
-/// 1x1 黒テクスチャの TextureView を作成（MatCap デフォルト用: RGB=0 で無効化）
+/// Create the `TextureView` for a 1x1 black texture (MatCap default: RGB=0 disables it).
 fn create_black_texture_view(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("black_1x1_view"),
@@ -5133,8 +5164,8 @@ fn create_black_texture_view(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu
     tex.create_view(&Default::default())
 }
 
-/// 1x1 フラット法線テクスチャの Unorm TextureView を作成
-/// tangent-space (0,0,1) = RGBA(128,128,255,255) — 法線マップなしと等価
+/// Create the Unorm `TextureView` for a 1x1 flat-normal texture.
+/// tangent-space (0, 0, 1) = RGBA(128, 128, 255, 255) - equivalent to no normal map.
 pub fn create_flat_normal_texture_view(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -5175,23 +5206,24 @@ pub fn create_flat_normal_texture_view(
     tex.create_view(&Default::default())
 }
 
-/// 共有トゥーンテクスチャ (toon01-10) を CPU で生成し GPU にアップロード
-/// 戻り値: (sRGB ビュー配列, Unorm ビュー配列)
+/// Generate shared toon textures (toon01-10) on the CPU and upload to GPU.
+/// Return value: (array of sRGB views, array of Unorm views).
 ///
-/// MMD 標準の toon01-10.bmp (32×32px) の各行・左端ピクセル色を忠実に再現する。
-/// シェーダーは U=0.0 固定でサンプルするため列方向の色差は無視できる。
+/// Faithfully reproduces the per-row, leftmost-pixel color of MMD's standard
+/// toon01-10.bmp (32x32 px). Shaders sample at fixed U=0.0, so column-wise
+/// color differences are negligible.
 fn generate_shared_toon_textures(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
 ) -> ([wgpu::TextureView; 10], [wgpu::TextureView; 10]) {
-    // MMD 標準トゥーンの行ごとの RGB 値 (row 0=上端, row 31=下端)
+    // Per-row RGB values of MMD's standard toon (row 0 = top, row 31 = bottom).
     // ---------------------------------------------------------------
-    // toon01-04: row 0-15 = 白, row 16-31 = shadow色 の 2色ステップ
-    // toon05-06: MMD 参照データ (不規則グラデーション、LUT)
-    // toon07-10: 全白 (トゥーン効果なし)
+    // toon01-04: row 0-15 = white, row 16-31 = shadow color (2-tone step).
+    // toon05-06: MMD reference data (irregular gradient, LUT).
+    // toon07-10: all white (no toon effect).
     // ---------------------------------------------------------------
 
-    /// 上半分=白, 下半分=shadow の 2色ステップテクスチャを生成
+    /// Produce a 2-tone step texture (top half = white, bottom half = shadow).
     const fn toon_step(shadow: [u8; 3]) -> [[u8; 3]; 32] {
         let mut rows = [[255u8, 255, 255]; 32];
         let mut i = 16;
@@ -5202,7 +5234,7 @@ fn generate_shared_toon_textures(
         rows
     }
 
-    /// (色, 繰り返し回数) のランレングスから 32行テクスチャを展開
+    /// Expand a 32-row texture from a run-length list of (color, count).
     const fn toon_rle<const N: usize>(runs: [([u8; 3], u8); N]) -> [[u8; 3]; 32] {
         let mut rows = [[0u8; 3]; 32];
         let mut pos = 0usize;
@@ -5220,12 +5252,12 @@ fn generate_shared_toon_textures(
         rows
     }
 
-    const TOON01: [[u8; 3]; 32] = toon_step([205, 205, 205]); // 白→灰
-    const TOON02: [[u8; 3]; 32] = toon_step([245, 225, 225]); // 白→ピンク系
-    const TOON03: [[u8; 3]; 32] = toon_step([154, 154, 154]); // 白→暗灰
-    const TOON04: [[u8; 3]; 32] = toon_step([248, 239, 235]); // 白→暖色ベージュ
+    const TOON01: [[u8; 3]; 32] = toon_step([205, 205, 205]); // white -> gray
+    const TOON02: [[u8; 3]; 32] = toon_step([245, 225, 225]); // white -> pinkish
+    const TOON03: [[u8; 3]; 32] = toon_step([154, 154, 154]); // white -> dark gray
+    const TOON04: [[u8; 3]; 32] = toon_step([248, 239, 235]); // white -> warm beige
 
-    // toon05: 白→暖ピンクのグラデーション (MMD 参照 LUT)
+    // toon05: gradient white -> warm pink (MMD reference LUT).
     #[rustfmt::skip]
     const TOON05: [[u8; 3]; 32] = toon_rle([
         ([255,255,255], 19), ([255,254,254], 1), ([255,250,248], 1),
@@ -5234,7 +5266,7 @@ fn generate_shared_toon_textures(
         ([255,231,222], 1),  ([254,232,223], 1),
     ]);
 
-    // toon06: 黄色系 — 中央ハイライトバンド + 暗黄 (MMD 参照 LUT)
+    // toon06: yellowish - central highlight band + dark yellow (MMD reference LUT).
     #[rustfmt::skip]
     const TOON06: [[u8; 3]; 32] = toon_rle([
         ([255,237, 97], 8),  ([255,238,106], 1), ([255,246,175], 1),
@@ -5315,19 +5347,19 @@ fn generate_shared_toon_textures(
     )
 }
 
-/// ボーン形状の種別（優先順: IK > 軸制限 > 移動 > 通常）
+/// Bone shape kind (priority: IK > axis-fixed > movable > normal).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum BoneShape {
-    Normal,    // ◎ 二重円（中心塗りつぶし）
-    Move,      // ◻ 正方形（中心塗りつぶし）
-    AxisFixed, // ⊗ 円＋✕
-    Ik,        // ◻ 外枠青＋中オレンジ＋中心青正方形
+    Normal,    // double circle (center filled)
+    Move,      // square (center filled)
+    AxisFixed, // circle + X
+    Ik,        // blue outer outline + orange fill + blue center square
 }
 
-/// ボーン表示用ジオメトリを生成（毎フレーム、カメラ向きビルボード）
-/// out_tails: LineList 用（テール三角形）— 最背面
-/// out_fill:  TriangleList 用（マーカー塗りつぶし面）— 中間
-/// out_lines: LineList 用（マーカー外枠・✕）— 最前面
+/// Generate bone-display geometry (every frame; camera-facing billboards).
+/// `out_tails`: for LineList (tail triangles) - backmost.
+/// `out_fill`:  for TriangleList (marker fill faces) - middle.
+/// `out_lines`: for LineList (marker outlines / X) - frontmost.
 #[allow(clippy::too_many_arguments)]
 fn generate_bone_vertices(
     out_tails: &mut Vec<GridVertex>,
@@ -5343,21 +5375,21 @@ fn generate_bone_vertices(
     out_fill.clear();
     out_lines.clear();
     let blue = [0.0, 0.0, 1.0, opacity];
-    let orange = [1.0, 0.4, 0.0, opacity]; // 濃いオレンジ #ff6600
+    let orange = [1.0, 0.4, 0.0, opacity]; // dark orange #ff6600
     let outer_factor = BONE_DISPLAY_RADIUS;
     let inner_factor = BONE_JOINT_RADIUS;
-    let ik_center_factor = inner_factor; // IKコントローラ中心の青正方形（移動ボーンと同サイズ）
+    let ik_center_factor = inner_factor; // blue square at IK-controller center (same size as movable bones)
     let segments = SPHERE_SEGMENTS;
 
-    // 描画優先順: 通常 → IK影響下(orange) → 軸制限 → IKコントローラ
-    // （後に描画されるほど手前に表示される）
+    // Draw priority: normal -> IK-influenced (orange) -> axis-fixed -> IK controller.
+    // (Drawn later -> shown on top.)
     for pass in 0..4u8 {
         for (bone_i, bone) in ir.bones.iter().enumerate() {
             if !bone.is_visible {
                 continue;
             }
 
-            // 形状決定（優先順: IK > 軸制限 > 移動 > 通常）
+            // Decide the shape (priority: IK > axis-fixed > movable > normal).
             let shape = if bone.is_ik_bone {
                 BoneShape::Ik
             } else if bone.is_axis_fixed {
@@ -5368,7 +5400,7 @@ fn generate_bone_vertices(
                 BoneShape::Normal
             };
 
-            // パス振り分け: 0=通常, 1=IK影響下(orange), 2=軸制限, 3=IKコントローラ
+            // Pass dispatch: 0 = normal, 1 = IK-influenced (orange), 2 = axis-fixed, 3 = IK controller.
             let bone_pass = if shape == BoneShape::Ik {
                 3
             } else if shape == BoneShape::AxisFixed {
@@ -5392,7 +5424,7 @@ fn generate_bone_vertices(
                 pos_fn(bone.position)
             };
 
-            // IK影響下ボーンはオレンジ、それ以外は青
+            // IK-influenced bones in orange; everything else in blue.
             let color = if bone.is_ik && shape != BoneShape::Ik {
                 orange
             } else {
@@ -5407,10 +5439,10 @@ fn generate_bone_vertices(
             let r_inner = dist * inner_factor;
             let r_ik_center = dist * ik_center_factor;
 
-            // 中心塗りつぶし色: IK影響下ボーンでも中心はブルー
+            // Center fill color: blue even for IK-influenced bones.
             let center_color = blue;
 
-            // △: self→tail / parent→self の三角形（線）— マーカーより先に描画
+            // Triangle (lines): self -> tail / parent -> self - drawn before markers.
             if let Some(tbi) = bone.tail_bone_index {
                 let tail_pos = if let Some(globals) = animated_globals {
                     if tbi < globals.len() {
@@ -5440,15 +5472,15 @@ fn generate_bone_vertices(
                 }
             }
 
-            // 外枠の太線用オフセット（2本描画で太さ2倍）
+            // Offset for outline thickness (draw twice for 2x thickness).
             let thick = dist * 0.0003;
 
-            // マーカー描画（形状別）— テールの上に重ねて描画
-            // 塗り（TriangleList）→ 線（LineList）の順で描画されるため、
-            // 塗りは内円/内正方形サイズいっぱいに描画し、線の外枠がその上に重なる
+            // Marker drawing (per shape) - drawn on top of tails.
+            // Order: fill (TriangleList) -> line (LineList). The fill spans the
+            // inner circle / inner square, and the outline overlays on top.
             match shape {
                 BoneShape::Normal => {
-                    // ◎: 内円塗りつぶし + 外円（太線）・内円の線
+                    // double circle: filled inner circle + thick outer circle / inner-circle line.
                     draw_filled_circle_tri(
                         out_fill,
                         pos,
@@ -5463,14 +5495,14 @@ fn generate_bone_vertices(
                     draw_circle(out_lines, pos, right, up, r_inner, segments, color);
                 }
                 BoneShape::Move => {
-                    // ◻: 内正方形塗りつぶし + 外正方形（太線）・内正方形の線
+                    // square: filled inner square + thick outer square / inner-square line.
                     draw_filled_square_tri(out_fill, pos, right, up, r_inner, center_color);
                     draw_square(out_lines, pos, right, up, r_outer - thick, color);
                     draw_square(out_lines, pos, right, up, r_outer + thick, color);
                     draw_square(out_lines, pos, right, up, r_inner, color);
                 }
                 BoneShape::AxisFixed => {
-                    // ⊗: 外円（太線） + ✕（太線、外円サイズ）
+                    // circle + X: thick outer circle + thick X spanning the outer circle.
                     draw_circle(out_lines, pos, right, up, r_outer - thick, segments, color);
                     draw_circle(out_lines, pos, right, up, r_outer + thick, segments, color);
                     let d = r_outer * 0.707;
@@ -5503,7 +5535,7 @@ fn generate_bone_vertices(
                     );
                 }
                 BoneShape::Ik => {
-                    // IKコントローラ: オレンジ外枠いっぱい塗り + 青中心塗り + 青外枠（太線）
+                    // IK controller: orange fill spanning the outline + blue center fill + thick blue outer outline.
                     draw_filled_square_tri(out_fill, pos, right, up, r_outer, orange);
                     draw_filled_square_tri(out_fill, pos, right, up, r_ik_center, blue);
                     draw_square(out_lines, pos, right, up, r_outer - thick, blue);
@@ -5511,10 +5543,10 @@ fn generate_bone_vertices(
                 }
             }
         }
-    } // 4パス終了
+    } // 4 passes done
 }
 
-/// 円を描画（LineList、segments 個の線分）
+/// Draw a circle (LineList, `segments` line segments).
 fn draw_circle(
     out: &mut Vec<GridVertex>,
     pos: Vec3,
@@ -5533,7 +5565,7 @@ fn draw_circle(
     }
 }
 
-/// 正方形を描画（LineList、4辺）
+/// Draw a square (LineList, 4 edges).
 fn draw_square(
     out: &mut Vec<GridVertex>,
     pos: Vec3,
@@ -5552,7 +5584,7 @@ fn draw_square(
     push_line(out, bl, tl, color);
 }
 
-/// 塗りつぶし円（TriangleList、三角形ファン）
+/// Filled circle (TriangleList, triangle fan).
 fn draw_filled_circle_tri(
     out: &mut Vec<GridVertex>,
     pos: Vec3,
@@ -5583,7 +5615,7 @@ fn draw_filled_circle_tri(
     }
 }
 
-/// 塗りつぶし正方形（TriangleList、2三角形）
+/// Filled square (TriangleList, 2 triangles).
 fn draw_filled_square_tri(
     out: &mut Vec<GridVertex>,
     pos: Vec3,
@@ -5596,7 +5628,7 @@ fn draw_filled_square_tri(
     let tr = pos + (right + up) * half;
     let br = pos + (right - up) * half;
     let bl = pos + (-right - up) * half;
-    // 三角形1: tl-tr-br
+    // Triangle 1: tl-tr-br.
     out.push(GridVertex {
         position: tl.to_array(),
         color,
@@ -5609,7 +5641,7 @@ fn draw_filled_square_tri(
         position: br.to_array(),
         color,
     });
-    // 三角形2: tl-br-bl
+    // Triangle 2: tl-br-bl.
     out.push(GridVertex {
         position: tl.to_array(),
         color,
@@ -5624,7 +5656,7 @@ fn draw_filled_square_tri(
     });
 }
 
-/// LineList 用 1線分を push
+/// Push a single line segment for LineList.
 fn push_line(out: &mut Vec<GridVertex>, a: Vec3, b: Vec3, color: [f32; 4]) {
     out.push(GridVertex {
         position: a.to_array(),
@@ -5636,7 +5668,7 @@ fn push_line(out: &mut Vec<GridVertex>, a: Vec3, b: Vec3, color: [f32; 4]) {
     });
 }
 
-/// ボーン三角形を描画（底辺＝base、頂点＝tip）
+/// Draw a bone triangle (base = base, apex = tip).
 fn draw_bone_triangle(
     out: &mut Vec<GridVertex>,
     base: Vec3,
@@ -5666,7 +5698,7 @@ fn draw_bone_triangle(
     let base_l = base + side * base_half;
     let base_r = base - side * base_half;
 
-    // 左辺: base_l → tip
+    // Left edge: base_l -> tip.
     out.push(GridVertex {
         position: base_l.to_array(),
         color,
@@ -5675,7 +5707,7 @@ fn draw_bone_triangle(
         position: tip.to_array(),
         color,
     });
-    // 右辺: base_r → tip
+    // Right edge: base_r -> tip.
     out.push(GridVertex {
         position: base_r.to_array(),
         color,
@@ -5686,11 +5718,11 @@ fn draw_bone_triangle(
     });
 }
 
-/// カメラ方向からビルボード用の right/up 軸を算出
+/// Derive right / up axes for billboarding from the camera direction.
 fn billboard_axes(to_camera: Vec3) -> (Vec3, Vec3) {
     let right = to_camera.cross(Vec3::Y).normalize_or_zero();
     if right.length_squared() < 0.001 {
-        // カメラが真上/真下を向いている場合
+        // Camera is looking straight up / straight down.
         let right = to_camera.cross(Vec3::Z).normalize();
         let up = right.cross(to_camera).normalize();
         (right, up)
@@ -5700,8 +5732,8 @@ fn billboard_axes(to_camera: Vec3) -> (Vec3, Vec3) {
     }
 }
 
-/// アニメーション用ボーンデルタ（位置差分・回転差分）を計算
-/// SpringBone頂点とJoint頂点の両方で共有する
+/// Compute animation bone deltas (position / rotation differences).
+/// Shared by both SpringBone and Joint vertex generation.
 fn compute_bone_deltas(
     ir: &IrModel,
     animated_globals: Option<&[glam::Mat4]>,
@@ -5744,9 +5776,9 @@ fn compute_bone_deltas(
     })
 }
 
-/// SpringBone物理ビジュアル用ジオメトリを生成
-/// - 剛体: ワイヤフレーム風のリング+接続線で形状を表現
-/// - ジョイント: 接続する2剛体間の線
+/// Generate visualization geometry for SpringBone physics.
+/// - Rigid bodies: rings + connecting lines, wireframe-style shape representation.
+/// - Joints: line between the two connected rigid bodies.
 fn generate_spring_bone_vertices(
     out: &mut Vec<GridVertex>,
     ir: &IrModel,
@@ -5758,28 +5790,28 @@ fn generate_spring_bone_vertices(
     use crate::intermediate::types::RigidShape;
 
     out.clear();
-    // VRM: group基準（コライダー=赤, スプリング=緑）
-    let collider_color = [1.0, 0.0, 0.0, opacity]; // レッド #ff0000（group=1: コライダー）
-    let spring_color = [0.0, 1.0, 0.0, opacity]; // グリーン #00ff00（group!=1: スプリングチェーン）
-                                                 // PMX/PMD: physics_mode基準（0:ボーン追従=緑, 1:物理演算=赤, 2:物理+ボーン=青）
-    let bone_follow_color = [0.0, 1.0, 0.0, opacity]; // グリーン
-    let physics_color = [1.0, 0.0, 0.0, opacity]; // レッド
-    let physics_bone_color = [0.0, 0.5, 1.0, opacity]; // ブルー
+    // VRM: by group (collider = red, spring = green).
+    let collider_color = [1.0, 0.0, 0.0, opacity]; // red #ff0000 (group=1: collider)
+    let spring_color = [0.0, 1.0, 0.0, opacity]; // green #00ff00 (group!=1: spring chain)
+                                                 // PMX/PMD: by physics_mode (0: bone-follow = green, 1: physics = red, 2: physics + bone = blue).
+    let bone_follow_color = [0.0, 1.0, 0.0, opacity]; // green
+    let physics_color = [1.0, 0.0, 0.0, opacity]; // red
+    let physics_bone_color = [0.0, 0.5, 1.0, opacity]; // blue
 
     let segments = SPHERE_SEGMENTS;
-    let line_width = 0.0_f32; // 1px描画（draw_ring/draw_line_quad の _width 引数用）
+    let line_width = 0.0_f32; // 1px draw (for the `_width` parameter of `draw_ring` / `draw_line_quad`)
 
-    // bone.position はすべての形式で glTF 空間に格納されている（PMX/PMD も pmx_pos_to_gltf 済み）
-    // rb.position は PMX 空間なので、bone 側を PMX 空間に戻して差分を取る
+    // `bone.position` is stored in glTF space for all formats (PMX/PMD already passed through `pmx_pos_to_gltf`).
+    // `rb.position` is in PMX space, so convert the bone side back to PMX space and take the delta.
     let pos_fn = crate::convert::coord::pos_fn(is_vrm0);
 
-    // 剛体の形状を描画
+    // Draw rigid-body shapes.
     for rb in &ir.physics.rigid_bodies {
         let color = if ir.source_format.is_pmx_pmd() {
             match rb.physics_mode {
-                0 => bone_follow_color,  // ボーン追従
-                1 => physics_color,      // 物理演算
-                _ => physics_bone_color, // 物理+ボーン
+                0 => bone_follow_color,  // bone-follow
+                1 => physics_color,      // physics
+                _ => physics_bone_color, // physics + bone
             }
         } else if rb.group == 1 {
             collider_color
@@ -5787,9 +5819,9 @@ fn generate_spring_bone_vertices(
             spring_color
         };
 
-        // PMX Euler → 回転クォータニオン（YXZ intrinsic = ZXY extrinsic: R = Rz * Rx * Ry）
-        // D3DX行優先: v * Ry * Rx * Rz → glam列優先: Rz * Rx * Ry
-        // PMX/PMD: 回転は常にファイルの値を使用。VRM: align_rigid_rotation 有効時のみ
+        // PMX Euler -> rotation quaternion (YXZ intrinsic = ZXY extrinsic: R = Rz * Rx * Ry).
+        // D3DX row-major: v * Ry * Rx * Rz -> glam column-major: Rz * Rx * Ry.
+        // PMX/PMD: always use the file's rotation. VRM: only when `align_rigid_rotation` is on.
         let rotation = if ir.source_format.is_pmx_pmd() || align_rigid_rotation {
             rb.rotation
         } else {
@@ -5798,12 +5830,12 @@ fn generate_spring_bone_vertices(
         let mut quat =
             glam::Quat::from_euler(glam::EulerRot::YXZ, rotation.y, rotation.x, rotation.z);
 
-        // アニメーション適用: 剛体をボーンに追従させる
+        // Apply animation: make the rigid body follow the bone.
         let rb_pos = if let (Some(bone_idx), Some(ref deltas)) = (rb.bone_index, &bone_deltas) {
             if bone_idx < deltas.len() {
                 let (pos_delta, rot_delta) = deltas[bone_idx];
                 let rest_bone_pmx = pos_fn(ir.bones[bone_idx].position);
-                // 剛体のボーンからのオフセットを回転適用
+                // Apply rotation to the rigid body's offset from the bone.
                 let offset = rb.position - rest_bone_pmx;
                 let rotated_offset = rot_delta * offset;
                 quat = rot_delta * quat;
@@ -5817,11 +5849,11 @@ fn generate_spring_bone_vertices(
 
         match &rb.shape {
             RigidShape::Sphere { radius } => {
-                // 8本の経線（Y軸周り45°間隔、大円弧）
+                // 8 meridians (45 degrees apart around Y; great-circle arcs).
                 for i in 0..8u32 {
                     let angle = std::f32::consts::FRAC_PI_4 * i as f32;
                     let horiz = Vec3::new(angle.cos(), 0.0, angle.sin());
-                    // 経線 = Y軸と水平方向で張る大円
+                    // Meridian = great circle spanned by Y and the horizontal axis.
                     draw_ring(
                         out,
                         rb_pos,
@@ -5834,7 +5866,7 @@ fn generate_spring_bone_vertices(
                         color,
                     );
                 }
-                // 7本の緯線（上から下へ等間隔）
+                // 7 latitudes (evenly spaced from top to bottom).
                 for i in 1..=7u32 {
                     let lat_angle = std::f32::consts::PI * i as f32 / 8.0;
                     let y = lat_angle.cos() * radius;
@@ -5854,18 +5886,18 @@ fn generate_spring_bone_vertices(
                 }
             }
             RigidShape::Capsule { radius, height } => {
-                // カプセル: Y軸がボーン方向
-                // 高さ = 球体中心間距離（PMX仕様: height = 全長 - 2*radius ではなく球体中心間距離）
+                // Capsule: Y axis is the bone direction.
+                // Height = distance between sphere centers (PMX spec: `height` is sphere-center-to-sphere-center, not (total length - 2*radius)).
                 let half_h = height * 0.5;
 
-                // 上端・下端のリング
+                // Top and bottom rings.
                 let top_offset = quat * Vec3::new(0.0, half_h, 0.0);
                 let bot_offset = quat * Vec3::new(0.0, -half_h, 0.0);
 
                 let top_center = rb_pos + top_offset;
                 let bot_center = rb_pos + bot_offset;
 
-                // 赤道リング（上端・下端）
+                // Equatorial rings (top and bottom).
                 draw_ring(
                     out,
                     top_center,
@@ -5889,12 +5921,12 @@ fn generate_spring_bone_vertices(
                     color,
                 );
 
-                // PMX/PMD: 両端に半球ワイヤーフレームを描画
+                // PMX/PMD: draw hemisphere wireframes on both ends.
                 if ir.source_format.is_pmx_pmd() {
                     let half_pi = std::f32::consts::FRAC_PI_2;
                     let half_seg = segments / 2;
 
-                    // 上半球: 4本の半経線（赤道→北極）
+                    // Upper hemisphere: 4 half-meridians (equator -> north pole).
                     for i in 0..4u32 {
                         let angle = half_pi * i as f32;
                         let horiz = Vec3::new(angle.cos(), 0.0, angle.sin());
@@ -5911,7 +5943,7 @@ fn generate_spring_bone_vertices(
                             color,
                         );
                     }
-                    // 上半球: 3本の緯線
+                    // Upper hemisphere: 3 latitudes.
                     for i in 1..=3u32 {
                         let lat = half_pi * i as f32 / 4.0;
                         let y = lat.sin() * radius;
@@ -5930,7 +5962,7 @@ fn generate_spring_bone_vertices(
                         );
                     }
 
-                    // 下半球: 4本の半経線（赤道→南極）
+                    // Lower hemisphere: 4 half-meridians (equator -> south pole).
                     for i in 0..4u32 {
                         let angle = half_pi * i as f32;
                         let horiz = Vec3::new(angle.cos(), 0.0, angle.sin());
@@ -5947,7 +5979,7 @@ fn generate_spring_bone_vertices(
                             color,
                         );
                     }
-                    // 下半球: 3本の緯線
+                    // Lower hemisphere: 3 latitudes.
                     for i in 1..=3u32 {
                         let lat = half_pi * i as f32 / 4.0;
                         let y = -lat.sin() * radius;
@@ -5967,7 +5999,7 @@ fn generate_spring_bone_vertices(
                     }
                 }
 
-                // 8本の接続線（上端→下端）
+                // 8 connecting lines (top -> bottom).
                 for i in 0..8u32 {
                     let angle = std::f32::consts::FRAC_PI_4 * i as f32;
                     let local_offset = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
@@ -5977,8 +6009,8 @@ fn generate_spring_bone_vertices(
                 }
             }
             RigidShape::Box { size } => {
-                // ボックス: 12辺をライン描画
-                // PMX仕様: sizeはhalf-extent（Bullet btBoxShapeと同じ）
+                // Box: draw 12 edges as lines.
+                // PMX spec: `size` is half-extent (same as Bullet `btBoxShape`).
                 let hx = size.x;
                 let hy = size.y;
                 let hz = size.z;
@@ -5996,15 +6028,15 @@ fn generate_spring_bone_vertices(
                     (0, 1),
                     (1, 2),
                     (2, 3),
-                    (3, 0), // 手前面
+                    (3, 0), // front face
                     (4, 5),
                     (5, 6),
                     (6, 7),
-                    (7, 4), // 奥面
+                    (7, 4), // back face
                     (0, 4),
                     (1, 5),
                     (2, 6),
-                    (3, 7), // 接続
+                    (3, 7), // connection
                 ];
                 for (a, b) in edges {
                     let pa = rb_pos + quat * corners[a];
@@ -6015,10 +6047,10 @@ fn generate_spring_bone_vertices(
         }
     }
 
-    // ジョイント接続線は generate_joint_vertices で描画するため、ここでは描画しない
+    // Joint connection lines are drawn by `generate_joint_vertices`, so do nothing here.
 }
 
-/// 1px リングライン（LineList）
+/// 1px ring line (LineList).
 #[allow(clippy::too_many_arguments)]
 fn draw_ring(
     verts: &mut Vec<GridVertex>,
@@ -6052,7 +6084,7 @@ fn draw_ring(
     }
 }
 
-/// 円弧ライン（LineList）: start_angle から end_angle まで描画
+/// Arc line (LineList): draws from `start_angle` to `end_angle`.
 #[allow(clippy::too_many_arguments)]
 fn draw_arc(
     verts: &mut Vec<GridVertex>,
@@ -6088,7 +6120,7 @@ fn draw_arc(
     }
 }
 
-/// 法線表示用ジオメトリを生成（LineList: 頂点→先端の2頂点/法線）
+/// Generate geometry for normal display (LineList: 2 vertices per normal, vertex -> tip).
 fn generate_normal_vertices(
     out: &mut Vec<GridVertex>,
     seen: &mut std::collections::HashSet<(u32, u32, u32, u32, u32, u32)>,
@@ -6100,13 +6132,13 @@ fn generate_normal_vertices(
     out.clear();
     seen.clear();
 
-    let color = [0.3, 0.6, 1.0, 0.9]; // 青系
+    let color = [0.3, 0.6, 1.0, 0.9]; // bluish
 
-    // アニメーション済み頂点があればそちらを使用
+    // Use animated vertices when available.
     let base_verts = model.current_vertices();
     let indices = model.base_indices();
 
-    // 可視フラグバッファをリサイズ＆クリア
+    // Resize and clear the visibility-flag buffer.
     visible.resize(base_verts.len(), false);
     visible.iter_mut().for_each(|v| *v = false);
 
@@ -6123,7 +6155,7 @@ fn generate_normal_vertices(
         }
     }
 
-    // 同一位置・同一法線の重複を除去（位置+法線のビット表現でキー化）
+    // Deduplicate same-position / same-normal entries (key by bit representation of position + normal).
     for (i, v) in base_verts.iter().enumerate() {
         if !visible[i] {
             continue;
@@ -6132,7 +6164,7 @@ fn generate_normal_vertices(
         if normal.length_squared() < 1e-6 {
             continue;
         }
-        // 位置と法線をビットキー化（f32 → u32）
+        // Bit-key the position and normal (f32 -> u32).
         let key = (
             v.position[0].to_bits(),
             v.position[1].to_bits(),
@@ -6157,8 +6189,8 @@ fn generate_normal_vertices(
     }
 }
 
-/// 2点間のライン（薄いクアッドで描画）
-/// 1px ライン（LineList）
+/// Line between two points (drawn as a thin quad).
+/// 1px line (LineList).
 fn draw_line_quad(
     verts: &mut Vec<GridVertex>,
     from: Vec3,
@@ -6179,7 +6211,7 @@ fn draw_line_quad(
     });
 }
 
-/// ジョイント頂点を生成（オレンジ立方体面 + 黒1pxエッジ、回転反映、アニメーション同期）
+/// Generate joint vertices (orange cube faces + 1px black edges; rotation-aware; animation-synced).
 fn generate_joint_vertices(
     faces_out: &mut Vec<GridVertex>,
     edges_out: &mut Vec<GridVertex>,
@@ -6191,13 +6223,13 @@ fn generate_joint_vertices(
     faces_out.clear();
     edges_out.clear();
 
-    let orange = [1.0, 1.0, 0.0, opacity]; // イエロー #ffff00
+    let orange = [1.0, 1.0, 0.0, opacity]; // yellow #ffff00
     let black = [0.0, 0.0, 0.0, opacity.min(1.0)];
     let size = 0.18_f32;
 
     let is_pmx_pmd = ir.source_format.is_pmx_pmd();
 
-    // bone.position はすべての形式で glTF 空間（PMX/PMD も pmx_pos_to_gltf 済み）
+    // `bone.position` is in glTF space for all formats (PMX/PMD already passed through `pmx_pos_to_gltf`).
     let pos_fn = crate::convert::coord::pos_fn(is_vrm0);
 
     for joint in &ir.physics.joints {
@@ -6207,14 +6239,14 @@ fn generate_joint_vertices(
 
         let rb_a = &ir.physics.rigid_bodies[joint.rigid_a];
 
-        // ジョイント位置（PMX座標）
-        // PMX/PMD: joint.position は既にPMX座標。VRM: glTF座標なので pos_fn で変換
+        // Joint position (PMX coordinates).
+        // PMX/PMD: `joint.position` is already in PMX coordinates. VRM: it's in glTF coordinates, so convert via `pos_fn`.
         let joint_rest_pos = if is_pmx_pmd {
             joint.position
         } else {
             pos_fn(joint.position)
         };
-        // ジョイント回転（YXZ intrinsic = ZXY extrinsic: R = Rz * Rx * Ry）
+        // Joint rotation (YXZ intrinsic = ZXY extrinsic: R = Rz * Rx * Ry).
         let joint_rest_quat = glam::Quat::from_euler(
             glam::EulerRot::YXZ,
             joint.rotation.y,
@@ -6222,7 +6254,7 @@ fn generate_joint_vertices(
             joint.rotation.z,
         );
 
-        // アニメーション適用: rigid_a のボーンからのオフセットで追従
+        // Apply animation: follow with the offset from `rigid_a`'s bone.
         let (joint_pos, joint_quat) =
             if let (Some(bone_idx), Some(ref deltas)) = (rb_a.bone_index, &bone_deltas) {
                 if bone_idx < deltas.len() {
@@ -6240,30 +6272,30 @@ fn generate_joint_vertices(
                 (joint_rest_pos, joint_rest_quat)
             };
 
-        // 正立方体の8頂点（ローカル座標）
+        // 8 vertices of the cube (local coordinates).
         let h = size * 0.5;
         let cube_verts = [
-            Vec3::new(-h, -h, -h), // 0: 左下手前
-            Vec3::new(h, -h, -h),  // 1: 右下手前
-            Vec3::new(h, h, -h),   // 2: 右上手前
-            Vec3::new(-h, h, -h),  // 3: 左上手前
-            Vec3::new(-h, -h, h),  // 4: 左下奥
-            Vec3::new(h, -h, h),   // 5: 右下奥
-            Vec3::new(h, h, h),    // 6: 右上奥
-            Vec3::new(-h, h, h),   // 7: 左上奥
+            Vec3::new(-h, -h, -h), // 0: bottom-left front
+            Vec3::new(h, -h, -h),  // 1: bottom-right front
+            Vec3::new(h, h, -h),   // 2: top-right front
+            Vec3::new(-h, h, -h),  // 3: top-left front
+            Vec3::new(-h, -h, h),  // 4: bottom-left back
+            Vec3::new(h, -h, h),   // 5: bottom-right back
+            Vec3::new(h, h, h),    // 6: top-right back
+            Vec3::new(-h, h, h),   // 7: top-left back
         ];
 
-        // 回転適用してワールド座標に変換
+        // Apply rotation and convert to world coordinates.
         let wv: [Vec3; 8] = cube_verts.map(|c| joint_pos + joint_quat * c);
 
-        // 立方体の6面（各面2三角形、オレンジ塗りつぶし）
+        // 6 cube faces (2 triangles each, orange fill).
         let cube_faces: [[usize; 4]; 6] = [
-            [0, 1, 2, 3], // 手前 (-Z)
-            [5, 4, 7, 6], // 奥 (+Z)
-            [4, 0, 3, 7], // 左 (-X)
-            [1, 5, 6, 2], // 右 (+X)
-            [3, 2, 6, 7], // 上 (+Y)
-            [4, 5, 1, 0], // 下 (-Y)
+            [0, 1, 2, 3], // front (-Z)
+            [5, 4, 7, 6], // back (+Z)
+            [4, 0, 3, 7], // left (-X)
+            [1, 5, 6, 2], // right (+X)
+            [3, 2, 6, 7], // top (+Y)
+            [4, 5, 1, 0], // bottom (-Y)
         ];
         for face in &cube_faces {
             faces_out.push(GridVertex {
@@ -6292,7 +6324,7 @@ fn generate_joint_vertices(
             });
         }
 
-        // 黒枠: 12本のエッジを1pxライン（LineList）で描画
+        // Black outline: draw 12 edges as 1px lines (LineList).
         let edges: [[usize; 2]; 12] = [
             [0, 1],
             [1, 2],
