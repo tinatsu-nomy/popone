@@ -15,39 +15,41 @@ use super::export_filter::build_filtered_ir;
 use super::gpu::{DrawMode, LightMode, ShaderSelection};
 use crate::intermediate::types::CullMode;
 
-/// ダークテーマのパネル背景色 (#1D1D1D)
+/// Dark theme panel background color (#1D1D1D).
 const DARK_PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x1D, 0x1D);
-/// ダークテーマのボーダー色 (#333333)
+/// Dark theme border color (#333333).
 const DARK_BORDER_COLOR: egui::Color32 = egui::Color32::from_rgb(0x33, 0x33, 0x33);
 
-// 材質行アイコン（v0.5.3 で [S][C][N][B][編] から絵文字へ移行）
-// egui の FontDefinitions::default() に含まれる NotoEmoji-Regular がフォールバックとして
-// 動作するため、Noto Sans JP/SC に無いコードポイントでも表示される想定。
-/// 法線平滑化（旧 [S]）— ✨
+// Material-row icons (migrated in v0.5.3 from [S][C][N][B][edit] to emoji).
+// `NotoEmoji-Regular` included in egui's `FontDefinitions::default()` works as
+// a fallback, so codepoints absent from Noto Sans JP/SC are still expected to
+// render.
+/// Normal smoothing (formerly [S]) - sparkle.
 const ICON_SMOOTH: &str = "✨";
-/// カスタム法線クリア（旧 [C]）— 🗑
+/// Clear custom normals (formerly [C]) - trash.
 const ICON_CLEAR_NORMAL: &str = "🗑";
-/// ノーマルマップ（旧 [N]）— 🗺
+/// Normal map (formerly [N]) - map.
 const ICON_NORMAL_MAP: &str = "🗺";
-/// エミッシブ（旧 [B]）— 💡
+/// Emissive (formerly [B]) - bulb.
 const ICON_EMISSIVE: &str = "💡";
-/// 材質編集ドロワー（旧 [編]）— ✏
+/// Material edit drawer (formerly [edit]) - pencil.
 const ICON_EDIT: &str = "✏";
 
-/// 材質パネルからのテクスチャ割り当てリクエスト
+/// Texture-assignment request from the material panel.
 enum TexAssignRequest {
-    /// ファイルダイアログから選択
+    /// Selected via file dialog.
     FileDialog(usize),
-    /// pkg_textures から選択（材質Index, pkg内テクスチャIndex）
+    /// Selected from `pkg_textures` (material index, in-pkg texture index).
     PkgTexture(usize, usize),
 }
 
 pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
-    // テクスチャ割り当てリクエスト（借用制約回避のためパネル外で処理）
+    // Texture-assignment request (handled outside the panel to avoid borrow conflicts).
     let mut tex_assign_request: Option<TexAssignRequest> = None;
 
-    // v0.5.3: 材質行先頭ボタンのサムネ表示用に IR テクスチャサムネを同期。
-    // 長さ比較で early return するため、同期済なら無コスト。
+    // v0.5.3: sync IR texture thumbnails for the leading button on each
+    // material row. Early-returns on length match, so it costs nothing when
+    // already synced.
     app.sync_ir_thumb_cache();
 
     let dark_panel = DARK_PANEL_BG;
@@ -57,25 +59,27 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
         .stroke(dark_border)
         .inner_margin(egui::Margin::same(4));
 
-    // 表示タブのトグルでリサイズ可否を切り替える。
-    // - OFF（既定）: 280 px に完全固定。
-    // - ON         : 280..=600 px の範囲でユーザーがドラッグして変更可能。
+    // The Display tab's toggle controls resize behavior.
+    // - OFF (default): completely fixed at 280 px.
+    // - ON          : user can drag in the 280..=600 px range.
     //
-    // egui 0.31 の SidePanel は内部で「コンテンツ描画後の min_rect」を
-    // PanelState として `id` ごとに永続化し、次フレームでそれを width として採用する。
-    // このため width_range が広がっている ON 時、子ウィジェットの min_rect が
-    // パネル幅を超えると毎フレーム幅が膨張していく（＝ 自動リサイズ問題）。
+    // egui 0.31's `SidePanel` persists "min_rect after content drawing" per
+    // `id` as `PanelState` and uses it as the width on the next frame.
+    // Consequently, when ON has a wider `width_range`, the panel grows every
+    // frame whenever a child widget's `min_rect` exceeds the panel width
+    // (= auto-resize problem).
     //
-    // 対策: 毎フレーム show 直前に PanelState を「アプリ側で管理する target_w」で
-    // 強制上書きし、show 直後に「`__resize` ID が drag された場合のみ」新幅を
-    // 取り込む。これによりコンテンツ駆動の幅変化を遮断し、ユーザーのドラッグだけ
-    // を panel_width に反映する。
+    // Mitigation: forcibly overwrite `PanelState` with our app-managed
+    // `target_w` immediately before `show`, and right after `show` import
+    // the new width "only if the `__resize` ID was dragged". This blocks
+    // content-driven width changes and reflects only user drags into
+    // `panel_width`.
     let panel_resizable = app.display.panel_resizable;
-    // 表示幅は ON/OFF どちらでも永続化された `panel_width` を使う。
-    // ON/OFF の違いは「ユーザーがドラッグで変更できるか」のみ。
-    //  - ON  : width_range(280..=600) でドラッグ可、新幅は post-show で取り込み保存
-    //  - OFF : width_range(target_w..=target_w) で現在の幅にロック（ドラッグ不可）
-    // 初回起動時は `panel_width` の既定値 280 px から始まる。
+    // Use the persisted `panel_width` for both ON / OFF.
+    // The only ON / OFF difference is whether the user can change it via drag.
+    //   - ON : `width_range(280..=600)`, draggable; the new width is captured post-show and saved.
+    //   - OFF: `width_range(target_w..=target_w)`, locked to the current width (no drag).
+    // On first launch, starts from the default `panel_width` of 280 px.
     let clamped = app.display.panel_width.clamp(280.0, 600.0);
     if (clamped - app.display.panel_width).abs() > f32::EPSILON {
         app.display.panel_width = clamped;
@@ -89,7 +93,7 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
 
     let panel_id_obj = egui::Id::new("info_panel");
 
-    // 直前フレームに egui が膨張させた PanelState.width を target_w で潰す。
+    // Squash whatever `PanelState.width` egui inflated last frame to `target_w`.
     ctx.data_mut(|d| {
         let new_rect = match d.get_persisted::<egui::containers::panel::PanelState>(panel_id_obj) {
             Some(mut s) => {
@@ -110,14 +114,14 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
         .resizable(panel_resizable)
         .frame(panel_frame)
         .show(ctx, |ui| {
-            // サイドパネル内テキストを白に統一
+            // Force all side-panel text white.
             ui.visuals_mut().widgets.noninteractive.fg_stroke =
                 egui::Stroke::new(1.0, egui::Color32::WHITE);
             ui.visuals_mut().widgets.inactive.fg_stroke =
                 egui::Stroke::new(1.0, egui::Color32::WHITE);
             ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
 
-            // タブバー（v0 デザイン: フラットスタイル、均等幅、隙間なし）
+            // Tab bar (v0 design: flat style, equal width, no gaps).
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let panel_w = ui.available_width();
@@ -127,10 +131,11 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     (SidePanelTab::Display, t!("viewer.tab.display")),
                     (SidePanelTab::Export, t!("viewer.tab.export")),
                 ];
-                // タブ幅はパネル幅に追従して均等割り。
-                // パネルの最小幅 280 px では panel_w / 4 ≈ 68 px となり、これが
-                // タブの実質的な最小サイズ（= 既存 UI のサイズ）。パネルが広がれば
-                // タブも 1/4 ずつ拡大し、右側の空白が生じない。
+                // Tabs are evenly divided to track the panel width.
+                // At the minimum panel width of 280 px, panel_w / 4 ~= 68 px,
+                // which is the effective minimum tab size (= the existing UI
+                // size). When the panel widens, tabs grow by 1/4 each so no
+                // gap appears on the right.
                 let tab_width = panel_w / tabs.len() as f32;
                 for (tab, label) in tabs {
                     let is_active = app.side_panel_tab == tab;
@@ -162,10 +167,10 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
             });
         });
 
-    // ユーザーがリサイズハンドルをドラッグした場合のみ panel_width を更新。
-    // egui SidePanel は resize handle に `id.with("__resize")` を割り当てる
-    // (egui 0.31 panel.rs:257)。このレスポンスの dragged() を見れば、
-    // 「コンテンツ膨張による幅変化」と「ユーザーのドラッグによる幅変化」を判別できる。
+    // Update `panel_width` only when the user drags the resize handle.
+    // egui SidePanel assigns `id.with("__resize")` to the resize handle
+    // (egui 0.31 panel.rs:257). Using `dragged()` on its response
+    // distinguishes content-driven width changes from user-driven ones.
     if panel_resizable {
         let resize_id = panel_id_obj.with("__resize");
         let dragged = ctx.read_response(resize_id).is_some_and(|r| r.dragged());
@@ -180,9 +185,9 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
         }
     }
 
-    // テクスチャ割り当て（借用解放後に処理）
+    // Texture assignment (handled after the borrow is released).
     match tex_assign_request {
-        // ダイアログが既にオープン中なら無視
+        // Skip if the dialog is already open.
         Some(TexAssignRequest::FileDialog(mat_idx)) if app.tex.pending_file_dialog.is_none() => {
             let mat_name = app
                 .loaded
@@ -198,7 +203,7 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
             });
             let initial_dir = app.tex.last_dir.clone();
 
-            // ファイルダイアログを別スレッドで開く（UIをブロックしない）
+            // Open the file dialog on a separate thread (does not block the UI).
             let dialog_title = t!("viewer.texture_picker.title", name = mat_name).into_owned();
             let (tx, rx) = std::sync::mpsc::channel();
             let repaint = ctx.clone();
@@ -222,7 +227,7 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
             ));
         }
         Some(TexAssignRequest::FileDialog(_)) => {
-            // pending_file_dialog が Some（既にオープン中）→ 無視
+            // `pending_file_dialog` is `Some` (already open) -> skip.
         }
         Some(TexAssignRequest::PkgTexture(mat_idx, tex_idx)) => {
             if let Some(ref pkg) = app.tex.pkg_textures {
@@ -231,7 +236,7 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     let data = tex_data.clone();
                     if app.assign_texture_data_to_material(mat_idx, &name, &data) {
                         app.tex.pkg_assignments.insert(mat_idx, name.clone());
-                        // 同名連動分もpkg割り当て履歴に記録（同一 MaterialGroup 内に限定）
+                        // Record same-name siblings into pkg-assignment history too (limited to the same MaterialGroup).
                         if app.tex.link_same_name {
                             if let Some(ref loaded) = app.loaded {
                                 for sib in loaded.same_name_siblings(mat_idx) {
@@ -246,26 +251,26 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
         None => {}
     }
 
-    // 非同期テクスチャファイルダイアログの結果をポーリング
+    // Poll the result of the async texture file dialog.
     if let Some((mat_idx, slot, ref rx)) = app.tex.pending_file_dialog {
         match rx.try_recv() {
             Ok(Some(path)) => {
                 if let Some(dir) = path.parent() {
                     app.tex.last_dir = Some(dir.to_path_buf());
                 }
-                // モデルが切り替わっている場合に備えて material index の有効性を確認
-                // (ダイアログ表示中に別モデルがロードされると stale になる)
+                // Validate the material index in case the model has changed.
+                // (When another model is loaded while the dialog is open, the index becomes stale.)
                 let valid = app
                     .loaded
                     .as_ref()
                     .is_some_and(|l| mat_idx < l.ir.materials.len());
                 if valid {
-                    // Step 4-16b: slot に応じて割当経路を分岐
+                    // Step 4-16b: branch the assignment path by slot.
                     if slot == crate::intermediate::types::TextureSlot::BaseColor {
                         app.assign_texture_to_material(mat_idx, &path);
                     } else {
-                        // 非 BaseColor: ファイルを読んで assign_texture_core(slot) で割当
-                        // review_016 対応: slot_texture_paths にパスを記録し、reload 時に復元可能にする
+                        // Non-BaseColor: read the file and assign via `assign_texture_core(slot)`.
+                        // review_016: record the path in `slot_texture_paths` so it can be restored on reload.
                         if let Ok(data) = std::fs::read(&path) {
                             let ext = path
                                 .extension()
@@ -276,7 +281,7 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                             let name = path.to_string_lossy().to_string();
                             if app.assign_texture_core(mat_idx, slot, &data, is_psd, &name) {
                                 app.slot_texture_paths.insert((mat_idx, slot), path.clone());
-                                // review_017 [P2-1]: same-name 連動分も slot_texture_paths に記録
+                                // review_017 [P2-1]: also record same-name siblings into `slot_texture_paths`.
                                 if app.tex.link_same_name {
                                     if let Some(ref loaded) = app.loaded {
                                         let siblings = loaded.same_name_siblings(mat_idx);
@@ -299,41 +304,41 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                 app.tex.pending_file_dialog = None;
             }
             Ok(None) => {
-                // ユーザーがキャンセル
+                // User cancelled.
                 app.tex.pending_file_dialog = None;
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
-                // まだダイアログ表示中 — 何もしない
+                // Dialog still open - do nothing.
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                // スレッドが異常終了
+                // Thread terminated abnormally.
                 app.tex.pending_file_dialog = None;
             }
         }
     }
 
-    // FBX読み込み方法選択ダイアログ
+    // FBX load-mode selection dialog.
     show_fbx_choice_dialog(ctx, app);
 
-    // OBJ/STL インポートオプションダイアログ
+    // OBJ/STL import-options dialog.
     show_import_options_dialog(ctx, app);
 
-    // unitypackage モデル選択ダイアログ
+    // unitypackage model-selection dialog.
     show_fbx_select_dialog(ctx, app);
 
-    // アーカイブ内モデル選択ダイアログ
+    // In-archive model-selection dialog.
     show_archive_select_dialog(ctx, app);
 
-    // unitypackage テクスチャ手動割当ダイアログ + リアルタイムプレビュー
+    // unitypackage manual texture-assignment dialog + real-time preview.
     app.prepare_tex_match_views();
     show_tex_match_dialog(ctx, app);
     app.sync_tex_match_preview();
 
-    // テクスチャ履歴上書き確認ダイアログ
+    // Texture-history overwrite confirmation dialog.
     show_confirm_save_tex_history(ctx, app);
 }
 
-/// テクスチャ履歴の上書き保存確認ダイアログ
+/// Texture-history overwrite-save confirmation dialog.
 fn show_confirm_save_tex_history(ctx: &egui::Context, app: &mut ViewerApp) {
     if !app.pending.confirm_save_tex_history {
         return;
@@ -366,7 +371,7 @@ fn show_confirm_save_tex_history(ctx: &egui::Context, app: &mut ViewerApp) {
     }
 }
 
-/// FBX読み込み方法選択ダイアログ（モデル+アニメーション両方含む場合）
+/// FBX load-mode selection dialog (when the file contains both model and animation).
 fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     let Some(ref mut pending) = app.pending.fbx_choice else {
         return;
@@ -395,7 +400,7 @@ fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             ui.separator();
             let no_model_loaded = app.loaded.is_none();
             if no_model_loaded {
-                // 初回ロード時はモデル必須（アニメーション単独は不可）
+                // On first load, the model is required (animation-only is not allowed).
                 pending.load_model = true;
                 ui.add_enabled(
                     false,
@@ -443,7 +448,7 @@ fn show_fbx_choice_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     }
 }
 
-/// OBJ/STL インポートオプション選択ダイアログ
+/// OBJ/STL import-options selection dialog.
 fn show_import_options_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     use super::app::pending::ImportUnit;
 
@@ -520,7 +525,7 @@ fn show_import_options_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     }
 }
 
-/// unitypackage内に複数モデルがある場合の選択ダイアログ
+/// Selection dialog used when a unitypackage contains multiple models.
 fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     if app.pending.unity_pkg.is_none() {
         return;
@@ -584,7 +589,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         });
 
     if let Some((idx, model_type)) = selected {
-        // 単一選択: 従来と同じ動作
+        // Single selection: same behavior as before.
         let pending = app
             .pending
             .unity_pkg
@@ -605,7 +610,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             skip_anim_check: false,
         });
     } else if multi_selected {
-        // 複数選択: 1つ目を通常ロード、残りを PendingMultiLoad に積む
+        // Multi-selection: load the first normally; queue the rest into `PendingMultiLoad`.
         let pending = app
             .pending
             .unity_pkg
@@ -621,11 +626,11 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         if let Some((&first, rest)) = checked_indices.split_first() {
             let (first_asset_idx, _, first_model_type) = pending.model_list[first];
 
-            // assets を Arc 化して共有（clone は参照カウントのみ）
+            // Wrap `assets` in `Arc` for sharing (clones bump only the refcount).
             let shared_assets = std::sync::Arc::new(pending.assets);
 
             if rest.is_empty() {
-                // 1件のみ
+                // Only one item.
                 app.pending.pkg_load = Some(super::app::PendingPkgModelLoad {
                     assets: shared_assets,
                     fbx_index: first_asset_idx,
@@ -641,7 +646,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                     skip_anim_check: false,
                 });
             } else {
-                // 複数: Arc clone のみで assets を共有
+                // Multiple: share `assets` via `Arc::clone` only.
                 let remaining: Vec<(usize, super::app::PkgModelType)> = rest
                     .iter()
                     .rev()
@@ -681,7 +686,7 @@ fn show_fbx_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     }
 }
 
-/// アーカイブ内に複数モデルがある場合の選択ダイアログ
+/// Selection dialog used when an archive contains multiple models.
 fn show_archive_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     if app.pending.archive.is_none() {
         return;
@@ -701,7 +706,7 @@ fn show_archive_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             ui.label(t!("viewer.dialog.archive_select.message1"));
             ui.label(t!("viewer.dialog.archive_select.message2"));
             ui.separator();
-            // クロージャ内で pending を再借用（PathBuf/String clone を回避）
+            // Re-borrow `pending` inside the closure (avoids cloning PathBuf / String).
             let Some(pending) = app.pending.archive.as_ref() else {
                 return;
             };
@@ -744,13 +749,13 @@ fn show_archive_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     }
 }
 
-/// unitypackage テクスチャ手動割当ダイアログ
+/// unitypackage manual texture-assignment dialog.
 fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     let Some(ref pending) = app.tex.pending_match else {
         return;
     };
 
-    // pkg_textures のファイル名一覧とサムネイルIDを参照
+    // Reference the `pkg_textures` file-name list and thumbnail IDs.
     let tex_names: Vec<&str> = app
         .tex
         .pkg_textures
@@ -763,7 +768,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         return;
     }
 
-    // loaded から材質名・ソース名を取得（clone 回避）
+    // Get material names / source names from `loaded` (avoids clones).
     let mat_info: Vec<(String, Option<String>)> = pending
         .mat_indices
         .iter()
@@ -803,20 +808,20 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                     &mut app.tex.link_same_name,
                     t!("viewer.dialog.tex_match.link_same_name"),
                 );
-                // 同名連動の ON/OFF 切り替え時にプレビューを全復元→再同期
+                // On link toggle, fully restore the preview and resync.
                 if link_resp.changed() {
                     if let (Some(ref mut pending), Some(ref mut loaded)) =
                         (&mut app.tex.pending_match, &mut app.loaded)
                     {
-                        // saved_binds を全復元
+                        // Restore all `saved_binds`.
                         for (draw_idx, (orig_tex, orig_mmd)) in pending.saved_binds.drain() {
                             if draw_idx < loaded.gpu_model.draws.len() {
                                 loaded.gpu_model.draws[draw_idx].texture_bind_group = orig_tex;
                                 loaded.gpu_model.draws[draw_idx].mmd_texture_bind_group = orig_mmd;
                             }
                         }
-                        // ON 切り替え時: 同名グループ内の selections を正規化
-                        // （グループ内で Some を優先して統一）
+                        // On ON: normalize `selections` within each same-name group
+                        // (prefer `Some` to unify the group).
                         if app.tex.link_same_name {
                             let mat_count = pending.mat_indices.len();
                             let mut unified: std::collections::HashMap<String, Option<usize>> =
@@ -830,7 +835,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                                     .map(|m| m.name.clone())
                                     .unwrap_or_default();
                                 let entry = unified.entry(mat_name).or_insert(None);
-                                // Some を優先（None → Some に上書き、Some → Some は先勝ち）
+                                // Prefer `Some` (None -> Some overwrites, Some -> Some keeps the first).
                                 if entry.is_none() && pending.selections[i].is_some() {
                                     *entry = pending.selections[i];
                                 }
@@ -848,7 +853,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                                 }
                             }
                         }
-                        // previewed を全リセット → 次フレームの sync で再適用
+                        // Reset all `previewed` -> reapplied during next frame's sync.
                         pending.previewed.iter_mut().for_each(|p| *p = None);
                     }
                 }
@@ -877,7 +882,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                             ui.end_row();
 
                             for i in 0..mat_count {
-                                // この行のハイライトフラグ（どのセルにホバーしてもハイライト）
+                                // Highlight flag for this row (any cell hover triggers it).
                                 let mut row_highlight = false;
 
                                 let mat_label = ui.label(&mat_info[i].0);
@@ -891,7 +896,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                                 }
 
                                 ui.horizontal(|ui| {
-                                    // 選択中テクスチャのサムネイル
+                                    // Thumbnail of the currently selected texture.
                                     if let Some(sel_idx) = new_selections[i] {
                                         if let Some(Some(tex_id)) = thumb_ids.get(sel_idx) {
                                             ui.image(egui::load::SizedTexture::new(
@@ -917,7 +922,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                                     if btn.contains_pointer() || btn.has_focus() {
                                         row_highlight = true;
                                     }
-                                    // ポップアップが開いている間もハイライト
+                                    // Highlight while the popup is open as well.
                                     if ui.memory(|m| m.is_popup_open(popup_id)) {
                                         row_highlight = true;
                                     }
@@ -979,7 +984,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                                         },
                                     );
                                 });
-                                // 行ホバー → 3Dビューでハイライト
+                                // Row hover -> highlight in the 3D view.
                                 if row_highlight {
                                     if let (Some(ref pending), Some(ref loaded)) =
                                         (&app.tex.pending_match, &app.loaded)
@@ -999,7 +1004,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                         });
                 });
 
-            // フィルタ値を書き戻し
+            // Write back the filter value.
             if let Some(ref mut pending) = app.tex.pending_match {
                 pending.tex_filter = tex_filter;
             }
@@ -1022,13 +1027,13 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             });
         });
 
-    // 同名連動: 選択が変わった材質と同名の材質にも同じ選択を反映
+    // Same-name linking: propagate a selection change to all same-name materials.
     if app.tex.link_same_name {
         if let Some(ref pending) = app.tex.pending_match {
             let prev = &pending.selections;
             for i in 0..mat_info.len() {
                 if new_selections[i] != prev[i] {
-                    // i番目の選択が変更された → 同名材質にも適用
+                    // i-th selection changed -> apply to same-name materials.
                     let changed_name = &mat_info[i].0;
                     let new_val = new_selections[i];
                     for j in 0..mat_info.len() {
@@ -1041,7 +1046,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         }
     }
 
-    // selections の更新を反映
+    // Reflect the `selections` update.
     if let Some(ref mut pending) = app.tex.pending_match {
         pending.selections = new_selections;
     }
@@ -1052,7 +1057,7 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             .pending_match
             .take()
             .expect("pending_match confirmed Some by apply flag");
-        // プレビュー中の bind group を復元（正式割り当てで上書きされるため）
+        // Restore the bind groups in preview (final assignment will overwrite them).
         if let Some(ref mut loaded) = app.loaded {
             for (draw_idx, (orig_tex, orig_mmd)) in pending.saved_binds.into_iter() {
                 if draw_idx < loaded.gpu_model.draws.len() {
@@ -1061,11 +1066,11 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                 }
             }
         }
-        // D&D プレビューが併存していた場合、復元で表示がずれるためリセット
+        // If a D&D preview coexists, reset it (restore would otherwise misalign the view).
         if let Some(ref mut preview) = app.tex.pending_preview {
             preview.previewed.iter_mut().for_each(|v| *v = false);
         }
-        // 割り当て情報を先にコピーして借用を解放
+        // Copy the assignment info first so we can release borrows.
         let assignments: Vec<(usize, String, Arc<[u8]>)> = pending
             .selections
             .iter()
@@ -1080,10 +1085,12 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                 })
             })
             .collect();
-        // 同名連動はダイアログ側で selections を複製済みだが、同じ pkg テクスチャを
-        // 同名材質グループに適用する場合に IrTexture が重複 push されるのを防ぐ。
-        // → (テクスチャ名, 材質名) ペアで重複排除し、同名材質グループにつき1回だけ
-        //   assign_texture_data_to_material を呼ぶ（link_same_name が横展開を担当）。
+        // The dialog already duplicates selections for same-name linking, but
+        // when the same pkg texture is applied to a same-name material group
+        // we must avoid pushing the `IrTexture` multiple times.
+        // -> Deduplicate by (texture_name, material_name) and call
+        //    `assign_texture_data_to_material` once per same-name material
+        //    group (`link_same_name` handles the lateral propagation).
         let mut applied_pairs: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
         let mut count = 0usize;
@@ -1096,18 +1103,19 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             if app.tex.link_same_name
                 && applied_pairs.contains(&(tex_name.clone(), mat_name.clone()))
             {
-                // 同名テクスチャ×同名材質は既に link_same_name で横展開済み
-                // 兄弟分の pkg_assignments は初回適用時に記録済み
+                // Same-name texture x same-name material is already
+                // propagated via `link_same_name`; siblings'
+                // `pkg_assignments` were recorded on the first application.
                 continue;
             }
             applied_pairs.insert((tex_name.clone(), mat_name.clone()));
             if !app.assign_texture_data_to_material(*mat_idx, tex_name, tex_data) {
-                // デコード/アップロード失敗 — pkg_assignments に記録しない
+                // Decode / upload failed - do not record in `pkg_assignments`.
                 continue;
             }
             app.tex.pkg_assignments.insert(*mat_idx, tex_name.clone());
-            // link_same_name で横展開された兄弟材質も pkg_assignments に記録
-            // 同名連動分もpkg割り当て履歴に記録（同一 MaterialGroup 内に限定）
+            // Also record sibling materials propagated via `link_same_name` into `pkg_assignments`.
+            // Record same-name siblings into pkg-assignment history (limited to the same MaterialGroup).
             if app.tex.link_same_name {
                 if let Some(ref loaded) = app.loaded {
                     for sib in loaded.same_name_siblings(*mat_idx) {
@@ -1127,23 +1135,28 @@ fn show_tex_match_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     }
 }
 
-/// 材質編集ドロワー（§A）: 材質行の `編` ボタンから開かれるフローティング `egui::Window`。
+/// Material edit drawer (§A): a floating `egui::Window` opened from the
+/// material row's edit button.
 ///
-/// - `editing_material_index` が `None` の場合は何もせず return
-/// - プラン TODO-8 に従い `Id::new("material_editor_window")` で固定、複数インスタンス化を防ぐ
-/// - `default_width(360.0)` + resizable + collapsible
-/// - Step 2 から §E の全セクション（基本 / 影 / アウトライン / リム / MatCap / UV アニメ /
-///   エミッシブ / 法線 / その他）を順次追加していく。
+/// - Returns immediately if `editing_material_index` is `None`.
+/// - Per plan TODO-8, pinned via `Id::new("material_editor_window")` to
+///   prevent multiple instances.
+/// - `default_width(360.0)` + resizable + collapsible.
+/// - From Step 2 onward, all §E sections (basic / shade / outline / rim /
+///   MatCap / UV anim / emissive / normal / other) are added in stages.
 ///
-/// ## 編集経路の dirty 伝達（borrow checker 対策）
+/// ## Dirty propagation in the edit path (borrow-checker workaround)
 ///
-/// closure 内では `dirty: bool` のローカルフラグだけを立て、closure 外で
-/// `app.mark_material_dirty(mat_idx)` と `app.material_overrides` への書き込みを行う。
-/// これにより closure 内の `&mut app` と closure 外の `&mut app` を時間的に逐次化できる。
-/// IR への書き込みと `MaterialParamOverride` への記録は closure 内で同時に行い、
-/// reload 後の再適用（§A / A スタンス対応）も同じ値で一貫する。
-/// M6 Step 6.5: PMX 非対応セクションの先頭に表示する視覚的バッジ。
-/// plain text `(PMX非対応)` をセクションタイトルから切り離し、色付きで強調する。
+/// Inside the closure only set a local `dirty: bool` flag; outside the
+/// closure call `app.mark_material_dirty(mat_idx)` and write to
+/// `app.material_overrides`. This serializes the in-closure `&mut app` and
+/// the out-of-closure `&mut app` in time. IR writes and the
+/// `MaterialParamOverride` records are performed simultaneously inside the
+/// closure, so the post-reload reapply (§A / A-stance support) keeps the
+/// same values consistently.
+/// M6 Step 6.5: visual badge displayed at the head of PMX-unsupported
+/// sections. Detaches the plain text "(not supported in PMX)" from the
+/// section title and emphasizes it with color.
 fn pmx_unsupported_badge(ui: &mut egui::Ui) {
     let badge = egui::RichText::new(t!("viewer.pmx_unsupported.badge"))
         .small()
@@ -1152,20 +1165,23 @@ fn pmx_unsupported_badge(ui: &mut egui::Ui) {
         .on_hover_text(t!("viewer.pmx_unsupported.hover"));
 }
 
-/// v0.5.2: 各材質セクションに埋め込むテクスチャスロット行ウィジェット。
+/// v0.5.2: per-material-section embedded texture-slot row widget.
 ///
-/// 旧「テクスチャスロット」集約セクションを解体し、各セクション（影・アウトライン・
-/// リム・MatCap・UV アニメ・エミッシブ/法線）の先頭に配置することで、
-/// テクスチャとそれを使うパラメタ（color / scale / shift 等）を 1 箇所で見られるようにする。
+/// Decomposes the legacy aggregated "Texture slots" section by placing the
+/// widget at the head of each section (shade / outline / rim / MatCap /
+/// UV anim / emissive / normal), so the texture and the parameters that use
+/// it (color / scale / shift, etc.) can be viewed together.
 ///
-/// レイアウト: `[画像ボタン] {label}: {filename or (未割当)} [×]`
+/// Layout: `[image button] {label}: {filename or (unassigned)} [x]`.
 ///
-/// - 割当済み: ImageButton のクリックでファイルダイアログを開く（差し替え）
-/// - 未割当: X アイコン付きプレースホルダボタン。クリックで新規割当
-/// - `×` は割当済みのときのみ表示、スロットリセット
+/// - Assigned: clicking the `ImageButton` opens the file dialog (replace).
+/// - Unassigned: an X-icon placeholder button. Click to assign.
+/// - `x` is shown only when assigned and resets the slot.
 ///
-/// 戻り値: `(assign_clicked, reset_clicked)` — 呼び出し側が `pending_tex_request` /
-/// `pending_tex_clear` に `slot` を入れる判断に使う（借用境界を跨がないようフラグだけ返す）。
+/// Return value: `(assign_clicked, reset_clicked)` - the caller uses these
+/// flags to decide whether to put `slot` into `pending_tex_request` /
+/// `pending_tex_clear` (only flags are returned to avoid crossing borrow
+/// boundaries).
 fn texture_slot_widget(
     ui: &mut egui::Ui,
     label: &str,
@@ -1241,10 +1257,11 @@ fn texture_slot_widget(
     (assign_clicked, reset_clicked)
 }
 
-/// KHR_texture_transform（offset / scale / rotation）を 1 行で編集するウィジェット (v0.5.4)。
-/// `info` が `None` のスロットには描画しない設計のため、呼び出し側で事前判定する。
-/// rotation は **度** で入力 / 表示し、`IrTextureInfo.rotation` にはラジアンで保存する。
-/// 変更があれば `true` を返す。
+/// One-line widget to edit KHR_texture_transform (offset / scale / rotation) (v0.5.4).
+/// Designed not to render for slots whose `info` is `None`; the caller pre-checks.
+/// rotation is entered / displayed in **degrees** but stored as radians in
+/// `IrTextureInfo.rotation`.
+/// Returns `true` if any value changed.
 fn uv_transform_widget(
     ui: &mut egui::Ui,
     id_salt: &str,
@@ -1314,7 +1331,7 @@ fn uv_transform_widget(
                     .range(-720.0..=720.0)
                     .suffix("°"),
             )
-            .on_hover_text(format!("{} rotation (度)", id_salt))
+            .on_hover_text(format!("{} rotation (degrees)", id_salt))
             .changed()
         {
             info.rotation = deg.to_radians();
@@ -1334,8 +1351,9 @@ fn uv_transform_widget(
     changed
 }
 
-/// `info` から現在値を読み取り、`pending_override` の UV エントリに全 3 フィールドをセットする。
-/// UI ウィジェットが `changed = true` を返した直後に呼ぶヘルパー。
+/// Read current values from `info` and set all three fields on
+/// `pending_override`'s UV entry.
+/// Helper to be called immediately after the UI widget returns `changed = true`.
 fn record_uv_override(
     target: &mut Option<crate::viewer::app::material_edit::TextureUvOverride>,
     info: &crate::intermediate::types::IrTextureInfo,
@@ -1350,29 +1368,31 @@ fn record_uv_override(
 pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
     use crate::intermediate::types::{MtoonParams, ShaderFamily};
 
-    // v0.5.9: パネル不在時は overlay_h を必ず 0 にしておく。
-    // 早期 return / 開いていない場合に古い値が残ると、中央ビューポートで
-    // 不要な FOV 補正が適用されモデルが意図せず縮んだままになる。
-    // パネルが実際に表示された場合は show() 後に正しい値で上書きする。
+    // v0.5.9: when the panel is absent, force `overlay_h` to 0.
+    // If a stale value remains (early return / panel not open), the central
+    // viewport applies an unintended FOV compensation and the model stays
+    // unintentionally scaled down. Overwrite with the correct value after
+    // `show()` when the panel is actually displayed.
     app.material_panel_height_px = 0.0;
 
     let Some(mat_idx) = app.editing_material_index else {
         return;
     };
 
-    // v0.5.2: 材質編集ウィンドウ表示前に ir_thumb_cache をモデルと同期。
-    // モデル切替や BG ロード完了など外部経路で ir.textures 長が変わっても、
-    // ここでチェックするだけでテクスチャスロットのサムネイルが追従する。
+    // v0.5.2: sync `ir_thumb_cache` to the model before showing the material
+    // edit window. Even if `ir.textures.len()` changes via external paths
+    // (model switch, BG load completion, etc.), checking here keeps the
+    // texture slot thumbnails in sync.
     app.sync_ir_thumb_cache();
 
-    // 材質名と総数を immutable borrow で先に取得
+    // Get the material name and total count via immutable borrow first.
     let (mat_name, mat_count) = {
         let Some(loaded) = app.loaded.as_ref() else {
             app.editing_material_index = None;
             return;
         };
         if mat_idx >= loaded.ir.materials.len() {
-            // モデル再ロード等で材質数が減った場合は閉じる
+            // Close when the material count shrinks (e.g. model reload).
             app.editing_material_index = None;
             return;
         }
@@ -1382,7 +1402,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
         )
     };
 
-    // M6 Step 6.3: ダーティインジケータ — 編集差分 or テクスチャスロット割当があれば `*` 付与
+    // M6 Step 6.3: dirty indicator - prepend `*` if there are edits or texture slot assignments.
     let has_param_override = app
         .material_overrides
         .get(&mat_idx)
@@ -1399,25 +1419,26 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
     let mut is_open = true;
     let mut dirty = false;
 
-    // 各セクションの編集結果を closure 外で反映するため、差分のみを一時バッファに保持する。
+    // Hold per-section edit deltas in a temporary buffer so we can apply them outside the closure.
     let mut pending_override = super::app::material_edit::MaterialParamOverride::new();
 
-    // Step 4-16b: テクスチャ選択ボタンクリック → closure 外でファイルダイアログ起動
+    // Step 4-16b: a texture-pick button click -> open the file dialog outside the closure.
     let mut pending_tex_request: Option<crate::intermediate::types::TextureSlot> = None;
-    // Step 4-17: テクスチャスロットリセット要求 → closure 外でスロットをクリア
+    // Step 4-17: texture slot reset request -> clear the slot outside the closure.
     let mut pending_tex_clear: Option<crate::intermediate::types::TextureSlot> = None;
-    // review_024 [P2]: MME カテゴリ「推定に戻す」→ closure 外で mme_kind を消去
+    // review_024 [P2]: MME category "Reset to estimated" -> clear `mme_kind` outside the closure.
     let mut pending_mme_reset = false;
 
-    // v0.5.2: ir_thumb_cache のスナップショットをクロージャ外に取り出す。
-    // クロージャ内で `app.loaded.as_mut()` と並行参照するには disjoint borrow が必要で、
-    // TextureId は Copy のため clone コストは無視できる。
+    // v0.5.2: take a snapshot of `ir_thumb_cache` outside the closure.
+    // Disjoint borrows are needed to reference `app.loaded.as_mut()` from the
+    // closure in parallel; `TextureId` is `Copy`, so cloning is negligible.
     let ir_thumb_ids: Vec<Option<egui::TextureId>> = app.tex.ir_thumb_cache.clone();
 
-    // v0.5.3: フローティング Window から下部ドック型 TopBottomPanel に変更。
-    // ショートカットヒントバーの直上に固定し、伸縮可能・スクロール可能とする。
-    // 呼び出し側（app/mod.rs）が status_bar / shortcut_hints の後にこの関数を呼ぶことで
-    // パネル積み上げ順が「最下=status_bar / 中=shortcut_hints / 上=この編集パネル」になる。
+    // v0.5.3: switched from a floating Window to a bottom-docked TopBottomPanel.
+    // Pinned right above the shortcut hint bar; resizable and scrollable.
+    // The caller (`app/mod.rs`) invokes this function after `status_bar` /
+    // `shortcut_hints`, giving the panel stacking order
+    // "bottom = status_bar / middle = shortcut_hints / top = this edit panel".
     let panel_frame = egui::Frame::new()
         .fill(DARK_PANEL_BG)
         .stroke(egui::Stroke::new(1.0, DARK_BORDER_COLOR))
@@ -1428,7 +1449,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
         .default_height(360.0)
         .frame(panel_frame)
         .show(ctx, |ui| {
-            // ヘッダ行: タイトル + 右端 [×] 閉じるボタン + UV 編集ボタン (v0.5.5)
+            // Header row: title + right-edge [x] close button + UV edit button (v0.5.5).
             ui.horizontal(|ui| {
                 ui.heading(&window_title);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1443,7 +1464,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                         egui::RichText::new(format!("mat_idx: {} / {}", mat_idx, mat_count))
                             .small(),
                     );
-                    // v0.5.5: UV 編集ウィンドウを開く（現在編集中の材質をアクティブにセット）
+                    // v0.5.5: open the UV edit window (set the currently edited material active).
                     if ui
                         .small_button(t!("viewer.material_edit.open_uv_edit_button"))
                         .on_hover_text(t!("viewer.material_edit.open_uv_edit_tooltip"))
@@ -1455,7 +1476,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                 });
             });
             ui.separator();
-            // パネル全体をスクロール可能に
+            // Make the entire panel scrollable.
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -1466,9 +1487,10 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                         return;
                     };
 
-                    // ==================== 材質名編集 (v0.5.3) ====================
-                    // 材質名を直接編集できる。変更は `MaterialParamOverride.name` に記録され、
-                    // reload 後も apply_to で復元される。`update_mat_cache` で UI 側キャッシュも追従。
+                    // ==================== Material name edit (v0.5.3) ====================
+                    // The material name can be edited directly. The change is recorded in
+                    // `MaterialParamOverride.name` and restored by `apply_to` after reload.
+                    // `update_mat_cache` also tracks the UI-side cache.
                     ui.horizontal(|ui| {
                         ui.label(t!("viewer.material_edit.material_name_label"));
                         let resp = ui.add(
@@ -1482,16 +1504,18 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                     });
                     ui.separator();
 
-                    // ==================== MToon 有効化チェックボックス (§G / Step 2-10) ====================
+                    // ==================== MToon enable checkbox (§G / Step 2-10) ====================
                     //
-                    // 材質の `shader_family` を明示的に `Mtoon` / `Other` に切替えるトグル。
-                    // これにより PMX 変換の `shader_family` 主軸判定 (Step 2-9) と UI の意味が
-                    // 1:1 で一致する。ユーザーがこのチェックを触らない限り、影・アウトライン等の
-                    // セクションを展開・編集しても `shader_family` は変わらず、PMX 変換の挙動も
-                    // 従来通りの非 MToon 経路を通る（review_005 [P1] の要件）。
+                    // Toggle that explicitly switches the material's `shader_family`
+                    // between `Mtoon` and `Other`. This makes the PMX-conversion
+                    // `shader_family` axis decision (Step 2-9) match the UI 1:1.
+                    // Unless the user toggles this checkbox, expanding / editing
+                    // sections like shade or outline does not change `shader_family`,
+                    // and PMX conversion goes through the existing non-MToon path
+                    // (review_005 [P1] requirement).
                     //
-                    // ON  → `shader_family = Mtoon` + `mtoon = Some(default)`（既存 mtoon は維持）
-                    // OFF → `shader_family = Other` + `mtoon = None`（MToon セクションの編集値は失われる）
+                    // ON  -> `shader_family = Mtoon` + `mtoon = Some(default)` (preserves existing `mtoon`).
+                    // OFF -> `shader_family = Other` + `mtoon = None` (loses MToon-section edits).
                     {
                         let mut mtoon_enabled = mat.shader_family == ShaderFamily::Mtoon;
                         ui.horizontal(|ui| {
@@ -1530,11 +1554,11 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                         ui.small(t!("viewer.material_edit.mtoon_toggle_warning"));
                     }
 
-                    // ==================== 初期値に戻す + プリセット (§H / §J / Step 5) ====================
+                    // ==================== Reset to defaults + preset (§H / §J / Step 5) ====================
                     ui.horizontal(|ui| {
-                        // 初期値に戻す
-                        // review_019 [P2-2]: tex.assignments と slot_texture_paths も消去して
-                        // reload 後のテクスチャ復活を防ぐ。
+                        // Reset to defaults.
+                        // review_019 [P2-2]: also clear `tex.assignments` and
+                        // `slot_texture_paths` to prevent texture revival after reload.
                         if mat_idx < app.pristine_materials.len()
                             && ui
                                 .button(t!("viewer.material_edit.reset_defaults"))
@@ -1548,9 +1572,9 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             dirty = true;
                         }
 
-                        // プリセット ComboBox + 適用ボタン
+                        // Preset ComboBox + apply button.
                         use super::app::material_presets::MaterialPreset;
-                        // egui の ComboBox は外部状態を持たないため、ラベル表示用に毎フレーム計算
+                        // egui's ComboBox holds no external state, so compute the label every frame.
                         ui.label("|");
                         let preset_id = ui.id().with("preset_combo");
                         let mut selected_preset: Option<MaterialPreset> = None;
@@ -1567,8 +1591,8 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                         if let Some(preset) = selected_preset {
                             let patch = preset.to_override();
                             patch.apply_to(mat);
-                            // review_019 [P2-1]: merge_from ではなく diff_from で override を再計算。
-                            // プリセットに含まれない古い override（UV アニメ等）が積み残されるのを防ぐ。
+                            // review_019 [P2-1]: recompute override via `diff_from` (not `merge_from`).
+                            // Prevents stale overrides not included in the preset (UV anim, etc.) from accumulating.
                             if mat_idx < app.pristine_materials.len() {
                                 let new_override =
                                     super::app::material_edit::MaterialParamOverride::diff_from(
@@ -1593,7 +1617,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             );
                         }
 
-                        // M6 Step 6.4: 材質パラメータのコピー/ペースト
+                        // M6 Step 6.4: material-parameter copy / paste.
                         ui.label("|");
                         if ui
                             .button(t!("viewer.material_edit.copy"))
@@ -1645,11 +1669,11 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                     });
                     ui.separator();
 
-                    // ==================== §E-1 基本セクション ====================
+                    // ==================== §E-1 Basic section ====================
                     egui::CollapsingHeader::new(t!("viewer.material_edit.section.basic"))
                         .default_open(true)
                         .show(ui, |ui| {
-                            // v0.5.2: BaseColor テクスチャのサムネイル + 割当UI
+                            // v0.5.2: BaseColor texture thumbnail + assign UI.
                             let (assign, reset) = texture_slot_widget(
                                 ui,
                                 "BaseColor",
@@ -1665,7 +1689,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 pending_tex_clear =
                                     Some(crate::intermediate::types::TextureSlot::BaseColor);
                             }
-                            // v0.5.4: BaseColor UV 編集（テクスチャ有り時のみ表示）
+                            // v0.5.4: BaseColor UV edit (shown only when a texture exists).
                             if let Some(ti) = mat.base_color_tex_info.as_mut() {
                                 if uv_transform_widget(ui, "base_color", ti) {
                                     record_uv_override(&mut pending_override.base_color_uv, ti);
@@ -1685,25 +1709,28 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             });
                         });
 
-                    // ==================== §E-2 影 (Shade) セクション ====================
+                    // ==================== §E-2 Shade section ====================
                     //
-                    // **重要 (review_005 [P1] 対応)**: 読み取りには `mat.mtoon()` を使い、
-                    // ユーザーが実際に値を変更した瞬間にだけ `mat.mtoon_mut()` を呼んで副作用を
-                    // 発生させる。`mat.mtoon_mut()` は `mtoon == None` のときに `MtoonParams::default()`
-                    // を即座に挿入するため、「セクションを展開しただけ」で非 MToon 材質が MToon 扱いに
-                    // 変わり、PMX 変換結果にまで影響してしまう問題があった（§G の主軸判定切替
-                    // とセットで修正済み）。
+                    // **Important (review_005 [P1])**: read via `mat.mtoon()`,
+                    // and call `mat.mtoon_mut()` only at the moment the user
+                    // actually changes a value to trigger the side effect.
+                    // `mat.mtoon_mut()` immediately inserts
+                    // `MtoonParams::default()` when `mtoon == None`, which
+                    // previously caused "merely expanding the section" to
+                    // promote a non-MToon material to MToon and affect the
+                    // PMX conversion result (fixed together with the §G axis
+                    // switch).
                     egui::CollapsingHeader::new(t!("viewer.material_edit.section.shade"))
                         .default_open(false)
                         .show(ui, |ui| {
-                            // v0.5.2: Shade / ShadingShift テクスチャのサムネイル + 割当UI
+                            // v0.5.2: Shade / ShadingShift texture thumbnails + assign UI.
                             {
                                 let mp = mat.mtoon();
                                 let shade_idx = mp.shade_texture.as_ref().map(|t| t.index);
                                 let shift_idx = mp.shading_shift_texture.as_ref().map(|t| t.index);
                                 let (a1, r1) = texture_slot_widget(
                                     ui,
-                                    "shade テクスチャ",
+                                    "shade texture",
                                     shade_idx,
                                     &loaded.ir.textures,
                                     &ir_thumb_ids,
@@ -1720,7 +1747,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 }
                                 let (a2, r2) = texture_slot_widget(
                                     ui,
-                                    "shading_shift テクスチャ",
+                                    "shading_shift texture",
                                     shift_idx,
                                     &loaded.ir.textures,
                                     &ir_thumb_ids,
@@ -1734,7 +1761,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                         Some(crate::intermediate::types::TextureSlot::ShadingShift);
                                 }
                             }
-                            // v0.5.4: Shade / ShadingShift UV 編集（mtoon 既存かつスロット割当有時のみ）
+                            // v0.5.4: Shade / ShadingShift UV edit (only if mtoon exists and slot is assigned).
                             if let Some(mp) = mat.mtoon.as_mut() {
                                 if let Some(ti) = mp.shade_texture.as_mut() {
                                     if uv_transform_widget(ui, "shade", ti) {
@@ -1753,7 +1780,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 }
                             }
 
-                            // 読み取り: `mat.mtoon()` はデフォルト値参照なので副作用なし
+                            // Read: `mat.mtoon()` references defaults, so it has no side effects.
                             let (
                                 mut shade_color_rgb,
                                 mut shading_toony,
@@ -1769,7 +1796,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 )
                             };
 
-                            // ウィジェット（ここでは IR を触らない）
+                            // Widgets (do not touch the IR here).
                             let mut shade_changed = false;
                             let mut toony_changed = false;
                             let mut shift_changed = false;
@@ -1815,8 +1842,8 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 }
                             });
 
-                            // 変更があった場合のみ `mat.mtoon_mut()` を呼んで書き込む。
-                            // これにより非 MToon 材質で展開しただけでは mtoon が挿入されない。
+                            // Call `mat.mtoon_mut()` only on a change to write the value.
+                            // This prevents `mtoon` from being inserted just by expanding the section on a non-MToon material.
                             if shade_changed || toony_changed || shift_changed || gi_changed {
                                 let mp = mat.mtoon_mut();
                                 if shade_changed {
@@ -1850,24 +1877,26 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             }
                         });
 
-                    // ==================== §E-3 アウトラインセクション ====================
+                    // ==================== §E-3 Outline section ====================
                     //
-                    // - `edge_color` / `edge_size` は IrMaterial 直接フィールド（非 MToon）
-                    // - `outline_width_mode` / `outline_width_factor` / `outline_lighting_mix` は
-                    //   MtoonParams フィールドのため、読み取りは `mat.mtoon()`、変更時のみ
-                    //   `mat.mtoon_mut()` を呼ぶ止血パターン（review_005 [P1] 対応）を踏襲する。
+                    // - `edge_color` / `edge_size` are direct `IrMaterial` fields (non-MToon).
+                    // - `outline_width_mode` / `outline_width_factor` /
+                    //   `outline_lighting_mix` are `MtoonParams` fields, so
+                    //   read via `mat.mtoon()` and call `mat.mtoon_mut()`
+                    //   only when the value actually changes (containment
+                    //   pattern from review_005 [P1]).
                     egui::CollapsingHeader::new(t!("viewer.material_edit.section.outline"))
                         .default_open(false)
                         .show(ui, |ui| {
                             use crate::intermediate::types::OutlineWidthMode;
 
-                            // v0.5.2: OutlineWidth テクスチャのサムネイル + 割当UI
+                            // v0.5.2: OutlineWidth texture thumbnail + assign UI.
                             {
                                 let outline_idx =
                                     mat.mtoon().outline_width_texture.as_ref().map(|t| t.index);
                                 let (a, r) = texture_slot_widget(
                                     ui,
-                                    "outline_width テクスチャ",
+                                    "outline_width texture",
                                     outline_idx,
                                     &loaded.ir.textures,
                                     &ir_thumb_ids,
@@ -1881,7 +1910,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                         Some(crate::intermediate::types::TextureSlot::OutlineWidth);
                                 }
                             }
-                            // v0.5.4: OutlineWidth UV 編集
+                            // v0.5.4: OutlineWidth UV edit.
                             if let Some(mp) = mat.mtoon.as_mut() {
                                 if let Some(ti) = mp.outline_width_texture.as_mut() {
                                     if uv_transform_widget(ui, "outline_width", ti) {
@@ -1894,7 +1923,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 }
                             }
 
-                            // edge_color: IrMaterial 直接 (RGBA)
+                            // edge_color: direct on `IrMaterial` (RGBA).
                             ui.horizontal(|ui| {
                                 ui.label("edge_color:");
                                 let mut rgba = mat.edge_color.to_array();
@@ -1905,7 +1934,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 }
                             });
 
-                            // edge_size: IrMaterial 直接 (MMD エッジ用, PMX 書き出し時は 1.0 クランプ)
+                            // edge_size: direct on `IrMaterial` (for MMD edges; clamped to 1.0 on PMX export).
                             ui.horizontal(|ui| {
                                 ui.label("edge_size:");
                                 if ui
@@ -1920,7 +1949,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 }
                             });
 
-                            // MToon アウトライン系（読み取りは mat.mtoon() 経由で副作用なし）
+                            // MToon outline-related (read via `mat.mtoon()` - no side effects).
                             let (mut width_mode, mut width_factor, mut lighting_mix) = {
                                 let mp = mat.mtoon();
                                 (
@@ -1933,7 +1962,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             let mut width_factor_changed = false;
                             let mut lighting_mix_changed = false;
 
-                            // outline_width_mode: ComboBox
+                            // outline_width_mode: ComboBox.
                             ui.horizontal(|ui| {
                                 ui.label("width_mode:");
                                 let label_of = |m: OutlineWidthMode| match m {
@@ -1961,7 +1990,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                     });
                             });
 
-                            // outline_width_factor: DragValue (world=m, screen=比率)
+                            // outline_width_factor: DragValue (world=meters, screen=ratio).
                             ui.horizontal(|ui| {
                                 ui.label("width_factor:");
                                 if ui
@@ -1976,7 +2005,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 }
                             });
 
-                            // outline_lighting_mix: Slider 0.0〜1.0
+                            // outline_lighting_mix: Slider 0.0..=1.0.
                             ui.horizontal(|ui| {
                                 ui.label("lighting_mix:");
                                 if ui
@@ -1990,7 +2019,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 }
                             });
 
-                            // MToon 系は変更時のみ mtoon_mut()
+                            // MToon: call `mtoon_mut()` only on change.
                             if width_mode_changed || width_factor_changed || lighting_mix_changed {
                                 let mp = mat.mtoon_mut();
                                 if width_mode_changed {
@@ -2009,21 +2038,21 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             }
                         });
 
-                    // ==================== §E-4 リムセクション ====================
+                    // ==================== §E-4 Rim section ====================
                     //
-                    // 全て MtoonParams フィールドなので、読み取りは `mat.mtoon()`、変更時のみ
-                    // `mat.mtoon_mut()` を呼ぶパターン。
+                    // All fields are `MtoonParams` fields, so read via
+                    // `mat.mtoon()` and call `mat.mtoon_mut()` only on change.
                     egui::CollapsingHeader::new(t!("viewer.material_edit.section.rim"))
                         .default_open(false)
                         .show(ui, |ui| {
                             pmx_unsupported_badge(ui);
-                            // v0.5.2: RimMultiply テクスチャのサムネイル + 割当UI
+                            // v0.5.2: RimMultiply texture thumbnail + assign UI.
                             {
                                 let rim_idx =
                                     mat.mtoon().rim_multiply_texture.as_ref().map(|t| t.index);
                                 let (a, r) = texture_slot_widget(
                                     ui,
-                                    "rim_multiply テクスチャ",
+                                    "rim_multiply texture",
                                     rim_idx,
                                     &loaded.ir.textures,
                                     &ir_thumb_ids,
@@ -2037,7 +2066,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                         Some(crate::intermediate::types::TextureSlot::RimMultiply);
                                 }
                             }
-                            // v0.5.4: RimMultiply UV 編集
+                            // v0.5.4: RimMultiply UV edit.
                             if let Some(mp) = mat.mtoon.as_mut() {
                                 if let Some(ti) = mp.rim_multiply_texture.as_mut() {
                                     if uv_transform_widget(ui, "rim_multiply", ti) {
@@ -2131,18 +2160,18 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             }
                         });
 
-                    // ==================== §E-5 MatCap セクション ====================
+                    // ==================== §E-5 MatCap section ====================
                     egui::CollapsingHeader::new("MatCap")
                         .default_open(false)
                         .show(ui, |ui| {
                             pmx_unsupported_badge(ui);
-                            // v0.5.2: Matcap テクスチャのサムネイル + 割当UI
+                            // v0.5.2: Matcap texture thumbnail + assign UI.
                             {
                                 let matcap_idx =
                                     mat.mtoon().matcap_texture.as_ref().map(|t| t.index);
                                 let (a, r) = texture_slot_widget(
                                     ui,
-                                    "matcap テクスチャ",
+                                    "matcap texture",
                                     matcap_idx,
                                     &loaded.ir.textures,
                                     &ir_thumb_ids,
@@ -2156,7 +2185,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                         Some(crate::intermediate::types::TextureSlot::Matcap);
                                 }
                             }
-                            // v0.5.4: Matcap UV 編集
+                            // v0.5.4: Matcap UV edit.
                             if let Some(mp) = mat.mtoon.as_mut() {
                                 if let Some(ti) = mp.matcap_texture.as_mut() {
                                     if uv_transform_widget(ui, "matcap", ti) {
@@ -2183,12 +2212,12 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             }
                         });
 
-                    // ==================== §E-6 UV アニメセクション ====================
-                    egui::CollapsingHeader::new("UV アニメ")
+                    // ==================== §E-6 UV anim section ====================
+                    egui::CollapsingHeader::new("UV anim")
                         .default_open(false)
                         .show(ui, |ui| {
                             pmx_unsupported_badge(ui);
-                            // v0.5.2: UvAnimMask テクスチャのサムネイル + 割当UI
+                            // v0.5.2: UvAnimMask texture thumbnail + assign UI.
                             {
                                 let mask_idx = mat
                                     .mtoon()
@@ -2197,7 +2226,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                     .map(|t| t.index);
                                 let (a, r) = texture_slot_widget(
                                     ui,
-                                    "uv_animation_mask テクスチャ",
+                                    "uv_animation_mask texture",
                                     mask_idx,
                                     &loaded.ir.textures,
                                     &ir_thumb_ids,
@@ -2211,7 +2240,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                         Some(crate::intermediate::types::TextureSlot::UvAnimMask);
                                 }
                             }
-                            // v0.5.4: UvAnimMask UV 編集（スクロール/回転の動的アニメと併用可）
+                            // v0.5.4: UvAnimMask UV edit (can be combined with scroll / rotation dynamic animation).
                             if let Some(mp) = mat.mtoon.as_mut() {
                                 if let Some(ti) = mp.uv_animation_mask_texture.as_mut() {
                                     if uv_transform_widget(ui, "uv_anim_mask", ti) {
@@ -2293,29 +2322,34 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             }
                         });
 
-                    // ==================== §E-7 エミッシブ / 法線セクション ====================
+                    // ==================== §E-7 Emissive / Normal section ====================
                     //
-                    // どちらも IrMaterial 直接フィールドなので、MToon 系の読み書き分離は不要。
+                    // Both are direct `IrMaterial` fields, so the MToon
+                    // read-write separation isn't needed.
                     //
-                    // **review_006 [P2] 対応**: `emissive_factor` は HDR 値（> 1.0）を保持する必要がある
-                    // （VRM の `KHR_materials_emissive_strength` で強度倍率が乗じられる）。しかし
-                    // `color_edit_button_rgb` は内部的に 0..1 の線形 `Rgba` にクランプしてしまうので、
-                    // 既存の HDR emissive を一度触っただけで発光が弱まってしまっていた。
+                    // **review_006 [P2]**: `emissive_factor` must keep HDR
+                    // values (> 1.0) (VRM's
+                    // `KHR_materials_emissive_strength` multiplies an
+                    // intensity factor). However,
+                    // `color_edit_button_rgb` internally clamps to a 0..1
+                    // linear `Rgba`, so merely touching an existing HDR
+                    // emissive once would weaken the emission.
                     //
-                    // **採用案**: 色と強度を分離した UI。
-                    // - 色 (0..1 の base_color): ColorPicker で直感的に選択
-                    // - 強度 (0..100 の multiplier): DragValue で HDR レンジを扱える
-                    // - 内部で `emissive_factor = base_color * intensity` を再計算
+                    // **Adopted design**: split the UI into color and
+                    // intensity.
+                    // - Color (0..1 `base_color`): pick intuitively with `ColorPicker`.
+                    // - Intensity (0..100 multiplier): handle HDR range via `DragValue`.
+                    // - Internally recompute `emissive_factor = base_color * intensity`.
                     egui::CollapsingHeader::new(t!("viewer.material_edit.section.emissive_normal"))
                         .default_open(false)
                         .show(ui, |ui| {
-                            // v0.5.2: Emissive / Normal テクスチャのサムネイル + 割当UI
+                            // v0.5.2: Emissive / Normal texture thumbnails + assign UI.
                             {
                                 let emissive_idx = mat.emissive_texture.as_ref().map(|t| t.index);
                                 let normal_idx = mat.normal_texture.as_ref().map(|t| t.index);
                                 let (a1, r1) = texture_slot_widget(
                                     ui,
-                                    "emissive テクスチャ",
+                                    "emissive texture",
                                     emissive_idx,
                                     &loaded.ir.textures,
                                     &ir_thumb_ids,
@@ -2330,7 +2364,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 }
                                 let (a2, r2) = texture_slot_widget(
                                     ui,
-                                    "normal テクスチャ",
+                                    "normal texture",
                                     normal_idx,
                                     &loaded.ir.textures,
                                     &ir_thumb_ids,
@@ -2344,7 +2378,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                         Some(crate::intermediate::types::TextureSlot::Normal);
                                 }
                             }
-                            // v0.5.4: Emissive / Normal UV 編集（IrMaterial 直下スロット）
+                            // v0.5.4: Emissive / Normal UV edit (slots directly on `IrMaterial`).
                             if let Some(ti) = mat.emissive_texture.as_mut() {
                                 if uv_transform_widget(ui, "emissive", ti) {
                                     record_uv_override(&mut pending_override.emissive_uv, ti);
@@ -2358,7 +2392,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 }
                             }
 
-                            // 現在の emissive_factor を (base_color, intensity) に分解
+                            // Decompose the current `emissive_factor` into (base_color, intensity).
                             let current = mat.emissive_factor;
                             let intensity = current.max_element().max(0.0);
                             let base_rgb_vec = if intensity > 1e-6 {
@@ -2391,8 +2425,8 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             ui.small(t!("viewer.material_edit.intensity_note"));
 
                             if color_changed || intensity_changed {
-                                // 色を変えたが強度が 0 のままだと結果が [0,0,0] になって反映されない。
-                                // そこで「色を変えた かつ 強度が 0」の場合は強度を 1.0 にフォールバック。
+                                // If only the color changes while intensity stays 0, the result becomes [0,0,0].
+                                // So when "color changed AND intensity == 0", fall back to intensity = 1.0.
                                 let effective_intensity = if color_changed && intensity_edit <= 1e-6
                                 {
                                     1.0
@@ -2405,7 +2439,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 dirty = true;
                             }
 
-                            // normal_texture_scale: f32 (デフォルト 1.0)
+                            // normal_texture_scale: f32 (default 1.0).
                             ui.horizontal(|ui| {
                                 ui.label("normal_scale:");
                                 if ui
@@ -2423,18 +2457,20 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             });
                         });
 
-                    // ==================== MMD テクスチャ (Sphere / Toon) ====================
+                    // ==================== MMD textures (Sphere / Toon) ====================
                     //
-                    // v0.5.2: BaseColor/Emissive/Normal 等の汎用スロットは各パラメタセクション
-                    // （基本 / 影 / アウトライン / リム / MatCap / UV アニメ / エミッシブ/法線）
-                    // に直接統合したため、ここには MMD/PMX 固有の Sphere / Toon だけを残す。
+                    // v0.5.2: Generic slots like BaseColor / Emissive / Normal
+                    // are integrated directly into each parameter section
+                    // (Basic / Shade / Outline / Rim / MatCap / UV anim /
+                    // Emissive+Normal), so only MMD/PMX-specific Sphere /
+                    // Toon remain here.
                     egui::CollapsingHeader::new(t!("viewer.material_edit.section.mmd_texture"))
                         .default_open(false)
                         .show(ui, |ui| {
                             use crate::intermediate::types::TextureSlot;
                             let (a1, r1) = texture_slot_widget(
                                 ui,
-                                "sphere テクスチャ",
+                                "sphere texture",
                                 mat.sphere_texture_index,
                                 &loaded.ir.textures,
                                 &ir_thumb_ids,
@@ -2447,7 +2483,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             }
                             let (a2, r2) = texture_slot_widget(
                                 ui,
-                                "toon テクスチャ",
+                                "toon texture",
                                 mat.toon_texture_index,
                                 &loaded.ir.textures,
                                 &ir_thumb_ids,
@@ -2460,16 +2496,16 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             }
                         });
 
-                    // ==================== §E-8 その他セクション ====================
+                    // ==================== §E-8 Other section ====================
                     //
-                    // - `alpha_mode` / `alpha_cutoff` / `cull_mode` は IrMaterial 直接
-                    // - `render_queue_offset` は MtoonParams フィールド（読み書き分離パターン）
+                    // - `alpha_mode` / `alpha_cutoff` / `cull_mode` are direct on `IrMaterial`.
+                    // - `render_queue_offset` is a `MtoonParams` field (read-write separation pattern).
                     egui::CollapsingHeader::new(t!("viewer.material_edit.section.other"))
                         .default_open(false)
                         .show(ui, |ui| {
                             use crate::intermediate::types::{AlphaMode, CullMode};
 
-                            // alpha_mode: ComboBox (Opaque / Mask / BlendWithZWrite / Blend)
+                            // alpha_mode: ComboBox (Opaque / Mask / BlendWithZWrite / Blend).
                             ui.horizontal(|ui| {
                                 ui.label("alpha_mode:");
                                 let label_of = |m: AlphaMode| match m {
@@ -2500,7 +2536,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                     });
                             });
 
-                            // alpha_cutoff: Slider 0.0〜1.0 (Mask モード時のみ実効)
+                            // alpha_cutoff: Slider 0.0..=1.0 (effective only in Mask mode).
                             ui.horizontal(|ui| {
                                 ui.label("alpha_cutoff:");
                                 if ui
@@ -2515,12 +2551,12 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 }
                             });
 
-                            // cull_mode: ComboBox (Back / None / Front)
+                            // cull_mode: ComboBox (Back / None / Front).
                             ui.horizontal(|ui| {
                                 ui.label("cull_mode:");
                                 let label_of = |m: CullMode| match m {
-                                    CullMode::Back => "Back (片面)",
-                                    CullMode::None => "None (両面)",
+                                    CullMode::Back => "Back (single-sided)",
+                                    CullMode::None => "None (double-sided)",
                                     CullMode::Front => "Front",
                                 };
                                 egui::ComboBox::from_id_salt("cull_mode_combo")
@@ -2540,7 +2576,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                     });
                             });
 
-                            // render_queue_offset: MtoonParams フィールド (BLEND 内ソート用)
+                            // render_queue_offset: `MtoonParams` field (for sorting within BLEND).
                             let mut rqo = mat.mtoon().render_queue_offset;
                             let mut rqo_changed = false;
                             ui.horizontal(|ui| {
@@ -2559,8 +2595,8 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                             }
                         });
 
-                    // ==================== MME 出力プレビュー (§K.3 / Step 6) ====================
-                    egui::CollapsingHeader::new("MME 出力 (ray-mmd)")
+                    // ==================== MME export preview (§K.3 / Step 6) ====================
+                    egui::CollapsingHeader::new("MME export (ray-mmd)")
                         .default_open(false)
                         .show(ui, |ui| {
                             use crate::convert::mme::ray_mmd::{
@@ -2596,8 +2632,8 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                         .small_button(t!("viewer.material_edit.reset_estimate"))
                                         .clicked()
                                     {
-                                        // review_024 [P2]: merge_from は Some しか上書きしないので、
-                                        // mme_kind を消すには closure 外で直接 None に設定する。
+                                        // review_024 [P2]: `merge_from` only overwrites when value is `Some`,
+                                        // so to clear `mme_kind` we set it to `None` outside the closure.
                                         pending_mme_reset = true;
                                     }
                                 }
@@ -2608,7 +2644,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                                 kind = estimated.label()
                             ));
 
-                            // ray-mmd ルート表示
+                            // Show the ray-mmd root.
                             let root_label =
                                 app.app_config.ray_mmd_root.as_deref().unwrap_or(".\\");
                             ui.small(format!("ray-mmd: {}", root_label));
@@ -2616,37 +2652,39 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
                 }); // ScrollArea::vertical().show
         });
 
-    // v0.5.9: パネルの実 px 高（egui logical pt × pixels_per_point）を記録し、
-    // 中央ビューポート描画時の FOV 補正に使う。これによりパネル開閉・パネル
-    // リサイズに対してモデルのスクリーン上ピクセル単位サイズが保たれる。
+    // v0.5.9: record the panel's pixel height
+    // (egui logical pt * pixels_per_point); used for FOV compensation in the
+    // central viewport. Keeps the model's on-screen pixel size constant
+    // across panel open/close and resize.
     app.material_panel_height_px = panel_inner.response.rect.height() * ctx.pixels_per_point();
 
     if dirty {
-        // 編集差分を `material_overrides` にマージする（既存エントリがあれば上書き）。
-        // reload（A スタンス変換等）で新 IR が構築されても `apply_to()` で自動復元される。
-        // `merge_from` が全 24 フィールドを macro で一括処理するため、各セクション追加
-        // でもこの dirty 処理は 1 行のままで済む。
+        // Merge the edit delta into `material_overrides` (overwrites existing entries).
+        // Even when reload (A-stance conversion etc.) rebuilds the IR, `apply_to()`
+        // restores values automatically.
+        // `merge_from` handles all 24 fields via macro in one shot, so this dirty path
+        // stays a single line as new sections are added.
         let name_changed = pending_override.name.is_some();
         let entry = app.material_overrides.entry(mat_idx).or_default();
         entry.merge_from(&pending_override);
         app.mark_material_dirty(mat_idx);
-        // v0.5.3: 材質名が変更された場合、UI 側キャッシュも再構築して
-        // サイドパネルの材質リスト表示に即反映する。
+        // v0.5.3: when the material name changes, also rebuild the UI cache so the
+        // side panel's material list reflects it immediately.
         if name_changed {
             app.update_mat_cache();
         }
     }
 
-    // review_024 [P2]: MME カテゴリ「推定に戻す」
+    // review_024 [P2]: MME category "Reset to estimated".
     if pending_mme_reset {
         if let Some(entry) = app.material_overrides.get_mut(&mat_idx) {
             entry.mme_kind = None;
         }
     }
 
-    // Step 4-17: テクスチャスロットリセット `×`
+    // Step 4-17: texture-slot reset `x`.
     if let Some(slot) = pending_tex_clear {
-        // review_017 [P2-2]: slot_texture_paths からも削除して reload 後の復活を防ぐ
+        // review_017 [P2-2]: also remove from `slot_texture_paths` to prevent revival on reload.
         app.slot_texture_paths.remove(&(mat_idx, slot));
         if let Some(loaded) = app.loaded.as_mut() {
             if let Some(mat) = loaded.ir.materials.get_mut(mat_idx) {
@@ -2697,8 +2735,8 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
         app.mark_material_dirty(mat_idx);
     }
 
-    // Step 4-16b: テクスチャ選択ボタンクリック → ファイルダイアログ起動
-    // closure 外で処理するため、app の borrow 衝突がない。
+    // Step 4-16b: a texture-pick button click -> open the file dialog.
+    // Handled outside the closure, so no `app` borrow conflict.
     if let Some(slot) = pending_tex_request {
         if app.tex.pending_file_dialog.is_none() {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -2724,7 +2762,7 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
     }
 }
 
-/// テクスチャD&D時の材質選択ダイアログ（複数選択＋リアルタイムプレビュー）
+/// Material-selection dialog at texture D&D (multi-select + real-time preview).
 pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     let Some(ref mut preview) = app.tex.pending_preview else {
         return;
@@ -2749,7 +2787,7 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
         .resizable(true)
         .default_pos(egui::pos2(20.0, 60.0))
         .show(ctx, |ui| {
-            // サムネイル + ファイル名を横並び表示
+            // Show thumbnail + file name side by side.
             ui.horizontal(|ui| {
                 if let Some(tex_id) = preview.preview_tex_id {
                     let thumb_size = 64.0;
@@ -2817,7 +2855,7 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                             egui::RichText::new("\u{25A1}")
                                 .color(egui::Color32::from_rgb(0xA0, 0x60, 0x60))
                         };
-                        // FBX 元テクスチャファイル名
+                        // FBX original texture file name.
                         let src_name = loaded
                             .mat_cache
                             .source_tex_names
@@ -2836,7 +2874,7 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                             }
                             ind_resp.contains_pointer() || cb.contains_pointer()
                         });
-                        // 材質行ホバー → 3Dビューでハイライト
+                        // Material-row hover -> highlight in the 3D view.
                         if row.inner {
                             for (di, d) in loaded.gpu_model.draws.iter().enumerate() {
                                 if d.material_index == mat_idx
@@ -2873,7 +2911,7 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
     }
 }
 
-/// PMX変換を実行
+/// Execute PMX conversion.
 pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
     if app.loaded.is_none() {
         return;
@@ -2881,7 +2919,7 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
     let output_path = std::path::PathBuf::from(&app.export.pmx_output_path);
     let log_path = output_path.with_extension("log");
 
-    // 変換前の累計書き込みバイト数を記録（drain 耐性のある累計オフセット）
+    // Record cumulative bytes-written before conversion (drain-safe cumulative offset).
     let log_offset_before = app
         .log_buffer
         .lock()
@@ -2889,10 +2927,10 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
         .map(|lb| lb.total_written)
         .unwrap_or(0);
 
-    // 法線が変更されている場合、IrModel に書き戻して変換用 IR を作る
+    // If normals are modified, write them back to `IrModel` to build the conversion IR.
     let normals_modified = app.material_display.iter().any(|d| d.smooth_normals)
         || app.material_display.iter().any(|d| d.clear_normals);
-    // 元の法線を保存（復元用）
+    // Save original normals (for restore).
     let saved_normals: Option<Vec<Vec<glam::Vec3>>> = if normals_modified {
         app.loaded.as_ref().map(|loaded| {
             loaded
@@ -2915,7 +2953,7 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
         .as_ref()
         .expect("loaded already verified by has_model check");
 
-    // 可視材質フィルタリング
+    // Filter visible materials.
     let convert_ir = if app.export.export_visible_only {
         let visible_mat_indices: HashSet<usize> = loaded
             .mat_cache
@@ -2940,7 +2978,7 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
         loaded.ir.clone_for_export()
     };
 
-    // PMX/PMD 形式では no_physics/raw_structure は無効（UI もグレーアウト）
+    // For PMX/PMD formats `no_physics` / `raw_structure` are disabled (UI is greyed out too).
     let is_pmx_pmd = convert_ir.source_format.is_pmx_pmd();
     let options = crate::pmx::build::PmxBuildOptions {
         align_rigid_rotation: app.display.align_rigid_rotation,
@@ -2957,22 +2995,18 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
         scale: app.export.scale,
     };
 
-    // A/Tスタンス情報を先に取得（BG スレッドで loaded にアクセスできないため）
+    // Capture A/T-stance info up front (BG thread cannot access `loaded`).
     let primary_astance_result = app
         .loaded
         .as_ref()
         .map(|l| l.primary_astance_result)
         .unwrap_or_default();
-    let stance_label = if is_pmx_pmd {
-        "Tスタンス"
-    } else {
-        "Aスタンス"
-    };
+    let stance_label = if is_pmx_pmd { "T-stance" } else { "A-stance" };
     let stance_label_owned = stance_label.to_string();
     let output_log = app.export.output_log;
     let log_buffer = Arc::clone(&app.log_buffer);
 
-    // MME 出力用データをキャプチャ（BG スレッドに move する）
+    // Capture MME-output data (move to the BG thread).
     let output_mme = app.export.output_mme;
     let ray_mmd_root = if output_mme {
         Some(
@@ -2985,7 +3019,7 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
     } else {
         None
     };
-    // 各材質の手動カテゴリ上書き
+    // Per-material manual category override.
     let mme_kinds: std::collections::HashMap<
         usize,
         crate::convert::mme::ray_mmd::RayMmdMaterialKind,
@@ -2998,7 +3032,7 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
         std::collections::HashMap::new()
     };
 
-    // 法線を即座に復元（BG スレッドは clone した IR を使うため、元 IR はすぐ戻せる）
+    // Restore normals immediately (the BG thread uses a cloned IR, so the original IR can be restored at once).
     if let Some(saved) = saved_normals {
         if let Some(ref mut loaded) = app.loaded {
             for (mi, mesh) in loaded.ir.meshes.iter_mut().enumerate() {
@@ -3013,14 +3047,14 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
         }
     }
 
-    // BG スレッドで PMX 変換を実行
+    // Run PMX conversion on a BG thread.
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cancel_clone = std::sync::Arc::clone(&cancel);
     let (tx, rx) = std::sync::mpsc::channel();
     let repaint = ctx.clone();
 
     std::thread::spawn(move || {
-        // 協調キャンセル対応: 各ステップ間でフラグを確認
+        // Cooperative cancel: check the flag between steps.
         let result = crate::convert_ir_to_pmx_with_cancel(
             &convert_ir,
             &output_path,
@@ -3028,7 +3062,7 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
             &cancel_clone,
         );
 
-        // キャンセル由来のエラーなら何もせず終了（UI 側で既にメッセージ表示済み）
+        // If the error came from a cancel, exit silently (the UI already showed the message).
         if cancel_clone.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
@@ -3062,7 +3096,7 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
                     );
                 }
 
-                // MME 出力
+                // MME output.
                 let mut mme_warning = false;
                 if output_mme {
                     if let Some(ref root) = ray_mmd_root {
@@ -3133,15 +3167,15 @@ pub fn execute_conversion(app: &mut ViewerApp, ctx: &egui::Context) {
     app.pending.convert_bg = Some(super::app::pending::PendingConvertBg { rx, cancel });
 }
 
-/// MME (.fx) 出力結果
+/// MME (.fx) output result.
 struct MmeEmitResult {
     count: usize,
-    /// `#include` 先の fxsub が見つからない場合に警告メッセージを格納
+    /// Holds a warning message when the `#include`-target fxsub is not found.
     include_warning: Option<String>,
 }
 
-/// MME (.fx) ファイル群を出力する。
-/// PMX 変換成功後に BG スレッドから呼び出される。
+/// Emit the MME (.fx) files.
+/// Called from the BG thread after PMX conversion succeeds.
 fn emit_mme_files(
     ir: &crate::intermediate::types::IrModel,
     mme_dir: &std::path::Path,
@@ -3152,24 +3186,24 @@ fn emit_mme_files(
 
     std::fs::create_dir_all(mme_dir)?;
 
-    // #include 相対パス
+    // Relative `#include` path.
     let include_path = ray_mmd::resolve_include_path(ray_mmd_root, mme_dir);
 
-    // #include 先の存在確認（.fx は出力するが、存在しなければ警告を返す）
+    // Verify the `#include` target exists (.fx files are still emitted; warn if missing).
     let fxsub_abs = mme_dir.join(&include_path);
     let include_warning = if !fxsub_abs.exists() {
         Some(format!(
-            "#include 先が見つかりません: {}\nray-mmd ルートを確認してください",
+            "#include target not found: {}\nCheck the ray-mmd root.",
             fxsub_abs.display()
         ))
     } else {
         None
     };
 
-    // 補助テクスチャ書き出し
+    // Emit auxiliary textures.
     let support_textures = ray_mmd::export_mme_support_textures(ir, mme_dir)?;
 
-    // .fx ファイル生成
+    // Generate .fx files.
     let mut used_names = std::collections::HashSet::new();
     let mut fx_manifest: Vec<(usize, String, ray_mmd::RayMmdMaterialKind)> = Vec::new();
 
@@ -3200,7 +3234,7 @@ fn emit_mme_files(
     })
 }
 
-/// 数値をカンマ区切りでフォーマット (例: 34059 → "34,059")
+/// Format a number with comma separators (e.g. 34059 -> "34,059").
 fn format_number(n: usize) -> String {
     let s = n.to_string();
     let len = s.len();
@@ -3214,8 +3248,8 @@ fn format_number(n: usize) -> String {
     result
 }
 
-/// メタ情報をセクションごとに折り畳み可能な Grid で表示
-/// 情報タブ: モデル情報 + メタ情報
+/// Show meta info in collapsible Grids per section.
+/// Info tab: model info + meta info.
 fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
     let Some(ref loaded) = app.loaded else {
         return;
@@ -3226,7 +3260,7 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
         egui::RichText::new(t!("viewer.section.model_info")).color(egui::Color32::from_gray(0xD0)),
     );
     ui.separator();
-    // 名前（単独行）
+    // Name (single row).
     egui::Grid::new("model_info_name")
         .num_columns(2)
         .show(ui, |ui| {
@@ -3238,7 +3272,7 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
             ui.label(ir.source_format.label());
             ui.end_row();
         });
-    // 数値情報を4列（ラベル+値 × 2）でコンパクト表示
+    // Compact 4-column display (label+value x 2) for numeric info.
     egui::Grid::new("model_info_stats")
         .num_columns(4)
         .spacing([4.0, 2.0])
@@ -3286,10 +3320,10 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
 
     ui.add_space(12.0);
 
-    // メタ情報 / コメント
+    // Meta info / comment.
     if !ir.comment.is_empty() {
         if ir.source_format.is_pmx_pmd() {
-            // PMX/PMD: 自由形式コメントをそのまま表示
+            // PMX/PMD: show the free-form comment as is.
             ui.heading(
                 egui::RichText::new(t!("viewer.section.comment"))
                     .color(egui::Color32::from_gray(0xD0)),
@@ -3306,7 +3340,7 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
     }
 }
 
-/// 操作タブ: アニメーション制御 + 表情モーフスライダ
+/// Control tab: animation controls + expression-morph sliders.
 fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
     show_animation_controls(ui, app);
 
@@ -3321,7 +3355,7 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
         return;
     }
 
-    // アニメーションが制御中の表情名を収集
+    // Collect expression names being controlled by the animation.
     let anim_expr_morphs: std::collections::HashSet<usize> = if let Some(ref anim) = app.anim.state
     {
         ir.morphs
@@ -3356,7 +3390,7 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     });
     if ui.small_button(t!("viewer.morph.reset_all")).clicked() {
-        // UV エディタで編集中のモーフは退避値を維持するためスキップする (v0.5.6)。
+        // Morphs being edited by the UV editor keep their stash values, so skip them (v0.5.6).
         let uv_locked_morph = app.uv_edit.active_morph;
         for (i, w) in app.morph_weights.iter_mut().enumerate() {
             if !anim_expr_morphs.contains(&i) && Some(i) != uv_locked_morph {
@@ -3368,7 +3402,7 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
     ui.separator();
     let filter_lower = app.morph_filter.to_lowercase();
     for (i, morph) in ir.morphs.iter().enumerate() {
-        // フィルタに一致しないモーフはスキップ
+        // Skip morphs that don't match the filter.
         if !filter_lower.is_empty()
             && !morph.name.to_lowercase().contains(&filter_lower)
             && !morph.name_en.to_lowercase().contains(&filter_lower)
@@ -3377,8 +3411,8 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
         if i < app.morph_weights.len() {
             let is_anim_controlled = anim_expr_morphs.contains(&i);
-            // v0.5.6: UV エディタで本モーフを編集中はウェイトが 1.0 に固定されるため、
-            // 誤操作を防ぐためスライダー類を無効化する（編集終了時に元値が復元される）。
+            // v0.5.6: while this morph is being edited in the UV editor, its weight is fixed at 1.0,
+            // so disable sliders to avoid mishandling (the original value is restored at edit end).
             let is_uv_morph_locked = app.uv_edit.active_morph == Some(i);
             let enabled = !is_anim_controlled && !is_uv_morph_locked;
             ui.horizontal(|ui| {
@@ -3424,13 +3458,13 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
     }
 }
 
-/// 表示タブ: 表示設定 + 材質表示
+/// Display tab: display settings + material display.
 fn show_tab_display(
     ui: &mut egui::Ui,
     app: &mut ViewerApp,
     tex_assign_request: &mut Option<TexAssignRequest>,
 ) {
-    // 表示設定
+    // Display settings.
     ui.heading(
         egui::RichText::new(t!("viewer.section.display_settings"))
             .color(egui::Color32::from_gray(0xD0)),
@@ -3445,13 +3479,13 @@ fn show_tab_display(
         app.display.ambient_sky_color = d.ambient_sky_color;
         app.display.ambient_ground_color = d.ambient_ground_color;
         app.display.bg_brightness = d.bg_brightness;
-        // Bloom は専用の初期値ボタンがあるため、ここでは触らない
+        // Bloom has a dedicated reset button, so do not touch it here.
     }
-    // ライト・環境光・Ground のカラーボタン位置を Grid で揃える
+    // Align Light / Ambient / Ground color-button positions in a Grid.
     egui::Grid::new("light_color_grid")
         .num_columns(2)
         .show(ui, |ui| {
-            // Unlit/Normal ではライティングが効かないため light を disabled に
+            // Disable Light for Unlit / Normal because lighting has no effect.
             let shader_sel = app.display.shader_selection();
             let light_enabled =
                 !matches!(shader_sel, ShaderSelection::Unlit | ShaderSelection::Normal);
@@ -3465,7 +3499,7 @@ fn show_tab_display(
             });
             ui.end_row();
 
-            // MMD/Unlit/Normal では環境光を無効化
+            // Disable ambient under MMD / Unlit / Normal.
             let amb_enabled = light_enabled && !app.display.use_mmd_path;
             ui.add_enabled(
                 amb_enabled,
@@ -3521,7 +3555,7 @@ fn show_tab_display(
             );
         }
     });
-    // ジョイント表示（PMX/PMDのみ）
+    // Joint display (PMX/PMD only).
     let is_pmx_pmd_joints = app
         .loaded
         .as_ref()
@@ -3542,7 +3576,7 @@ fn show_tab_display(
             );
         }
     }
-    // ワイヤーフレーム
+    // Wireframe.
     let supports_wire = app
         .renderer
         .as_ref()
@@ -3556,7 +3590,7 @@ fn show_tab_display(
             ui.selectable_value(&mut app.display.draw_mode, DrawMode::SolidWireframe, "S+W");
         });
     }
-    // ライトモード
+    // Light mode.
     ui.horizontal(|ui| {
         ui.label(t!("viewer.display.light_mode_label"));
         ui.selectable_value(
@@ -3570,7 +3604,7 @@ fn show_tab_display(
             t!("viewer.display.light_mode_fixed"),
         );
     });
-    // MMD リソース構築済みの draw があるかで判定
+    // Decide based on whether there is a draw with built MMD resources.
     let has_mmd_capability = app.loaded.as_ref().is_some_and(|l| {
         l.gpu_model
             .draws
@@ -3579,7 +3613,7 @@ fn show_tab_display(
     });
     ui.separator();
 
-    // シェーダーモード選択（▲ ComboBox ▼）
+    // Shader mode selection (up-arrow ComboBox down-arrow).
     let mut sel = app.display.shader_selection();
     let shader_choices: Vec<ShaderSelection> = {
         let mut v = vec![
@@ -3605,7 +3639,7 @@ fn show_tab_display(
         }
     };
     let len = shader_choices.len();
-    // 最長選択肢に合わせた固定幅を計算
+    // Compute a fixed width based on the longest choice.
     let combo_min_width = {
         let max_w = shader_choices
             .iter()
@@ -3652,7 +3686,7 @@ fn show_tab_display(
         app.normalize_shader_state();
     }
 
-    // MToon アウトラインを持つ Standard draw があるかで有効判定
+    // Decide enable based on whether any Standard draw has an MToon outline.
     let has_outline_draws = app.loaded.as_ref().is_some_and(|l| {
         l.gpu_model
             .draws
@@ -3669,7 +3703,7 @@ fn show_tab_display(
         ),
     );
 
-    // MMD サブオプション（明示的 Mmd 選択時、または Auto で MMD パスが有効な場合）
+    // MMD sub-options (when explicitly selecting Mmd, or when MMD path is enabled under Auto).
     let show_mmd_options =
         sel == ShaderSelection::Mmd || (sel == ShaderSelection::Auto && app.display.use_mmd_path);
     if show_mmd_options {
@@ -3743,9 +3777,9 @@ fn show_tab_display(
             .iter()
             .any(|d| d.render_style == super::mesh::RenderStyle::Mmd)
     });
-    // per-material 法線フラグの一括切替（ラベル + [on]/[off] ボタン）
+    // Bulk toggle for per-material normal flags (label + [on]/[off] buttons).
     ui.add_enabled_ui(!has_mmd_normals, |ui| {
-        // 法線平滑化 一括
+        // Normal smoothing bulk.
         ui.horizontal(|ui| {
             ui.label(t!("viewer.display.smooth_normals_label"));
             let on_resp = ui.small_button("on");
@@ -3761,7 +3795,7 @@ fn show_tab_display(
                 if let Some(ref loaded) = app.loaded {
                     let ir_mats = &loaded.ir.materials;
                     for (i, d) in app.material_display.iter_mut().enumerate() {
-                        // 法線マップ付き材質は on 操作時に false 強制（既存仕様維持）
+                        // Materials with a normal map are forced to false on "on" (preserves existing behavior).
                         if v && ir_mats.get(i).is_some_and(|m| m.normal_texture.is_some()) {
                             d.smooth_normals = false;
                         } else {
@@ -3776,7 +3810,7 @@ fn show_tab_display(
                 off_resp.on_disabled_hover_text(t!("viewer.display.pmx_normals_locked"));
             }
         });
-        // カスタム法線クリア 一括
+        // Clear custom normals bulk.
         ui.horizontal(|ui| {
             ui.label(t!("viewer.display.clear_normals_label"));
             let on_resp = ui.small_button("on");
@@ -3810,8 +3844,8 @@ fn show_tab_display(
 
     ui.add_space(12.0);
 
-    // 材質表示
-    // テクスチャ履歴キーを先に計算（借用衝突回避）
+    // Material display.
+    // Compute the texture-history key up front (avoid borrow conflicts).
     let tex_history_key = app.texture_history_key();
     let tex_history_has_entry = tex_history_key.as_ref().is_some_and(|k| {
         app.texture_history.history.contains_key(k)
@@ -3822,7 +3856,7 @@ fn show_tab_display(
         .assignments
         .values()
         .any(|s| matches!(s, super::app::helpers::TextureSource::File(_)));
-    // v0.5.0: パラメータ編集だけでもテクスチャ割当なしで保存可能にする（§I 最小永続化）
+    // v0.5.0: allow saving with parameter edits alone, even without texture assignments (§I minimum persistence).
     let has_param_edits = !app.material_overrides.is_empty();
 
     let Some(ref loaded) = app.loaded else { return };
@@ -3861,7 +3895,7 @@ fn show_tab_display(
         )
         .on_hover_text(t!("viewer.material_list.link_same_name_hover"));
     });
-    // 2行目: テクスチャリセット + 履歴ボタン（小フォント）
+    // Row 2: texture reset + history buttons (small font).
     let mut do_save_history = false;
     let mut do_recall_history = false;
     ui.horizontal(|ui| {
@@ -3886,7 +3920,7 @@ fn show_tab_display(
                     )
                     .clicked()
             {
-                // 既に履歴がある場合は確認フラグ、なければ即保存
+                // If history exists, set the confirm flag; otherwise save immediately.
                 if tex_history_has_entry {
                     app.pending.confirm_save_tex_history = true;
                 } else {
@@ -3905,7 +3939,7 @@ fn show_tab_display(
             }
         }
     });
-    // フィルター（材質数が多い場合に便利）
+    // Filter (useful when there are many materials).
     if num_draws > 10 {
         ui.horizontal(|ui| {
             ui.label(t!("viewer.material_list.search_label"));
@@ -3918,7 +3952,7 @@ fn show_tab_display(
     }
     let filter_lower = app.material_filter.to_lowercase();
     let thumb_ids = &app.tex.pkg_thumb_cache;
-    // 材質ごとの法線マップ有無を事前抽出（借用衝突回避のため）
+    // Pre-extract per-material normal-map presence (to avoid borrow conflicts).
     let mat_has_normal_map: Vec<bool> = app
         .loaded
         .as_ref()
@@ -3929,7 +3963,7 @@ fn show_tab_display(
                 .collect()
         })
         .unwrap_or_default();
-    // 材質ごとのエミッシブ有無を事前抽出
+    // Pre-extract per-material emissive presence.
     let mat_has_emissive: Vec<bool> = app
         .loaded
         .as_ref()
@@ -3944,7 +3978,7 @@ fn show_tab_display(
                 .collect()
         })
         .unwrap_or_default();
-    // グループ情報を軽量抽出（名前と draw_range のみ。MaterialGroup 全体の clone を回避）
+    // Lightly extract group info (only names and draw_range; avoid cloning the whole `MaterialGroup`).
     let (group_names, group_draw_ranges): (Vec<String>, Vec<std::ops::Range<usize>>) = app
         .loaded
         .as_ref()
@@ -3958,7 +3992,7 @@ fn show_tab_display(
     let has_groups = !group_names.is_empty();
 
     if has_groups {
-        // DrawCall Index → グループIndex
+        // DrawCall index -> group index.
         let mut draw_to_group: Vec<usize> = vec![0; num_draws];
         for (gi, dr) in group_draw_ranges.iter().enumerate() {
             for item in draw_to_group
@@ -3969,9 +4003,9 @@ fn show_tab_display(
                 *item = gi;
             }
         }
-        // draw_info もクローン（CollapsingHeader クロージャ内で使うため）
+        // Also clone `draw_info` (used inside the `CollapsingHeader` closure).
         let draw_info_owned = draw_info.to_vec();
-        // loaded の借用を解放
+        // Release the `loaded` borrow.
         let _ = draw_info;
         let _ = mat_tex_info;
         let _ = mat_names;
@@ -3986,7 +4020,7 @@ fn show_tab_display(
             if group_draws.is_empty() {
                 continue;
             }
-            // グループ内のユニークな mat_idx を収集（S/C 一括用）
+            // Collect unique `mat_idx` within the group (for S / C bulk).
             let group_mat_idxs: Vec<usize> = {
                 let mut set = std::collections::BTreeSet::new();
                 for &(_, mat_idx) in &group_draws {
@@ -4002,11 +4036,11 @@ fn show_tab_display(
                 id,
                 true,
             );
-            // ヘッダ行: ▶[S][C][N][B][ ] グループ名
+            // Header row: collapse [S][C][N][B][ ] group name.
             let header_res = ui.horizontal(|ui| {
-                // 折りたたみトグル
+                // Collapse toggle.
                 state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
-                // [S] 法線平滑化（グループ一括）— 常に有効（ノーマルマップと併用可）
+                // [S] Smooth normals (group bulk) - always enabled (compatible with normal map).
                 {
                     let all_on = !group_mat_idxs.is_empty()
                         && group_mat_idxs.iter().all(|&mi| {
@@ -4029,7 +4063,7 @@ fn show_tab_display(
                     }
                     resp.on_hover_text(t!("viewer.material_list.smooth_normals_group_hover"));
                 }
-                // [C] カスタム法線クリア（グループ一括）
+                // [C] Clear custom normals (group bulk).
                 {
                     let all_on = !group_mat_idxs.is_empty()
                         && group_mat_idxs.iter().all(|&mi| {
@@ -4052,7 +4086,7 @@ fn show_tab_display(
                     }
                     resp.on_hover_text(t!("viewer.material_list.clear_normals_group_hover"));
                 }
-                // [N] ノーマルマップ ON/OFF（グループ一括）
+                // [N] Normal map ON/OFF (group bulk).
                 {
                     let eligible: Vec<usize> = group_mat_idxs
                         .iter()
@@ -4078,7 +4112,7 @@ fn show_tab_display(
                     }
                     resp.on_hover_text(t!("viewer.material_list.normal_map_group_hover"));
                 }
-                // [B] エミッシブ ON/OFF（グループ一括）
+                // [B] Emissive ON/OFF (group bulk).
                 {
                     let eligible: Vec<usize> = group_mat_idxs
                         .iter()
@@ -4104,7 +4138,7 @@ fn show_tab_display(
                     }
                     resp.on_hover_text(t!("viewer.material_list.emissive_group_hover"));
                 }
-                // [ ] 表示/非表示（グループ一括）
+                // [ ] Visible / Hidden (group bulk).
                 {
                     let all_visible = group_draw_idxs
                         .iter()
@@ -4118,7 +4152,7 @@ fn show_tab_display(
                         }
                     }
                 }
-                // グループ名
+                // Group name.
                 if ui
                     .selectable_label(
                         false,
@@ -4131,7 +4165,7 @@ fn show_tab_display(
                     state.toggle(ui);
                 }
             });
-            // ヘッダ行ホバー → グループ内全 draw をハイライト
+            // Header-row hover -> highlight all draws in the group.
             if header_res.response.contains_pointer() {
                 for &di in &group_draw_idxs {
                     if app.material_visibility.get(di).copied().unwrap_or(true) {
@@ -4144,7 +4178,7 @@ fn show_tab_display(
                 let mat_tex_info = &loaded.mat_cache.tex_indices;
                 let mat_names = &loaded.mat_cache.names;
                 let mat_src_tex = &loaded.mat_cache.source_tex_names;
-                // v0.5.3: 材質行先頭ボタンのサムネ表示用キャッシュ参照
+                // v0.5.3: cache reference for thumbnail display on the leading button of each material row.
                 let loaded_ir_thumb_ids: &[Option<egui::TextureId>] =
                     &app.tex.ir_thumb_cache;
                 for &(i, mat_idx) in &group_draws {
@@ -4159,10 +4193,10 @@ fn show_tab_display(
                     }
                     let row_resp = ui.horizontal(|ui| {
                 let mut row_highlight = false;
-                // テクスチャ状態インジケータ（v0.5.3: サムネ表示対応）
-                // - 割当 IR テクスチャのサムネが取れる場合は ImageButton（18px）
-                // - has_tex=true だがサムネ未生成 → ■（緑）にフォールバック
-                // - has_tex=false → □（赤茶）プレースホルダ
+                // Texture-state indicator (v0.5.3: with thumbnail).
+                // - When the assigned IR texture's thumbnail is available, use an `ImageButton` (18 px).
+                // - has_tex=true but no thumbnail -> fallback to filled green square.
+                // - has_tex=false -> empty red-brown square placeholder.
                 {
                     let tex_idx_opt = mat_tex_info.get(mat_idx).and_then(|t| *t);
                     let has_tex = tex_idx_opt.is_some();
@@ -4180,13 +4214,13 @@ fn show_tab_display(
                         }
                         (false, None) => t!("viewer.material_list.tex_unset").into_owned(),
                     };
-                    // v0.5.3: ImageButton の枠分があるため、画像自体は 14px に抑えて
-                    // 行全体の見た目サイズを絵文字アイコン列と揃える。
+                    // v0.5.3: account for `ImageButton` framing by capping the image at 14 px,
+                    // so the row's visual size matches the emoji icon columns.
                     const THUMB_PX: f32 = 14.0;
                     let thumb_size = egui::vec2(THUMB_PX, THUMB_PX);
                     let resp = if let Some(tid) = thumb_id {
-                        // v0.5.3: コンパクトプリセット（padding=1, stroke=0.5）。
-                        // scope 内のみに適用し他のボタンには波及させない。
+                        // v0.5.3: compact preset (padding=1, stroke=0.5).
+                        // Applied only inside the `scope` so other buttons aren't affected.
                         ui.scope(|ui| {
                             let style = ui.style_mut();
                             style.spacing.button_padding = egui::vec2(1.0, 1.0);
@@ -4225,7 +4259,7 @@ fn show_tab_display(
                     }
                     let has_pkg = app.tex.pkg_textures.is_some();
                     let popup_id = ui.id().with(("pkg_tex_popup", mat_idx));
-                    // ポップアップ開放中もハイライト
+                    // Highlight while the popup is open as well.
                     if ui.memory(|m| m.is_popup_open(popup_id)) {
                         row_highlight = true;
                     }
@@ -4239,7 +4273,7 @@ fn show_tab_display(
                     if has_pkg {
                         egui::popup_below_widget(ui, popup_id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
                             ui.set_min_width(280.0);
-                            // 「ファイルから選択」を先頭に配置
+                            // Place "Select from file" at the top.
                             if ui.button(t!("viewer.material_list.pkg_select_file")).clicked() {
                                 *tex_assign_request = Some(TexAssignRequest::FileDialog(mat_idx));
                                 ui.memory_mut(|m| m.toggle_popup(popup_id));
@@ -4292,9 +4326,9 @@ fn show_tab_display(
                         mat_src_tex.get(mat_idx)
                             .and_then(|s| s.as_deref())
                     });
-                // 法線 per-material トグル（S=平滑化, C=カスタム法線クリア, N=ノーマルマップ, B=エミッシブ）
+                // Per-material normal toggles (S = smooth, C = clear custom, N = normal map, B = emissive).
                 let has_nmap = mat_has_normal_map.get(mat_idx).copied().unwrap_or(false);
-                // [S][C] は常に有効（ノーマルマップと併用可: TBN 基底法線の平滑化で品質向上）
+                // [S][C] are always enabled (compatible with normal map: smoothing the TBN base normal improves quality).
                 if let Some(d) = app.material_display.get(mat_idx) {
                     let old = d.smooth_normals;
                     let resp = ui.add_enabled(
@@ -4321,7 +4355,7 @@ fn show_tab_display(
                     if resp.hovered() { row_highlight = true; }
                     resp.on_hover_text(t!("viewer.material_list.clear_normals_hover"));
                 }
-                // [N] ノーマルマップ ON/OFF
+                // [N] Normal map ON/OFF.
                 if let Some(d) = app.material_display.get(mat_idx) {
                     let old = d.normal_map;
                     let resp = ui.add_enabled(
@@ -4335,7 +4369,7 @@ fn show_tab_display(
                     if resp.hovered() { row_highlight = true; }
                     resp.on_hover_text(t!("viewer.material_list.normal_map_hover"));
                 }
-                // [B] エミッシブ ON/OFF
+                // [B] Emissive ON/OFF.
                 if let Some(d) = app.material_display.get(mat_idx) {
                     let old = d.emissive;
                     let has_emissive = mat_has_emissive.get(mat_idx).copied().unwrap_or(false);
@@ -4351,10 +4385,12 @@ fn show_tab_display(
                     resp.on_hover_text(t!("viewer.material_list.emissive_hover"));
                 }
 
-                // 材質編集パネル開閉（§A）。既存アイコン列とは別列として扱い、
-                // クリックで下部ドック型の編集パネルをトグル表示する。
-                // ※ 旧版で ✎ (U+270E) が表示できなかった件は、egui の NotoEmoji フォールバックに
-                //    含まれない code point だったのが原因。ICON_EDIT (✏ U+270F) はフォールバック対象。
+                // Material-edit panel open / close (§A). Treated as a column
+                // separate from the existing icon columns; clicking toggles
+                // the bottom-docked edit panel.
+                // Note: the old version's ✎ (U+270E) couldn't be rendered
+                // because the codepoint isn't in egui's NotoEmoji fallback.
+                // `ICON_EDIT` (✏ U+270F) is in the fallback.
                 {
                     let is_editing = app.editing_material_index == Some(mat_idx);
                     let resp = ui.selectable_label(is_editing, ICON_EDIT);
@@ -4377,7 +4413,7 @@ fn show_tab_display(
                 } else {
                     ui.checkbox(&mut app.material_visibility[i], name)
                 };
-                // 材質名ホバー時にテクスチャ参照ファイル名をツールチップ表示
+                // Show the referenced texture file names as a tooltip on material-name hover.
                 if let Some(ref loaded) = app.loaded {
                     if let Some(mat) = loaded.ir.materials.get(mat_idx) {
                         let textures = &loaded.ir.textures;
@@ -4433,7 +4469,7 @@ fn show_tab_display(
                 if cb.contains_pointer() { row_highlight = true; }
                 row_highlight
                     });
-                    // 行ホバー検出 → 同一材質の全 draw をハイライト（非表示は除外）
+                    // Row-hover detection -> highlight all draws of the same material (excluding hidden).
                     if row_resp.inner {
                         if let Some(ref loaded) = app.loaded {
                             for (di, d) in loaded.gpu_model.draws.iter().enumerate() {
@@ -4450,10 +4486,10 @@ fn show_tab_display(
         }
     }
 
-    // ── ファイル構成 ──
+    // -- File structure --
     show_file_tree(ui, app);
 
-    // テクスチャ履歴の遅延実行（loaded の借用が解放された後）
+    // Deferred texture-history execution (after the `loaded` borrow is released).
     if do_save_history {
         app.do_save_texture_history();
     }
@@ -4462,7 +4498,7 @@ fn show_tab_display(
     }
 }
 
-/// ファイル構成ツリー: ロードチェーン（開いたファイル → 経由 → 最終モデル）を階層表示
+/// File-structure tree: hierarchical display of the load chain (opened file -> intermediate -> final model).
 fn show_file_tree(ui: &mut egui::Ui, app: &ViewerApp) {
     let Some(ref loaded) = app.loaded else { return };
 
@@ -4479,10 +4515,10 @@ fn show_file_tree(ui: &mut egui::Ui, app: &ViewerApp) {
     let anim_color = egui::Color32::from_rgb(0x80, 0xB0, 0xE0);
     let path_color = egui::Color32::from_gray(0x80);
 
-    // ── ロードチェーン構築 ──
-    // Level 0: 開いたファイル（source）
-    // Level 1: 中間ファイル（Archive 内エントリ / Prefab）
-    // Level 2: 最終モデルファイル（FBX群 / 単一モデル）
+    // -- Build the load chain --
+    // Level 0: opened file (source).
+    // Level 1: intermediate file (archive entry / Prefab).
+    // Level 2: final model file (FBX group / single model).
 
     let source_path = loaded.source.display_path();
     let source_name = source_path
@@ -4491,7 +4527,7 @@ fn show_file_tree(ui: &mut egui::Ui, app: &ViewerApp) {
         .unwrap_or_else(|| source_path.to_string_lossy().to_string());
     let source_full = source_path.to_string_lossy().to_string();
 
-    // Archive 内エントリ名（ZIP/7z 経由の場合）
+    // In-archive entry name (when going through ZIP / 7z).
     let archive_entry = if let super::app::ReloadableSource::Archive {
         selected_entry_path,
         ..
@@ -4502,27 +4538,27 @@ fn show_file_tree(ui: &mut egui::Ui, app: &ViewerApp) {
         None
     };
 
-    // グループが複数 or Prefab なら最終モデルファイルとしてグループ名を表示
+    // If there are multiple groups or a Prefab, show the group name as the final model file.
     let groups = &loaded.material_groups;
     let has_prefab = loaded.prefab_name.is_some();
     let has_multi_groups = groups.len() > 1;
 
-    // ── ツリー描画 ──
-    // Level 0: ソースファイル
+    // -- Tree drawing --
+    // Level 0: source file.
     egui::CollapsingHeader::new(egui::RichText::new(&source_name).color(dir_color).strong())
         .id_salt(ui.id().with("file_chain_root"))
         .default_open(true)
         .show(ui, |ui| {
-            // パス表示
+            // Show path.
             ui.label(egui::RichText::new(&source_full).color(path_color).small());
 
-            // Level 1: Archive 内エントリ
+            // Level 1: in-archive entry.
             if let Some(ref entry) = archive_entry {
                 let entry_name = std::path::Path::new(entry)
                     .file_name()
                     .map(|f| f.to_string_lossy().to_string())
                     .unwrap_or_else(|| entry.clone());
-                // Archive 内のエントリがさらに Prefab を持つ場合
+                // The in-archive entry further holds a Prefab.
                 if has_prefab {
                     egui::CollapsingHeader::new(egui::RichText::new(&entry_name).color(file_color))
                         .id_salt(ui.id().with("file_chain_archive_entry"))
@@ -4532,22 +4568,22 @@ fn show_file_tree(ui: &mut egui::Ui, app: &ViewerApp) {
                         });
                 } else {
                     ui.label(egui::RichText::new(&entry_name).color(file_color));
-                    // テクスチャ
+                    // Textures.
                     show_texture_subtree(ui, loaded, groups, dir_color, tex_color);
                 }
             } else if has_prefab {
-                // Level 1: Prefab（unitypackage 直接）
+                // Level 1: Prefab (directly under unitypackage).
                 show_prefab_subtree(ui, loaded, dir_color, file_color, tex_color);
             } else if has_multi_groups {
-                // 複数グループ（append 等）: グループ別にテクスチャ表示
+                // Multiple groups (append, etc.): show textures per group.
                 show_texture_subtree(ui, loaded, groups, dir_color, tex_color);
             } else {
-                // 単一モデル: テクスチャのみ表示
+                // Single model: show only textures.
                 show_texture_subtree(ui, loaded, groups, dir_color, tex_color);
             }
         });
 
-    // ── 追加モデル ──
+    // -- Appended models --
     for (ai, appended) in loaded.appended_models.iter().enumerate() {
         let ap = appended.source.display_path();
         let aname = ap
@@ -4570,7 +4606,7 @@ fn show_file_tree(ui: &mut egui::Ui, app: &ViewerApp) {
         });
     }
 
-    // ── アニメーション ──
+    // -- Animations --
     if !app.anim.library.is_empty() {
         let header = t!(
             "viewer.file_tree.animations",
@@ -4591,7 +4627,7 @@ fn show_file_tree(ui: &mut egui::Ui, app: &ViewerApp) {
         });
     }
 
-    // ── パッケージテクスチャ ──
+    // -- Package textures --
     if let Some(ref pkg) = app.tex.pkg_textures {
         if !pkg.is_empty() {
             let header = t!("viewer.file_tree.pkg_textures", count = pkg.len());
@@ -4611,7 +4647,7 @@ fn show_file_tree(ui: &mut egui::Ui, app: &ViewerApp) {
     }
 }
 
-/// Prefab サブツリー: Prefab名 → FBX群（テクスチャ付き）
+/// Prefab subtree: Prefab name -> FBX group (with textures).
 fn show_prefab_subtree(
     ui: &mut egui::Ui,
     loaded: &super::app::LoadedModel,
@@ -4627,7 +4663,7 @@ fn show_prefab_subtree(
         .default_open(true)
         .show(ui, |ui| {
             for (gi, group) in groups.iter().enumerate() {
-                // グループごとのテクスチャを収集
+                // Collect per-group textures.
                 let mut tex_indices = Vec::new();
                 for mat_idx in group.material_range.clone() {
                     if let Some(mat) = loaded.ir.materials.get(mat_idx) {
@@ -4658,7 +4694,7 @@ fn show_prefab_subtree(
         });
 }
 
-/// テクスチャサブツリー: グループ別または全テクスチャを表示
+/// Texture subtree: shows textures per group or all textures.
 fn show_texture_subtree(
     ui: &mut egui::Ui,
     loaded: &super::app::LoadedModel,
@@ -4672,7 +4708,7 @@ fn show_texture_subtree(
     }
 
     if groups.len() > 1 {
-        // 複数グループ: グループ別に表示
+        // Multiple groups: show per group.
         for (gi, group) in groups.iter().enumerate() {
             let mut tex_indices = Vec::new();
             for mat_idx in group.material_range.clone() {
@@ -4706,7 +4742,7 @@ fn show_texture_subtree(
             });
         }
     } else {
-        // 単一グループ: フラット表示
+        // Single group: flat display.
         let header = t!("viewer.file_tree.textures_all", count = tex_count);
         egui::CollapsingHeader::new(
             egui::RichText::new(header.as_ref())
@@ -4723,7 +4759,7 @@ fn show_texture_subtree(
     }
 }
 
-/// 材質が参照するすべてのテクスチャインデックスを収集する
+/// Collect all texture indices referenced by a material.
 fn collect_material_tex_indices(
     mat: &crate::intermediate::types::IrMaterial,
     out: &mut Vec<usize>,
@@ -4758,7 +4794,7 @@ fn collect_material_tex_indices(
             out.push(idx);
         }
     }
-    // MToon 追加テクスチャ
+    // MToon additional textures.
     if let Some(ref mtoon) = mat.mtoon {
         for info in [
             &mtoon.shade_texture,
@@ -4778,7 +4814,7 @@ fn collect_material_tex_indices(
     }
 }
 
-/// 出力タブ: PMX変換 + UVマップ出力
+/// Export tab: PMX conversion + UV map export.
 fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     let has_humanoid = app
         .loaded
@@ -4805,7 +4841,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     );
     ui.separator();
 
-    // 出力先ディレクトリ（converted_modelXX の作成場所）
+    // Output directory (where `converted_modelXX` is created).
     ui.horizontal(|ui| {
         ui.label(t!("viewer.export_tab.output_dir_label"));
         let dir_label = app
@@ -4821,7 +4857,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         );
     });
     ui.horizontal(|ui| {
-        // ダイアログ表示中は重複起動しない
+        // Do not relaunch while the dialog is open.
         let dialog_active = app.export.pending_folder_dialog.is_some();
         if ui
             .add_enabled(
@@ -4840,7 +4876,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         .and_then(|l| l.source.display_path().parent().map(|p| p.to_path_buf()))
                 })
                 .unwrap_or_default();
-            // フォルダ選択ダイアログを別スレッドで開く（UIをブロックしない）
+            // Open the folder-select dialog on a separate thread (does not block the UI).
             let dialog_title = t!("viewer.export_tab.output_dir_dialog_title").into_owned();
             let (tx, rx) = std::sync::mpsc::channel();
             let repaint = ui.ctx().clone();
@@ -4863,8 +4899,8 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     });
 
-    // モデル名編集（タイトルバー表示 + PMX 出力ファイル名の両方に反映）
-    // モデル未ロード時はグレーアウト
+    // Model-name edit (reflected in both the title bar and the PMX output filename).
+    // Greyed out when no model is loaded.
     ui.horizontal(|ui| {
         ui.label(t!("viewer.export_tab.model_name_label"));
         ui.add_enabled_ui(has_model && !is_processing, |ui| {
@@ -4874,15 +4910,15 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     .hint_text(t!("viewer.export_tab.model_name_hint")),
             );
             if response.changed() {
-                // TextEdit からの変更はユーザー入力のため、サニタイズはせずそのまま反映。
-                // タイトルバー・PMX 出力ファイル名に即時反映する。
+                // Changes from `TextEdit` are user input, so reflect them as is without sanitization.
+                // Apply to the title bar and PMX output filename immediately.
                 app.refresh_derived_from_display_name();
             }
         });
     });
     ui.separator();
 
-    // PMX/PMD ロード時は PMX 変換関連をグレーアウト
+    // Grey out PMX-conversion controls while a PMX/PMD model is loaded.
     ui.add_enabled_ui(has_model && !is_processing && !is_pmx_pmd, |ui| {
         let convert_disabled_hint = if is_pmx_pmd {
             t!("viewer.export_tab.convert_disabled_pmx_pmd")
@@ -4896,7 +4932,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             .on_disabled_hover_text(convert_disabled_hint)
             .clicked()
         {
-            // 変換ごとに converted_modelXX を再採番（上書き防止）
+            // Renumber `converted_modelXX` per conversion (avoids overwriting).
             if let Some(ref loaded) = app.loaded {
                 let source_path = loaded.source.display_path();
                 let base_dir =
@@ -4904,7 +4940,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         source_path.parent().unwrap_or(std::path::Path::new("."))
                     });
                 let converted_dir = crate::next_converted_dir(base_dir);
-                // ユーザーが編集可能な model_display_name を優先。未設定時のみフォールバック。
+                // Prefer the user-editable `model_display_name`; fall back only if unset.
                 let pmx_stem = if !app.export.model_display_name.is_empty() {
                     app.export.model_display_name.clone()
                 } else {
@@ -4918,7 +4954,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 };
                 let output_path = converted_dir.join(format!("{}.pmx", pmx_stem));
                 app.export.pmx_output_path = output_path.to_string_lossy().into_owned();
-                // 出力ディレクトリ作成を BG スレッドで実行（ネットワークドライブ対策）
+                // Create the output directory on a BG thread (network-drive friendly).
                 if let Some(dir) = output_path.parent() {
                     let dir = dir.to_path_buf();
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -4930,13 +4966,13 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     });
                     app.export.pending_mkdir = Some(super::app::pending::PendingMkdir { rx });
                 } else {
-                    // 親ディレクトリが無い場合は直接変換を開始
+                    // No parent directory: start the conversion directly.
                     app.pending.convert = Some(PendingOverlay::WaitingOverlay);
                 }
             }
         }
     });
-    // PMX/PMD 時: T→Aスタンスはグレーアウト、代わりにA→Tスタンスを表示
+    // For PMX/PMD: grey out T->A stance and show A->T stance instead.
     let is_fbx = app
         .loaded
         .as_ref()
@@ -4961,14 +4997,14 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 .on_disabled_hover_text(t!("viewer.export_tab.pose_disabled_no_humanoid"))
                 .changed()
             {
-                // Aスタンス変換ONならTスタンス変換OFFに
+                // If A-stance conversion is ON, force T-stance conversion OFF.
                 if app.normalize_pose {
                     app.normalize_to_tstance = false;
                 }
                 app.pending.reload = Some(PendingOverlay::WaitingOverlay);
             }
         });
-        // FBX 時: A→Tスタンス変換チェックボックス追加
+        // For FBX: add an A->T stance conversion checkbox.
         if is_fbx {
             ui.add_enabled_ui(has_humanoid, |ui| {
                 if ui
@@ -4979,7 +5015,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     .on_disabled_hover_text(t!("viewer.export_tab.pose_disabled_no_humanoid"))
                     .changed()
                 {
-                    // Tスタンス変換ONならAスタンス変換OFFに
+                    // If T-stance conversion is ON, force A-stance conversion OFF.
                     if app.normalize_to_tstance {
                         app.normalize_pose = false;
                     }
@@ -4988,7 +5024,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             });
         }
     }
-    // オプション2列グリッド
+    // 2-column option grid.
     egui::Grid::new("export_options")
         .num_columns(2)
         .spacing([8.0, 2.0])
@@ -5051,7 +5087,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             ui.end_row();
         });
 
-    // MME (ray-mmd) — PMX 変換のサブメニュー (§K.5 / Step 6)
+    // MME (ray-mmd) - sub-menu of PMX conversion (§K.5 / Step 6).
     ui.add_enabled(
         has_model,
         egui::Checkbox::new(
@@ -5116,14 +5152,14 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
 
     ui.add_space(12.0);
 
-    // UVマップ出力
+    // UV map export.
     ui.heading(
         egui::RichText::new(t!("viewer.section.uvmap_export"))
             .color(egui::Color32::from_gray(0xD0)),
     );
     ui.separator();
     ui.add_enabled_ui(has_model && !is_processing, |ui| {
-        // ダイアログ表示中は重複起動しない
+        // Do not relaunch while the dialog is open.
         let uv_dialog_active = app.export.pending_uv_dialog.is_some();
         if ui
             .add_enabled(
@@ -5132,9 +5168,9 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
             )
             .clicked()
         {
-            // デフォルトディレクトリ: モデルをロードしたディレクトリ（ソースファイルの親）
-            // アーカイブの場合は display_path がアーカイブ本体を指すため、
-            // 自動的にアーカイブの置かれたディレクトリが採用される。
+            // Default directory: the directory where the model was loaded (source-file's parent).
+            // For archives, `display_path` points to the archive itself, so
+            // the directory containing the archive is automatically used.
             let default_dir = app.loaded.as_ref().map(|l| {
                 l.source
                     .display_path()
@@ -5142,13 +5178,13 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     .unwrap_or(std::path::Path::new("."))
                     .to_path_buf()
             });
-            // デフォルトファイル名: model_display_name があればそれ、無ければ "uvmap"
+            // Default filename: `model_display_name` if set; otherwise "uvmap".
             let file_name = Some(if app.export.model_display_name.is_empty() {
                 "uvmap.psd".to_string()
             } else {
                 format!("{}.psd", app.export.model_display_name)
             });
-            // ダイアログ結果受信後に使う材質グループ情報をキャプチャ
+            // Capture material-group info to be used after the dialog returns.
             let uv_groups: Vec<(String, std::ops::Range<usize>)> =
                 if let Some(ref loaded) = app.loaded {
                     loaded
@@ -5160,7 +5196,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     Vec::new()
                 };
             let uv_map_size = app.export.uv_map_size;
-            // 保存ダイアログを別スレッドで開く（UIをブロックしない）
+            // Open the save dialog on a separate thread (does not block the UI).
             let dialog_title = t!("viewer.export_tab.uvmap_dialog_title").into_owned();
             let (tx, rx) = std::sync::mpsc::channel();
             let repaint = ui.ctx().clone();
@@ -5198,15 +5234,15 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     });
 }
 
-/// パーミッション値のバッジ種別
+/// Badge variants for permission values.
 enum MetaBadge {
-    /// 許可（緑バッジ）
+    /// Allow (green badge).
     Allow,
-    /// 条件付き（黄バッジ）
+    /// Warn (yellow badge).
     Warn,
-    /// 禁止（赤バッジ）
+    /// Deny (red badge).
     Deny,
-    /// 中立（灰バッジ）
+    /// Neutral (grey badge).
     Neutral,
 }
 
@@ -5424,8 +5460,8 @@ fn meta_label_tooltip(label: &str) -> Option<std::borrow::Cow<'static, str>> {
 }
 
 fn show_meta_info(ui: &mut egui::Ui, comment: &str) {
-    // comment 形式: "[Section]" 行でセクション区切り、"  label: value" 行がフィールド
-    // まずセクション単位にパースする
+    // Comment format: a "[Section]" line is a section separator, "  label: value" lines are fields.
+    // Parse per section first.
     struct Section {
         title: String,
         fields: Vec<(String, String)>,
@@ -5485,13 +5521,13 @@ fn show_meta_info(ui: &mut egui::Ui, comment: &str) {
     }
 }
 
-/// ログメモリバッファから累計オフセット以降を読み取る（drain 耐性あり）
+/// Read from the in-memory log buffer starting at the cumulative offset (drain-safe).
 fn read_log_buffer_from_offset(buffer: &crate::SharedLogBuffer, offset: usize) -> Option<String> {
     let lb = buffer.lock().ok()?;
     lb.read_from_offset(offset)
 }
 
-/// 変換ログをファイルに書き出す
+/// Write the conversion log to a file.
 fn write_convert_log(
     log_path: &Path,
     ir: &crate::intermediate::types::IrModel,
@@ -5593,7 +5629,7 @@ fn write_convert_log(
     }
 }
 
-/// アニメーション再生コントロールUI
+/// Animation playback controls UI.
 fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
     use super::animation::LoopMode;
 
@@ -5602,7 +5638,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
     );
     ui.separator();
 
-    // VRMAライブラリ
+    // VRMA library.
     if !app.anim.library.is_empty() {
         ui.label(t!(
             "viewer.animation.library_count",
@@ -5613,7 +5649,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
         for (i, (name, _, _)) in app.anim.library.iter().enumerate() {
             ui.horizontal(|ui| {
                 let is_active = app.anim.active_index == Some(i);
-                // [▶][×] ファイル名（▶クリックで切替）
+                // [play][x] filename (clicking play switches).
                 let play_icon = if is_active {
                     egui::RichText::new("▶").color(egui::Color32::from_rgb(0x4A, 0x90, 0xD9))
                 } else {
@@ -5636,7 +5672,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
             app.anim.library.remove(idx);
             if was_active {
                 if app.anim.library.is_empty() {
-                    // ポーズリセット（アニメーション解除と同じ処理）
+                    // Pose reset (same processing as animation unbind).
                     if let Some(ref anim) = app.anim.state {
                         if let Some(ref mut loaded) = app.loaded {
                             for (i, morph) in loaded.ir.morphs.iter().enumerate() {
@@ -5765,7 +5801,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
             );
         });
 
-        // Unity .anim の Muscle スケール調整（is_additive の場合のみ）
+        // Adjust Unity .anim muscle scale (only when `is_additive`).
         if anim.animation.is_additive {
             ui.horizontal(|ui| {
                 ui.label(t!("viewer.animation.muscle_scale_label"));
@@ -5776,7 +5812,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         .speed(0.01)
                         .fixed_decimals(2),
                 );
-                // DragValue確定時（ドラッグ解放 or Enter）のみ再読み込み
+                // Reload only when DragValue is committed (drag release or Enter).
                 if (app.anim.muscle_scale - old_scale).abs() > 1e-6
                     && (response.drag_stopped() || response.lost_focus())
                 {
@@ -5840,7 +5876,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
         ));
 
         if ui.small_button(t!("viewer.animation.unbind")).clicked() {
-            // アニメーション制御中のモーフウェイトを 0 にリセット
+            // Reset morph weights controlled by the animation to 0.
             if let Some(ref mut loaded) = app.loaded {
                 for (i, morph) in loaded.ir.morphs.iter().enumerate() {
                     if anim
@@ -5853,7 +5889,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         }
                     }
                 }
-                // ボーンアニメーションで変形された頂点をリセットするためキャッシュ無効化
+                // Invalidate the cache to reset vertices deformed by bone animation.
                 loaded.gpu_model.invalidate_morph_cache();
             }
             app.anim.state = None;
@@ -5899,7 +5935,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     }
 
-    // Muscle倍率変更 → .anim 再読み込み
+    // Muscle-scale change -> reload .anim.
     if muscle_scale_changed {
         if let Some(idx) = app.anim.active_index {
             let path = app.anim.library[idx].1.clone();
@@ -5907,7 +5943,7 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 .extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("anim"))
             {
-                // 現在の再生位置・状態を保存
+                // Save the current playback position / state.
                 let (cur_time, was_playing) = app
                     .anim
                     .state
@@ -5964,10 +6000,10 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
     }
 }
 
-// ─── HSV カラーホイールウィジェット ───
+// --- HSV color wheel widget ---
 
-/// Hue リング + SV 四角のカラーホイールをポップアップで表示するボタン。
-/// `rgb` は linear [f32; 3]。
+/// A button that pops up a Hue ring + SV square color wheel.
+/// `rgb` is linear `[f32; 3]`.
 fn color_wheel_button_rgb(ui: &mut egui::Ui, label: &str, rgb: &mut [f32; 3]) {
     let popup_id = ui.make_persistent_id(label);
     let open = ui.memory(|mem| mem.is_popup_open(popup_id));
@@ -6019,7 +6055,7 @@ fn color_wheel_button_rgb(ui: &mut egui::Ui, label: &str, rgb: &mut [f32; 3]) {
     }
 }
 
-/// HSV ホイール本体: Hue リング + SV 四角
+/// HSV wheel body: Hue ring + SV square.
 fn hsv_wheel_picker(ui: &mut egui::Ui, rgb: &mut [f32; 3]) {
     let hsv = rgb_to_hsv(*rgb);
     let mut h = hsv[0];
@@ -6029,7 +6065,7 @@ fn hsv_wheel_picker(ui: &mut egui::Ui, rgb: &mut [f32; 3]) {
     let wheel_radius = 90.0_f32;
     let ring_width = 16.0_f32;
     let inner_radius = wheel_radius - ring_width;
-    // SV 四角: 内接円に内接する正方形
+    // SV square: inscribed in the inner circle.
     let sq_half = inner_radius * 0.65;
     let total_size = egui::vec2(wheel_radius * 2.0 + 8.0, wheel_radius * 2.0 + 8.0);
 
@@ -6037,7 +6073,7 @@ fn hsv_wheel_picker(ui: &mut egui::Ui, rgb: &mut [f32; 3]) {
     let center = rect.center();
     let painter = ui.painter_at(rect);
 
-    // ── Hue リング描画（三角形メッシュ） ──
+    // -- Hue ring drawing (triangle mesh) --
     let segments = 64;
     let mut hue_mesh = Mesh::default();
     for i in 0..segments {
@@ -6085,7 +6121,7 @@ fn hsv_wheel_picker(ui: &mut egui::Ui, rgb: &mut [f32; 3]) {
     }
     painter.add(egui::Shape::mesh(hue_mesh));
 
-    // Hue インジケータ（リング上の丸）
+    // Hue indicator (circle on the ring).
     let hue_angle = h * std::f32::consts::TAU;
     let hue_mid_r = (wheel_radius + inner_radius) * 0.5;
     let hue_pos = center + egui::vec2(hue_angle.cos(), -hue_angle.sin()) * hue_mid_r;
@@ -6100,10 +6136,10 @@ fn hsv_wheel_picker(ui: &mut egui::Ui, rgb: &mut [f32; 3]) {
         egui::Stroke::new(1.0, Color32::BLACK),
     );
 
-    // ── SV 四角描画 ──
+    // -- SV square drawing --
     let sq_rect = egui::Rect::from_center_size(center, egui::vec2(sq_half * 2.0, sq_half * 2.0));
-    // 4頂点のグラデーション: 左上(白), 右上(hue), 左下(黒), 右下(黒)
-    // 実際にはSV空間: x=S(0→1), y=V(1→0)
+    // 4-vertex gradient: top-left (white), top-right (hue), bottom-left (black), bottom-right (black).
+    // SV space: x = S (0 -> 1), y = V (1 -> 0).
     let mut sv_mesh = Mesh::default();
     let sv_steps = 32_u32;
     for yi in 0..sv_steps {
@@ -6174,7 +6210,7 @@ fn hsv_wheel_picker(ui: &mut egui::Ui, rgb: &mut [f32; 3]) {
         egui::StrokeKind::Outside,
     );
 
-    // SV インジケータ
+    // SV indicator.
     let sv_pos = egui::pos2(
         sq_rect.left() + s * sq_rect.width(),
         sq_rect.top() + (1.0 - v) * sq_rect.height(),
@@ -6186,8 +6222,8 @@ fn hsv_wheel_picker(ui: &mut egui::Ui, rgb: &mut [f32; 3]) {
     };
     painter.circle_stroke(sv_pos, 4.0, egui::Stroke::new(2.0, indicator_color));
 
-    // ── インタラクション ──
-    // Hue リングドラッグ
+    // -- Interaction --
+    // Hue ring drag.
     let ring_id = ui.id().with("hue_ring");
     let ring_response = ui.interact(rect, ring_id, egui::Sense::click_and_drag());
     if ring_response.dragged() || ring_response.clicked() {
@@ -6195,7 +6231,7 @@ fn hsv_wheel_picker(ui: &mut egui::Ui, rgb: &mut [f32; 3]) {
             let dx = pos.x - center.x;
             let dy = -(pos.y - center.y);
             let dist = (dx * dx + dy * dy).sqrt();
-            // リング上、またはドラッグ中なら hue を更新
+            // Update hue if on the ring or while dragging.
             if dist >= inner_radius * 0.8 || ui.ctx().is_being_dragged(ring_id) {
                 h = dy.atan2(dx) / std::f32::consts::TAU;
                 if h < 0.0 {
@@ -6205,7 +6241,7 @@ fn hsv_wheel_picker(ui: &mut egui::Ui, rgb: &mut [f32; 3]) {
         }
     }
 
-    // SV 四角ドラッグ
+    // SV square drag.
     let sv_id = ui.id().with("sv_square");
     let sv_response = ui.interact(sq_rect, sv_id, egui::Sense::click_and_drag());
     if sv_response.dragged() || sv_response.clicked() {
@@ -6215,11 +6251,11 @@ fn hsv_wheel_picker(ui: &mut egui::Ui, rgb: &mut [f32; 3]) {
         }
     }
 
-    // 値を書き戻し
+    // Write back values.
     let new_rgb = hsv_to_rgb(h, s, v);
     *rgb = new_rgb;
 
-    // 現在色プレビュー
+    // Current-color preview.
     let preview_color = Color32::from_rgb(
         linear_to_srgb_u8(rgb[0]),
         linear_to_srgb_u8(rgb[1]),
@@ -6230,7 +6266,7 @@ fn hsv_wheel_picker(ui: &mut egui::Ui, rgb: &mut [f32; 3]) {
     ui.painter().rect_filled(preview_rect, 2.0, preview_color);
 }
 
-// ─── 色空間変換ヘルパー ───
+// --- Color-space conversion helpers ---
 
 fn linear_to_srgb_u8(c: f32) -> u8 {
     let s = if c <= 0.0031308 {
@@ -6326,22 +6362,27 @@ fn hsv_to_color32(h: f32, s: f32, v: f32) -> Color32 {
 }
 
 // ===========================================================================
-// UV編集タブ (v0.5.5 Phase 1: 頂点単位 UV 編集)
+// UV edit tab (v0.5.5 Phase 1: per-vertex UV editing).
 // ===========================================================================
 
-/// UV 座標 (0..1) をキャンバス矩形上の画面座標に変換する。
+/// Convert a UV coordinate (0..1) to screen coordinates inside the canvas rect.
 ///
-/// UV Y=0 を**上端**、UV Y=1 を**下端**にマッピングする（PSD 出力 `convert/uvmap.rs` が
-/// `y = v * dim` で画像 Y に直書きしているのと合わせるため）。これにより UV エディタの
-/// 見え方と `.psd` UV マップの見え方が完全一致し、ユーザーが両者を同時参照できる。
+/// Maps UV Y=0 to the **top** and UV Y=1 to the **bottom** (to match the
+/// PSD output in `convert/uvmap.rs`, which writes directly to image Y as
+/// `y = v * dim`). This makes the UV editor view and `.psd` UV map view
+/// match exactly, letting the user reference both simultaneously.
 ///
-/// Phase 2-3 でビュー変換 (`view_offset`, `view_zoom`) を追加: キャンバス左上端に
-/// 置かれる UV 座標が `view_offset`、ズーム倍率が `view_zoom`。
+/// In Phase 2-3 we added view transforms (`view_offset`, `view_zoom`):
+/// the UV coordinate placed at the canvas's top-left is `view_offset`;
+/// the zoom factor is `view_zoom`.
 ///
-/// スケールは X/Y 共通の固定値 (`UV_BASE_PX_PER_UNIT × view_zoom` px/UV) で、
-/// UV [0,1] は `view_zoom = 1.0` のとき `UV_BASE_PX_PER_UNIT × UV_BASE_PX_PER_UNIT` px の正方形になる。
-/// キャンバスの縦横比に依存しないため、Window を横長/縦長にしても UV の見た目比率 (1:1) は保たれ、
-/// 「ウィンドウは UV 空間を覗くビューポート」として振る舞う (DCC ツール標準動作)。
+/// The scale is a fixed X/Y common value (`UV_BASE_PX_PER_UNIT *
+/// view_zoom` px/UV); UV [0, 1] becomes a
+/// `UV_BASE_PX_PER_UNIT * UV_BASE_PX_PER_UNIT` px square at
+/// `view_zoom = 1.0`. It does not depend on the canvas aspect ratio, so
+/// even when the window is wide / tall the UV's visual aspect (1:1) is
+/// preserved, and the window behaves like "a viewport into UV space"
+/// (standard DCC-tool behavior).
 fn uv_to_canvas(
     uv: [f32; 2],
     rect: egui::Rect,
@@ -6355,7 +6396,7 @@ fn uv_to_canvas(
     )
 }
 
-/// キャンバス内の画面座標 (px) を UV 座標 (0..1) に変換する。`uv_to_canvas` の逆変換。
+/// Convert in-canvas screen coordinates (px) to UV coordinates (0..1). Inverse of `uv_to_canvas`.
 fn canvas_to_uv(
     p: egui::Pos2,
     rect: egui::Rect,
@@ -6369,32 +6410,34 @@ fn canvas_to_uv(
     ]
 }
 
-/// UV 編集キャンバスの基準スケール (px / UV 単位、`view_zoom = 1.0` のとき)。
-/// X/Y 共通で使われるため UV[0,1] は常に正方形 (1:1 アスペクト) として描画される。
-/// 値 256 は起動時のキャンバス縦 (~250px) にほぼ収まるサイズとして選定。
+/// Reference scale of the UV edit canvas (px / UV unit, when `view_zoom = 1.0`).
+/// Shared between X and Y, so UV [0, 1] is always drawn as a square (1:1 aspect).
+/// 256 was chosen so it roughly fits the initial canvas height (~250 px).
 const UV_BASE_PX_PER_UNIT: f32 = 256.0;
 
-/// Shift スナップ用: `val` を `step` の倍数に丸める。
+/// Shift-snap: round `val` to a multiple of `step`.
 fn snap_to(val: f32, step: f32) -> f32 {
     (val / step).round() * step
 }
 
-/// UV 編集ウィンドウ（v0.5.5 Phase 1 / Phase 3 A-3）。材質編集パネルのヘッダボタンから開く。
+/// UV edit window (v0.5.5 Phase 1 / Phase 3 A-3). Opened from a header button on the material edit panel.
 ///
-/// `app.uv_edit.detached == false` のときは `egui::Window` でメインウィンドウ内のフローティングとして開き、
-/// `true` のときは `ctx.show_viewport_immediate` で OS ネイティブの独立ウィンドウに切り替える。
-/// どちらも `Id::new("uv_edit_window")` / `ViewportId::from_hash_of("uv_edit_viewport")` で固定 ID 化し、
-/// 複数インスタンス化を防ぐ。`app.uv_edit_window_open` が `true` のときだけ描画する。
+/// When `app.uv_edit.detached == false`, opens as a floating `egui::Window`
+/// inside the main window. When `true`, switches to an OS-native standalone
+/// window via `ctx.show_viewport_immediate`. Both use fixed IDs
+/// (`Id::new("uv_edit_window")` /
+/// `ViewportId::from_hash_of("uv_edit_viewport")`) to prevent multiple
+/// instances. Drawn only when `app.uv_edit_window_open` is `true`.
 pub fn show_uv_edit_window(ctx: &egui::Context, app: &mut ViewerApp) {
     if !app.uv_edit_window_open {
         return;
     }
-    // モデルがない場合は自動で閉じる（材質編集パネルと同じ挙動）
+    // Auto-close when no model is loaded (matches the material edit panel).
     if app.loaded.is_none() {
         app.uv_edit_window_open = false;
         return;
     }
-    // タイトルにアクティブ材質名を反映
+    // Reflect the active-material name in the title.
     let title = {
         let mat_count = app
             .loaded
@@ -6414,9 +6457,10 @@ pub fn show_uv_edit_window(ctx: &egui::Context, app: &mut ViewerApp) {
     };
 
     if app.uv_edit.detached {
-        // Phase 3 / A-3: OS ネイティブの独立ウィンドウに描画する。
-        // `show_viewport_immediate` はメインと同スレッドで content クロージャを呼ぶため、
-        // `&mut ViewerApp` をそのままクロージャに渡せる（deferred 版と違い Arc<Mutex> 不要）。
+        // Phase 3 / A-3: render into an OS-native standalone window.
+        // `show_viewport_immediate` invokes the content closure on the same
+        // thread as main, so `&mut ViewerApp` can be passed as is (no
+        // Arc<Mutex> needed unlike the `deferred` variant).
         let viewport_id = egui::ViewportId::from_hash_of("uv_edit_viewport");
         let builder = egui::ViewportBuilder::default()
             .with_title(&title)
@@ -6427,18 +6471,19 @@ pub fn show_uv_edit_window(ctx: &egui::Context, app: &mut ViewerApp) {
                 show_uv_edit_body(ui, app);
             });
             if vctx.input(|i| i.viewport().close_requested()) {
-                // × ボタンで閉じたらウィンドウ表示状態を false に戻す。
-                // detached フラグはユーザー設定として維持（次回「UV 編集」を開いたときも独立化）。
+                // When the user closes the window via the x button, reset the visibility flag to false.
+                // Keep the `detached` flag as a user preference (so the next "UV edit" also uses standalone).
                 app.uv_edit_window_open = false;
             }
         });
     } else {
         let mut is_open = true;
-        // v0.5.7: ユーザーが自由にリサイズできるよう、min/max は一切設けない。
-        // 自動成長ループは `show_uv_edit_body` 内のキャンバス確保時に
-        // フッター分の高さを事前予約することで遮断している。
-        // default_height を 520 に拡大して、起動時にキャンバス縦が ~250px 確保され、
-        // UV エリアが小さく見えないようにする (header が ~200px 取るため)。
+        // v0.5.7: do not set any min / max so the user can resize freely.
+        // The auto-grow loop is blocked by pre-reserving footer height when
+        // allocating the canvas inside `show_uv_edit_body`.
+        // `default_height` is enlarged to 520 so the canvas height starts at
+        // ~250 px and the UV area doesn't look small (the header takes
+        // ~200 px).
         egui::Window::new(title)
             .id(egui::Id::new("uv_edit_window"))
             .default_width(320.0)
@@ -6462,7 +6507,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         return;
     }
 
-    // 材質一覧の取得（borrow 競合を避けるため clone でコピー）
+    // Get the material list (clone to avoid borrow conflicts).
     let mat_names: Vec<String> = app
         .loaded
         .as_ref()
@@ -6474,13 +6519,13 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         return;
     }
 
-    // active_material の正規化（材質数を超えていたら 0 に戻す）
+    // Normalize `active_material` (reset to 0 if it exceeds the material count).
     if app.uv_edit.active_material >= mat_count {
         app.uv_edit.active_material = 0;
     }
     let active_mat = app.uv_edit.active_material;
 
-    // 材質選択 ComboBox
+    // Material selection ComboBox.
     egui::ComboBox::from_id_salt("uv_edit_material_combo")
         .width(ui.available_width() - 4.0)
         .selected_text(format!("[{}] {}", active_mat, mat_names[active_mat]))
@@ -6494,9 +6539,9 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
             }
         });
 
-    // Phase 3 A-1: UV セット選択 ComboBox。
-    // active 材質のどのメッシュも UV1 を持たなければ UV1 選択を disable し、
-    // かつ現在の active_uv_set=1 であれば UV0 に戻す（古い選択が残らないよう安全側に）。
+    // Phase 3 A-1: UV-set selection ComboBox.
+    // If no mesh of the active material has UV1, disable the UV1 choice and,
+    // if `active_uv_set == 1`, revert to UV0 (safe side: avoid stale selection).
     let has_uv1 = app
         .loaded
         .as_ref()
@@ -6506,7 +6551,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         app.uv_edit.active_uv_set = 0;
     }
     ui.horizontal(|ui| {
-        ui.label("UV セット:");
+        ui.label("UV set:");
         let current_label = if app.uv_edit.active_uv_set == 0 {
             "UV0"
         } else {
@@ -6522,7 +6567,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 });
             });
         if new_set != app.uv_edit.active_uv_set {
-            // セット切替時は進行中のドラッグ状態を取り消す（別 UV 空間での誤操作を避ける）
+            // On set switch, cancel any in-progress drag (avoid mishandling in a different UV space).
             app.uv_edit.active_uv_set = new_set;
             app.uv_edit.dragging = false;
             app.uv_edit.drag_mode = UvDragMode::None;
@@ -6536,11 +6581,11 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     });
 
-    // Phase 3 A-2: UV モーフ選択 ComboBox。
-    // active_uv_set と一致する channel を持つ UV モーフのみを選択肢に出す。
-    // モーフ選択中は以下の制約:
-    //   - ドラッグ状態 / selected は別空間として扱うため、切替時にクリア
-    //   - active_uv_set はモーフの channel に強制同期（UV セット不一致を避ける）
+    // Phase 3 A-2: UV-morph selection ComboBox.
+    // List only UV morphs whose channel matches `active_uv_set`.
+    // While a morph is selected, the following constraints apply:
+    //   - drag state / selected belong to a separate space; clear them on switch.
+    //   - `active_uv_set` is forcibly synced to the morph's channel (avoid UV-set mismatch).
     let uv_morph_list: Vec<(usize, String, u8)> = app
         .loaded
         .as_ref()
@@ -6558,8 +6603,8 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 .collect()
         })
         .unwrap_or_default();
-    // 現在の active_morph がリスト外 (IR が変わった後など) なら None に戻す。
-    // ヘルパー経由でウェイトの復元も同時に行う。
+    // If the current `active_morph` is not in the list (e.g. after the IR changed), reset to `None`.
+    // Restore weights via the helper at the same time.
     if let Some(cur) = app.uv_edit.active_morph {
         if !uv_morph_list.iter().any(|(i, _, _)| *i == cur)
             && app
@@ -6595,8 +6640,8 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         );
                     }
                 });
-            // 切替時: ヘルパー経由でウェイトの退避/復元と active_morph 更新をまとめて行う。
-            // 戻り値が true（実際にモードが切り替わった）なら、選択・ドラッグ状態・undo もクリア。
+            // On switch: stash / restore weights and update `active_morph` via the helper in one go.
+            // If the return value is `true` (mode actually switched), clear selection / drag state / undo too.
             if app
                 .uv_edit
                 .switch_active_morph(new_morph, &mut app.morph_weights)
@@ -6612,32 +6657,34 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 app.uv_edit.undo_stack.clear();
                 app.uv_edit.redo_stack.clear();
                 app.uv_edit.pristine_uvs.clear();
-                // モーフ選択時は active_uv_set を channel に強制同期
+                // On morph selection, force `active_uv_set` to the channel.
                 if let Some(idx) = new_morph {
                     if let Some((_, _, ch)) = uv_morph_list.iter().find(|(i, _, _)| *i == idx) {
                         app.uv_edit.active_uv_set = *ch;
                     }
                 }
             }
-            // モーフ編集時の挙動説明（編集中はウェイト 1.0 固定、終了時に元値復元）
+            // Behavior note for morph editing (weight is locked to 1.0 while editing; restored on end).
             if app.uv_edit.active_morph.is_some() {
                 ui.small(t!("viewer.uv_edit.morph_edit_weight_lock_hint"));
             }
         });
     }
-    // モーフ選択は上の分岐で active_uv_set を更新しうるので、最新値で active_chan を再取得
+    // The morph branch above may update `active_uv_set`, so re-read `active_chan` with the latest value.
     let active_chan = app.uv_edit.active_uv_set;
     let active_morph = app.uv_edit.active_morph;
-    // Phase 3 A-2: UV モーフのエントリは `(global_vi, [f32;4])` 形式で頂点を指すため、
-    // メッシュ毎のグローバル頂点オフセットを先に計算して `read_displayed_uv` 等に渡す。
-    // ベース UV 編集時 (`active_morph == None`) は実質未使用だが、呼び出し箇所の型を揃えるため常に用意する。
+    // Phase 3 A-2: UV-morph entries are `(global_vi, [f32; 4])`, so
+    // pre-compute per-mesh global vertex offsets and pass them to
+    // `read_displayed_uv` etc. Base UV editing (`active_morph == None`)
+    // doesn't really use them, but always prepare them to keep the call
+    // sites' types uniform.
     let global_offsets: Vec<usize> = app
         .loaded
         .as_ref()
         .map(|l| mesh_global_offsets_of(&l.ir))
         .unwrap_or_default();
 
-    // ステータス (現在 UV セットの件数のみ集計)
+    // Status (count only the current UV set).
     let override_count = app
         .uv_edit
         .overrides
@@ -6676,11 +6723,11 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
             .on_hover_text(t!("viewer.uv_edit.clear_all_edits_tooltip"))
             .clicked()
         {
-            // review_result_03 [P2]: クリア直後の Ctrl+Z/Ctrl+Y で編集が復活しないよう
-            // undo/redo スタックも同時に破棄する。UI ラベル「すべてクリア」と整合。
-            // review_result_06 [P2]: pristine_uvs も破棄する。残したままだと次のドラッグで
-            // `record_pristine` が古い pristine を `or_insert` で再利用し、クリア後の新編集が
-            // 「古い A に戻る」基準で undo 判定されて overrides から外れなくなる。
+            // review_result_03 [P2]: also drop undo / redo so Ctrl+Z / Ctrl+Y immediately after clear
+            // does not revive edits. Matches the "Clear all" UI label.
+            // review_result_06 [P2]: also drop `pristine_uvs`. If it remains, the next drag's
+            // `record_pristine` reuses the old pristine via `or_insert`, and post-clear new edits
+            // are judged "back to old A" by undo and never leave `overrides`.
             app.uv_edit.overrides.clear();
             app.uv_edit.selected.clear();
             app.uv_edit.undo_stack.clear();
@@ -6694,9 +6741,10 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         {
             app.uv_edit.reset_view();
         }
-        // Phase 3 / A-3: 独立ウィンドウへの切り替えトグル。
-        // ボタンを押した瞬間に `detached` が反転し、次フレームの `show_uv_edit_window` で
-        // 描画先 (egui::Window vs show_viewport_immediate) が切り替わる。
+        // Phase 3 / A-3: toggle to switch to a standalone window.
+        // The moment the button is pressed, `detached` flips, and the next
+        // frame's `show_uv_edit_window` switches the render target
+        // (`egui::Window` vs `show_viewport_immediate`).
         let (label, hover) = if app.uv_edit.detached {
             (
                 t!("viewer.uv_edit.dock_button"),
@@ -6720,7 +6768,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
     ui.small(t!("viewer.uv_edit.hint_select_modes"));
     ui.small(t!("viewer.uv_edit.hint_handles"));
 
-    // Phase 2-5: Undo / Redo ボタン行とキーショートカット（Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z）
+    // Phase 2-5: Undo / Redo button row and keyboard shortcuts (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z).
     let can_undo = !app.uv_edit.undo_stack.is_empty();
     let can_redo = !app.uv_edit.redo_stack.is_empty();
     let mut undo_trigger = false;
@@ -6752,7 +6800,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
             app.uv_edit.redo_stack.len()
         ));
     });
-    // キーボードショートカット: TextEdit 等がキー入力を欲していないときだけ受ける
+    // Keyboard shortcuts: only handled when no widget (e.g. `TextEdit`) is requesting keyboard input.
     if !ui.ctx().wants_keyboard_input() {
         let (key_undo, key_redo, key_select_all) = ui.input(|i| {
             let z = i.key_pressed(egui::Key::Z) && i.modifiers.command;
@@ -6772,8 +6820,9 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     }
     if select_all_trigger {
-        // アクティブ材質に属する全メッシュの全頂点を、現在 UV セット上で selected に追加
-        // （既存選択は保持）。UV1 モードで UV1 を持たないメッシュはスキップ。
+        // Add all vertices of every mesh belonging to the active material into
+        // `selected` on the current UV set (preserving existing selection).
+        // Skip meshes without UV1 in UV1 mode.
         if let Some(loaded) = app.loaded.as_ref() {
             for (mi, mesh) in loaded.ir.meshes.iter().enumerate() {
                 if mesh.material_index != active_mat {
@@ -6809,7 +6858,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
 
     ui.separator();
 
-    // アクティブ材質の BaseColor テクスチャ解決（PMX/PMD は texture_index フォールバック）
+    // Resolve the active material's BaseColor texture (PMX/PMD falls back to `texture_index`).
     let bg_tex_idx: Option<usize> = app
         .loaded
         .as_ref()
@@ -6821,7 +6870,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 .or(mat.texture_index)
         });
 
-    // キャッシュ差分検出: 一致しなければ古い egui TextureId を free し、新しい TextureView を登録
+    // Cache-diff detection: when mismatched, free the old egui `TextureId` and register the new `TextureView`.
     let cached_idx = app.uv_edit_bg_tex.as_ref().map(|(i, _)| *i);
     if cached_idx != bg_tex_idx {
         if let Some((_, old_id)) = app.uv_edit_bg_tex.take() {
@@ -6845,12 +6894,14 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     }
 
-    // キャンバス描画: Window 追従の長方形（正方形強制はしない）。
-    //   - canvas_w = avail.x - 4 (右側に 4px の余白)
-    //   - canvas_h = avail.y - 32 (フッター予約: 本関数末尾の add_space(4) + small() を逃がす)
-    //     → これが無いと Window が auto-grow ループに陥り、縦リサイズも無効化される。
-    //   - UV [0,1] は `rect.width() × rect.height()` でキャンバス全域に伸縮 (uv_to_canvas 参照)。
-    //     Window を縦長/横長にすると UV 表示も同じ縦横比に伸びる。
+    // Canvas drawing: rectangle that tracks the Window (no forced square).
+    //   - canvas_w = avail.x - 4 (4 px margin on the right).
+    //   - canvas_h = avail.y - 32 (footer reservation: leaves room for the
+    //     `add_space(4)` + `small()` at the function tail).
+    //     Without this, the Window auto-grows in a loop and vertical resize is disabled.
+    //   - UV [0, 1] stretches across the whole canvas as
+    //     `rect.width() x rect.height()` (see `uv_to_canvas`). When the
+    //     Window is tall / wide, the UV display stretches in the same aspect.
     const UV_FOOTER_RESERVE_PX: f32 = 32.0;
     let avail = ui.available_size();
     let canvas_w = (avail.x - 4.0).max(160.0);
@@ -6861,7 +6912,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
     );
     let painter = ui.painter_at(rect);
 
-    // ホイール: カーソル位置を中心にズーム (Phase 2-3)
+    // Wheel: zoom centered on the cursor position (Phase 2-3).
     let scroll_y = ui.input(|i| i.raw_scroll_delta.y);
     if response.hovered() && scroll_y != 0.0 {
         if let Some(cursor) = ui.input(|i| i.pointer.hover_pos()) {
@@ -6877,7 +6928,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     }
 
-    // 中ボタンドラッグ: パン (Phase 2-3, 固定スケール対応)
+    // Middle-button drag: pan (Phase 2-3, supports fixed scale).
     let (mid_down, ptr_delta) = ui.input(|i| (i.pointer.middle_down(), i.pointer.delta()));
     if response.hovered() && mid_down && (ptr_delta.x.abs() + ptr_delta.y.abs()) > 0.0 {
         let s = app.uv_edit.view_zoom * UV_BASE_PX_PER_UNIT;
@@ -6885,18 +6936,18 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         app.uv_edit.view_offset[1] -= ptr_delta.y / s;
     }
 
-    // 以降の描画・ピック・ドラッグで参照するビュー状態（本フレーム確定値）
+    // View state used by drawing / picking / dragging below (this frame's settled values).
     let voff = app.uv_edit.view_offset;
     let vzoom = app.uv_edit.view_zoom;
 
-    // UV [0,1] 領域がキャンバス上でどこに来るかを計算
+    // Compute where the UV [0, 1] region ends up on the canvas.
     let uv01_tl = uv_to_canvas([0.0, 0.0], rect, voff, vzoom);
     let uv01_br = uv_to_canvas([1.0, 1.0], rect, voff, vzoom);
     let uv01_rect = egui::Rect::from_two_pos(uv01_tl, uv01_br);
 
-    // 背景: キャンバス全体を暗色で塗る (UV [0,1] の外側も視覚的に示すため)
+    // Background: paint the whole canvas dark (also visually indicates outside UV [0, 1]).
     painter.rect_filled(rect, 0.0, Color32::from_rgb(0x0A, 0x0A, 0x0A));
-    // BaseColor テクスチャがあれば UV [0,1] 矩形に等倍描画
+    // Draw the BaseColor texture 1:1 over the UV [0, 1] rect, if present.
     if let Some((_, tex_id)) = app.uv_edit_bg_tex {
         painter.image(
             tex_id,
@@ -6913,7 +6964,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         egui::Stroke::new(1.0, Color32::from_gray(0x60)),
         egui::StrokeKind::Inside,
     );
-    // キャンバス外周の枠
+    // Canvas outer frame.
     painter.rect_stroke(
         rect,
         0.0,
@@ -6921,7 +6972,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         egui::StrokeKind::Inside,
     );
 
-    // 描画: 選択材質のメッシュの UV ワイヤと頂点ドット
+    // Drawing: UV wires + vertex dots for the selected material's meshes.
     let wire_stroke = egui::Stroke::new(0.5, Color32::from_rgb(0x80, 0x80, 0x80));
     let vert_default = Color32::from_rgb(0xE0, 0xE0, 0xE0);
     let vert_edited = Color32::from_rgb(0x66, 0xBB, 0xFF);
@@ -6933,7 +6984,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
             if mesh.material_index != active_mat {
                 continue;
             }
-            // UV1 モードで UV1 を持たないメッシュは一切描画しない（ピック/ドラッグと挙動を合わせる）
+            // In UV1 mode, do not draw meshes without UV1 at all (matches pick / drag behavior).
             if active_chan == 1 && mesh.uvs1.len() != mesh.vertices.len() {
                 continue;
             }
@@ -7003,9 +7054,10 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     }
 
-    // Phase 3 A-5: 選択 bbox と 2D ギズモハンドルを描画する。
-    // 選択頂点が 1 個以下だと bbox が面積 0 になるので 2 個以上のときだけ表示。
-    // bbox が極端に狭い（UV 空間で < 1e-5）ときも無効化する（回転/スケールが数値的に破綻するため）。
+    // Phase 3 A-5: draw the selection bbox and 2D gizmo handles.
+    // The bbox has zero area with one or fewer selected vertices, so show only when >= 2.
+    // Also disable when the bbox is extremely narrow (UV-space < 1e-5) -
+    // rotation / scale becomes numerically unstable.
     let selection_bbox_uv: Option<[f32; 4]> = if app.uv_edit.selected.len() >= 2 {
         let mut u_min = f32::INFINITY;
         let mut u_max = f32::NEG_INFINITY;
@@ -7037,29 +7089,29 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         None
     };
 
-    // bbox があればキャンバス上にギズモを描く。ハンドル位置 / ピック閾値の数値はここだけ。
+    // If a bbox exists, draw gizmos on the canvas. Handle position / pick threshold numbers live only here.
     const GIZMO_HANDLE_RADIUS: f32 = 5.0;
-    const GIZMO_PICK_RADIUS_SQ: f32 = 100.0; // 10px
-    const GIZMO_ROTATE_OFFSET: f32 = 24.0; // bbox 上辺から何 px 外側に置くか
+    const GIZMO_PICK_RADIUS_SQ: f32 = 100.0; // 10 px
+    const GIZMO_ROTATE_OFFSET: f32 = 24.0; // pixel offset above the bbox top edge
     let gizmo_handle_pos: Option<([egui::Pos2; 4], egui::Pos2)> = selection_bbox_uv.map(|bb| {
-        // 4 隅のキャンバス座標: 配列順 [min/min, max/min, min/max, max/max]
+        // Canvas coordinates of the 4 corners; array order [min/min, max/min, min/max, max/max].
         let p_mm = uv_to_canvas([bb[0], bb[1]], rect, voff, vzoom);
         let p_xm = uv_to_canvas([bb[2], bb[1]], rect, voff, vzoom);
         let p_mx = uv_to_canvas([bb[0], bb[3]], rect, voff, vzoom);
         let p_xx = uv_to_canvas([bb[2], bb[3]], rect, voff, vzoom);
-        // 回転ハンドル: bbox 上辺中央の外側（キャンバス y が小さい方向）に GIZMO_ROTATE_OFFSET
+        // Rotate handle: place at GIZMO_ROTATE_OFFSET outside the bbox top-edge midpoint (toward smaller canvas y).
         let top_mid = egui::pos2((p_mm.x + p_xm.x) * 0.5, (p_mm.y + p_xm.y) * 0.5);
         let rotate = egui::pos2(top_mid.x, top_mid.y - GIZMO_ROTATE_OFFSET);
         ([p_mm, p_xm, p_mx, p_xx], rotate)
     });
     if let (Some(bb), Some((corners, rot_handle))) = (selection_bbox_uv, gizmo_handle_pos) {
-        let bb_rect = egui::Rect::from_two_pos(corners[0], corners[3]).intersect(rect); // キャンバス外は削る
+        let bb_rect = egui::Rect::from_two_pos(corners[0], corners[3]).intersect(rect); // clip to canvas
         let gizmo_stroke = egui::Stroke::new(
             1.0,
             Color32::from_rgba_premultiplied(0xFF, 0xA8, 0x40, 0xE0),
         );
         painter.rect_stroke(bb_rect, 0.0, gizmo_stroke, egui::StrokeKind::Inside);
-        // 4 隅スケールハンドル（塗りつぶし四角）
+        // 4 corner scale handles (filled squares).
         let handle_fill = Color32::from_rgba_premultiplied(0xFF, 0xA8, 0x40, 0xFF);
         for &c in &corners {
             let hr = egui::Rect::from_center_size(
@@ -7074,7 +7126,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 egui::StrokeKind::Inside,
             );
         }
-        // 回転ハンドル（塗りつぶし円 + 線で bbox 上辺に接続）
+        // Rotate handle (filled circle + line connecting to the bbox top edge).
         let top_mid = egui::pos2((corners[0].x + corners[1].x) * 0.5, corners[0].y);
         painter.line_segment(
             [top_mid, rot_handle],
@@ -7090,10 +7142,10 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
             GIZMO_HANDLE_RADIUS,
             egui::Stroke::new(1.0, Color32::BLACK),
         );
-        let _ = bb; // bb は現状ピック時に使うのみで描画では未参照
+        let _ = bb; // currently used only at pick time; not referenced in drawing
     }
 
-    // クリック: 最寄頂点を選択（12px 以内のみ）
+    // Click: select the nearest vertex (within 12 px only).
     if response.clicked() {
         if let Some(click_pos) = response.interact_pointer_pos() {
             let mut best: Option<((u32, u32, u8), f32)> = None;
@@ -7136,12 +7188,12 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     }
 
-    // ドラッグ開始: モード判定 (Move or Rect, Phase 2-2)
+    // Drag start: mode decision (Move or Rect, Phase 2-2).
     //
-    // 判定ルール:
-    //   - プレス位置が選択済み頂点の 12 px 以内 → Move (既存選択で平行移動)
-    //   - プレス位置が任意の頂点の 12 px 以内 → Move (その頂点を単独選択して平行移動)
-    //   - それ以外 → Rect (矩形選択、既存選択はクリア)
+    // Decision rules:
+    //   - Press within 12 px of an already-selected vertex -> Move (translate the existing selection).
+    //   - Press within 12 px of any vertex -> Move (single-select that vertex and translate).
+    //   - Otherwise -> Rect (rectangle selection; existing selection is cleared).
     if response.drag_started() {
         app.uv_edit.drag_start_uvs.clear();
         app.uv_edit.drag_press_uv = None;
@@ -7151,13 +7203,14 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         if let Some(press_pos) = response.interact_pointer_pos() {
             app.uv_edit.drag_press_uv = Some(canvas_to_uv(press_pos, rect, voff, vzoom));
 
-            // Phase 3 A-5: ギズモハンドルのヒット判定（最優先）
-            // ヒットしたら `drag_mode = Move` + `gizmo_action = Some(...)` にして、以降の
-            // dragged() Move ブランチで gizmo_action を参照して XformMode を強制する。
+            // Phase 3 A-5: gizmo handle hit-test (highest priority).
+            // On hit, set `drag_mode = Move` + `gizmo_action = Some(...)`;
+            // subsequent `dragged()` Move branches reference `gizmo_action`
+            // to force `XformMode`.
             let gizmo_hit: Option<(UvGizmoAction, [f32; 2])> =
                 if let (Some(bb), Some((corners, rot))) = (selection_bbox_uv, gizmo_handle_pos) {
-                    // 各ハンドルとの距離 2 乗を取り、最小 & 閾値内を選ぶ。回転ハンドルが
-                    // 4 隅と重なる構図はないため単純比較で十分。
+                    // Compute squared distance to each handle and pick the smallest within threshold.
+                    // Simple comparison suffices because the rotate handle never overlaps the 4 corners.
                     let d_rot = (rot - press_pos).length_sq();
                     let d_corners = [
                         (corners[0] - press_pos).length_sq(),
@@ -7176,13 +7229,13 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                         },
                     );
                     if d_rot < GIZMO_PICK_RADIUS_SQ && d_rot <= best_d {
-                        // 回転ハンドル: pivot = bbox 中心
+                        // Rotate handle: pivot = bbox center.
                         Some((
                             UvGizmoAction::Rotate,
                             [(bb[0] + bb[2]) * 0.5, (bb[1] + bb[3]) * 0.5],
                         ))
                     } else if best_d < GIZMO_PICK_RADIUS_SQ {
-                        // 角ハンドル: sign は 2 bit (u軸, v軸)。配列順序 [mm, xm, mx, xx]
+                        // Corner handle: sign is 2 bits (u axis, v axis). Array order [mm, xm, mx, xx].
                         let (sign_u, sign_v): (i8, i8) = match best_idx {
                             0 => (-1, -1),
                             1 => (1, -1),
@@ -7190,7 +7243,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                             3 => (1, 1),
                             _ => (0, 0),
                         };
-                        // スケールの pivot は「掴んだ角の反対角」
+                        // Scale pivot is "the opposite corner of the grabbed corner".
                         let pivot_u = if sign_u > 0 { bb[0] } else { bb[2] };
                         let pivot_v = if sign_v > 0 { bb[1] } else { bb[3] };
                         Some((
@@ -7244,20 +7297,20 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
             }
 
             let mode = if gizmo_hit.is_some() {
-                // Phase 3 A-5: ギズモハンドル上で押下 → Move（変換タイプは gizmo_action で強制）
-                // 選択頂点はそのまま維持する（bbox 内の頂点全体に変換を適用するため）
+                // Phase 3 A-5: press on a gizmo handle -> Move (transform type forced by `gizmo_action`).
+                // Keep the selected vertices as is (the transform is applied to all vertices inside the bbox).
                 UvDragMode::Move
             } else if nearest_sel_sq < 144.0 {
                 UvDragMode::Move
             } else if nearest_any_sq < 144.0 {
-                // 新規頂点を単独選択して Move
+                // Single-select the new vertex and Move.
                 app.uv_edit.selected.clear();
                 if let Some(k) = best_any {
                     app.uv_edit.selected.insert(k);
                 }
                 UvDragMode::Move
             } else {
-                // 頂点から遠い → 矩形選択。Phase 3 A-4: Shift=加算 / Ctrl=除外 / 無修飾=置換
+                // Far from any vertex -> rectangle selection. Phase 3 A-4: Shift = add / Ctrl = subtract / no-modifier = replace.
                 let (shift_down, ctrl_down) =
                     ui.input(|i| (i.modifiers.shift, i.modifiers.command));
                 let behavior = if shift_down {
@@ -7272,17 +7325,17 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     app.uv_edit.selected.clear();
                     app.uv_edit.rect_initial_selected.clear();
                 } else {
-                    // Add/Subtract: 開始時点の selected を initial として保存
+                    // Add/Subtract: save the initial `selected` at the start.
                     app.uv_edit.rect_initial_selected = app.uv_edit.selected.clone();
                 }
                 UvDragMode::Rect
             };
             app.uv_edit.drag_mode = mode;
 
-            // Move モードなら開始時点の UV を記録（累積方式の基点）
-            // Phase 2-4: あわせて選択 bbox 中心を pivot として保存（回転/スケールの基準点）
-            // Phase 3 A-1: active_chan と一致する選択頂点のみを対象にし、別チャネルの
-            // 選択が混線することを避ける。
+            // For Move mode, record the starting UV (origin for the accumulating method).
+            // Phase 2-4: also save the selection-bbox center as `pivot` (basis for rotation / scale).
+            // Phase 3 A-1: limit to selected vertices matching `active_chan` to
+            // avoid cross-channel selection interference.
             if matches!(mode, UvDragMode::Move) {
                 let selected: Vec<(u32, u32, u8)> = app
                     .uv_edit
@@ -7303,8 +7356,8 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                             read_displayed_uv(ir, *mi, *vi, *chan, active_morph, &global_offsets)
                         {
                             app.uv_edit.drag_start_uvs.insert((*mi, *vi, *chan), arr);
-                            // review_result_05 [P2]: 初回ドラッグ時点の UV を pristine として記録
-                            // （or_insert セマンティクスなので 2 回目以降は上書きされない）
+                            // review_result_05 [P2]: record the UV at the first-drag moment as pristine
+                            // (`or_insert` semantics, so it is not overwritten on subsequent calls).
                             app.uv_edit.record_pristine((*mi, *vi, *chan), arr);
                             u_min = u_min.min(arr[0]);
                             u_max = u_max.max(arr[0]);
@@ -7320,8 +7373,8 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     None
                 };
 
-                // Phase 3 A-5: gizmo ヒットがあれば action をセットし、pivot を gizmo の pivot で上書き。
-                // ScaleCorner の pivot は反対角、Rotate の pivot は bbox 中心（既存値と一致）。
+                // Phase 3 A-5: if there's a gizmo hit, set the action and overwrite `pivot` with the gizmo's pivot.
+                // ScaleCorner pivot = opposite corner; Rotate pivot = bbox center (matches existing value).
                 if let Some((action, pivot)) = gizmo_hit {
                     app.uv_edit.gizmo_action = Some(action);
                     app.uv_edit.drag_pivot = Some(pivot);
@@ -7330,15 +7383,15 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     }
 
-    // ドラッグ中: モードに応じて処理
+    // While dragging: handle by mode.
     if response.dragged() {
         match app.uv_edit.drag_mode {
             UvDragMode::Move => {
-                // Phase 2-4: 修飾キーで変換モード切替
-                //   - 無修飾: 平行移動 (既存)
-                //   - Alt  : pivot 中心の回転（角度差 = cursor と press の pivot からの角度差）
-                //   - Ctrl : pivot 中心のスケール（倍率 = cursor と press の pivot からの距離比）
-                // いずれも `start_uv + 変換` 方式で、フレーム数に比例した過加算は起こさない。
+                // Phase 2-4: switch transform mode by modifier key.
+                //   - no modifier: translate (existing).
+                //   - Alt        : rotate around pivot (angle delta = angle from pivot of cursor minus press).
+                //   - Ctrl       : scale around pivot (factor = distance from pivot of cursor / press).
+                // All use `start_uv + transform`, so over-accumulation proportional to frame count does not occur.
                 if !app.uv_edit.drag_start_uvs.is_empty() {
                     if let (Some(press_uv), Some(cursor_pos)) =
                         (app.uv_edit.drag_press_uv, response.interact_pointer_pos())
@@ -7355,9 +7408,9 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                             Rotate,
                             Scale,
                         }
-                        // Phase 3 A-5: gizmo_action が Some ならハンドル由来のモードを優先し、
-                        // 修飾キー解釈より前にモードを確定する。None の場合は従来通り Ctrl=Scale,
-                        // Alt=Rotate, 無修飾=Translate。
+                        // Phase 3 A-5: when `gizmo_action` is `Some`, prefer the handle-derived mode
+                        // and fix the mode before reading modifier keys. When `None`, fall back to
+                        // Ctrl = Scale, Alt = Rotate, no modifier = Translate.
                         let xform = match app.uv_edit.gizmo_action {
                             Some(UvGizmoAction::ScaleCorner { .. }) if pivot.is_some() => {
                                 XformMode::Scale
@@ -7374,7 +7427,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                             }
                         };
 
-                        // モード別に変換パラメータを事前計算
+                        // Pre-compute transform parameters per mode.
                         let scale_factor: f32 = if let (XformMode::Scale, Some(pv)) = (xform, pivot)
                         {
                             let pd = ((press_uv[0] - pv[0]).powi(2)
@@ -7424,20 +7477,20 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                                         )
                                     }
                                     _ => {
-                                        // 平行移動 (fallback)
+                                        // Translate (fallback).
                                         let dx = cursor_uv[0] - press_uv[0];
                                         let dy = cursor_uv[1] - press_uv[1];
                                         (start_uv[0] + dx, start_uv[1] + dy)
                                     }
                                 };
-                                // Shift スナップは平行移動モードのみ適用
+                                // Shift snap applies only in translate mode.
                                 let (nu, nv) =
                                     if shift_down && matches!(xform, XformMode::Translate) {
                                         (snap_to(raw_u, snap_step), snap_to(raw_v, snap_step))
                                     } else {
                                         (raw_u, raw_v)
                                     };
-                                // Phase 3 A-1/A-2: chan に応じて UV0/UV1 or モーフオフセットへ書き込む。
+                                // Phase 3 A-1/A-2: write to UV0 / UV1 or the morph offset based on `chan`.
                                 if write_displayed_uv(
                                     &mut loaded.ir,
                                     mi,
@@ -7459,7 +7512,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 }
             }
             UvDragMode::Rect => {
-                // 矩形範囲内の頂点を計算し、behavior (Replace/Add/Subtract) に応じて selected を再計算
+                // Compute vertices inside the rect and recompute `selected` per `behavior` (Replace / Add / Subtract).
                 if let (Some(press_uv), Some(cursor_pos)) =
                     (app.uv_edit.drag_press_uv, response.interact_pointer_pos())
                 {
@@ -7468,7 +7521,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                     let u_hi = press_uv[0].max(cursor_uv[0]);
                     let v_lo = press_uv[1].min(cursor_uv[1]);
                     let v_hi = press_uv[1].max(cursor_uv[1]);
-                    // rect 内頂点を集める (active_chan に属する頂点のみ)
+                    // Collect vertices inside the rect (only those on `active_chan`).
                     let mut inside: std::collections::HashSet<(u32, u32, u8)> =
                         std::collections::HashSet::new();
                     if let Some(loaded) = app.loaded.as_ref() {
@@ -7500,9 +7553,11 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                             }
                         }
                     }
-                    // behavior に応じた selected 再構築 (Phase 3 A-4)。
-                    // Add/Subtract は初期選択を維持するため、別 UV セットに属する選択も
-                    // そのまま持ち越される（本チャネルと混線しない: inside が active_chan のみ）。
+                    // Rebuild `selected` per `behavior` (Phase 3 A-4).
+                    // Add/Subtract preserves the initial selection, so
+                    // selections on other UV sets are carried over (no
+                    // cross-channel interference: `inside` is only
+                    // `active_chan`).
                     app.uv_edit.selected = match app.uv_edit.rect_behavior {
                         UvRectBehavior::Replace => inside,
                         UvRectBehavior::Add => {
@@ -7518,7 +7573,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
                             s
                         }
                     };
-                    // 選択矩形の視覚フィードバック（半透明塗り + 枠線、頂点描画の後に追加）
+                    // Visual feedback for the selection rect (translucent fill + outline, added after vertex drawing).
                     let p0 = uv_to_canvas(press_uv, rect, voff, vzoom);
                     let p1 = uv_to_canvas(cursor_uv, rect, voff, vzoom);
                     let sel_rect = egui::Rect::from_two_pos(p0, p1);
@@ -7539,10 +7594,10 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         }
     }
 
-    // ドラッグ終了: モード別の後処理 + 共通のクリーンアップ
+    // Drag end: mode-specific post-processing + common cleanup.
     if response.drag_stopped() {
         if matches!(app.uv_edit.drag_mode, UvDragMode::Move) && app.uv_edit.dragging {
-            // Phase 2-5: undo エントリを記録（drag_start_uvs を clear する前）
+            // Phase 2-5: record an undo entry (before clearing `drag_start_uvs`).
             let before = app.uv_edit.drag_start_uvs.clone();
             let mut after: std::collections::HashMap<(u32, u32, u8), [f32; 2]> =
                 std::collections::HashMap::with_capacity(before.len());
@@ -7573,7 +7628,7 @@ fn show_uv_edit_body(ui: &mut egui::Ui, app: &mut ViewerApp) {
         app.uv_edit.gizmo_action = None;
     }
 
-    // Phase 2-4: ドラッグ中の Move モードでピボットを十字マーカーで表示（視覚フィードバック）
+    // Phase 2-4: while dragging in Move mode, show the pivot as a cross marker (visual feedback).
     if app.uv_edit.dragging && matches!(app.uv_edit.drag_mode, UvDragMode::Move) {
         if let Some(pivot) = app.uv_edit.drag_pivot {
             let p = uv_to_canvas(pivot, rect, voff, vzoom);
