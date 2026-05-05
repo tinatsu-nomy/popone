@@ -3,6 +3,10 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.5.9 (2026-05-05)](#v059-2026-05-05)
+    - [New Features / Improvements](#new-features--improvements)
+    - [Internals (i18n housekeeping)](#internals-i18n-housekeeping)
+    - [Scope Notes](#scope-notes)
   - [v0.5.8 (2026-04-22)](#v058-2026-04-22)
     - [Internals](#internals)
   - [v0.5.7 (2026-04-22)](#v057-2026-04-22)
@@ -17,7 +21,7 @@
     - [New Features (Phase 2)](#new-features-phase-2)
     - [New Features (Phase 3)](#new-features-phase-3)
     - [Internals](#internals-3)
-    - [Scope Notes](#scope-notes)
+    - [Scope Notes](#scope-notes-1)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
     - [Tests](#tests)
   - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
@@ -54,6 +58,33 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.9 (2026-05-05)
+
+An **internal i18n housekeeping release** for `popone`. CLI help / error messages / viewer UI strings are now resolved dynamically through `rust-i18n`, and every Japanese comment, `assert!` / `expect()` / `panic!` message remaining inside the Rust sources has been translated to English. End-user behaviour is unchanged from v0.5.8 — the UI labels still render in Japanese, just resolved through the i18n catalog. The release also bundles small UI improvements: a resizable right-side panel, better UV-edit-window resize behaviour, and a unified format for `log_viewer.toml`.
+
+### New Features / Improvements
+
+- **Resizable right-side panel with width persistence** — The right-side tab panel (Info / Display / Export / Animation / Archive / etc.) is now an `egui::SidePanel::resizable(true)`. The width can be adjusted by dragging the panel border, and the chosen width is persisted to `popone.toml` under `[window] right_panel_width`. The previous fixed-width layout cramped the material editor and the file tree on smaller windows.
+- **Stable on-screen model size when toggling the material editor** — Because changing the right-panel width also resizes the 3D viewport, opening or closing the material editor used to make the model visibly grow or shrink. The fix adjusts camera distance (rather than FOV) when the right panel toggles, so the rendered model keeps the same on-screen size before and after.
+- **UV edit window: improved resize behaviour and locked 1:1 UV aspect** — The UV edit window is now a resizable `egui::Window` with a sane minimum size, so it can be enlarged or shrunk freely to inspect the texture background and UV wireframe. Inside the canvas the UV space is rendered with a fixed **1:1 aspect ratio**, so resizing the window in either direction never distorts the UV layout.
+- **Unify `log_viewer.toml` format with `popone.toml`** — The persistence format for the log viewer window position / size is now the same `[window]` section layout (`outer_x` / `outer_y` / `inner_w` / `inner_h`) used by the main `popone.toml`. Both toml files now share an identical schema, simplifying external tooling and manual edits.
+
+### Internals (i18n housekeeping)
+
+The bulk of this release is the **`rust-i18n`-based dynamic resolution of CLI and viewer strings, plus an English-language sweep across Rust sources**, split across roughly 50 commits in the `v0.5.8..v0.5.9` range. The project policy is now: **logs = English (fixed) / UI = locale-switchable via `t!()` / source comments = English**.
+
+- **CLI and internal error i18n** — Commits `89a00e0` through `bb8d7e3` localised CLI help, `--dump` output, error messages, the `Error:` prefix, every Japanese string baked into `anyhow::Context` chains, every `#[error]` attribute on `thiserror` derives, and the loader code under `loaders` / `archive` / `vrm/extract` / `pmx/build` / `unitypackage` / `obj/directx`. The previous "untranslatable Japanese strings deep inside texture decoding and material loading" problem is gone — every user-facing message now goes through `t!()`.
+- **Viewer UI literal strings → `t!()`** — Stages A-1 through A-9 incrementally migrated every viewer-side string literal to `t!()`. Order: side-panel skeleton (tabs + section headings) → top / status / shortcut bars → 6 dialogs (33 keys) → toasts (cancel / precondition / bg_failure / progress / append / anim / reload / uvmap / texture / history) → material editor + texture drop dialog → UV edit window → animation controls → VRM meta panel (permissions / license dictionary) → display tab + morph filter (A-1) → info tab + texture picker + PMX badge (A-2) → material list / texture column (A-4) → export tab + convert toast + uv_edit hints (A-5) → log viewer window (A-6) → status bar + D&D overlay (A-7) → ImportUnit + progress overlay + cancel (A-8) → file tree + MMD texture section (A-9) → leftover cleanup (PMX log + IPC eprintln). Each batch was kept warning-free under `cargo clippy --features viewer -- -D warnings`.
+- **Viewer `assert!` / `expect()` / `panic!` messages translated to English** — Panic-path messages cannot rely on the i18n catalog being loaded, so they are explicitly **excluded** from `t!()` and standardised to English. Initial sweep of 11 sites + a follow-up batch of 40 = 51 sites in total.
+- **Viewer source comments in English** — Comments under `viewer/` were translated batch by batch (small files batches 1–5, large files batch 1, the largest file `app/file_io.rs`, then `app/mod.rs`, `gpu.rs`, and `ui.rs`). The remaining Japanese-comment count under `viewer/` went from **3,646 → 0**.
+- **Non-UI source comments in English** — Comments outside the viewer (convert pipeline, mid-size files, archive, unity, ray-mmd MME, intermediate types, `pmx/build`, `vrm/extract`, test code) were translated through batches 2 through 4f.
+- **uvmap test fix-up** — Two `uvmap` unit tests had been matching error strings literally and broke when those strings moved into `t!()`. They were re-pointed at the resolved English messages so the test suite stays green.
+
+### Scope Notes
+
+- The Japanese UI labels users see are now routed through `t!()` instead of being baked in, but the wording and layout are unchanged from v0.5.8. The persistence schema for `popone.toml` is also fully backward-compatible — only the new `right_panel_width` field has been added.
+- Log output language remains **fixed to English** (the `log` crate's sink). UI locale is now structurally swappable via `popone.toml`, but only the default Japanese locale ships in this release.
 
 ## v0.5.8 (2026-04-22)
 

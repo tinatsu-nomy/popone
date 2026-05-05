@@ -3,6 +3,10 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [更新履歴](#%E6%9B%B4%E6%96%B0%E5%B1%A5%E6%AD%B4)
+  - [v0.5.9（2026-05-05）](#v0592026-05-05)
+    - [新機能 / 改善](#%E6%96%B0%E6%A9%9F%E8%83%BD--%E6%94%B9%E5%96%84)
+    - [内部実装（i18n 整備）](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85i18n-%E6%95%B4%E5%82%99)
+    - [スコープ注記](#%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%97%E6%B3%A8%E8%A8%98)
   - [v0.5.8（2026-04-22）](#v0582026-04-22)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85)
   - [v0.5.7（2026-04-22）](#v0572026-04-22)
@@ -17,7 +21,7 @@
     - [新機能 (Phase 2)](#%E6%96%B0%E6%A9%9F%E8%83%BD-phase-2)
     - [新機能 (Phase 3)](#%E6%96%B0%E6%A9%9F%E8%83%BD-phase-3)
     - [内部実装](#%E5%86%85%E9%83%A8%E5%AE%9F%E8%A3%85-3)
-    - [スコープ注記](#%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%97%E6%B3%A8%E8%A8%98)
+    - [スコープ注記](#%E3%82%B9%E3%82%B3%E3%83%BC%E3%83%97%E6%B3%A8%E8%A8%98-1)
     - [バグ修正（リリース前レビュー対応）](#%E3%83%90%E3%82%B0%E4%BF%AE%E6%AD%A3%E3%83%AA%E3%83%AA%E3%83%BC%E3%82%B9%E5%89%8D%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC%E5%AF%BE%E5%BF%9C-1)
     - [テスト](#%E3%83%86%E3%82%B9%E3%83%88)
   - [v0.5.4（2026-04-13）](#v0542026-04-13)
@@ -54,6 +58,33 @@
 # 更新履歴
 
 [English](CHANGELOG.md)
+
+## v0.5.9（2026-05-05）
+
+`popone` 内部の **i18n 整備リリース**。CLI ヘルプ・エラーメッセージ・viewer UI 文字列を `rust-i18n` で動的解決に切り替え、同時に Rust ソース内に残っていた日本語コメントと `assert!` / `expect()` / `panic!` メッセージをすべて英語化した。動作上は UI ラベルが従来どおり日本語で表示されるため、エンドユーザー視点の挙動は v0.5.8 から不変。あわせて右側パネルのリサイズ可能化・UV 編集ウィンドウのリサイズ挙動改善・`log_viewer.toml` のフォーマット統一など UI 周りの改善を同梱する。
+
+### 新機能 / 改善
+
+- **右側パネルのリサイズ可能化＋幅永続化** — トップバー右側のタブパネル（情報 / 表示 / 出力 / アニメ / アーカイブ等）を `egui::SidePanel::resizable(true)` でリサイズ可能化。境界をマウスドラッグで幅を変更でき、変更後の幅は `popone.toml` の `[window] right_panel_width` で永続化される。これまで右側ペインは固定幅で、材質編集パネルやファイルツリーの可視範囲が窮屈になっていた問題を解消
+- **材質編集パネル表示時のモデル表示倍率維持** — 右側パネル幅の変更に伴って 3D ビューポート幅も変わるため、材質編集パネルを開閉するとモデルの見た目サイズが変動していた。パネル開閉時にカメラ距離を補正することで、視野角を変えずにモデルの見た目サイズを保つよう修正
+- **UV 編集ウィンドウのリサイズ挙動改善＋ UV 表示 1:1 アスペクト固定** — UV 編集ウィンドウを `egui::Window` のリサイズ可能化＋最小サイズ指定で大小自由に表示できるよう改善。キャンバス内では UV 空間を **1:1 アスペクト**で固定描画し、ウィンドウを縦長／横長にリサイズしても UV の縦横比が崩れない
+- **`log_viewer.toml` のフォーマットを `popone.toml` と統一** — ログビュアーウィンドウの位置・サイズ永続化形式を、本体側 `popone.toml` と同じ `[window]` セクション形式（`outer_x` / `outer_y` / `inner_w` / `inner_h`）に揃えた。これにより両 toml の構造が同一となり、外部ツールや手動編集での読み書きが一貫する
+
+### 内部実装（i18n 整備）
+
+このリリースの主目的は **`rust-i18n` を用いた CLI / viewer 文字列の動的解決化＋ Rust ソースの英語化**で、`v0.5.8..v0.5.9` 区間の約 50 コミットに分かれる。プロジェクトポリシーは **ログ＝英語固定 / UI＝ロケール切替可能（`t!()` 経由）/ ソースコメント＝英語**。
+
+- **CLI / 内部エラーの i18n** — `89a00e0`〜`bb8d7e3` で CLI ヘルプ、`--dump` 出力、エラーメッセージ、`Error:` プレフィックス、`anyhow::Context` チェーン内の日本語文字列、`thiserror` 派生の `#[error]` 属性、loaders / archive / vrm/extract / pmx/build / unitypackage / obj/directx の各ローダーを横断的に i18n 化（`t!()` 経由）。テクスチャ展開や材質ロードなどローカライズ不可能だった深部の日本語埋め込みを撤廃
+- **viewer UI 文字列リテラル → `t!()` 化** — A-1 から A-9 までの段階で viewer 全 UI を i18n 化。順序: side-panel skeleton（タブ＋セクション見出し）→ top / status / shortcut bars → 6 dialogs（33 キー）→ toasts（cancel / precondition / bg_failure / progress / append / anim / reload / uvmap / texture / history）→ material editor + texture drop dialog → UV edit window → animation controls → VRM meta panel（permissions / license 辞書）→ display tab + morph filter（A-1）→ info tab + texture picker + PMX badge（A-2）→ material list / texture column（A-4）→ export tab + convert toast + uv_edit hints（A-5）→ log viewer window（A-6）→ status bar + D&D overlay（A-7）→ ImportUnit + progress overlay + cancel（A-8）→ file tree + MMD texture section（A-9）→ leftover cleanup（PMX log + IPC eprintln）。各バッチ後に `cargo clippy --features viewer -- -D warnings` でリンタ警告ゼロを維持
+- **viewer の `assert!` / `expect()` / `panic!` メッセージ英文化** — パニック時に翻訳ロードが保証されないため i18n 対象外として全て英語に統一。初期 11 件 + 追加 40 件 = 計 51 箇所
+- **viewer ソースコメントの英文化** — viewer/ 配下のコメントを英語化（small files batch 1〜5 + large files batch 1 + 最大ファイル `app/file_io.rs` + `app/mod.rs` + `gpu.rs` + `ui.rs`）。viewer 配下の日本語コメント残数は **3,646 → 0 件**で完全消滅
+- **non-UI ソースコメントの英文化** — convert 系 / 中規模ファイル / archive / unity / ray-mmd MME / 中間データ型 / pmx/build / vrm/extract / テストコメント等の非 UI 部のコメントを batch 2〜4f で英語化
+- **uvmap テストの追従修正** — 内部エラーメッセージの i18n 化に伴って 2 件のユニットテスト（`uvmap` 関連）が固定文字列マッチで失敗していたのを、`t!()` 解決後の英語メッセージに同期させて復旧
+
+### スコープ注記
+
+- ユーザー画面に表示される日本語 UI ラベル群は `t!()` で動的解決される構造になっただけで、表示文言・レイアウトは v0.5.8 から変わっていない。`popone.toml` への永続化スキーマも `right_panel_width` の追加以外は互換
+- ログ言語は **英語固定**（`log` クレート出力先）。UI ロケールは将来 `popone.toml` 経由で切替可能にするための足場が整った状態で、本リリース時点ではデフォルトロケール（日本語）のみが提供される
 
 ## v0.5.8（2026-04-22）
 
