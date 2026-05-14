@@ -188,11 +188,12 @@
     - [モーフの再帰的有効性判定](#%E3%83%A2%E3%83%BC%E3%83%95%E3%81%AE%E5%86%8D%E5%B8%B0%E7%9A%84%E6%9C%89%E5%8A%B9%E6%80%A7%E5%88%A4%E5%AE%9A)
     - [テクスチャ pruning](#%E3%83%86%E3%82%AF%E3%82%B9%E3%83%81%E3%83%A3-pruning)
     - [仕様](#%E4%BB%95%E6%A7%98)
-  - [UVマップ PSD レイヤーグループ化](#uv%E3%83%9E%E3%83%83%E3%83%97-psd-%E3%83%AC%E3%82%A4%E3%83%A4%E3%83%BC%E3%82%B0%E3%83%AB%E3%83%BC%E3%83%97%E5%8C%96)
+  - [UVマップ PSD / PSB レイヤーグループ化](#uv%E3%83%9E%E3%83%83%E3%83%97-psd--psb-%E3%83%AC%E3%82%A4%E3%83%A4%E3%83%BC%E3%82%B0%E3%83%AB%E3%83%BC%E3%83%97%E5%8C%96)
     - [PSD グループフォルダの仕組み](#psd-%E3%82%B0%E3%83%AB%E3%83%BC%E3%83%97%E3%83%95%E3%82%A9%E3%83%AB%E3%83%80%E3%81%AE%E4%BB%95%E7%B5%84%E3%81%BF)
     - [データフロー](#%E3%83%87%E3%83%BC%E3%82%BF%E3%83%95%E3%83%AD%E3%83%BC-1)
     - [入力検証 (`validate_groups`)](#%E5%85%A5%E5%8A%9B%E6%A4%9C%E8%A8%BC-validate_groups)
     - [entries 構築 (`build_entries`)](#entries-%E6%A7%8B%E7%AF%89-build_entries)
+    - [出力フォーマット選択（PSD と PSB）](#%E5%87%BA%E5%8A%9B%E3%83%95%E3%82%A9%E3%83%BC%E3%83%9E%E3%83%83%E3%83%88%E9%81%B8%E6%8A%9Epsd-%E3%81%A8-psb)
     - [`MaterialGroup` 構造体（`viewer/app/mod.rs`）](#materialgroup-%E6%A7%8B%E9%80%A0%E4%BD%93viewerappmodrs)
   - [アニメーション再生](#%E3%82%A2%E3%83%8B%E3%83%A1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E5%86%8D%E7%94%9F)
     - [アニメーション解除時のポーズリセット](#%E3%82%A2%E3%83%8B%E3%83%A1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E8%A7%A3%E9%99%A4%E6%99%82%E3%81%AE%E3%83%9D%E3%83%BC%E3%82%BA%E3%83%AA%E3%82%BB%E3%83%83%E3%83%88)
@@ -2864,9 +2865,9 @@ loop {
 | モデルロード時 | `export_visible_only` を `false` にリセット |
 | PMX/PMD ロード時 | UI でチェックボックスが無効化 |
 
-## UVマップ PSD レイヤーグループ化
+## UVマップ PSD / PSB レイヤーグループ化
 
-`convert/uvmap.rs` の PSD 出力で、複数モデルをマージした場合にモデル別のグループフォルダを生成する。
+`convert/uvmap.rs` の PSD 出力で、複数モデルをマージした場合にモデル別のグループフォルダを生成する。v0.5.10 から、PSD の `u32` length フィールド上限（≈ 2 GiB）を超えそうな出力は自動的に PSB（Large Document Format / `.psb`）形式に切り替えて書き出す。
 
 ### PSD グループフォルダの仕組み
 
@@ -2887,9 +2888,10 @@ viewer/app/mod.rs: MaterialGroup { name, material_range, draw_range }
  ↓ (material_range のみ抽出)
 viewer/ui.rs: Vec<(String, Range<usize>)>
  ↓
-convert/uvmap.rs: export_uv_map_grouped(ir, path, size, groups)
- ↓ validate_groups → build_entries → write_psd_file
-PSD ファイル（レイヤーグループ付き）
+convert/uvmap.rs: export_uv_map_grouped(ir, path, size, groups) -> PathBuf
+ ↓ validate_groups → build_entries → estimate_layer_section_bytes
+ ↓ → PsFormat::Psd / Psb → adjust_extension_for_format → write_ps_file
+PSD (.psd) または PSB (.psb) ファイル（レイヤーグループ付き）
 ```
 
 ### 入力検証 (`validate_groups`)
@@ -2904,6 +2906,28 @@ PSD ファイル（レイヤーグループ付き）
 2. 各材質がどのグループに属するか逆引きマップを構築
 3. material index 降順で走査し、グループ境界で GroupEnd/GroupStart マーカーを挿入
 4. グループに属さない孤立材質はルート階層に出力
+
+### 出力フォーマット選択（PSD と PSB）
+
+`export_uv_map_grouped()` は書き込みを始める前に PSD と PSB のどちらで出力するかを決定する。PSD は「Layer and Mask Information」セクション長、内側の「Layer Info」長、チャンネル毎のデータ長を `u32` で記録するため、レイヤーセクションが ≈ 2 GiB を超えると writer が silent に破損ファイルを生成し、Photoshop / Krita / Affinity / GIMP のいずれでも開けない `.psd` になっていた。PSB（Large Document Format）はこれら 3 つのフィールドを `u64` に拡張することでこの制約を取り除く。
+
+| ステップ | ヘルパー | 備考 |
+|---|---|---|
+| サイズ予測 | `estimate_layer_section_bytes(width, height, &entries)` | `u64` で少し過大に見積もる。per-layer オーバーヘッドは 512 バイト切り上げ、Content レイヤーには `4 × (2 + pixel_count)` を加算 |
+| フォーマット判定 | `PSD_TO_PSB_THRESHOLD_BYTES = 1.9 GiB` と比較 | 仕様上限 `u32::MAX`（≈ 2.15 GiB）よりも保守的。推定器が緊密にバウンドできない要素（luni / lsct ブロック、Unicode 名等）の余裕を確保 |
+| パス書き換え | `adjust_extension_for_format(&path, format)` | 昇格時は `.psd` → `.psb`。`Path::set_extension` を用いるため、無拡張子や別拡張子の入力も統一的に正規化 |
+| ファイル書き込み | `write_ps_file(w, width, height, &entries, format)` | writer 本体は両フォーマット共通。シグネチャ（`8BPS` / `8BPB`）、version（1 / 2）、length フィールド幅の 3 箇所のみ分岐 |
+
+length フィールドの分岐は以下の小さなヘルパーペアに集約される:
+
+```rust
+fn write_section_length<W: Write>(w: &mut W, len: u64, format: PsFormat) -> io::Result<()> { /* PSD は u32、PSB は u64 */ }
+fn push_section_length(buf: &mut Vec<u8>, len: u64, format: PsFormat)               { /* 同上、Vec へ追加 */ }
+```
+
+これによって writer 本体はフォーマット中立を維持でき、構造差を知っているのはこの 2 ヘルパー（とファイルヘッダ書き出し）のみとなる。
+
+`export_uv_map_grouped()` の戻り値は v0.5.10 から `io::Result<()>` → `io::Result<PathBuf>` に変更されており、`.psd` → `.psb` への書き換え込みで実際に書き出されたパスを呼び出し側に返す。viewer 側の成功 toast はこの実パスを表示する。
 
 ### `MaterialGroup` 構造体（`viewer/app/mod.rs`）
 

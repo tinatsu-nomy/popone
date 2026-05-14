@@ -1,15 +1,37 @@
-//! Export the UV map as a PSD file with one layer per material.
-//! When groups are supplied, merging multiple models places each one in its own folder.
+//! Export the UV map as a PSD (or PSB / Large Document Format) file with one
+//! layer per material. When groups are supplied, merging multiple models
+//! places each one in its own folder.
+//!
+//! PSD vs PSB: PSD stores section lengths as `u32`, so once the layer section
+//! exceeds ~2 GiB the writer silently truncates and produces a corrupt file
+//! (PSB raises those length fields to `u64`). This module estimates the layer
+//! section size before writing and auto-promotes to PSB (renaming `.psd`
+//! → `.psb`) when the estimate crosses the safety threshold.
 
 use rust_i18n::t;
 use std::io::{self, Write};
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::intermediate::types::IrModel;
 
 /// Default resolution for UV-map exports.
 pub const DEFAULT_UV_SIZE: u32 = 4096;
+
+/// Output container format. `Psd` is the legacy 4-byte length format and is
+/// limited to ~2 GiB total layer section size. `Psb` (Large Document Format)
+/// uses 8-byte length fields and removes that limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PsFormat {
+    Psd,
+    Psb,
+}
+
+/// Promote PSD → PSB when the estimated layer section size exceeds this many
+/// bytes. The hard PSD limit is `u32::MAX`; we leave a generous safety margin
+/// because the estimate ignores per-layer record overhead and luni/lsct
+/// blocks. 1.9 GiB ≈ 2_040_109_465 bytes.
+const PSD_TO_PSB_THRESHOLD_BYTES: u64 = 1_900 * 1024 * 1024;
 
 // -- PSD layer entries --------------------------------------
 
@@ -26,18 +48,23 @@ enum PsdLayerEntry<'a> {
 // -- Public API ---------------------------------------------
 
 /// Export the UV map as a PSD (flat version; backwards-compatible wrapper).
-pub fn export_uv_map(ir: &IrModel, path: &Path, size: u32) -> io::Result<()> {
+/// Returns the path actually written, which may have been promoted from
+/// `.psd` to `.psb` when the file would exceed the PSD 2 GiB length limit.
+pub fn export_uv_map(ir: &IrModel, path: &Path, size: u32) -> io::Result<PathBuf> {
     export_uv_map_grouped(ir, path, size, &[])
 }
 
-/// Export the UV map as a PSD with grouping support.
+/// Export the UV map as a PSD/PSB with grouping support.
 /// `groups` is a slice of `(group name, material index range)`. An empty slice flattens every material.
+/// Returns the path actually written. When the estimated layer section size
+/// exceeds [`PSD_TO_PSB_THRESHOLD_BYTES`] the writer auto-promotes to PSB and
+/// rewrites the extension to `.psb`.
 pub fn export_uv_map_grouped(
     ir: &IrModel,
     path: &Path,
     size: u32,
     groups: &[(String, Range<usize>)],
-) -> io::Result<()> {
+) -> io::Result<PathBuf> {
     let mat_count = ir.materials.len();
     let dim = size as usize;
 
@@ -113,20 +140,53 @@ pub fn export_uv_map_grouped(
     let processed = validate_groups(groups, mat_count)?;
     let entries = build_entries(&layers, &layer_names, groups, &processed, mat_count);
 
-    // Write the PSD
-    let file = std::fs::File::create(path)?;
+    // Estimate the layer section size and pick PSD or PSB. A PSD whose layer
+    // section exceeds ~2 GiB is silently corrupted by the 4-byte length
+    // fields, so we promote oversized writes to PSB up front.
+    let estimated = estimate_layer_section_bytes(size, size, &entries);
+    let format = if estimated > PSD_TO_PSB_THRESHOLD_BYTES {
+        PsFormat::Psb
+    } else {
+        PsFormat::Psd
+    };
+    let final_path = adjust_extension_for_format(path, format);
+
+    if format == PsFormat::Psb {
+        log::info!(
+            "UV map export: estimated layer section {} bytes exceeds PSD threshold {} bytes; promoting to PSB ({})",
+            estimated,
+            PSD_TO_PSB_THRESHOLD_BYTES,
+            final_path.display()
+        );
+    }
+
+    // Write the file
+    let file = std::fs::File::create(&final_path)?;
     let mut w = io::BufWriter::new(file);
-    write_psd_file(&mut w, size, size, &entries)?;
+    write_ps_file(&mut w, size, size, &entries, format)?;
     w.flush()?;
 
     log::info!(
-        "UV map export: {} ({}x{}, {} layers)",
-        path.display(),
+        "UV map export: {} ({}x{}, {} layers, format={:?})",
+        final_path.display(),
         size,
         size,
-        mat_count
+        mat_count,
+        format
     );
-    Ok(())
+    Ok(final_path)
+}
+
+/// Replace the file extension to match the chosen format. PSD → `.psd`,
+/// PSB → `.psb`. If the input has no extension, append the appropriate one.
+fn adjust_extension_for_format(path: &Path, format: PsFormat) -> PathBuf {
+    let target_ext = match format {
+        PsFormat::Psd => "psd",
+        PsFormat::Psb => "psb",
+    };
+    let mut out = path.to_path_buf();
+    out.set_extension(target_ext);
+    out
 }
 
 // -- Entry construction -------------------------------------
@@ -322,19 +382,50 @@ fn build_lsct_block(section_type: u32) -> Vec<u8> {
     block
 }
 
-/// Write the entire PSD file at once (RGBA, 8 bit/channel).
-fn write_psd_file<W: Write>(
+/// Estimate the in-memory size of the layer section (in bytes) before writing.
+/// Used to decide between PSD and PSB. The estimate is intentionally a slight
+/// over-approximation: per-layer record overhead is rounded up so the
+/// threshold check stays conservative.
+fn estimate_layer_section_bytes(width: u32, height: u32, entries: &[PsdLayerEntry]) -> u64 {
+    let pixel_count = (width as u64) * (height as u64);
+    // Layer count i16 + global layer mask info u32 ≈ 8 bytes of fixed overhead.
+    let mut total: u64 = 8;
+    // Per-Content channel data: 4 channels × (compression u16 + pixel_count).
+    // Per-marker channel data: 4 channels × compression u16 = 8 bytes.
+    // Layer record overhead (rect, channels, blend mode, lengths, names, luni,
+    // optional lsct): bounded by ~256 bytes per entry; we round up to 512 to
+    // cover unicode names and future additions.
+    for entry in entries {
+        match entry {
+            PsdLayerEntry::Content { .. } => {
+                total += 512 + 4 * (2 + pixel_count);
+            }
+            PsdLayerEntry::GroupStart { .. } | PsdLayerEntry::GroupEnd => {
+                total += 512 + 4 * 2;
+            }
+        }
+    }
+    total
+}
+
+/// Write the entire PSD or PSB file at once (RGBA, 8 bit/channel).
+fn write_ps_file<W: Write>(
     w: &mut W,
     width: u32,
     height: u32,
     entries: &[PsdLayerEntry],
+    format: PsFormat,
 ) -> io::Result<()> {
     let ch_count: u16 = 4;
     let pixel_count = (width as usize) * (height as usize);
 
     // -- File header (26 bytes) --
-    w.write_all(b"8BPS")?;
-    w.write_all(&1u16.to_be_bytes())?; // version = 1
+    let (sig, version): (&[u8; 4], u16) = match format {
+        PsFormat::Psd => (b"8BPS", 1),
+        PsFormat::Psb => (b"8BPB", 2),
+    };
+    w.write_all(sig)?;
+    w.write_all(&version.to_be_bytes())?;
     w.write_all(&[0u8; 6])?;
     w.write_all(&ch_count.to_be_bytes())?;
     w.write_all(&height.to_be_bytes())?;
@@ -349,8 +440,9 @@ fn write_psd_file<W: Write>(
     w.write_all(&0u32.to_be_bytes())?;
 
     // -- Layer and Mask Information --
-    let layer_section = build_layer_section(width, height, entries)?;
-    w.write_all(&(layer_section.len() as u32).to_be_bytes())?;
+    // PSD: section length is u32. PSB: section length is u64.
+    let layer_section = build_layer_section(width, height, entries, format)?;
+    write_section_length(w, layer_section.len() as u64, format)?;
     w.write_all(&layer_section)?;
 
     // -- Image Data (composite) --
@@ -367,22 +459,48 @@ fn write_psd_file<W: Write>(
     Ok(())
 }
 
+/// Write a section length using u32 (PSD) or u64 (PSB).
+fn write_section_length<W: Write>(w: &mut W, len: u64, format: PsFormat) -> io::Result<()> {
+    match format {
+        PsFormat::Psd => w.write_all(&(len as u32).to_be_bytes()),
+        PsFormat::Psb => w.write_all(&len.to_be_bytes()),
+    }
+}
+
+/// Append a section length to a `Vec<u8>` using u32 (PSD) or u64 (PSB).
+fn push_section_length(buf: &mut Vec<u8>, len: u64, format: PsFormat) {
+    match format {
+        PsFormat::Psd => buf.extend_from_slice(&(len as u32).to_be_bytes()),
+        PsFormat::Psb => buf.extend_from_slice(&len.to_be_bytes()),
+    }
+}
+
 /// Build the layer section.
-fn build_layer_section(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::Result<Vec<u8>> {
+fn build_layer_section(
+    width: u32,
+    height: u32,
+    entries: &[PsdLayerEntry],
+    format: PsFormat,
+) -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
 
-    let layer_info = build_layer_info(width, height, entries)?;
-    w_u32(&mut buf, layer_info.len() as u32)?;
+    let layer_info = build_layer_info(width, height, entries, format)?;
+    push_section_length(&mut buf, layer_info.len() as u64, format);
     buf.extend_from_slice(&layer_info);
 
-    // Global layer mask info (empty)
+    // Global layer mask info (empty) — same u32 length on both PSD and PSB.
     w_u32(&mut buf, 0)?;
 
     Ok(buf)
 }
 
 /// Build the layer info (driven by `entries`).
-fn build_layer_info(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::Result<Vec<u8>> {
+fn build_layer_info(
+    width: u32,
+    height: u32,
+    entries: &[PsdLayerEntry],
+    format: PsFormat,
+) -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
     let layer_count = entries.len() as i16;
     let pixel_count = (width as usize) * (height as usize);
@@ -390,10 +508,11 @@ fn build_layer_info(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::R
     // layer count (positive = composite has no alpha)
     w_i16(&mut buf, layer_count)?;
 
-    // Channel data length for Content layers (raw = 2 + pixel_count per channel)
-    let content_ch_data_len = (2 + pixel_count) as u32;
+    // Channel data length for Content layers (raw = 2 + pixel_count per channel).
+    // PSD: u32, PSB: u64. We carry a u64 and write through `push_section_length`.
+    let content_ch_data_len: u64 = 2 + pixel_count as u64;
     // Channel data length for group markers (just the compression u16)
-    let marker_ch_data_len: u32 = 2;
+    let marker_ch_data_len: u64 = 2;
 
     // -- Layer records per entry --
     for entry in entries {
@@ -407,7 +526,7 @@ fn build_layer_info(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::R
 
                 for ch_id in &[0i16, 1, 2, -1] {
                     w_i16(&mut buf, *ch_id)?;
-                    w_u32(&mut buf, content_ch_data_len)?;
+                    push_section_length(&mut buf, content_ch_data_len, format);
                 }
 
                 buf.extend_from_slice(b"8BIM"); // blend mode signature
@@ -437,7 +556,7 @@ fn build_layer_info(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::R
 
                 for ch_id in &[0i16, 1, 2, -1] {
                     w_i16(&mut buf, *ch_id)?;
-                    w_u32(&mut buf, marker_ch_data_len)?;
+                    push_section_length(&mut buf, marker_ch_data_len, format);
                 }
 
                 buf.extend_from_slice(b"8BIM");
@@ -469,7 +588,7 @@ fn build_layer_info(width: u32, height: u32, entries: &[PsdLayerEntry]) -> io::R
 
                 for ch_id in &[0i16, 1, 2, -1] {
                     w_i16(&mut buf, *ch_id)?;
-                    w_u32(&mut buf, marker_ch_data_len)?;
+                    push_section_length(&mut buf, marker_ch_data_len, format);
                 }
 
                 buf.extend_from_slice(b"8BIM");
@@ -817,7 +936,7 @@ mod tests {
         let processed = validate_groups(&groups, 1).unwrap();
         let entries = build_entries(&layers, &names, &groups, &processed, 1);
 
-        let info = build_layer_info(1, 1, &entries).unwrap();
+        let info = build_layer_info(1, 1, &entries, PsFormat::Psd).unwrap();
 
         // layer_count = 3 (GroupEnd + Content + GroupStart)
         let count = i16::from_be_bytes([info[0], info[1]]);
@@ -850,7 +969,7 @@ mod tests {
         let processed = validate_groups(&groups, 1).unwrap();
         let entries = build_entries(&layers, &names, &groups, &processed, 1);
 
-        let info = build_layer_info(1, 1, &entries).unwrap();
+        let info = build_layer_info(1, 1, &entries, PsFormat::Psd).unwrap();
 
         // "pass" should appear twice (in the GroupEnd and GroupStart layer records)
         let mut pass_count = 0;
@@ -871,5 +990,136 @@ mod tests {
         // luni layout: "8BIM" + "luni" + len(4) + char_count(4) + UTF-16BE chars
         let char_count = u32::from_be_bytes([luni[12], luni[13], luni[14], luni[15]]);
         assert_eq!(char_count, expected_utf16.len() as u32);
+    }
+
+    // -- PSB / PSD format auto-promotion tests ----------------
+
+    #[test]
+    fn test_adjust_extension_for_format() {
+        // .psd → .psd when staying as PSD
+        let p = adjust_extension_for_format(Path::new("/tmp/foo.psd"), PsFormat::Psd);
+        assert_eq!(p.extension().unwrap(), "psd");
+        // .psd → .psb when promoted
+        let p = adjust_extension_for_format(Path::new("/tmp/foo.psd"), PsFormat::Psb);
+        assert_eq!(p.extension().unwrap(), "psb");
+        // .psb → .psb (stable)
+        let p = adjust_extension_for_format(Path::new("/tmp/foo.psb"), PsFormat::Psb);
+        assert_eq!(p.extension().unwrap(), "psb");
+        // No extension → appended
+        let p = adjust_extension_for_format(Path::new("/tmp/foo"), PsFormat::Psd);
+        assert_eq!(p.extension().unwrap(), "psd");
+        // Unrelated extension → overwritten
+        let p = adjust_extension_for_format(Path::new("/tmp/foo.txt"), PsFormat::Psb);
+        assert_eq!(p.extension().unwrap(), "psb");
+    }
+
+    #[test]
+    fn test_psd_header_signature_and_version() {
+        // PSD: signature "8BPS", version 1
+        let mut buf = Vec::new();
+        let entries: Vec<PsdLayerEntry> = vec![PsdLayerEntry::Content {
+            name: "m",
+            rgba: &[0, 0, 0, 255],
+        }];
+        write_ps_file(&mut buf, 1, 1, &entries, PsFormat::Psd).unwrap();
+        assert_eq!(&buf[0..4], b"8BPS");
+        assert_eq!(u16::from_be_bytes([buf[4], buf[5]]), 1);
+    }
+
+    #[test]
+    fn test_psb_header_signature_and_version() {
+        // PSB: signature "8BPB", version 2
+        let mut buf = Vec::new();
+        let entries: Vec<PsdLayerEntry> = vec![PsdLayerEntry::Content {
+            name: "m",
+            rgba: &[0, 0, 0, 255],
+        }];
+        write_ps_file(&mut buf, 1, 1, &entries, PsFormat::Psb).unwrap();
+        assert_eq!(&buf[0..4], b"8BPB");
+        assert_eq!(u16::from_be_bytes([buf[4], buf[5]]), 2);
+    }
+
+    #[test]
+    fn test_psb_layer_section_uses_8byte_length() {
+        // PSD writes the layer section length as u32 (4 bytes after the 26-byte
+        // header + 4-byte color mode length + 4-byte image resources length =
+        // offset 34). PSB writes it as u64 (8 bytes at the same offset). When
+        // we compare the same payload across both formats, the PSB output must
+        // be at least 4 bytes longer (the additional length-field bytes).
+        let entries: Vec<PsdLayerEntry> = vec![PsdLayerEntry::Content {
+            name: "m",
+            rgba: &[0, 0, 0, 255],
+        }];
+        let mut psd_buf = Vec::new();
+        write_ps_file(&mut psd_buf, 1, 1, &entries, PsFormat::Psd).unwrap();
+        let mut psb_buf = Vec::new();
+        write_ps_file(&mut psb_buf, 1, 1, &entries, PsFormat::Psb).unwrap();
+        // PSB has +4 bytes for the outer layer-section length, +4 for the
+        // inner layer-info length, and +4 per channel record (4 channels × 1
+        // layer = 16). Total expected delta = 4 + 4 + 16 = 24 bytes.
+        assert_eq!(
+            psb_buf.len(),
+            psd_buf.len() + 24,
+            "psd={} psb={}",
+            psd_buf.len(),
+            psb_buf.len()
+        );
+    }
+
+    #[test]
+    fn test_estimate_layer_section_bytes_grows_with_layers() {
+        // The estimator must scale linearly with layer count and grow with
+        // resolution. Used to drive the PSD → PSB promotion threshold.
+        let one = vec![PsdLayerEntry::Content {
+            name: "a",
+            rgba: &[],
+        }];
+        let two = vec![
+            PsdLayerEntry::Content {
+                name: "a",
+                rgba: &[],
+            },
+            PsdLayerEntry::Content {
+                name: "b",
+                rgba: &[],
+            },
+        ];
+        let e1 = estimate_layer_section_bytes(4096, 4096, &one);
+        let e2 = estimate_layer_section_bytes(4096, 4096, &two);
+        assert!(e2 > e1, "two layers must estimate larger than one");
+        // Doubling the resolution roughly quadruples the estimate.
+        let e1_hi = estimate_layer_section_bytes(8192, 8192, &one);
+        assert!(e1_hi > e1 * 3, "8k must be ~4x larger than 4k");
+    }
+
+    #[test]
+    fn test_estimate_crosses_psb_threshold_at_realistic_payload() {
+        // Sanity: 4096 × 4096 × ~30 layers should cross the PSB promotion
+        // threshold (the silent-corruption boundary reported by users).
+        let layers: Vec<PsdLayerEntry> = (0..30)
+            .map(|_| PsdLayerEntry::Content {
+                name: "m",
+                rgba: &[],
+            })
+            .collect();
+        let est = estimate_layer_section_bytes(4096, 4096, &layers);
+        assert!(
+            est > PSD_TO_PSB_THRESHOLD_BYTES,
+            "expected estimate {} to exceed threshold {}",
+            est,
+            PSD_TO_PSB_THRESHOLD_BYTES
+        );
+        // Conversely, a single 4k layer must stay below the threshold.
+        let one = vec![PsdLayerEntry::Content {
+            name: "m",
+            rgba: &[],
+        }];
+        let est_small = estimate_layer_section_bytes(4096, 4096, &one);
+        assert!(
+            est_small < PSD_TO_PSB_THRESHOLD_BYTES,
+            "expected single-layer estimate {} to stay below threshold {}",
+            est_small,
+            PSD_TO_PSB_THRESHOLD_BYTES
+        );
     }
 }

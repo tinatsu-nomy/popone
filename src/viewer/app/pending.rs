@@ -1379,8 +1379,10 @@ impl ViewerApp {
                                 uv_map_size,
                                 &uv_groups,
                             );
+                            // PSB auto-promotion may rewrite `.psd` → `.psb`,
+                            // so report the path that was actually written.
                             let _ = tx.send(match result {
-                                Ok(()) => Ok(path),
+                                Ok(actual_path) => Ok(actual_path),
                                 Err(e) => Err(format!("{e}")),
                             });
                             repaint.request_repaint();

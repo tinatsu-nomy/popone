@@ -3,43 +3,47 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.5.10 (2026-05-15)](#v0510-2026-05-15)
+    - [Bug Fixes](#bug-fixes)
+    - [Internals](#internals)
+    - [Scope Notes](#scope-notes)
   - [v0.5.9 (2026-05-05)](#v059-2026-05-05)
     - [New Features / Improvements](#new-features--improvements)
     - [Internals (i18n housekeeping)](#internals-i18n-housekeeping)
-    - [Scope Notes](#scope-notes)
+    - [Scope Notes](#scope-notes-1)
   - [v0.5.8 (2026-04-22)](#v058-2026-04-22)
-    - [Internals](#internals)
+    - [Internals](#internals-1)
   - [v0.5.7 (2026-04-22)](#v057-2026-04-22)
     - [New Features](#new-features)
-    - [Internals](#internals-1)
+    - [Internals](#internals-2)
   - [v0.5.6 (2026-04-14)](#v056-2026-04-14)
     - [New Features](#new-features-1)
-    - [Internals](#internals-2)
+    - [Internals](#internals-3)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
   - [v0.5.5 (2026-04-13)](#v055-2026-04-13)
     - [New Features (Phase 1)](#new-features-phase-1)
     - [New Features (Phase 2)](#new-features-phase-2)
     - [New Features (Phase 3)](#new-features-phase-3)
-    - [Internals](#internals-3)
-    - [Scope Notes](#scope-notes-1)
+    - [Internals](#internals-4)
+    - [Scope Notes](#scope-notes-2)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
     - [Tests](#tests)
   - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
     - [New Features](#new-features-2)
-    - [Internals](#internals-4)
+    - [Internals](#internals-5)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
     - [Tests](#tests-1)
   - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
     - [New Features](#new-features-3)
-    - [Internals](#internals-5)
+    - [Internals](#internals-6)
   - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
     - [New Features](#new-features-4)
-    - [Internals](#internals-6)
+    - [Internals](#internals-7)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-3)
   - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
     - [New Features](#new-features-5)
     - [Performance](#performance)
-    - [Internals](#internals-7)
+    - [Internals](#internals-8)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-4)
     - [Tests](#tests-2)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
@@ -50,7 +54,7 @@
   - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
     - [New Features](#new-features-7)
     - [Behavior Changes](#behavior-changes-1)
-    - [Internals](#internals-8)
+    - [Internals](#internals-9)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -58,6 +62,26 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.10 (2026-05-15)
+
+A targeted bug-fix release for the **UV map PSD output 2 GiB silent-failure**. UV map exports that previously produced a corrupt `.psd` (unopenable in Photoshop / Krita / Affinity / GIMP) now transparently switch to the **PSB (Large Document Format / `.psb`)** container when the estimated layer section would exceed the PSD `u32` length limit. No other behaviour changes; small models still write a regular `.psd`.
+
+### Bug Fixes
+
+- **UV map PSD 2 GiB silent corruption resolved** — Previously, exporting a UV map for a high-resolution / many-material merged model could silently produce a corrupt `.psd` because the PSD format encodes the layer-and-mask information section length as `u32` (≈ 2 GiB limit). The writer now estimates the layer section size up front and, when it crosses a conservative 1.9 GiB threshold, auto-promotes to PSB: the file signature flips to `8BPB`, the version to `2`, the relevant section / channel length fields widen from `u32` to `u64`, and the output extension is rewritten from `.psd` to `.psb`. The path actually written is returned through the export API so the toast and log lines reflect the real filename. Small-to-mid models continue to be written as ordinary PSD with no change in output.
+
+### Internals
+
+- **`PsFormat::Psd` / `PsFormat::Psb` enum in `convert/uvmap.rs`** — The writer now carries a format flag end-to-end. The three PSD/PSB structural deltas (outer "Layer and Mask Information" length, inner "Layer Info" length, and per-channel data length) are localised inside `write_section_length()` / `push_section_length()` helpers, so the body of the writer stays format-neutral.
+- **`estimate_layer_section_bytes()` helper** — Computes a slight over-approximation of the layer section size (per-layer overhead rounded up to 512 bytes, plus `4 × (2 + pixel_count)` for content layers) and is compared against the new `PSD_TO_PSB_THRESHOLD_BYTES = 1.9 GiB` constant to decide format.
+- **`export_uv_map_grouped()` return type** — Changed from `io::Result<()>` to `io::Result<PathBuf>` so the caller learns the actual path (including the `.psb` rewrite). `viewer/app/pending.rs` was updated to feed that path back into the success toast.
+- **Tests** — Six new unit tests cover extension rewriting (`.psd` ↔ `.psb`), PSD vs PSB header bytes (`8BPS` / version 1 vs `8BPB` / version 2), the +24-byte expected size delta of the length fields between formats, layer-section size estimate monotonicity, and the realistic-payload threshold crossing (4096 × 4096 × 30 layers crosses the boundary; a single 4 k layer stays well below).
+
+### Scope Notes
+
+- File handling remains unchanged for ordinary models — no migration is required and existing `.psd` outputs are bit-identical to those produced by v0.5.9.
+- PSB (`.psb`) is supported by Photoshop CS / 2021+, Krita, Affinity Photo, and GIMP (via plug-in). The promotion threshold is intentionally conservative (1.9 GiB rather than the hard 2 GiB limit) to leave headroom for the per-layer record overhead the estimator cannot tightly bound.
 
 ## v0.5.9 (2026-05-05)
 

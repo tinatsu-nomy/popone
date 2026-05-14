@@ -188,11 +188,12 @@
     - [Recursive Morph Validity Check](#recursive-morph-validity-check)
     - [Texture Pruning](#texture-pruning)
     - [Specification](#specification)
-  - [UV Map PSD Layer Grouping](#uv-map-psd-layer-grouping)
+  - [UV Map PSD / PSB Layer Grouping](#uv-map-psd--psb-layer-grouping)
     - [PSD Group Folder Mechanism](#psd-group-folder-mechanism)
     - [Data Flow](#data-flow-1)
     - [Input Validation (`validate_groups`)](#input-validation-validate_groups)
     - [Entry Construction (`build_entries`)](#entry-construction-build_entries)
+    - [Output Format Selection (PSD vs PSB)](#output-format-selection-psd-vs-psb)
     - [`MaterialGroup` Struct (`viewer/app/mod.rs`)](#materialgroup-struct-viewerappmodrs)
   - [Animation Playback](#animation-playback)
     - [Pose Reset on Animation Clear](#pose-reset-on-animation-clear)
@@ -2887,9 +2888,9 @@ Collect `texture_index` and all `IrTextureInfo` fields (shade / outline_width / 
 | On model load | Reset `export_visible_only` to `false` |
 | On PMX/PMD load | Checkbox disabled in UI |
 
-## UV Map PSD Layer Grouping
+## UV Map PSD / PSB Layer Grouping
 
-The PSD output in `convert/uvmap.rs` generates model-based group folders when multiple models are merged.
+The PSD output in `convert/uvmap.rs` generates model-based group folders when multiple models are merged. Since v0.5.10 the writer auto-promotes to PSB (Large Document Format / `.psb`) when the estimated layer section size would exceed the PSD `u32` length limit (≈ 2 GiB).
 
 ### PSD Group Folder Mechanism
 
@@ -2910,9 +2911,10 @@ viewer/app/mod.rs: MaterialGroup { name, material_range, draw_range }
  ↓ (extract material_range only)
 viewer/ui.rs: Vec<(String, Range<usize>)>
  ↓
-convert/uvmap.rs: export_uv_map_grouped(ir, path, size, groups)
- ↓ validate_groups → build_entries → write_psd_file
-PSD file (with layer groups)
+convert/uvmap.rs: export_uv_map_grouped(ir, path, size, groups) -> PathBuf
+ ↓ validate_groups → build_entries → estimate_layer_section_bytes
+ ↓ → PsFormat::Psd / Psb → adjust_extension_for_format → write_ps_file
+PSD (.psd) or PSB (.psb) file (with layer groups)
 ```
 
 ### Input Validation (`validate_groups`)
@@ -2927,6 +2929,28 @@ PSD file (with layer groups)
 2. Build reverse lookup map: material index → sorted group index
 3. Iterate material indices in descending order, inserting GroupEnd/GroupStart markers at group boundaries
 4. Orphan materials (not in any group) appear at root level
+
+### Output Format Selection (PSD vs PSB)
+
+`export_uv_map_grouped()` chooses between PSD and PSB up front, before any bytes are written. PSD encodes the "Layer and Mask Information" section length, the inner "Layer Info" length, and per-channel data lengths as `u32`, so when the layer section would exceed ≈ 2 GiB the writer would silently produce a corrupt `.psd` that no major editor (Photoshop / Krita / Affinity / GIMP) can open. PSB (Large Document Format) widens those three fields to `u64`, removing the limit.
+
+| Step | Helper | Notes |
+|---|---|---|
+| Estimate size | `estimate_layer_section_bytes(width, height, &entries)` | Returns a `u64` slight over-approximation. Per-layer overhead is rounded up to 512 bytes plus `4 × (2 + pixel_count)` for content layers. |
+| Decide format | Compare against `PSD_TO_PSB_THRESHOLD_BYTES = 1.9 GiB` | Conservative threshold below the hard `u32::MAX` (≈ 2.15 GiB) limit to leave headroom for items the estimator cannot bound tightly (luni / lsct blocks, unicode names). |
+| Rewrite path | `adjust_extension_for_format(&path, format)` | `.psd` → `.psb` when promoted. The function uses `Path::set_extension`, so input paths without an extension or with an unrelated extension are normalised too. |
+| Write file | `write_ps_file(w, width, height, &entries, format)` | One writer body for both formats. Format-specific bytes are localised to a 4-byte signature (`8BPS` vs `8BPB`), a `u16` version (1 vs 2), and the three length-field widths. |
+
+The format-specific length writes go through the small helper pair:
+
+```rust
+fn write_section_length<W: Write>(w: &mut W, len: u64, format: PsFormat) -> io::Result<()> { /* u32 for PSD, u64 for PSB */ }
+fn push_section_length(buf: &mut Vec<u8>, len: u64, format: PsFormat)               { /* same, into a Vec */ }
+```
+
+This keeps the writer body format-neutral; the only place that knows the structural delta is these two helpers (plus the file header).
+
+`export_uv_map_grouped()` returns `io::Result<PathBuf>` (changed from `io::Result<()>` in v0.5.10) so the caller can show the path actually written, including any `.psd` → `.psb` rewrite, in the success toast.
 
 ### `MaterialGroup` Struct (`viewer/app/mod.rs`)
 
