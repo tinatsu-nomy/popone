@@ -1,6 +1,6 @@
 [package]
 name = "popone"
-version = "0.5.10"
+version = "0.5.11"
 edition = "2021"
 rust-version = "1.93"
 license = "0BSD"
@@ -55,4 +55,10 @@ winres = "0.1"
 [features]
 default = []
 viewer = ["eframe", "rfd", "bytemuck", "encase", "pollster"]
+
+[dev-dependencies]
+# WGSL front-end parser for the shader compile tests. Pinned to the same major
+# version (24) that wgpu 24 already pulls transitively, so no extra naga copy
+# is added to the dependency tree. `wgsl-in` enables `naga::front::wgsl`.
+naga = { version = "24", features = ["wgsl-in"] }
 

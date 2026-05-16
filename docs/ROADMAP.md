@@ -29,6 +29,7 @@
 
 
 
+
 # Roadmap
 
 [日本語](ROADMAP.jp.md)
@@ -110,9 +111,8 @@ When a `.obj` references a `.mtl` in a subdirectory, textures referenced from th
 
 ### GPU Shader Automated Tests
 
-There is no automated verification of the WGSL shader sources. Recommended:
+The `naga` WGSL compile test shipped in v0.5.11 (every shader source in `viewer/gpu.rs` / `viewer/bloom.rs` is parsed + validated through naga in CI under `cargo test --features viewer`). See [CHANGELOG.md](CHANGELOG.md#v0511-2026-05-16). Remaining:
 
-- **`naga` WGSL compile test** — syntax validation for every shader in CI
 - **Unit tests for Rust-side lighting math** — `calc_lighting_mtoon_core` and helpers should have deterministic unit tests with known inputs
 
 ### 7z Extraction Phase 1 Memory Peak

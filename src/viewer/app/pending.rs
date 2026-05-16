@@ -1409,12 +1409,22 @@ impl ViewerApp {
                 self.export.pending_uv_bg = None;
                 match result {
                     Ok(path) => {
+                        // The UV export flow never offers `.psb` as a user
+                        // choice; the writer only produces `.psb` via the size
+                        // based PSD→PSB auto-promotion. So a `.psb` result
+                        // unambiguously means promotion happened, and the user
+                        // (who asked for `.psd`) gets an explicit explanation
+                        // instead of a silently different extension.
+                        let promoted = path
+                            .extension()
+                            .is_some_and(|e| e.eq_ignore_ascii_case("psb"));
+                        let key = if promoted {
+                            "viewer.toast.uvmap.exported_psb"
+                        } else {
+                            "viewer.toast.uvmap.exported"
+                        };
                         self.convert_message = Some(ConvertMessage::success(
-                            t!(
-                                "viewer.toast.uvmap.exported",
-                                path = path.display().to_string()
-                            )
-                            .into_owned(),
+                            t!(key, path = path.display().to_string()).into_owned(),
                         ));
                     }
                     Err(e) => {

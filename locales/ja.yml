@@ -364,6 +364,7 @@ viewer:
       file_not_loaded: "ファイルを読み込めませんでした。\nファイルが破損していないか、対応形式（VRM/FBX/PMX/PMD/ZIP/7z）であるか確認してください。\n詳細: %{detail}"
     uvmap:
       exported: "UVマップ出力完了: %{path}"
+      exported_psb: "UVマップをPSB形式で出力しました（レイヤーデータがPSDの2GiB上限を超えたためPSDから自動切替）: %{path}"
       failed: "UVマップ出力失敗: %{error}"
     tex:
       load_failed: "テクスチャ読み込み失敗: %{error}"

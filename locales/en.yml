@@ -364,6 +364,7 @@ viewer:
       file_not_loaded: "Could not load the file.\nCheck whether the file is corrupted or in a supported format (VRM/FBX/PMX/PMD/ZIP/7z).\nDetails: %{detail}"
     uvmap:
       exported: "UV map exported: %{path}"
+      exported_psb: "UV map exported as PSB (auto-switched from PSD because the layer data exceeded the PSD 2 GiB limit): %{path}"
       failed: "UV map export failed: %{error}"
     tex:
       load_failed: "Texture load failed: %{error}"

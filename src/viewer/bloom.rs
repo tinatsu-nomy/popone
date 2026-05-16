@@ -803,4 +803,29 @@ mod tests {
         assert!((emissive[1] - 1.0).abs() < 1e-5);
         assert!((emissive[2] - 1.0).abs() < 1e-5);
     }
+
+    /// The bloom post-process shader is a single raw string literal rather than
+    /// a macro-assembled one, but it is still only exercised at viewer launch.
+    /// Run it through naga's WGSL front-end + validator so a typo fails
+    /// `cargo test` instead of at runtime.
+    #[test]
+    fn bloom_shader_compiles() {
+        let module = match naga::front::wgsl::parse_str(BLOOM_SHADER_SRC) {
+            Ok(m) => m,
+            Err(e) => panic!(
+                "WGSL parse failed for `BLOOM_SHADER_SRC`:\n{}",
+                e.emit_to_string(BLOOM_SHADER_SRC)
+            ),
+        };
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        if let Err(e) = validator.validate(&module) {
+            panic!(
+                "WGSL validation failed for `BLOOM_SHADER_SRC`:\n{}",
+                e.emit_to_string(BLOOM_SHADER_SRC)
+            );
+        }
+    }
 }

@@ -364,6 +364,7 @@ viewer:
       file_not_loaded: "无法加载文件。\n请检查文件是否损坏，或是否为支持的格式 (VRM/FBX/PMX/PMD/ZIP/7z)。\n详细: %{detail}"
     uvmap:
       exported: "UV 贴图导出完成: %{path}"
+      exported_psb: "UV 贴图已以 PSB 格式导出（图层数据超过 PSD 2 GiB 上限，已从 PSD 自动切换）: %{path}"
       failed: "UV 贴图导出失败: %{error}"
     tex:
       load_failed: "纹理加载失败: %{error}"

@@ -108,9 +108,8 @@
 
 ### GPU シェーダー自動テスト
 
-WGSL シェーダーソースの自動検証が存在しません。推奨:
+`naga` WGSL コンパイルテストは v0.5.11 で実装済み（`viewer/gpu.rs` / `viewer/bloom.rs` の全シェーダーソースを naga でパース + 検証し、CI の `cargo test --features viewer` で実行）。[CHANGELOG.jp.md](CHANGELOG.jp.md#v0511-2026-05-16) 参照。残り:
 
-- **`naga` WGSL コンパイルテスト** — CI で全シェーダーの構文検証
 - **Rust 側ライティング計算のユニットテスト** — `calc_lighting_mtoon_core` 等のヘルパーに、既知入力での決定的ユニットテストを追加
 
 ### 7z 展開 Phase 1 メモリピーク

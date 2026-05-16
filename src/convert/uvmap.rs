@@ -1122,4 +1122,132 @@ mod tests {
             PSD_TO_PSB_THRESHOLD_BYTES
         );
     }
+
+    /// Read a big-endian section length that is `u32` for PSD and `u64` for
+    /// PSB, returning the value and the number of bytes the field occupied.
+    fn read_section_len(buf: &[u8], at: usize, format: PsFormat) -> (u64, usize) {
+        match format {
+            PsFormat::Psd => {
+                let b: [u8; 4] = buf[at..at + 4].try_into().unwrap();
+                (u32::from_be_bytes(b) as u64, 4)
+            }
+            PsFormat::Psb => {
+                let b: [u8; 8] = buf[at..at + 8].try_into().unwrap();
+                (u64::from_be_bytes(b), 8)
+            }
+        }
+    }
+
+    /// Round-trip the writer for both PSD and PSB on a small canvas and
+    /// re-parse the produced bytes. v0.5.10 only had estimator unit tests; it
+    /// never read the written bytes back, so a truncated PSB length field
+    /// (the exact silent-corruption failure mode) would have gone unnoticed.
+    /// A real 1.9 GiB write is infeasible here, but the structural invariant
+    /// `section_start + declared_len + image_data_len == file_len` is
+    /// format-independent: it fails the moment a length field overflows or is
+    /// written at the wrong width, which is precisely the bug class.
+    #[test]
+    fn test_ps_file_roundtrip_psd_and_psb_parse_back() {
+        const W: u32 = 8;
+        const H: u32 = 8;
+        let pixel_count = (W as usize) * (H as usize);
+        let rgba = vec![0u8; pixel_count * 4];
+
+        let entries = vec![
+            PsdLayerEntry::GroupStart { name: "grp" },
+            PsdLayerEntry::Content {
+                name: "mat0",
+                rgba: &rgba,
+            },
+            PsdLayerEntry::Content {
+                name: "mat1",
+                rgba: &rgba,
+            },
+            PsdLayerEntry::GroupEnd,
+        ];
+
+        let mut sizes = [0usize; 2];
+        for (slot, format) in [PsFormat::Psd, PsFormat::Psb].into_iter().enumerate() {
+            let mut buf: Vec<u8> = Vec::new();
+            write_ps_file(&mut buf, W, H, &entries, format).expect("write_ps_file failed");
+
+            // -- File header (26 bytes) --
+            let (sig, ver): (&[u8; 4], u16) = match format {
+                PsFormat::Psd => (b"8BPS", 1),
+                PsFormat::Psb => (b"8BPB", 2),
+            };
+            assert_eq!(&buf[0..4], sig, "signature mismatch for {format:?}");
+            assert_eq!(u16::from_be_bytes([buf[4], buf[5]]), ver, "version");
+            assert_eq!(u16::from_be_bytes([buf[12], buf[13]]), 4, "channel count");
+            assert_eq!(
+                u32::from_be_bytes(buf[14..18].try_into().unwrap()),
+                H,
+                "height"
+            );
+            assert_eq!(
+                u32::from_be_bytes(buf[18..22].try_into().unwrap()),
+                W,
+                "width"
+            );
+            assert_eq!(u16::from_be_bytes([buf[22], buf[23]]), 8, "depth");
+            assert_eq!(u16::from_be_bytes([buf[24], buf[25]]), 3, "color mode RGB");
+
+            // -- Color Mode Data (empty) + Image Resources (empty), u32 each --
+            assert_eq!(
+                u32::from_be_bytes(buf[26..30].try_into().unwrap()),
+                0,
+                "color mode data must be empty"
+            );
+            assert_eq!(
+                u32::from_be_bytes(buf[30..34].try_into().unwrap()),
+                0,
+                "image resources must be empty"
+            );
+
+            // -- Layer and Mask Information --
+            // Outer section length: u32 (PSD) / u64 (PSB).
+            let (outer_len, outer_w) = read_section_len(&buf, 34, format);
+            let section_start = 34 + outer_w;
+
+            // Inner "Layer Info" length is also u32/u64, followed by the layer
+            // info bytes and a 4-byte (empty) global layer mask info block.
+            let (inner_len, inner_w) = read_section_len(&buf, section_start, format);
+            assert_eq!(
+                inner_w + inner_len as usize + 4,
+                outer_len as usize,
+                "inner layer-info length + global mask must fill the outer section ({format:?})"
+            );
+
+            // Image data has no length prefix; it runs to EOF as a 2-byte
+            // compression marker plus 4 raw channels of `pixel_count` bytes.
+            let image_data_len = 2 + 4 * pixel_count;
+
+            // The corruption detector: a wrong-width or overflowed length
+            // breaks this equality.
+            assert_eq!(
+                section_start + outer_len as usize + image_data_len,
+                buf.len(),
+                "declared layer-section length is inconsistent with file size ({format:?})"
+            );
+            assert_eq!(
+                u16::from_be_bytes([
+                    buf[section_start + outer_len as usize],
+                    buf[section_start + outer_len as usize + 1]
+                ]),
+                0,
+                "image data compression marker must be raw"
+            );
+
+            sizes[slot] = buf.len();
+        }
+
+        // PSB widens three classes of length field, so it must be strictly
+        // larger than the PSD encoding of the identical layer set.
+        assert!(
+            sizes[1] > sizes[0],
+            "PSB output ({}) must be larger than PSD ({}) for the same layers",
+            sizes[1],
+            sizes[0]
+        );
+    }
 }

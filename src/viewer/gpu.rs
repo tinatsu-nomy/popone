@@ -6351,3 +6351,58 @@ fn generate_joint_vertices(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Shader compile tests
+// ---------------------------------------------------------------------------
+//
+// The shader sources in this module are assembled at compile time from
+// `macro_rules!` fragments via `concat!`. A syntax mistake inside one fragment
+// only surfaces when the viewer launches and `create_shader_module` runs. These
+// tests feed every assembled shader through naga's WGSL front-end and validator
+// (the same front-end wgpu uses), so a broken fragment fails `cargo test`
+// instead of at runtime.
+
+#[cfg(test)]
+mod shader_compile_tests {
+    use super::*;
+
+    /// Parse and validate one WGSL source. Panics with a readable, span-aware
+    /// message (including the shader name) when parsing or validation fails.
+    fn assert_wgsl_compiles(name: &str, src: &str) {
+        let module = match naga::front::wgsl::parse_str(src) {
+            Ok(m) => m,
+            Err(e) => panic!("WGSL parse failed for `{name}`:\n{}", e.emit_to_string(src)),
+        };
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        if let Err(e) = validator.validate(&module) {
+            panic!(
+                "WGSL validation failed for `{name}`:\n{}",
+                e.emit_to_string(src)
+            );
+        }
+    }
+
+    #[test]
+    fn all_gpu_shaders_compile() {
+        // Every shader handed to `create_shader_module` in `Renderer::new`.
+        let shaders: &[(&str, &str)] = &[
+            ("SHADER_SRC", SHADER_SRC),
+            ("GRID_SHADER_SRC", GRID_SHADER_SRC),
+            ("GRID_SHADER_UNORM_SRC", GRID_SHADER_UNORM_SRC),
+            ("WIRE_OVERLAY_SHADER_SRC", WIRE_OVERLAY_SHADER_SRC),
+            ("MMD_EDGE_SHADER_SRC", MMD_EDGE_SHADER_SRC),
+            ("MMD_MAIN_SHADER_SRC", MMD_MAIN_SHADER_SRC),
+            ("MMD_EDGE_SHADER_UNORM_SRC", MMD_EDGE_SHADER_UNORM_SRC),
+            ("MMD_MAIN_SHADER_UNORM_SRC", MMD_MAIN_SHADER_UNORM_SRC),
+            ("OUTLINE_SHADER_SRC", OUTLINE_SHADER_SRC),
+            ("OUTLINE_SHADER_UNORM_SRC", OUTLINE_SHADER_UNORM_SRC),
+        ];
+        for (name, src) in shaders {
+            assert_wgsl_compiles(name, src);
+        }
+    }
+}

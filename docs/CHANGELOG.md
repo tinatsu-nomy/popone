@@ -3,58 +3,63 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.5.10 (2026-05-15)](#v0510-2026-05-15)
-    - [Bug Fixes](#bug-fixes)
+  - [v0.5.11 (2026-05-16)](#v0511-2026-05-16)
+    - [New Features](#new-features)
+    - [Tests](#tests)
     - [Internals](#internals)
     - [Scope Notes](#scope-notes)
+  - [v0.5.10 (2026-05-15)](#v0510-2026-05-15)
+    - [Bug Fixes](#bug-fixes)
+    - [Internals](#internals-1)
+    - [Scope Notes](#scope-notes-1)
   - [v0.5.9 (2026-05-05)](#v059-2026-05-05)
     - [New Features / Improvements](#new-features--improvements)
     - [Internals (i18n housekeeping)](#internals-i18n-housekeeping)
-    - [Scope Notes](#scope-notes-1)
+    - [Scope Notes](#scope-notes-2)
   - [v0.5.8 (2026-04-22)](#v058-2026-04-22)
-    - [Internals](#internals-1)
-  - [v0.5.7 (2026-04-22)](#v057-2026-04-22)
-    - [New Features](#new-features)
     - [Internals](#internals-2)
-  - [v0.5.6 (2026-04-14)](#v056-2026-04-14)
+  - [v0.5.7 (2026-04-22)](#v057-2026-04-22)
     - [New Features](#new-features-1)
     - [Internals](#internals-3)
+  - [v0.5.6 (2026-04-14)](#v056-2026-04-14)
+    - [New Features](#new-features-2)
+    - [Internals](#internals-4)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
   - [v0.5.5 (2026-04-13)](#v055-2026-04-13)
     - [New Features (Phase 1)](#new-features-phase-1)
     - [New Features (Phase 2)](#new-features-phase-2)
     - [New Features (Phase 3)](#new-features-phase-3)
-    - [Internals](#internals-4)
-    - [Scope Notes](#scope-notes-2)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
-    - [Tests](#tests)
-  - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
-    - [New Features](#new-features-2)
     - [Internals](#internals-5)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
+    - [Scope Notes](#scope-notes-3)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
     - [Tests](#tests-1)
-  - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
+  - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
     - [New Features](#new-features-3)
     - [Internals](#internals-6)
-  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
+    - [Tests](#tests-2)
+  - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
     - [New Features](#new-features-4)
     - [Internals](#internals-7)
+  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
+    - [New Features](#new-features-5)
+    - [Internals](#internals-8)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-3)
   - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
-    - [New Features](#new-features-5)
+    - [New Features](#new-features-6)
     - [Performance](#performance)
-    - [Internals](#internals-8)
+    - [Internals](#internals-9)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-4)
-    - [Tests](#tests-2)
+    - [Tests](#tests-3)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
-    - [New Features](#new-features-6)
-    - [Behavior Changes](#behavior-changes)
-    - [Tests](#tests-3)
-  - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
     - [New Features](#new-features-7)
+    - [Behavior Changes](#behavior-changes)
+    - [Tests](#tests-4)
+  - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
+    - [New Features](#new-features-8)
     - [Behavior Changes](#behavior-changes-1)
-    - [Internals](#internals-9)
+    - [Internals](#internals-10)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -62,6 +67,28 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.11 (2026-05-16)
+
+A quality-hardening follow-up to v0.5.10. It closes the verification gap left by the PSD→PSB auto-promotion (which previously had only estimator unit tests), adds automated WGSL shader compilation tests so a broken shader fragment fails `cargo test` instead of at viewer launch, and makes the PSD→PSB promotion explicit in the success toast. No output format changes: ordinary models still write a byte-identical `.psd`.
+
+### New Features
+
+- **Explicit toast when UV export auto-promotes PSD → PSB** — When the UV map writer crosses the 1.9 GiB threshold and switches the output to `.psb`, the success toast now uses a dedicated message stating that the format was auto-switched from PSD because the layer data exceeded the PSD 2 GiB limit (instead of silently showing a `.psb` path the user did not ask for). Ordinary `.psd` exports are unchanged. Added `viewer.toast.uvmap.exported_psb` to the `en` / `ja` / `zh` locale catalogs.
+
+### Tests
+
+- **PSD/PSB round-trip parse-back test** — `convert/uvmap.rs` gains a test that writes both a PSD and a PSB on a small canvas and re-parses the produced bytes, asserting the signature / version / header fields and the structural invariant `section_start + declared_layer_section_len + image_data_len == file_len`. This invariant fails the instant a length field overflows or is written at the wrong width — exactly the v0.5.10 silent-corruption failure mode — so the PSB container is now provably openable rather than only size-estimated.
+- **naga WGSL shader compile tests** — The macro-assembled shader sources in `viewer/gpu.rs` (10 shaders) and `viewer/bloom.rs` (`BLOOM_SHADER_SRC`) are now fed through naga's WGSL front-end + validator (the same front-end wgpu uses). A syntax mistake in any `macro_rules!` fragment now fails `cargo test` instead of only surfacing when the viewer launches.
+
+### Internals
+
+- **`naga` dev-dependency** — Added `naga = { version = "24", features = ["wgsl-in"] }` under `[dev-dependencies]`. Version `24` resolves to the same `naga 24.0.0` that `wgpu 24` already pulls transitively, so no extra copy is added to the dependency tree.
+- **CI runs viewer-gated tests** — `.github/workflows/ci.yml` gained a `cargo test --features viewer` step. The shader compile tests live under the `viewer` feature, so the pre-existing `cargo test` step (CLI-only) would never have executed them.
+
+### Scope Notes
+
+- No change to exported file bytes for ordinary models — `.psd` outputs remain bit-identical to v0.5.10. The only user-visible change is the more explicit toast wording when auto-promotion to PSB occurs.
 
 ## v0.5.10 (2026-05-15)
 
