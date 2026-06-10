@@ -5,6 +5,7 @@ use crate::intermediate::types::{
 };
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use rust_i18n::t;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,17 +19,10 @@ pub fn load_obj(path: &Path) -> Result<IrModel> {
 /// - `scale`: scale factor into glTF space (meters).
 /// - `z_up`: when true, apply a Z-Up -> Y-Up conversion.
 pub fn load_obj_with_params(path: &Path, scale: f32, z_up: bool) -> Result<IrModel> {
-    let (models, materials_result) = tobj::load_obj(path, &tobj::GPU_LOAD_OPTIONS)
-        .map_err(|e| PoponeError::ObjParse(format!("{}", e)))?;
-
-    let materials = match materials_result {
-        Ok(mats) => mats,
-        Err(e) => {
-            log::warn!("MTL load failed (continuing with default material): {}", e);
-            Vec::new()
-        }
-    };
-
+    // Route disk loads through the in-memory path so the shared `mtl_loader`
+    // captures each `.mtl`'s directory (needed to resolve textures that live
+    // next to a `.mtl` in a subdirectory rather than next to the `.obj`).
+    let data = std::fs::read(path)?;
     let base_dir = path.parent().unwrap_or(Path::new("."));
     let name = path
         .file_stem()
@@ -36,7 +30,7 @@ pub fn load_obj_with_params(path: &Path, scale: f32, z_up: bool) -> Result<IrMod
         .unwrap_or("OBJ Model")
         .to_string();
 
-    build_ir_model(&name, &models, &materials, base_dir, None, scale, z_up)
+    load_obj_from_data_with_params(&data, &name, base_dir, None, scale, z_up)
 }
 
 /// Load OBJ data from memory and convert it into an `IrModel`.
@@ -61,8 +55,22 @@ pub fn load_obj_from_data_with_params(
 ) -> Result<IrModel> {
     let mut reader = std::io::BufReader::new(std::io::Cursor::new(data));
 
+    // Directories of every `.mtl` referenced via `mtllib`. Textures named inside
+    // a `.mtl` are relative to that `.mtl`, so these become preferred bases for
+    // texture lookup in `build_ir_model`. `RefCell` because tobj requires `Fn`.
+    let mtl_dirs: RefCell<Vec<PathBuf>> = RefCell::new(Vec::new());
+
     // MTL loader: try aux_files first, fall back to disk reads from base_dir
     let mtl_loader = |mtl_path: &Path| -> tobj::MTLLoadResult {
+        if let Some(parent) = mtl_path.parent() {
+            let norm = normalize_rel_path(parent);
+            if !norm.as_os_str().is_empty() {
+                let mut dirs = mtl_dirs.borrow_mut();
+                if !dirs.contains(&norm) {
+                    dirs.push(norm);
+                }
+            }
+        }
         let mtl_data = resolve_sidecar(aux, base_dir, mtl_path);
         match mtl_data {
             Some(bytes) => {
@@ -88,7 +96,10 @@ pub fn load_obj_from_data_with_params(
         }
     };
 
-    build_ir_model(name, &models, &materials, base_dir, aux, scale, z_up)
+    let mtl_dirs = mtl_dirs.into_inner();
+    build_ir_model(
+        name, &models, &materials, base_dir, &mtl_dirs, aux, scale, z_up,
+    )
 }
 
 /// Resolve a sidecar file from `aux_files` or from disk.
@@ -146,6 +157,26 @@ fn resolve_sidecar(
     std::fs::read(&full_path).ok()
 }
 
+/// Resolve a texture referenced from a `.mtl`.
+///
+/// Texture names written in a `.mtl` are relative to that `.mtl`'s location,
+/// not the `.obj`'s. So try each `.mtl` directory as a prefix first, then fall
+/// back to the bare name (resolved against `base_dir` = the `.obj` directory)
+/// for the common case where the `.mtl` sits next to the `.obj`.
+fn resolve_texture(
+    aux: Option<&HashMap<PathBuf, Arc<[u8]>>>,
+    base_dir: &Path,
+    mtl_dirs: &[PathBuf],
+    tex_rel: &Path,
+) -> Option<Vec<u8>> {
+    for dir in mtl_dirs {
+        if let Some(bytes) = resolve_sidecar(aux, base_dir, &dir.join(tex_rel)) {
+            return Some(bytes);
+        }
+    }
+    resolve_sidecar(aux, base_dir, tex_rel)
+}
+
 /// Normalize a relative path (backslash -> slash, drop "./", resolve "..").
 fn normalize_rel_path(rel: &Path) -> PathBuf {
     let s = rel.to_string_lossy().replace('\\', "/");
@@ -162,11 +193,13 @@ fn normalize_rel_path(rel: &Path) -> PathBuf {
     PathBuf::from(out.join("/"))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_ir_model(
     name: &str,
     models: &[tobj::Model],
     materials: &[tobj::Material],
     base_dir: &Path,
+    mtl_dirs: &[PathBuf],
     aux: Option<&HashMap<PathBuf, Arc<[u8]>>>,
     scale: f32,
     z_up: bool,
@@ -203,9 +236,11 @@ fn build_ir_model(
             if let Some(&idx) = texture_map.get(tex_name) {
                 Some(idx)
             } else {
-                // Load the texture as a byte buffer
+                // Load the texture as a byte buffer. Names inside a `.mtl` are
+                // relative to that `.mtl`, so try the `.mtl` directories first
+                // before falling back to the `.obj` directory.
                 let tex_path = Path::new(tex_name);
-                let data = resolve_sidecar(aux, base_dir, tex_path)?;
+                let data = resolve_texture(aux, base_dir, mtl_dirs, tex_path)?;
                 let ext_raw = crate::path_ext_lower(tex_path);
                 let ext = if ext_raw.is_empty() {
                     "png".to_string()
@@ -371,5 +406,94 @@ fn compute_face_normals(vertices: &mut [IrVertex], indices: &[u32]) {
     for v in vertices.iter_mut() {
         let n = v.normal.normalize_or_zero();
         v.normal = if n == Vec3::ZERO { Vec3::Y } else { n };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Best-effort unique temp directory; removed by `Drop` after the test.
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            static COUNTER: AtomicU32 = AtomicU32::new(0);
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "popone_obj_test_{}_{}_{}",
+                tag,
+                std::process::id(),
+                n
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            TempDir { path }
+        }
+
+        fn write(&self, rel: &str, bytes: &[u8]) {
+            let full = self.path.join(rel);
+            if let Some(parent) = full.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(full, bytes).unwrap();
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    const TRI_OBJ_BODY: &str =
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nusemtl m\nf 1/1 2/2 3/3\n";
+
+    /// Texture named inside a `.mtl` that lives in a subdirectory must be found
+    /// relative to the `.mtl`, not relative to the `.obj`. Regression for the
+    /// "MTL subdirectory resolution" bug.
+    #[test]
+    fn texture_resolves_relative_to_mtl_subdirectory() {
+        let dir = TempDir::new("mtl_subdir");
+        dir.write(
+            "model.obj",
+            format!("mtllib mtl/model.mtl\n{}", TRI_OBJ_BODY).as_bytes(),
+        );
+        dir.write("mtl/model.mtl", b"newmtl m\nmap_Kd tex.png\n");
+        // The texture sits next to the `.mtl`, NOT next to the `.obj`.
+        dir.write("mtl/tex.png", b"FAKE-PNG-BYTES");
+
+        let model = load_obj(&dir.path.join("model.obj")).expect("load_obj should succeed");
+
+        assert_eq!(model.textures.len(), 1, "texture should have been resolved");
+        match &model.textures[0].data {
+            TextureData::Encoded(bytes) => {
+                assert_eq!(&bytes[..], b"FAKE-PNG-BYTES");
+            }
+            other => panic!("expected encoded texture, got {:?}", other),
+        }
+    }
+
+    /// The flat layout (`.mtl` next to the `.obj`) must keep working: the
+    /// fallback to the `.obj` directory should still resolve the texture.
+    #[test]
+    fn texture_resolves_in_flat_layout() {
+        let dir = TempDir::new("flat");
+        dir.write(
+            "model.obj",
+            format!("mtllib model.mtl\n{}", TRI_OBJ_BODY).as_bytes(),
+        );
+        dir.write("model.mtl", b"newmtl m\nmap_Kd tex.png\n");
+        dir.write("tex.png", b"FLAT-PNG");
+
+        let model = load_obj(&dir.path.join("model.obj")).expect("load_obj should succeed");
+
+        assert_eq!(model.textures.len(), 1);
+        match &model.textures[0].data {
+            TextureData::Encoded(bytes) => assert_eq!(&bytes[..], b"FLAT-PNG"),
+            other => panic!("expected encoded texture, got {:?}", other),
+        }
     }
 }

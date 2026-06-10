@@ -3,63 +3,68 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.5.12 (2026-06-11)](#v0512-2026-06-11)
+    - [Bug Fixes](#bug-fixes)
+    - [Internals](#internals)
+    - [Tests](#tests)
+    - [Scope Notes](#scope-notes)
   - [v0.5.11 (2026-05-16)](#v0511-2026-05-16)
     - [New Features](#new-features)
-    - [Tests](#tests)
-    - [Internals](#internals)
-    - [Scope Notes](#scope-notes)
-  - [v0.5.10 (2026-05-15)](#v0510-2026-05-15)
-    - [Bug Fixes](#bug-fixes)
+    - [Tests](#tests-1)
     - [Internals](#internals-1)
     - [Scope Notes](#scope-notes-1)
+  - [v0.5.10 (2026-05-15)](#v0510-2026-05-15)
+    - [Bug Fixes](#bug-fixes-1)
+    - [Internals](#internals-2)
+    - [Scope Notes](#scope-notes-2)
   - [v0.5.9 (2026-05-05)](#v059-2026-05-05)
     - [New Features / Improvements](#new-features--improvements)
     - [Internals (i18n housekeeping)](#internals-i18n-housekeeping)
-    - [Scope Notes](#scope-notes-2)
+    - [Scope Notes](#scope-notes-3)
   - [v0.5.8 (2026-04-22)](#v058-2026-04-22)
-    - [Internals](#internals-2)
+    - [Internals](#internals-3)
   - [v0.5.7 (2026-04-22)](#v057-2026-04-22)
     - [New Features](#new-features-1)
-    - [Internals](#internals-3)
+    - [Internals](#internals-4)
   - [v0.5.6 (2026-04-14)](#v056-2026-04-14)
     - [New Features](#new-features-2)
-    - [Internals](#internals-4)
+    - [Internals](#internals-5)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
   - [v0.5.5 (2026-04-13)](#v055-2026-04-13)
     - [New Features (Phase 1)](#new-features-phase-1)
     - [New Features (Phase 2)](#new-features-phase-2)
     - [New Features (Phase 3)](#new-features-phase-3)
-    - [Internals](#internals-5)
-    - [Scope Notes](#scope-notes-3)
+    - [Internals](#internals-6)
+    - [Scope Notes](#scope-notes-4)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
-    - [Tests](#tests-1)
+    - [Tests](#tests-2)
   - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
     - [New Features](#new-features-3)
-    - [Internals](#internals-6)
+    - [Internals](#internals-7)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
-    - [Tests](#tests-2)
+    - [Tests](#tests-3)
   - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
     - [New Features](#new-features-4)
-    - [Internals](#internals-7)
+    - [Internals](#internals-8)
   - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
     - [New Features](#new-features-5)
-    - [Internals](#internals-8)
+    - [Internals](#internals-9)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-3)
   - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
     - [New Features](#new-features-6)
     - [Performance](#performance)
-    - [Internals](#internals-9)
+    - [Internals](#internals-10)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-4)
-    - [Tests](#tests-3)
+    - [Tests](#tests-4)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
     - [New Features](#new-features-7)
     - [Behavior Changes](#behavior-changes)
-    - [Tests](#tests-4)
+    - [Tests](#tests-5)
   - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
     - [New Features](#new-features-8)
     - [Behavior Changes](#behavior-changes-1)
-    - [Internals](#internals-10)
+    - [Internals](#internals-11)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -67,6 +72,26 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.12 (2026-06-11)
+
+A bug-fix release. OBJ files that reference a `.mtl` living in a subdirectory now resolve the textures named inside that `.mtl` relative to the `.mtl`'s own directory instead of the `.obj`'s directory, so subdirectory-organized OBJ assets no longer load with missing textures.
+
+### Bug Fixes
+
+- **MTL subdirectory texture resolution** — When an `.obj` references a material library via `mtllib sub/dir/model.mtl`, the texture names written inside that `.mtl` (e.g. `map_Kd body.png`) are relative to the `.mtl`, not the `.obj`. Previously every texture was resolved only against the `.obj`'s directory, so any OBJ that kept its `.mtl` + textures in a subdirectory loaded with missing (white-fallback) textures. The loader now records each `mtllib` directory and tries it as a prefix before falling back to the `.obj` directory, so both subdirectory and flat layouts resolve correctly.
+
+### Internals
+
+- **Unified disk and in-memory OBJ paths** — `load_obj_with_params` now reads the file and delegates to `load_obj_from_data_with_params`, so disk loads go through the same custom `mtl_loader` closure used by archive / in-memory loads. This is what lets the disk path capture the `.mtl` directories (the previous `tobj::load_obj` default loader discarded them).
+
+### Tests
+
+- **OBJ MTL-subdirectory resolution tests** — Added `texture_resolves_relative_to_mtl_subdirectory` (a `.mtl` + texture nested under a subdirectory) and `texture_resolves_in_flat_layout` (regression for the `.mtl`-next-to-`.obj` case) to `obj/extract.rs`. Both write real files to a temp directory and assert the resolved texture bytes.
+
+### Scope Notes
+
+- No output format changes. Flat-layout OBJ assets (the common case) are unaffected — the `.obj`-directory lookup remains as a fallback.
 
 ## v0.5.11 (2026-05-16)
 

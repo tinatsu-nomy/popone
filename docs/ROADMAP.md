@@ -15,7 +15,6 @@
   - [Future Work (No Target Version)](#future-work-no-target-version)
     - [Unity `.anim` Residuals](#unity-anim-residuals)
     - [Archive Parent-Directory References](#archive-parent-directory-references)
-    - [MTL Subdirectory Resolution](#mtl-subdirectory-resolution)
   - [Code Quality](#code-quality)
     - [GPU Shader Automated Tests](#gpu-shader-automated-tests)
     - [7z Extraction Phase 1 Memory Peak](#7z-extraction-phase-1-memory-peak)
@@ -26,6 +25,7 @@
   - [Process Notes](#process-notes)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 
 
 
@@ -102,10 +102,6 @@ Some archives reference textures via `../` parent-directory paths. `sanitize_rel
 - Adding a separate sanitizer that allows `..` only within the archive content tree
 
 Until this is implemented, affected archives will fail to locate textures with warnings.
-
-### MTL Subdirectory Resolution
-
-When a `.obj` references a `.mtl` in a subdirectory, textures referenced from the `.mtl` should resolve relative to the `.mtl`'s directory, not the `.obj`'s directory. Currently the `.obj`'s directory is used for all paths.
 
 ## Code Quality
 
