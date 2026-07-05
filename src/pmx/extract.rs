@@ -175,6 +175,23 @@ fn extract_bones(pmx: &PmxModel) -> Vec<IrBone> {
     bones
 }
 
+/// Case-insensitive `aux_files` lookup.
+///
+/// Windows/macOS filesystems are case-insensitive, so a PMX authored on such a system
+/// can reference `foo.PNG` while the archive entry is `foo.png`. The exact `HashMap`
+/// lookup is case-sensitive and misses these, causing a spurious "format error" (the
+/// texture ends up empty). `normalized` uses forward slashes; aux keys may render with
+/// `\` on Windows, so both sides are slash-normalized before comparing.
+fn aux_get_ignore_case<'a>(
+    aux: &'a HashMap<PathBuf, Arc<[u8]>>,
+    normalized: &str,
+) -> Option<&'a Arc<[u8]>> {
+    let target = normalized.to_lowercase();
+    aux.iter()
+        .find(|(k, _)| k.to_string_lossy().replace('\\', "/").to_lowercase() == target)
+        .map(|(_, v)| v)
+}
+
 /// Texture extraction: load from disk or `aux_files`.
 fn extract_textures(
     pmx: &PmxModel,
@@ -206,6 +223,12 @@ fn extract_textures(
             let data = if let Some(aux) = aux_files {
                 let key = PathBuf::from(&normalized);
                 if let Some(cached) = aux.get(&key) {
+                    cached.to_vec()
+                } else if let Some(cached) = aux_get_ignore_case(aux, &normalized) {
+                    // Case-insensitive fallback: a PMX built on a case-insensitive
+                    // filesystem (Windows/macOS) may reference `foo.PNG` while the archive
+                    // stores `foo.png`. Disk loads resolve this via the OS, but the
+                    // case-sensitive `aux.get` above misses it, so match here explicitly.
                     cached.to_vec()
                 } else {
                     log::warn!("Texture not found in aux_files: {:?}", key);
@@ -729,5 +752,54 @@ mod tests {
                 tex.filename
             );
         }
+    }
+
+    #[test]
+    fn test_aux_get_ignore_case() {
+        let mut aux: HashMap<PathBuf, Arc<[u8]>> = HashMap::new();
+        // Archive stored the file with a lowercase extension.
+        aux.insert(
+            PathBuf::from("textures/body_d.png"),
+            Arc::from(vec![1u8, 2, 3].into_boxed_slice()),
+        );
+
+        // Exact match still works through the caller's `aux.get`; here we verify the
+        // case-insensitive fallback resolves a PMX reference that uses `.PNG`.
+        let hit = aux_get_ignore_case(&aux, "textures/body_d.PNG");
+        assert!(hit.is_some(), "大文字拡張子の参照が解決できていない");
+        assert_eq!(&**hit.unwrap(), &[1u8, 2, 3]);
+
+        // A differing-case directory component must also resolve.
+        let hit_dir = aux_get_ignore_case(&aux, "Textures/BODY_D.png");
+        assert!(
+            hit_dir.is_some(),
+            "ディレクトリ名の大文字小文字差が解決できていない"
+        );
+
+        // A genuinely different file must not match.
+        assert!(aux_get_ignore_case(&aux, "textures/other.png").is_none());
+    }
+
+    #[test]
+    fn test_extract_textures_case_insensitive_aux() {
+        // A PMX referencing `foo.PNG` while the archive stores `foo.png` must still
+        // resolve the bytes (regression for the ZIP/7z texture "format error").
+        let mut pmx = PmxModel::default();
+        pmx.textures = vec!["textures\\Body_D.PNG".to_string()];
+
+        let mut aux: HashMap<PathBuf, Arc<[u8]>> = HashMap::new();
+        aux.insert(
+            PathBuf::from("textures/body_d.png"),
+            Arc::from(vec![9u8, 8, 7, 6].into_boxed_slice()),
+        );
+
+        let textures = extract_textures(&pmx, Path::new(""), Some(&aux));
+        assert_eq!(textures.len(), 1);
+        assert_eq!(
+            textures[0].data.as_bytes(),
+            &[9u8, 8, 7, 6],
+            "大文字小文字が異なる参照でテクスチャデータが空になっている"
+        );
+        assert_eq!(textures[0].mime_type, "image/png");
     }
 }

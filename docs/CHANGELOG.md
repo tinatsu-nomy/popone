@@ -3,24 +3,28 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.5.12 (2026-06-11)](#v0512-2026-06-11)
+  - [v0.5.13 (2026-07-06)](#v0513-2026-07-06)
     - [Bug Fixes](#bug-fixes)
-    - [Internals](#internals)
     - [Tests](#tests)
     - [Scope Notes](#scope-notes)
+  - [v0.5.12 (2026-06-11)](#v0512-2026-06-11)
+    - [Bug Fixes](#bug-fixes-1)
+    - [Internals](#internals)
+    - [Tests](#tests-1)
+    - [Scope Notes](#scope-notes-1)
   - [v0.5.11 (2026-05-16)](#v0511-2026-05-16)
     - [New Features](#new-features)
-    - [Tests](#tests-1)
+    - [Tests](#tests-2)
     - [Internals](#internals-1)
-    - [Scope Notes](#scope-notes-1)
-  - [v0.5.10 (2026-05-15)](#v0510-2026-05-15)
-    - [Bug Fixes](#bug-fixes-1)
-    - [Internals](#internals-2)
     - [Scope Notes](#scope-notes-2)
+  - [v0.5.10 (2026-05-15)](#v0510-2026-05-15)
+    - [Bug Fixes](#bug-fixes-2)
+    - [Internals](#internals-2)
+    - [Scope Notes](#scope-notes-3)
   - [v0.5.9 (2026-05-05)](#v059-2026-05-05)
     - [New Features / Improvements](#new-features--improvements)
     - [Internals (i18n housekeeping)](#internals-i18n-housekeeping)
-    - [Scope Notes](#scope-notes-3)
+    - [Scope Notes](#scope-notes-4)
   - [v0.5.8 (2026-04-22)](#v058-2026-04-22)
     - [Internals](#internals-3)
   - [v0.5.7 (2026-04-22)](#v057-2026-04-22)
@@ -35,14 +39,14 @@
     - [New Features (Phase 2)](#new-features-phase-2)
     - [New Features (Phase 3)](#new-features-phase-3)
     - [Internals](#internals-6)
-    - [Scope Notes](#scope-notes-4)
+    - [Scope Notes](#scope-notes-5)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
-    - [Tests](#tests-2)
+    - [Tests](#tests-3)
   - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
     - [New Features](#new-features-3)
     - [Internals](#internals-7)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
-    - [Tests](#tests-3)
+    - [Tests](#tests-4)
   - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
     - [New Features](#new-features-4)
     - [Internals](#internals-8)
@@ -55,12 +59,12 @@
     - [Performance](#performance)
     - [Internals](#internals-10)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-4)
-    - [Tests](#tests-4)
+    - [Tests](#tests-5)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
     - [New Features](#new-features-7)
     - [Behavior Changes](#behavior-changes)
-    - [Tests](#tests-5)
+    - [Tests](#tests-6)
   - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
     - [New Features](#new-features-8)
     - [Behavior Changes](#behavior-changes-1)
@@ -72,6 +76,22 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.13 (2026-07-06)
+
+A bug-fix release. PMX models loaded directly from a ZIP / 7z archive now resolve texture references whose filename case differs from the archive entry (e.g. a material referencing `body.PNG` while the archive stores `body.png`), so those textures no longer load as an empty "format error" white fallback.
+
+### Bug Fixes
+
+- **Case-insensitive PMX texture lookup for archive loads** — When a PMX is loaded from inside a ZIP / 7z, its texture references are matched against the archive's in-memory files (`aux_files`). The lookup was case-sensitive, so a PMX authored on a case-insensitive filesystem (Windows / macOS) that references `textures/body.PNG` while the archive entry is `textures/body.png` failed to find the bytes, leaving the texture empty and surfacing as an image-decode "format error" (white fallback). The archive *extraction* side already matched case-insensitively, so the file was present in `aux_files` under its real name — only the *retrieval* in `extract_textures` was strict. It now falls back to a case-insensitive match, fixing both the ZIP and 7z paths. Loading the same model from an already-extracted folder was unaffected because the OS resolves the case on disk.
+
+### Tests
+
+- **Case-insensitive aux lookup tests** — Added `test_aux_get_ignore_case` (helper level: differing extension and directory case) and `test_extract_textures_case_insensitive_aux` (a PMX referencing `Body_D.PNG` against an archive `body_d.png` resolves the correct bytes) to `pmx/extract.rs`.
+
+### Scope Notes
+
+- No output format changes. The exact-match lookup is tried first, so correctly-cased references are unaffected; the case-insensitive pass is only a fallback. Disk loads on case-sensitive filesystems (e.g. Linux) with a case-mismatched reference remain a separate, unaddressed edge case.
 
 ## v0.5.12 (2026-06-11)
 

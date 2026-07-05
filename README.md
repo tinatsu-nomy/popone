@@ -6,7 +6,7 @@ A 3D viewer for VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x files.
 
 ## Download
 
-Latest release: **[popone-v0.5.12.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.5.12/popone-v0.5.12.exe)**
+Latest release: **[popone-v0.5.13.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.5.13/popone-v0.5.13.exe)**
 
 All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
