@@ -211,6 +211,7 @@
     - [パニックログ](#%E3%83%91%E3%83%8B%E3%83%83%E3%82%AF%E3%83%AD%E3%82%B0)
     - [ログビュアー（別ウインドウ）](#%E3%83%AD%E3%82%B0%E3%83%93%E3%83%A5%E3%82%A2%E3%83%BC%E5%88%A5%E3%82%A6%E3%82%A4%E3%83%B3%E3%83%89%E3%82%A6)
   - [シングルインスタンス](#%E3%82%B7%E3%83%B3%E3%82%B0%E3%83%AB%E3%82%A4%E3%83%B3%E3%82%B9%E3%82%BF%E3%83%B3%E3%82%B9)
+  - [隠しオプション (popone.toml `[behavior]`)](#%E9%9A%A0%E3%81%97%E3%82%AA%E3%83%97%E3%82%B7%E3%83%A7%E3%83%B3-poponetoml-behavior)
   - [FPS 計測](#fps-%E8%A8%88%E6%B8%AC)
   - [ウォッチドッグ — メインスレッド応答性監視](#%E3%82%A6%E3%82%A9%E3%83%83%E3%83%81%E3%83%89%E3%83%83%E3%82%B0--%E3%83%A1%E3%82%A4%E3%83%B3%E3%82%B9%E3%83%AC%E3%83%83%E3%83%89%E5%BF%9C%E7%AD%94%E6%80%A7%E7%9B%A3%E8%A6%96)
     - [アーキテクチャ](#%E3%82%A2%E3%83%BC%E3%82%AD%E3%83%86%E3%82%AF%E3%83%81%E3%83%A3-1)
@@ -3225,6 +3226,23 @@ fn show_log_viewer(&self, ctx: &egui::Context) {
 - **前面化**: `ViewportCommand::Minimized(false)` + `Focus`（最小化状態からも復帰）
 - **パス正規化**: 送信前に `std::fs::canonicalize()` で絶対パス化（CWD 差異対策）
 - **InstanceCheck 3状態**: `Primary`（プライマリインスタンス起動）/ `Forwarded`（既存インスタンスへファイルパスを転送して終了）/ `FallbackStart`（既存インスタンス検出失敗時のフォールバック起動）。v0.4.0 でログ自動ローテーションが廃止されたため、Primary と FallbackStart は実質同じ扱いとなり、両者を区別する `can_rotate` 変数も削除された
+- **無効化（隠しオプション）**: `popone.toml` に `[behavior] disable_single_instance = true` を手動で追記すると、この Named Mutex / Named Pipe チェック自体をスキップし、複数ウィンドウを同時起動できる。GUI トグルは存在しない。判定に使う `app_config` は Named Mutex 検出より前（`data_dir()` / `load_config()` 呼び出し直後）にロードされる
+- **`disable_single_instance` 有効時の書き込み排他**: `atomic_write()`（`popone.toml` / `popone_history.json` 共通の保存ヘルパー）は固定名の `.tmp`/`.bak` を使うため、「同時に書き込むプロセスは常に1つ」という前提がある。通常はこの Named Mutex による強制シングルインスタンスがその前提を保証するが、`disable_single_instance = true` はその前提自体を崩す。そのため `atomic_write()` 内部で別の Named Mutex（`Local\popone_viewer_config_write_lock`）を取得し、プロセスをまたいで書き込みを直列化する（`config_write_lock` モジュール、`persistence.rs`）。取得はタイムアウト付き（3秒）で、失敗時はロックなしで書き込みを続行する（設定を失うより競合のリスクを取るフォールバック）
+
+## 隠しオプション (popone.toml `[behavior]`)
+
+GUI 上のトグルが存在せず、`popone.toml` を手動編集した場合のみ有効になる設定。`AppConfig.behavior: BehaviorConfig`、両フィールドとも `#[serde(default)] = false`（省略時は従来どおりの挙動）。
+
+| キー | 型 | 既定値 | 効果 |
+|---|---|---|---|
+| `disable_single_instance` | bool | false | シングルインスタンス制御（Named Mutex/Pipe）自体を無効化し、複数プロセスの同時起動を許可 |
+| `exit_on_escape` | bool | false | メインウインドウで Escape キーを押すと即座に終了（`ViewportCommand::Close` 送信、閉じるボタンと同等）。`update()` の冒頭でチェックするため、ダイアログを閉じる用途の既存 Escape ハンドラ（`ui.rs` 内の各ダイアログ等）とは独立して動作する点に注意 |
+
+```toml
+[behavior]
+disable_single_instance = true
+exit_on_escape = true
+```
 
 ## FPS 計測
 

@@ -2224,6 +2224,14 @@ impl eframe::App for ViewerApp {
         }
         ctx.request_repaint_after(Duration::from_secs(3));
 
+        // Hidden option ([behavior] exit_on_escape in popone.toml, no GUI toggle):
+        // Escape closes the main window immediately, same as the close button.
+        if self.app_config.behavior.exit_on_escape
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
         // Dark theme: `new()`'s settings can be overwritten by eframe's
         // initialization, so reapply on the first `update()` (subsequent
         // frames skip via the flag).

@@ -81,6 +81,24 @@ pub struct AppConfig {
     /// paths during MME export. When unset (None) the current directory `.\` is used as fallback.
     #[serde(default)]
     pub ray_mmd_root: Option<String>,
+    /// Hidden options with no GUI toggle — enabled only by hand-editing `popone.toml`.
+    #[serde(default)]
+    pub behavior: BehaviorConfig,
+}
+
+/// Hidden startup/runtime behavior toggles. None of these fields have a corresponding
+/// GUI control; they exist purely for manual `popone.toml` editing (kiosk-style setups,
+/// power users launching multiple instances on purpose, etc.).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BehaviorConfig {
+    /// When true, skip the Named Mutex / Named Pipe single-instance check entirely,
+    /// so multiple `popone` viewer windows can run side by side.
+    #[serde(default)]
+    pub disable_single_instance: bool,
+    /// When true, pressing Escape anywhere in the main window closes the viewer
+    /// immediately (equivalent to clicking the window's close button).
+    #[serde(default)]
+    pub exit_on_escape: bool,
 }
 
 /// Display options that survive across sessions.
@@ -520,7 +538,86 @@ fn recover_from_bak(path: &Path) {
     }
 }
 
+/// Cross-process write lock guarding `atomic_write()`.
+///
+/// `atomic_write()` uses fixed `.tmp`/`.bak` sibling paths (derived from `path`'s
+/// extension), which is safe only when a single process writes at a time. That was
+/// always true while the Named Mutex in `single_instance.rs` forced exactly one
+/// viewer process — but `[behavior] disable_single_instance` (see `BehaviorConfig`)
+/// now allows multiple processes to share the same `data_dir`. Without this lock,
+/// two processes calling `save_config()` / `save_texture_history()` around the same
+/// time could race on the same `.tmp`/`.bak` files and silently drop or corrupt one
+/// side's settings. Held only for the duration of a single `atomic_write()` call.
+#[cfg(target_os = "windows")]
+mod config_write_lock {
+    use std::ffi::c_void;
+
+    const MUTEX_NAME: &str = "Local\\popone_viewer_config_write_lock";
+    const WAIT_OBJECT_0: u32 = 0;
+    const WAIT_ABANDONED: u32 = 0x0000_0080;
+    const LOCK_TIMEOUT_MS: u32 = 3000;
+
+    extern "system" {
+        fn CreateMutexW(
+            lp_mutex_attributes: *mut c_void,
+            b_initial_owner: i32,
+            lp_name: *const u16,
+        ) -> *mut c_void;
+        fn WaitForSingleObject(h_handle: *mut c_void, dw_milliseconds: u32) -> u32;
+        fn ReleaseMutex(h_mutex: *mut c_void) -> i32;
+        fn CloseHandle(h_object: *mut c_void) -> i32;
+    }
+
+    fn to_wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// RAII guard around the named mutex; releases on `Drop`. `acquire()` returns
+    /// `None` on failure or timeout -- callers proceed with the write anyway (best
+    /// effort) rather than lose the user's settings entirely.
+    pub struct WriteLock(*mut c_void);
+
+    impl WriteLock {
+        pub fn acquire() -> Option<Self> {
+            let name = to_wide(MUTEX_NAME);
+            // SAFETY: name is a valid null-terminated UTF-16 string from to_wide().
+            let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, name.as_ptr()) };
+            if handle.is_null() {
+                log::warn!("Config write lock: CreateMutexW failed (proceeding without lock)");
+                return None;
+            }
+            // SAFETY: handle was just created above and is non-null.
+            let wait = unsafe { WaitForSingleObject(handle, LOCK_TIMEOUT_MS) };
+            // WAIT_ABANDONED means a previous owner terminated without releasing --
+            // we now own the mutex just the same, so treat it as a successful acquire.
+            if wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED {
+                log::warn!("Config write lock: acquire timed out (proceeding without lock)");
+                // SAFETY: handle is a valid handle owned by this call.
+                unsafe { CloseHandle(handle) };
+                return None;
+            }
+            Some(Self(handle))
+        }
+    }
+
+    impl Drop for WriteLock {
+        fn drop(&mut self) {
+            // SAFETY: self.0 is a valid mutex handle owned by this guard (acquired in
+            // `acquire()`); ReleaseMutex must precede CloseHandle per the Win32 contract.
+            unsafe {
+                ReleaseMutex(self.0);
+                CloseHandle(self.0);
+            }
+        }
+    }
+}
+
 fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    // Serialize with any other process writing into the same data_dir (see
+    // `config_write_lock` docs above). Held until this function returns.
+    #[cfg(target_os = "windows")]
+    let _write_lock = config_write_lock::WriteLock::acquire();
+
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, bytes)?;
     // Windows: rename fails when overwriting an existing file, so use a backup-based
@@ -736,6 +833,81 @@ mod tests {
         assert!(parsed.log_viewer.y.is_none());
         assert!(parsed.log_viewer.width.is_none());
         assert!(parsed.log_viewer.height.is_none());
+    }
+
+    #[test]
+    fn test_behavior_config_default_backward_compat() {
+        // Pre-existing popone.toml without a [behavior] section must still parse,
+        // with both hidden flags defaulting to false (feature disabled).
+        let legacy = "[directory]\nlast_model = 'C:\\\\Test'\n";
+        let parsed: AppConfig = toml::from_str(legacy).expect("legacy should parse");
+        assert!(!parsed.behavior.disable_single_instance);
+        assert!(!parsed.behavior.exit_on_escape);
+    }
+
+    #[test]
+    fn test_behavior_config_explicit_roundtrip() {
+        let cfg = AppConfig {
+            behavior: BehaviorConfig {
+                disable_single_instance: true,
+                exit_on_escape: true,
+            },
+            ..Default::default()
+        };
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        let parsed: AppConfig = toml::from_str(&text).unwrap();
+        assert!(parsed.behavior.disable_single_instance);
+        assert!(parsed.behavior.exit_on_escape);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_concurrent_save_config_no_corruption() {
+        // Regression test for the [behavior] disable_single_instance gap: multiple
+        // processes (simulated here with threads sharing one data_dir) calling
+        // save_config() around the same time must never corrupt popone.toml, even
+        // though atomic_write() uses fixed .tmp/.bak sibling paths. The named-mutex
+        // WriteLock inside atomic_write() serializes access within a single OS, and a
+        // Windows named mutex serializes across threads of one process exactly like
+        // it does across processes, so this exercises the same code path.
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = dir.path().to_path_buf();
+
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let dir_path = dir_path.clone();
+                std::thread::spawn(move || {
+                    let cfg = AppConfig {
+                        window: Some(WindowConfig {
+                            x: i as f32,
+                            y: i as f32,
+                            width: 1280.0,
+                            height: 720.0,
+                        }),
+                        ..Default::default()
+                    };
+                    save_config(&dir_path, &cfg);
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // The file must exist, parse cleanly, and no leftover .tmp/.bak debris
+        // should remain from a torn write.
+        let path = config_path(&dir_path);
+        let text =
+            std::fs::read_to_string(&path).expect("popone.toml should exist and be readable");
+        toml::from_str::<AppConfig>(&text).expect("popone.toml must not be corrupted");
+        assert!(
+            !path.with_extension("tmp").exists(),
+            "stale .tmp should be cleaned up"
+        );
+        assert!(
+            !path.with_extension("bak").exists(),
+            "stale .bak should be cleaned up"
+        );
     }
 
     #[test]

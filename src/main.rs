@@ -1195,24 +1195,32 @@ fn run_viewer_with_file(input: PathBuf) -> Result<()> {
 /// Shared viewer launch (logging, panic hook, NativeOptions setup).
 #[cfg(feature = "viewer")]
 fn run_viewer_with_initial(initial_file: Option<PathBuf>) -> Result<()> {
-    // Single-instance: try to forward to an existing instance
-    #[cfg(target_os = "windows")]
-    {
-        use popone::viewer::single_instance::InstanceCheck;
-        match popone::viewer::single_instance::try_send_to_existing(initial_file.as_deref()) {
-            InstanceCheck::Forwarded => return Ok(()),
-            // Both Primary and FallbackStart continue execution. v0.4.0 onwards no longer
-            // performs log rotation, so the two cases need no further distinction.
-            InstanceCheck::Primary | InstanceCheck::FallbackStart => {}
-        }
-    }
-
     // App data directory (%LOCALAPPDATA%\popone)
     let data_dir = popone::viewer::app::persistence::data_dir();
     popone::viewer::app::persistence::migrate_from_exe_dir(&data_dir);
 
-    // Load session config (loaded before the log config is applied)
+    // Load session config (loaded before the log config is applied; also gates the
+    // single-instance check below via the hidden `[behavior] disable_single_instance` flag)
     let app_config = popone::viewer::app::persistence::load_config(&data_dir);
+
+    // Single-instance: try to forward to an existing instance. Hidden option
+    // `[behavior] disable_single_instance = true` in popone.toml skips this entirely.
+    #[cfg(target_os = "windows")]
+    {
+        let disable_single_instance = app_config
+            .as_ref()
+            .is_some_and(|c| c.behavior.disable_single_instance);
+        if !disable_single_instance {
+            use popone::viewer::single_instance::InstanceCheck;
+            match popone::viewer::single_instance::try_send_to_existing(initial_file.as_deref()) {
+                InstanceCheck::Forwarded => return Ok(()),
+                // Both Primary and FallbackStart continue execution. v0.4.0 onwards no longer
+                // performs log rotation, so the two cases need no further distinction.
+                InstanceCheck::Primary | InstanceCheck::FallbackStart => {}
+            }
+        }
+    }
+
     let log_config = app_config
         .as_ref()
         .map(|c| c.log.clone())

@@ -211,6 +211,7 @@
     - [Panic Log](#panic-log)
     - [Log Viewer (Separate Window)](#log-viewer-separate-window)
   - [Single Instance](#single-instance)
+  - [Hidden Options (popone.toml `[behavior]`)](#hidden-options-poponetoml-behavior)
   - [FPS Measurement](#fps-measurement)
   - [Watchdog — Main Thread Responsiveness Monitor](#watchdog--main-thread-responsiveness-monitor)
     - [Architecture](#architecture-1)
@@ -3249,6 +3250,23 @@ When the viewer is already running and launched again, the file path is forwarde
 - **Focus**: `ViewportCommand::Minimized(false)` + `Focus` (restores from minimized state)
 - **Path normalization**: `std::fs::canonicalize()` before sending (CWD difference mitigation)
 - **InstanceCheck tri-state**: `Primary` (primary instance start) / `Forwarded` (file path forwarded to existing instance, current process exits) / `FallbackStart` (fallback when existing-instance detection fails). v0.4.0 removed automatic log rotation, so `Primary` and `FallbackStart` now behave identically; the previous `can_rotate` variable that distinguished them was deleted in the same release
+- **Disabling it (hidden option)**: Manually adding `[behavior] disable_single_instance = true` to `popone.toml` skips this Named Mutex / Named Pipe check entirely, allowing multiple windows to run at once. There is no GUI toggle. The `app_config` used for this decision is loaded (`data_dir()` / `load_config()`) before the Named Mutex check runs.
+- **Write exclusion when `disable_single_instance` is enabled**: `atomic_write()` (the save helper shared by `popone.toml` and `popone_history.json`) uses fixed `.tmp`/`.bak` sibling paths, which assumes exactly one process ever writes at a time. Normally the Named Mutex above enforces that assumption by forcing a single instance — but `disable_single_instance = true` removes that guarantee. To compensate, `atomic_write()` acquires a second Named Mutex (`Local\popone_viewer_config_write_lock`, see the `config_write_lock` module in `persistence.rs`) that serializes writes across processes. Acquisition has a 3-second timeout; on failure it proceeds without the lock rather than risk losing the user's settings entirely.
+
+## Hidden Options (popone.toml `[behavior]`)
+
+Settings with no corresponding GUI toggle — they only take effect when `popone.toml` is edited by hand. `AppConfig.behavior: BehaviorConfig`; both fields are `#[serde(default)] = false` (omitting them preserves the previous behavior).
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `disable_single_instance` | bool | false | Disables single-instance control (Named Mutex/Pipe) entirely, allowing multiple processes to run at once |
+| `exit_on_escape` | bool | false | Pressing Escape in the main window exits immediately (sends `ViewportCommand::Close`, equivalent to the close button). Checked at the top of `update()`, so it fires independently of the existing per-dialog Escape handlers (e.g. the various dialogs in `ui.rs`) that close a dialog instead of the app |
+
+```toml
+[behavior]
+disable_single_instance = true
+exit_on_escape = true
+```
 
 ## FPS Measurement
 

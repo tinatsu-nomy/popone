@@ -3,35 +3,40 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.5.13 (2026-07-06)](#v0513-2026-07-06)
-    - [Bug Fixes](#bug-fixes)
+  - [v0.5.14 (2026-07-08)](#v0514-2026-07-08)
+    - [New Features](#new-features)
+    - [Bug Fixes (found while adding the above)](#bug-fixes-found-while-adding-the-above)
     - [Tests](#tests)
     - [Scope Notes](#scope-notes)
+  - [v0.5.13 (2026-07-06)](#v0513-2026-07-06)
+    - [Bug Fixes](#bug-fixes)
+    - [Tests](#tests-1)
+    - [Scope Notes](#scope-notes-1)
   - [v0.5.12 (2026-06-11)](#v0512-2026-06-11)
     - [Bug Fixes](#bug-fixes-1)
     - [Internals](#internals)
-    - [Tests](#tests-1)
-    - [Scope Notes](#scope-notes-1)
-  - [v0.5.11 (2026-05-16)](#v0511-2026-05-16)
-    - [New Features](#new-features)
     - [Tests](#tests-2)
-    - [Internals](#internals-1)
     - [Scope Notes](#scope-notes-2)
+  - [v0.5.11 (2026-05-16)](#v0511-2026-05-16)
+    - [New Features](#new-features-1)
+    - [Tests](#tests-3)
+    - [Internals](#internals-1)
+    - [Scope Notes](#scope-notes-3)
   - [v0.5.10 (2026-05-15)](#v0510-2026-05-15)
     - [Bug Fixes](#bug-fixes-2)
     - [Internals](#internals-2)
-    - [Scope Notes](#scope-notes-3)
+    - [Scope Notes](#scope-notes-4)
   - [v0.5.9 (2026-05-05)](#v059-2026-05-05)
     - [New Features / Improvements](#new-features--improvements)
     - [Internals (i18n housekeeping)](#internals-i18n-housekeeping)
-    - [Scope Notes](#scope-notes-4)
+    - [Scope Notes](#scope-notes-5)
   - [v0.5.8 (2026-04-22)](#v058-2026-04-22)
     - [Internals](#internals-3)
   - [v0.5.7 (2026-04-22)](#v057-2026-04-22)
-    - [New Features](#new-features-1)
+    - [New Features](#new-features-2)
     - [Internals](#internals-4)
   - [v0.5.6 (2026-04-14)](#v056-2026-04-14)
-    - [New Features](#new-features-2)
+    - [New Features](#new-features-3)
     - [Internals](#internals-5)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
   - [v0.5.5 (2026-04-13)](#v055-2026-04-13)
@@ -39,34 +44,34 @@
     - [New Features (Phase 2)](#new-features-phase-2)
     - [New Features (Phase 3)](#new-features-phase-3)
     - [Internals](#internals-6)
-    - [Scope Notes](#scope-notes-5)
+    - [Scope Notes](#scope-notes-6)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
-    - [Tests](#tests-3)
+    - [Tests](#tests-4)
   - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
-    - [New Features](#new-features-3)
+    - [New Features](#new-features-4)
     - [Internals](#internals-7)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
-    - [Tests](#tests-4)
+    - [Tests](#tests-5)
   - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
-    - [New Features](#new-features-4)
+    - [New Features](#new-features-5)
     - [Internals](#internals-8)
   - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
-    - [New Features](#new-features-5)
+    - [New Features](#new-features-6)
     - [Internals](#internals-9)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-3)
   - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
-    - [New Features](#new-features-6)
+    - [New Features](#new-features-7)
     - [Performance](#performance)
     - [Internals](#internals-10)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-4)
-    - [Tests](#tests-5)
+    - [Tests](#tests-6)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
-    - [New Features](#new-features-7)
-    - [Behavior Changes](#behavior-changes)
-    - [Tests](#tests-6)
-  - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
     - [New Features](#new-features-8)
+    - [Behavior Changes](#behavior-changes)
+    - [Tests](#tests-7)
+  - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
+    - [New Features](#new-features-9)
     - [Behavior Changes](#behavior-changes-1)
     - [Internals](#internals-11)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
@@ -76,6 +81,28 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.14 (2026-07-08)
+
+A hidden-option release. Adds a `[behavior]` section to `popone.toml` with no corresponding GUI toggle — both flags only take effect when the file is edited by hand.
+
+### New Features
+
+- **Disable single-instance option** — Adding `[behavior] disable_single_instance = true` to `popone.toml` skips the existing Named Mutex / Named Pipe single-instance control entirely, allowing multiple `popone` windows to run at the same time. Defaults to `false` (previous behavior unchanged).
+- **Exit-on-Escape option** — Adding `[behavior] exit_on_escape = true` to `popone.toml` makes pressing Escape in the main window close it immediately (sends the same `ViewportCommand::Close` as clicking the close button). Defaults to `false` (previous behavior unchanged; only the existing per-dialog Escape handlers fire).
+
+### Bug Fixes (found while adding the above)
+
+- **Config write exclusion when `disable_single_instance` is enabled** — The `atomic_write()` helper shared by `popone.toml` and `popone_history.json` uses fixed `.tmp`/`.bak` sibling paths, which assumes exactly one process ever writes at a time. That assumption used to be guaranteed by the Named Mutex forcing a single instance, but `disable_single_instance = true` removes that guarantee — closing multiple windows at nearly the same time could otherwise corrupt or drop one side's settings. `atomic_write()` now acquires a second Named Mutex (`Local\popone_viewer_config_write_lock`) to serialize writes across processes, with a 3-second timeout that falls back to writing without the lock (rather than losing the user's settings) on failure.
+
+### Tests
+
+- **`BehaviorConfig` backward-compat / round-trip tests** — Verify a pre-existing `popone.toml` without a `[behavior]` section loads both flags as `false`, and that explicit values survive a toml round-trip.
+- **Concurrent-write regression test** — Verifies that 8 threads calling `save_config()` at once never corrupt `popone.toml` and leave no stray `.tmp`/`.bak` files afterward (a Windows named mutex serializes across threads of one process the same way it does across processes, so this exercises the same lock path without needing separate OS processes).
+
+### Scope Notes
+
+- Neither option has a GUI toggle; behavior is unchanged from previous releases unless `popone.toml` is edited by hand.
 
 ## v0.5.13 (2026-07-06)
 
