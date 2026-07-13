@@ -1,8 +1,11 @@
-//! Direct archive (ZIP / 7z) loading.
+//! Direct archive (ZIP / 7z / RAR) loading.
 //!
 //! Provides a uniform interface for detecting model files (VRM/FBX/PMX/PMD)
 //! inside an archive and extracting them together with their textures.
+//! Encrypted archives are supported by passing a password down from the
+//! caller; the password is held in memory only and never persisted.
 
+pub mod rar;
 pub mod sevenz;
 pub mod zip_extract;
 
@@ -49,6 +52,7 @@ pub struct ArchiveEntry {
 pub enum ArchiveFormat {
     Zip,
     SevenZ,
+    Rar,
 }
 
 /// Model kind inside the archive.
@@ -140,17 +144,28 @@ pub fn archive_format_from_ext(ext: &str) -> Option<ArchiveFormat> {
     match ext {
         "zip" => Some(ArchiveFormat::Zip),
         "7z" => Some(ArchiveFormat::SevenZ),
+        "rar" => Some(ArchiveFormat::Rar),
         _ => None,
     }
 }
 
 /// List models inside an archive.
 ///
-/// **Note**: 7z's streaming-only API forces us to fully extract every file matching
-/// the target extensions and keep them in memory (capped by `MAX_TOTAL_BYTES`). ZIP
-/// only fetches metadata. The 7z entries are kept inside `ArchiveContents` so that
-/// `extract_model_bundle` can reuse them without re-extracting.
-pub fn list_models(data: &[u8], format: ArchiveFormat) -> Result<ArchiveContents> {
+/// **Note**: 7z and RAR are solid/streaming formats, forcing us to fully extract
+/// every file matching the target extensions and keep them in memory (capped by
+/// `MAX_TOTAL_BYTES`). ZIP only fetches metadata. The extracted entries are kept
+/// inside `ArchiveContents` so that `extract_model_bundle` can reuse them without
+/// re-extracting.
+///
+/// `password`: for encrypted archives. Encryption raises
+/// `PoponeError::ArchivePasswordRequired` / `ArchiveBadPassword` so the viewer
+/// can prompt the user and retry. ZIP never needs it at the listing stage
+/// (only entry payloads are encrypted).
+pub fn list_models(
+    data: &[u8],
+    format: ArchiveFormat,
+    password: Option<&str>,
+) -> Result<ArchiveContents> {
     match format {
         ArchiveFormat::Zip => {
             let metas = zip_extract::list_entries(data)?;
@@ -162,7 +177,16 @@ pub fn list_models(data: &[u8], format: ArchiveFormat) -> Result<ArchiveContents
             })
         }
         ArchiveFormat::SevenZ => {
-            let entries = sevenz::extract_filtered(data, MAX_TOTAL_BYTES)?;
+            let entries = sevenz::extract_filtered(data, MAX_TOTAL_BYTES, password)?;
+            let models = find_models_from_entries(&entries);
+            Ok(ArchiveContents {
+                models,
+                entries: Some(entries),
+                metas: None,
+            })
+        }
+        ArchiveFormat::Rar => {
+            let entries = rar::extract_filtered(data, MAX_TOTAL_BYTES, password)?;
             let models = find_models_from_entries(&entries);
             Ok(ArchiveContents {
                 models,
@@ -220,11 +244,14 @@ fn path_to_model_kind(path: &Path) -> Option<ArchiveModelKind> {
 }
 
 /// Extract the selected model plus its associated files.
+/// `password`: only consulted for ZIP (7z/RAR entries were already decrypted
+/// at the listing stage and live in `contents.entries`).
 pub fn extract_model_bundle(
     data: &[u8],
     format: ArchiveFormat,
     contents: ArchiveContents,
     model_index: usize,
+    password: Option<&str>,
 ) -> Result<ModelBundle> {
     let (_, model_path, _, kind) = contents.models.get(model_index).ok_or_else(|| {
         PoponeError::Archive(
@@ -240,9 +267,9 @@ pub fn extract_model_bundle(
 
     match format {
         ArchiveFormat::Zip => {
-            extract_bundle_from_zip(data, &model_path, kind, contents.metas.as_deref())
+            extract_bundle_from_zip(data, &model_path, kind, contents.metas.as_deref(), password)
         }
-        ArchiveFormat::SevenZ => {
+        ArchiveFormat::SevenZ | ArchiveFormat::Rar => {
             extract_bundle_from_entries(contents.entries.unwrap_or_default(), &model_path, kind)
         }
     }
@@ -254,11 +281,13 @@ fn extract_bundle_from_zip(
     model_path: &Path,
     kind: ArchiveModelKind,
     metas: Option<&[ArchiveEntryMeta]>,
+    password: Option<&str>,
 ) -> Result<ModelBundle> {
     match kind {
         ArchiveModelKind::Pmx | ArchiveModelKind::Pmd => {
             // PMX/PMD: extract the model first to discover texture references, then extract just the needed files
-            let model_entries = zip_extract::extract_files(data, &[model_path], MAX_TOTAL_BYTES)?;
+            let model_entries =
+                zip_extract::extract_files(data, &[model_path], MAX_TOTAL_BYTES, password)?;
             let model_entry = model_entries
                 .into_iter()
                 .find(|e| e.path == model_path)
@@ -286,7 +315,8 @@ fn extract_bundle_from_zip(
             let aux_files = if !needed.is_empty() {
                 let needed_refs: Vec<&Path> = needed.iter().map(|p| p.as_path()).collect();
                 let remaining = MAX_TOTAL_BYTES.saturating_sub(model_entry.data.len() as u64);
-                let aux_entries = zip_extract::extract_files(data, &needed_refs, remaining)?;
+                let aux_entries =
+                    zip_extract::extract_files(data, &needed_refs, remaining, password)?;
                 build_aux_files(aux_entries, model_dir)
             } else {
                 HashMap::new()
@@ -301,7 +331,8 @@ fn extract_bundle_from_zip(
         }
         ArchiveModelKind::Stl | ArchiveModelKind::UnityPackage => {
             // STL / UnityPackage: extract only the model itself (no textures needed)
-            let model_entries = zip_extract::extract_files(data, &[model_path], MAX_TOTAL_BYTES)?;
+            let model_entries =
+                zip_extract::extract_files(data, &[model_path], MAX_TOTAL_BYTES, password)?;
             let model_entry = model_entries
                 .into_iter()
                 .find(|e| e.path == model_path)
@@ -346,7 +377,7 @@ fn extract_bundle_from_zip(
             }
 
             let path_refs: Vec<&Path> = paths_to_extract.iter().map(|p| p.as_path()).collect();
-            let entries = zip_extract::extract_files(data, &path_refs, MAX_TOTAL_BYTES)?;
+            let entries = zip_extract::extract_files(data, &path_refs, MAX_TOTAL_BYTES, password)?;
 
             let mut model_entry = None;
             let mut textures = Vec::new();
@@ -818,11 +849,11 @@ mod tests {
             writer.finish().unwrap();
         }
 
-        let contents = list_models(&buf, ArchiveFormat::Zip).unwrap();
+        let contents = list_models(&buf, ArchiveFormat::Zip, None).unwrap();
         assert_eq!(contents.models.len(), 1);
         assert_eq!(contents.models[0].3, ArchiveModelKind::UnityPackage);
 
-        let bundle = extract_model_bundle(&buf, ArchiveFormat::Zip, contents, 0).unwrap();
+        let bundle = extract_model_bundle(&buf, ArchiveFormat::Zip, contents, 0, None).unwrap();
         // Only the model itself is extracted; textures are empty
         assert_eq!(bundle.model.data, b"fake unitypackage data");
         assert!(
@@ -889,7 +920,7 @@ mod tests {
             writer.finish().unwrap();
         }
 
-        let contents = list_models(&buf, ArchiveFormat::Zip).unwrap();
+        let contents = list_models(&buf, ArchiveFormat::Zip, None).unwrap();
         assert_eq!(contents.models.len(), 1);
         assert_eq!(contents.models[0].2, "model.pmx");
         assert_eq!(contents.models[0].3, ArchiveModelKind::Pmx);
@@ -898,7 +929,7 @@ mod tests {
     #[test]
     fn test_broken_archive_error() {
         // Corrupt data must return an error
-        let result = list_models(b"this is not a zip file", ArchiveFormat::Zip);
+        let result = list_models(b"this is not a zip file", ArchiveFormat::Zip, None);
         assert!(result.is_err());
     }
 
@@ -909,8 +940,113 @@ mod tests {
             let writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
             writer.finish().unwrap();
         }
-        let contents = list_models(&buf, ArchiveFormat::Zip).unwrap();
+        let contents = list_models(&buf, ArchiveFormat::Zip, None).unwrap();
         assert!(contents.models.is_empty());
+    }
+
+    /// Build an AES-256 encrypted ZIP containing one STL entry
+    /// (STL is extracted without parsing, keeping the test focused on decryption).
+    fn build_encrypted_zip(password: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored)
+                .with_aes_encryption(zip::AesMode::Aes256, password);
+            writer.start_file("model/test.stl", options).unwrap();
+            std::io::Write::write_all(&mut writer, b"STL secret data").unwrap();
+            writer.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn test_zip_encrypted_password_flow() {
+        let buf = build_encrypted_zip("secret");
+
+        // Listing works without a password (only entry payloads are encrypted).
+        let contents = list_models(&buf, ArchiveFormat::Zip, None).unwrap();
+        assert_eq!(contents.models.len(), 1);
+
+        // Extracting without a password reports that one is required.
+        let Err(err) = extract_model_bundle(&buf, ArchiveFormat::Zip, contents, 0, None) else {
+            panic!("extraction without a password must fail");
+        };
+        assert!(
+            matches!(err, PoponeError::ArchivePasswordRequired),
+            "expected ArchivePasswordRequired, got: {err:?}"
+        );
+
+        // A wrong password is rejected (AES stores a password verifier).
+        let contents = list_models(&buf, ArchiveFormat::Zip, None).unwrap();
+        let Err(err) = extract_model_bundle(&buf, ArchiveFormat::Zip, contents, 0, Some("wrong"))
+        else {
+            panic!("extraction with a wrong password must fail");
+        };
+        assert!(
+            matches!(err, PoponeError::ArchiveBadPassword),
+            "expected ArchiveBadPassword, got: {err:?}"
+        );
+
+        // The correct password decrypts the payload.
+        let contents = list_models(&buf, ArchiveFormat::Zip, None).unwrap();
+        let bundle =
+            extract_model_bundle(&buf, ArchiveFormat::Zip, contents, 0, Some("secret")).unwrap();
+        assert_eq!(bundle.model.data, b"STL secret data");
+    }
+
+    /// Build an AES-256 encrypted 7z (with encrypted headers) containing one STL entry.
+    fn build_encrypted_7z(password: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut writer =
+                sevenz_rust2::ArchiveWriter::new(std::io::Cursor::new(&mut buf)).unwrap();
+            writer.set_content_methods(vec![
+                sevenz_rust2::encoder_options::AesEncoderOptions::new(sevenz_rust2::Password::new(
+                    password,
+                ))
+                .into(),
+                sevenz_rust2::encoder_options::Lzma2Options::default().into(),
+            ]);
+            let entry = sevenz_rust2::ArchiveEntry::new_file("model/test.stl");
+            writer
+                .push_archive_entry(entry, Some(&b"STL secret data"[..]))
+                .unwrap();
+            writer.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn test_sevenz_encrypted_password_flow() {
+        let buf = build_encrypted_7z("secret");
+
+        // 7z extracts at listing time, so the password failure surfaces here.
+        let Err(err) = list_models(&buf, ArchiveFormat::SevenZ, None) else {
+            panic!("listing an encrypted 7z without a password must fail");
+        };
+        assert!(
+            matches!(err, PoponeError::ArchivePasswordRequired),
+            "expected ArchivePasswordRequired, got: {err:?}"
+        );
+
+        // A wrong password must not succeed (BadPassword or corruption).
+        assert!(list_models(&buf, ArchiveFormat::SevenZ, Some("wrong")).is_err());
+
+        // The correct password decrypts everything.
+        let contents = list_models(&buf, ArchiveFormat::SevenZ, Some("secret")).unwrap();
+        assert_eq!(contents.models.len(), 1);
+        assert_eq!(contents.models[0].3, ArchiveModelKind::Stl);
+        let bundle = extract_model_bundle(&buf, ArchiveFormat::SevenZ, contents, 0, None).unwrap();
+        assert_eq!(bundle.model.data, b"STL secret data");
+    }
+
+    #[test]
+    fn test_rar_format_from_ext() {
+        assert_eq!(archive_format_from_ext("rar"), Some(ArchiveFormat::Rar));
+        assert_eq!(archive_format_from_ext("zip"), Some(ArchiveFormat::Zip));
+        assert_eq!(archive_format_from_ext("7z"), Some(ArchiveFormat::SevenZ));
+        assert_eq!(archive_format_from_ext("tar"), None);
     }
 
     #[test]
@@ -926,7 +1062,7 @@ mod tests {
             writer.finish().unwrap();
         }
         // Test with a tiny cap
-        let result = zip_extract::extract_files(&buf, &[Path::new("huge.pmx")], 1);
+        let result = zip_extract::extract_files(&buf, &[Path::new("huge.pmx")], 1, None);
         // 10 bytes of data against a 1-byte cap -> size-overflow error
         assert!(result.is_err());
     }

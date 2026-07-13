@@ -157,6 +157,7 @@ pub const MODEL_EXTENSIONS: &[&str] = &[
     "anim",
     "zip",
     "7z",
+    "rar",
 ];
 
 // PkgModelType moved to unitypackage.rs (it is used by the CLI as well).

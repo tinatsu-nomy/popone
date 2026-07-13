@@ -28,12 +28,14 @@ fn decode_filename(file: &zip::read::ZipFile) -> Result<String> {
 }
 
 /// Pass 1: collect entry metadata only (no data extraction).
+/// Uses `by_index_raw` so listing also works on encrypted ZIPs
+/// (ZIP encrypts entry payloads only; names and sizes stay readable).
 pub fn list_entries(data: &[u8]) -> Result<Vec<ArchiveEntryMeta>> {
     let reader = std::io::Cursor::new(data);
     let mut archive = zip::ZipArchive::new(reader)?;
     let mut entries = Vec::new();
     for i in 0..archive.len() {
-        let file = archive.by_index(i)?;
+        let file = archive.by_index_raw(i)?;
         if file.is_dir() {
             continue;
         }
@@ -49,10 +51,15 @@ pub fn list_entries(data: &[u8]) -> Result<Vec<ArchiveEntryMeta>> {
 
 /// Pass 2: extract only the files matching the given paths.
 /// `max_total_bytes`: total extraction size limit (zip-bomb defense).
+/// `password`: for encrypted entries (ZipCrypto / AES). Without it, hitting an
+/// encrypted entry yields `ArchivePasswordRequired`; a wrong password yields
+/// `ArchiveBadPassword` (ZipCrypto's 1-byte check may let a wrong password
+/// through, in which case the CRC check fails as a generic error instead).
 pub fn extract_files(
     data: &[u8],
     paths: &[&std::path::Path],
     max_total_bytes: u64,
+    password: Option<&str>,
 ) -> Result<Vec<ArchiveEntry>> {
     let reader = std::io::Cursor::new(data);
     let mut archive = zip::ZipArchive::new(reader)?;
@@ -60,19 +67,32 @@ pub fn extract_files(
     let mut total = 0u64;
 
     for i in 0..archive.len() {
-        let file = archive.by_index(i)?;
-        if file.is_dir() {
-            continue;
-        }
-        let name = decode_filename(&file)?;
-        let norm_path = normalize_archive_path(&name)?;
+        // Resolve name/size/encryption via the raw handle first: `by_index` fails
+        // on encrypted entries, and we must not fail on entries we never extract.
+        let (norm_path, declared, encrypted) = {
+            let file = archive.by_index_raw(i)?;
+            if file.is_dir() {
+                continue;
+            }
+            let name = decode_filename(&file)?;
+            (
+                normalize_archive_path(&name)?,
+                file.size(),
+                file.encrypted(),
+            )
+        };
 
         if !paths.iter().any(|p| *p == norm_path) {
             continue;
         }
 
+        // Detect the need for a password from the entry flag (robust against the
+        // various errors `by_index` produces for encrypted entries).
+        if encrypted && password.is_none() {
+            return Err(PoponeError::ArchivePasswordRequired);
+        }
+
         // Size check (declared size)
-        let declared = file.size();
         if total + declared > max_total_bytes {
             return Err(PoponeError::Archive(
                 t!(
@@ -84,6 +104,15 @@ pub fn extract_files(
                 .to_string(),
             ));
         }
+
+        let file = match password {
+            Some(pw) => archive.by_index_decrypt(i, pw.as_bytes()),
+            None => archive.by_index(i),
+        }
+        .map_err(|e| match e {
+            zip::result::ZipError::InvalidPassword => PoponeError::ArchiveBadPassword,
+            other => PoponeError::from(other),
+        })?;
 
         // Actual read; cap with `take` as a hard limit
         let limit = max_total_bytes - total;

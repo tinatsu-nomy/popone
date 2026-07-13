@@ -451,12 +451,12 @@ fn run_main(mut args: Args) -> Result<()> {
     let ext = popone::path_ext_lower(&input);
 
     // Reject `--list-models` on non-archive inputs
-    if args.list_models && !matches!(ext.as_str(), "zip" | "7z") {
+    if args.list_models && !matches!(ext.as_str(), "zip" | "7z" | "rar") {
         anyhow::bail!("{}", t!("cli.error.list_models_archive_only"));
     }
 
     // Archives: handle `--list-models` before the viewer-mode branch
-    if args.list_models && matches!(ext.as_str(), "zip" | "7z") {
+    if args.list_models && matches!(ext.as_str(), "zip" | "7z" | "rar") {
         let data = std::fs::read(&input).with_context(|| {
             t!(
                 "cli.error.archive_load_failed",
@@ -467,7 +467,8 @@ fn run_main(mut args: Args) -> Result<()> {
         let format = popone::archive::archive_format_from_ext(&ext).with_context(|| {
             t!("cli.error.unsupported_archive_format", ext = ext.clone()).to_string()
         })?;
-        let contents = popone::archive::list_models(&data, format)
+        let contents = popone::archive::list_models(&data, format, None)
+            .map_err(cli_password_hint)
             .with_context(|| t!("cli.error.archive_list_failed").to_string())?;
         if contents.models.is_empty() {
             println!("{}", t!("cli.output.no_models_in_archive"));
@@ -501,7 +502,7 @@ fn run_main(mut args: Args) -> Result<()> {
     }
 
     // PMX conversion via an archive
-    if matches!(ext.as_str(), "zip" | "7z") {
+    if matches!(ext.as_str(), "zip" | "7z" | "rar") {
         let output = args
             .output
             .as_ref()
@@ -779,7 +780,21 @@ fn run_main(mut args: Args) -> Result<()> {
     Ok(())
 }
 
-/// Archive (ZIP / 7z) -> PMX conversion.
+/// Encrypted archives are GUI-only: the CLI has no password prompt, so replace
+/// the password markers with a hint pointing to the viewer.
+fn cli_password_hint(e: popone::error::PoponeError) -> anyhow::Error {
+    use popone::error::PoponeError;
+    if matches!(
+        e,
+        PoponeError::ArchivePasswordRequired | PoponeError::ArchiveBadPassword
+    ) {
+        anyhow::anyhow!("{}", t!("cli.error.archive_password_gui_only"))
+    } else {
+        e.into()
+    }
+}
+
+/// Archive (ZIP / 7z / RAR) -> PMX conversion.
 fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> Result<()> {
     let log_level = args
         .log_level
@@ -809,7 +824,8 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
         )
         .to_string()
     })?;
-    let contents = popone::archive::list_models(&data, format)
+    let contents = popone::archive::list_models(&data, format, None)
+        .map_err(cli_password_hint)
         .with_context(|| t!("cli.error.archive_list_failed").to_string())?;
 
     if contents.models.is_empty() {
@@ -913,7 +929,8 @@ fn run_archive_convert(input: &Path, output: &Path, ext: &str, args: &Args) -> R
 
     log::info!("Selected model: {}", contents.models[selected].1.display());
 
-    let bundle = popone::archive::extract_model_bundle(&data, format, contents, selected)
+    let bundle = popone::archive::extract_model_bundle(&data, format, contents, selected, None)
+        .map_err(cli_password_hint)
         .with_context(|| t!("cli.error.archive_model_extract_failed").to_string())?;
 
     // Build the IR by branching on the model kind

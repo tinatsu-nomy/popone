@@ -6,8 +6,8 @@ use std::path::Path;
 
 use super::{normalize_archive_path, ArchiveEntry, MODEL_EXTENSIONS, TEXTURE_EXTENSIONS};
 
-/// Whether the extension is one we want to extract.
-fn should_extract(path: &Path) -> bool {
+/// Whether the extension is one we want to extract (shared with the RAR extractor).
+pub(super) fn should_extract(path: &Path) -> bool {
     let ext = crate::path_ext_lower(path);
     MODEL_EXTENSIONS.contains(&ext.as_str())
         || TEXTURE_EXTENSIONS.contains(&ext.as_str())
@@ -19,7 +19,14 @@ fn should_extract(path: &Path) -> bool {
 
 /// Extract a 7z archive, keeping only model/texture extensions in memory.
 /// `max_total_bytes`: total extraction size limit.
-pub fn extract_filtered(data: &[u8], max_total_bytes: u64) -> Result<Vec<ArchiveEntry>> {
+/// `password`: for AES-encrypted archives (header and/or content encryption).
+/// Encrypted archives without a password fail with `ArchivePasswordRequired`
+/// (mapped from `sevenz_rust2::Error::PasswordRequired` in `error.rs`).
+pub fn extract_filtered(
+    data: &[u8],
+    max_total_bytes: u64,
+    password: Option<&str>,
+) -> Result<Vec<ArchiveEntry>> {
     let cursor = std::io::Cursor::new(data);
     let mut entries = Vec::new();
     let mut total = 0u64;
@@ -27,7 +34,10 @@ pub fn extract_filtered(data: &[u8], max_total_bytes: u64) -> Result<Vec<Archive
     // `dest` is unused (we handle bytes inside the callback) but required by the API.
     let dummy_dest = std::env::temp_dir();
 
-    sevenz_rust2::decompress_with_extract_fn(cursor, &dummy_dest, |entry, reader, _dest_path| {
+    let extract_fn = |entry: &sevenz_rust2::ArchiveEntry,
+                      reader: &mut dyn std::io::Read,
+                      _dest_path: &std::path::PathBuf|
+     -> std::result::Result<bool, sevenz_rust2::Error> {
         let name = entry.name();
         let norm_path = match normalize_archive_path(name) {
             Ok(p) => p,
@@ -92,7 +102,16 @@ pub fn extract_filtered(data: &[u8], max_total_bytes: u64) -> Result<Vec<Archive
             data: buf,
         });
         Ok(true)
-    })?;
+    };
+
+    // `decompress_with_extract_fn` is just the empty-password shorthand for the
+    // same implementation, so route both cases through the password variant.
+    // An empty password on an encrypted archive yields `PasswordRequired`,
+    // a wrong one `MaybeBadPassword` -- keeping the two cases distinguishable.
+    let pw = password
+        .map(sevenz_rust2::Password::from)
+        .unwrap_or_else(sevenz_rust2::Password::empty);
+    sevenz_rust2::decompress_with_extract_fn_and_password(cursor, &dummy_dest, pw, extract_fn)?;
 
     Ok(entries)
 }

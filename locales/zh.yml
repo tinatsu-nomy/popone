@@ -44,7 +44,8 @@ cli:
     error_prefix: "错误"
   error:
     viewer_feature_required: "查看器需要使用 viewer feature 构建。\n用法: popone <输入.vrm> <输出.pmx>\n查看器: cargo build --features viewer"
-    list_models_archive_only: "--list-models 仅适用于压缩文件（.zip / .7z）"
+    list_models_archive_only: "--list-models 仅适用于压缩文件（.zip / .7z / .rar）"
+    archive_password_gui_only: "CLI 模式不支持加密压缩文件。请在查看器（GUI）中打开"
     archive_load_failed: "读取压缩文件失败: %{path}"
     unsupported_archive_format: "不支持的压缩文件格式: %{ext}"
     archive_list_failed: "获取压缩文件中的模型列表失败"
@@ -107,6 +108,8 @@ error:
   image_failed: "图像处理失败"
   unitypackage_failed: "解压 unitypackage 失败"
   archive_failed: "压缩文件处理失败"
+  archive_password_required: "加密压缩文件：需要输入密码"
+  archive_bad_password: "压缩文件密码错误"
   pmx:
     field_negative: "%{field} 为负: %{val}"
     invalid_magic: "PMX 魔数无效: %{magic}"
@@ -282,7 +285,7 @@ viewer:
       ok: "确定"
       cancel: "取消"
       apply: "应用"
-      filter_archive: "归档 (.zip, .7z)"
+      filter_archive: "归档 (.zip, .7z, .rar)"
     open_model:
       title: "打开 3D 模型 / VRMA 动画"
       filter_supported: "支持的格式"
@@ -313,6 +316,10 @@ viewer:
       title: "选择压缩包内模型"
       message1: "在压缩包中发现多个模型。"
       message2: "请选择要加载的文件。"
+    archive_password:
+      title: "压缩文件密码"
+      message: "「%{name}」受密码保护。请输入密码（不会被记住）。"
+      ok: "OK"
     tex_match:
       title: "手动分配纹理"
       instruction: "请为未能自动匹配的材质指定纹理。"
@@ -361,7 +368,7 @@ viewer:
     reload:
       failed: "重新加载失败: %{error}"
       load_failed: "加载失败: %{error}"
-      file_not_loaded: "无法加载文件。\n请检查文件是否损坏，或是否为支持的格式 (VRM/FBX/PMX/PMD/ZIP/7z)。\n详细: %{detail}"
+      file_not_loaded: "无法加载文件。\n请检查文件是否损坏，或是否为支持的格式 (VRM/FBX/PMX/PMD/ZIP/7z/RAR)。\n详细: %{detail}"
     uvmap:
       exported: "UV 贴图导出完成: %{path}"
       exported_psb: "UV 贴图已以 PSB 格式导出（图层数据超过 PSD 2 GiB 上限，已从 PSD 自动切换）: %{path}"

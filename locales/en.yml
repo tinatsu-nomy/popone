@@ -44,7 +44,8 @@ cli:
     error_prefix: "Error"
   error:
     viewer_feature_required: "Viewer must be built with the viewer feature.\nUsage: popone <input.vrm> <output.pmx>\nViewer: cargo build --features viewer"
-    list_models_archive_only: "--list-models is only valid for archive files (.zip / .7z)"
+    list_models_archive_only: "--list-models is only valid for archive files (.zip / .7z / .rar)"
+    archive_password_gui_only: "Password-protected archives are not supported in CLI mode. Open the file in the viewer (GUI) instead"
     archive_load_failed: "Failed to read archive: %{path}"
     unsupported_archive_format: "Unsupported archive format: %{ext}"
     archive_list_failed: "Failed to list models in archive"
@@ -107,6 +108,8 @@ error:
   image_failed: "Image processing failed"
   unitypackage_failed: "Failed to extract unitypackage"
   archive_failed: "Archive processing failed"
+  archive_password_required: "Encrypted archive: a password is required"
+  archive_bad_password: "Wrong archive password"
   pmx:
     field_negative: "%{field} is negative: %{val}"
     invalid_magic: "Invalid PMX magic number: %{magic}"
@@ -282,7 +285,7 @@ viewer:
       ok: "OK"
       cancel: "Cancel"
       apply: "Apply"
-      filter_archive: "Archive (.zip, .7z)"
+      filter_archive: "Archive (.zip, .7z, .rar)"
     open_model:
       title: "Open 3D model / VRMA animation"
       filter_supported: "Supported formats"
@@ -313,6 +316,10 @@ viewer:
       title: "Select Model in Archive"
       message1: "Multiple models found in the archive."
       message2: "Select a file to load."
+    archive_password:
+      title: "Archive Password"
+      message: "\"%{name}\" is password-protected. Enter the password (it will not be remembered)."
+      ok: "OK"
     tex_match:
       title: "Manual Texture Assignment"
       instruction: "Assign textures to materials that could not be auto-matched."
@@ -361,7 +368,7 @@ viewer:
     reload:
       failed: "Reload failed: %{error}"
       load_failed: "Load failed: %{error}"
-      file_not_loaded: "Could not load the file.\nCheck whether the file is corrupted or in a supported format (VRM/FBX/PMX/PMD/ZIP/7z).\nDetails: %{detail}"
+      file_not_loaded: "Could not load the file.\nCheck whether the file is corrupted or in a supported format (VRM/FBX/PMX/PMD/ZIP/7z/RAR).\nDetails: %{detail}"
     uvmap:
       exported: "UV map exported: %{path}"
       exported_psb: "UV map exported as PSB (auto-switched from PSD because the layer data exceeded the PSD 2 GiB limit): %{path}"

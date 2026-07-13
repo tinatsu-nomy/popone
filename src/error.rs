@@ -53,6 +53,15 @@ pub enum PoponeError {
     #[error("{}: {}", t!("error.archive_failed"), .0)]
     Archive(String),
 
+    /// Encrypted archive was opened without a password. The viewer catches
+    /// this variant (via `anyhow` downcast) and prompts the user for input.
+    #[error("{}", t!("error.archive_password_required"))]
+    ArchivePasswordRequired,
+
+    /// The supplied archive password did not match.
+    #[error("{}", t!("error.archive_bad_password"))]
+    ArchiveBadPassword,
+
     #[error("{0}")]
     Other(String),
 
@@ -80,7 +89,21 @@ impl From<zip::result::ZipError> for PoponeError {
 
 impl From<sevenz_rust2::Error> for PoponeError {
     fn from(e: sevenz_rust2::Error) -> Self {
-        PoponeError::Archive(format!("{e}"))
+        match e {
+            sevenz_rust2::Error::PasswordRequired => PoponeError::ArchivePasswordRequired,
+            sevenz_rust2::Error::MaybeBadPassword(_) => PoponeError::ArchiveBadPassword,
+            _ => PoponeError::Archive(format!("{e}")),
+        }
+    }
+}
+
+impl From<unrar::error::UnrarError> for PoponeError {
+    fn from(e: unrar::error::UnrarError) -> Self {
+        match e.code {
+            unrar::error::Code::MissingPassword => PoponeError::ArchivePasswordRequired,
+            unrar::error::Code::BadPassword => PoponeError::ArchiveBadPassword,
+            _ => PoponeError::Archive(format!("{e}")),
+        }
     }
 }
 

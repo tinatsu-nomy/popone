@@ -65,6 +65,8 @@ pub struct PendingArchive {
     pub source_path: PathBuf,
     pub append: bool,
     pub is_temp: bool,
+    /// Password entered for this archive (in-memory only, never persisted).
+    pub password: Option<String>,
 }
 
 /// Deferred load for a model inside an archive.
@@ -77,7 +79,52 @@ pub struct PendingArchiveLoad {
     pub shown: bool,
     pub append: bool,
     pub is_temp: bool,
+    /// Password entered for this archive (in-memory only, never persisted).
+    pub password: Option<String>,
 }
+
+/// State for the archive password-input dialog. Created when a background
+/// load fails with `ArchivePasswordPrompt`; the dialog fills `input` and sets
+/// `submitted`, then `poll_deferred_loads` restarts the load with the password.
+/// The password lives only in this struct and the in-flight load request --
+/// it is never written to `popone.toml` or kept after the load finishes.
+pub struct PendingArchivePassword {
+    pub path: PathBuf,
+    pub append: bool,
+    /// ZIP extract-stage retry: auto-select this internal model path after
+    /// re-listing, so the user does not have to pick the model again.
+    pub auto_select_model: Option<PathBuf>,
+    /// Text-field buffer bound to the dialog.
+    pub input: String,
+    /// Error line shown in the dialog (set after a wrong password).
+    pub error: Option<String>,
+    /// True once the user pressed OK; consumed by `poll_deferred_loads`.
+    pub submitted: bool,
+}
+
+/// Marker error raised by the BG parse thread when an archive needs a
+/// password (or the supplied one was wrong). Carries enough context for the
+/// main thread to reopen the password dialog and retry the load.
+#[derive(Debug)]
+pub struct ArchivePasswordPrompt {
+    pub path: PathBuf,
+    pub append: bool,
+    pub auto_select_model: Option<PathBuf>,
+    /// True when a password was supplied but rejected.
+    pub bad_password: bool,
+}
+
+impl std::fmt::Display for ArchivePasswordPrompt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.bad_password {
+            write!(f, "{}", t!("error.archive_bad_password"))
+        } else {
+            write!(f, "{}", t!("error.archive_password_required"))
+        }
+    }
+}
+
+impl std::error::Error for ArchivePasswordPrompt {}
 
 /// State for the FBX-load-method dialog (used when an FBX contains both model and animation).
 pub struct PendingFbxChoice {
@@ -194,6 +241,10 @@ pub enum BgLoadKind {
         source_path: PathBuf,
         is_temp: bool,
         append: bool,
+        /// Password used for listing (forwarded to the extract stage).
+        password: Option<String>,
+        /// Password-retry: skip the selection dialog and reload this model.
+        auto_select_model: Option<PathBuf>,
     },
 }
 
@@ -357,6 +408,8 @@ pub struct PendingState {
     pub archive: Option<PendingArchive>,
     /// Deferred archive model load.
     pub archive_load: Option<PendingArchiveLoad>,
+    /// Waiting for archive password input.
+    pub archive_password: Option<PendingArchivePassword>,
     /// State machine for background loading
     /// (unifies the dispatch reservation and the BG parse handle at the type level).
     pub bg_state: BackgroundLoadState,
@@ -615,6 +668,7 @@ impl Default for PendingState {
             pkg_load: None,
             archive: None,
             archive_load: None,
+            archive_password: None,
             bg_state: BackgroundLoadState::Idle,
             convert: None,
             rebuild: None,
@@ -1081,11 +1135,31 @@ impl ViewerApp {
                 }
                 Ok(Err(e)) => {
                     self.pending.bg_state = BackgroundLoadState::Idle;
-                    let msg = format!("{:#}", e);
-                    if msg.contains("bg load cancelled") {
-                        log::info!("Bg load cancelled (req={})", current_id);
+                    if let Some(prompt) = e.downcast_ref::<ArchivePasswordPrompt>() {
+                        // Encrypted archive: open the password dialog instead of a
+                        // failure toast, then retry the load with the input.
+                        log::info!(
+                            "Archive requires a password (bad_password={}): {}",
+                            prompt.bad_password,
+                            prompt.path.display()
+                        );
+                        self.pending.archive_password = Some(PendingArchivePassword {
+                            path: prompt.path.clone(),
+                            append: prompt.append,
+                            auto_select_model: prompt.auto_select_model.clone(),
+                            input: String::new(),
+                            error: prompt
+                                .bad_password
+                                .then(|| t!("error.archive_bad_password").into_owned()),
+                            submitted: false,
+                        });
                     } else {
-                        self.convert_message = Some(ConvertMessage::failure(msg));
+                        let msg = format!("{:#}", e);
+                        if msg.contains("bg load cancelled") {
+                            log::info!("Bg load cancelled (req={})", current_id);
+                        } else {
+                            self.convert_message = Some(ConvertMessage::failure(msg));
+                        }
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -1153,6 +1227,21 @@ impl ViewerApp {
                 .take()
                 .expect("pending_archive_load verified by shown");
             self.spawn_bg_archive_load(p);
+        }
+
+        // Archive password entered -> restart the load with the password.
+        if self
+            .pending
+            .archive_password
+            .as_ref()
+            .is_some_and(|p| p.submitted)
+        {
+            let p = self
+                .pending
+                .archive_password
+                .take()
+                .expect("pending archive_password verified by submitted");
+            self.spawn_bg_archive_index_retry(p);
         }
     }
 

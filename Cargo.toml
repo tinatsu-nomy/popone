@@ -1,6 +1,6 @@
 [package]
 name = "popone"
-version = "0.5.14"
+version = "0.5.15"
 edition = "2021"
 rust-version = "1.93"
 license = "0BSD"
@@ -31,8 +31,9 @@ chrono      = "0.4"
 clap        = { version = "4", features = ["derive"] }
 encoding_rs = "0.8"
 mikktspace  = "0.2"
-zip          = { version = "2", default-features = false, features = ["deflate"] }
+zip          = { version = "2", default-features = false, features = ["deflate", "aes-crypto"] }
 sevenz-rust2 = "0.20"
+unrar        = "0.5"
 tobj         = "4"
 toml         = "0.8"
 dunce        = "1"

@@ -6,7 +6,7 @@ VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x を 3D 表示します。
 
 ## ダウンロード
 
-最新リリース: **[popone-v0.5.14.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.5.14/popone-v0.5.14.exe)**
+最新リリース: **[popone-v0.5.15.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.5.15/popone-v0.5.15.exe)**
 
 全リリース一覧: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -66,6 +66,7 @@ Windows では exe にアイコンを埋め込むために [Windows SDK](https:/
 | tar | .unitypackage (tar.gz) 展開 |
 | zip | ZIP アーカイブ展開 |
 | sevenz-rust2 | 7z アーカイブ展開 |
+| unrar | RAR アーカイブ展開（公式 UnRAR ライブラリ） |
 | tobj | OBJ/MTL パーサー |
 | toml | TOML 設定パーサー |
 | dunce | UNC パス簡略化 |
@@ -107,6 +108,7 @@ Windows では exe にアイコンを埋め込むために [Windows SDK](https:/
 | [tar](https://github.com/alexcrichton/tar-rs) | MIT OR Apache-2.0 |
 | [zip](https://github.com/zip-rs/zip2) | MIT |
 | [sevenz-rust2](https://github.com/hasenbanck/sevenz-rust2) | Apache-2.0 |
+| [unrar](https://github.com/muja/unrar.rs) | MIT OR Apache-2.0 (bindings) / UnRAR license (bundled UnRAR source; see THIRD_PARTY_NOTICES.md) |
 | [tobj](https://github.com/tatsy/tobj) | MIT |
 | [clap](https://github.com/clap-rs/clap) | MIT OR Apache-2.0 |
 | [anyhow](https://github.com/dtolnay/anyhow) / [thiserror](https://github.com/dtolnay/thiserror) | MIT OR Apache-2.0 |

@@ -44,7 +44,8 @@ cli:
     error_prefix: "エラー"
   error:
     viewer_feature_required: "ビューアは viewer feature 付きでビルドする必要があります。\n使い方: popone <入力.vrm> <出力.pmx>\nビューア: cargo build --features viewer"
-    list_models_archive_only: "--list-models はアーカイブファイル（.zip / .7z）専用です"
+    list_models_archive_only: "--list-models はアーカイブファイル（.zip / .7z / .rar）専用です"
+    archive_password_gui_only: "パスワード付きアーカイブは CLI では扱えません。ビューア（GUI）で開いてください"
     archive_load_failed: "アーカイブ読み込み失敗: %{path}"
     unsupported_archive_format: "未対応のアーカイブ形式: %{ext}"
     archive_list_failed: "アーカイブ内モデル一覧取得失敗"
@@ -107,6 +108,8 @@ error:
   image_failed: "画像処理失敗"
   unitypackage_failed: "unitypackage 展開失敗"
   archive_failed: "アーカイブ処理失敗"
+  archive_password_required: "パスワード付きアーカイブです。パスワードを入力してください"
+  archive_bad_password: "アーカイブのパスワードが違います"
   pmx:
     field_negative: "%{field}が負: %{val}"
     invalid_magic: "PMXマジックナンバーが不正: %{magic}"
@@ -282,7 +285,7 @@ viewer:
       ok: "OK"
       cancel: "キャンセル"
       apply: "適用"
-      filter_archive: "アーカイブ (.zip, .7z)"
+      filter_archive: "アーカイブ (.zip, .7z, .rar)"
     open_model:
       title: "3Dモデル / VRMAアニメーションを開く"
       filter_supported: "対応形式"
@@ -313,6 +316,10 @@ viewer:
       title: "アーカイブ内モデル選択"
       message1: "アーカイブ内に複数のモデルが見つかりました。"
       message2: "読み込むファイルを選択してください。"
+    archive_password:
+      title: "アーカイブのパスワード"
+      message: "「%{name}」はパスワードで保護されています。パスワードを入力してください（記憶はされません）。"
+      ok: "OK"
     tex_match:
       title: "テクスチャ手動割当"
       instruction: "自動割当できなかった材質にテクスチャを割り当ててください。"
@@ -361,7 +368,7 @@ viewer:
     reload:
       failed: "リロード失敗: %{error}"
       load_failed: "読み込み失敗: %{error}"
-      file_not_loaded: "ファイルを読み込めませんでした。\nファイルが破損していないか、対応形式（VRM/FBX/PMX/PMD/ZIP/7z）であるか確認してください。\n詳細: %{detail}"
+      file_not_loaded: "ファイルを読み込めませんでした。\nファイルが破損していないか、対応形式（VRM/FBX/PMX/PMD/ZIP/7z/RAR）であるか確認してください。\n詳細: %{detail}"
     uvmap:
       exported: "UVマップ出力完了: %{path}"
       exported_psb: "UVマップをPSB形式で出力しました（レイヤーデータがPSDの2GiB上限を超えたためPSDから自動切替）: %{path}"

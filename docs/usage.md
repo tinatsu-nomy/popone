@@ -46,6 +46,7 @@
 | UnityPackage (`.unitypackage`) | Extracts Prefab / VRM / FBX + textures from tar.gz archive. Prefab-based texture and normal map auto-mapping supported |
 | ZIP (`.zip`) | Auto-detects and extracts VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage from archive |
 | 7z (`.7z`) | Auto-detects and extracts VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage from archive |
+| RAR (`.rar`) | Auto-detects and extracts VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage from archive (RAR4 / RAR5, extraction only) |
 
 ## Quick Start
 
@@ -160,7 +161,7 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 | UV Map PSD | Per-material layers with model-based group folders (from viewer) |
 
 - In the viewer, "PMX Convert" button exports immediately to `converted_modelXX/` directory. Output folder opens automatically in Explorer. Base output directory is configurable in the "Export" tab. Output PMX filename is taken from the editable "Model name" field in the top bar / right panel. The initial value is the source filename (the Prefab name when loaded via a Prefab, or the archive filename when loaded via an archive)
-- Auto-detection of VRM 0.0 / 1.0 / FBX / UnityPackage / ZIP / 7z
+- Auto-detection of VRM 0.0 / 1.0 / FBX / UnityPackage / ZIP / 7z / RAR
 - MMD standard bone insertion (master, center, groove, waist, leg IK, toe IK)
 - Semi-standard bones (waist cancel, leg D, toe EX, arm twist, wrist twist, shoulder cancel)
 - VRM Expression to PMX morph conversion
@@ -268,7 +269,8 @@ Shader information recorded in VRM 0.0 `materialProperties` is auto-detected and
 - **Texture size limit** — Textures exceeding the GPU's `max_texture_dimension_2d` (typically 8192px) are automatically downscaled. This may result in slight quality loss. Does not affect PMX conversion output (viewer display only)
 - **Mipmap generation** — All textures are uploaded with a full mipmap chain. Downsampling is performed in linear color space (sRGB-correct) to eliminate moiré and aliasing when the camera is pulled back
 - **Depth precision** — Reverse-Z depth buffer provides high precision at all distances, minimizing Z-fighting on large models and stages
-- **Extraction size limit** — Archive (ZIP / 7z) and `.unitypackage` extraction is capped at 2GB total. Files exceeding this limit will produce an error
+- **Extraction size limit** — Archive (ZIP / 7z / RAR) and `.unitypackage` extraction is capped at 2GB total. Files exceeding this limit will produce an error
+- **Password-protected archives are GUI-only** — Encrypted ZIP / 7z / RAR archives prompt for a password in the viewer. The password is used only for that load and is never saved; reloading prompts again. The CLI does not support encrypted archives
 - **MMD-specialized models** — Models optimized for MMD-specific rendering may display some surfaces incorrectly
 - **PMX 2.1 SoftBody** — Skipped (not supported)
 - **Viewer display and PMX output do not match exactly** — The viewer renders with a PBR-like shader approximating MToon / lilToon / Poiyomi, while PMX conversion maps materials to MMD's own shading model (diffuse + ambient + shade color + edge + toon + sphere). Shader-specific parameters (additive emission, rim light, shade shift, MatCap, outline width control, reflection/refraction, etc.) have no 1:1 mapping in PMX / MMD, so the appearance when the PMX is opened in MMD may not match the viewer preview. Final adjustments are expected to be done in PmxEditor or MMD itself
@@ -305,11 +307,11 @@ Options:
   --align-rigid-rotation  Align rigid body rotation to bone direction
   --raw-structure         Export with original bone structure (skip standard bone insertion + keep original bone names)
   --scale <FLOAT>         PMX export scale multiplier (default: 1.0)
-  --model-name <NAME>     Specify model filename inside archive (for ZIP/7z)
+  --model-name <NAME>     Specify model filename inside archive (for ZIP/7z/RAR)
   --fbx-name <NAME>       Specify FBX filename inside .unitypackage. When omitted,
                           auto-selects the largest FBX by file size (heuristic:
                           main model files are typically larger than animations or props)
-  --list-models           List models inside archive and exit (for ZIP/7z)
+  --list-models           List models inside archive and exit (for ZIP/7z/RAR)
   --log-level <LEVEL>     Log level (error/warn/info/debug, default: info)
 ```
 

@@ -54,6 +54,7 @@ pub enum FileFormat {
     UnityPackage,
     SevenZ,
     Zip,
+    Rar,
     /// .vrma, .gltf, .glb (animation), .anim
     Animation,
     Unknown,
@@ -72,6 +73,7 @@ pub(super) fn detect_format(ext: &str) -> FileFormat {
         "unitypackage" => FileFormat::UnityPackage,
         "7z" => FileFormat::SevenZ,
         "zip" => FileFormat::Zip,
+        "rar" => FileFormat::Rar,
         "vrma" | "anim" => FileFormat::Animation,
         _ => FileFormat::Unknown,
     }
@@ -98,6 +100,8 @@ pub(super) enum CpuParseInput {
         append: bool,
         normalize_pose: bool,
         normalize_to_tstance: bool,
+        /// Archive password (ZIP decrypts at this extract stage).
+        password: Option<String>,
     },
     /// Model inside a UnityPackage (FBX / VRM / Prefab).
     PkgModel {
@@ -126,7 +130,33 @@ pub(super) enum CpuParseInput {
         path: PathBuf,
         preloaded: Option<super::helpers::PreloadedData>,
         append: bool,
+        /// Password for encrypted archives (in-memory only, never persisted).
+        password: Option<String>,
+        /// Password-retry: auto-select this model after re-listing.
+        auto_select_model: Option<PathBuf>,
     },
+}
+
+/// Convert the archive layer's password markers into an `ArchivePasswordPrompt`
+/// carrying the context the main thread needs to reopen the dialog and retry.
+fn archive_password_prompt(
+    e: crate::error::PoponeError,
+    path: &Path,
+    append: bool,
+    auto_select_model: Option<PathBuf>,
+) -> anyhow::Error {
+    use crate::error::PoponeError;
+    match e {
+        PoponeError::ArchivePasswordRequired | PoponeError::ArchiveBadPassword => {
+            anyhow::Error::new(super::pending::ArchivePasswordPrompt {
+                path: path.to_path_buf(),
+                append,
+                auto_select_model,
+                bad_password: matches!(e, PoponeError::ArchiveBadPassword),
+            })
+        }
+        other => other.into(),
+    }
 }
 
 /// Pre-decode textures on the BG thread (Encoded → RawRgba).
@@ -399,13 +429,24 @@ fn cpu_parse_source_inner(
             append,
             normalize_pose: np,
             normalize_to_tstance: nt,
+            password,
         } => {
             check_cancel(cancel)?;
             let model_path = contents.models[model_index].1.clone();
             let kind = contents.models[model_index].3;
 
-            let bundle =
-                crate::archive::extract_model_bundle(&archive_data, format, contents, model_index)?;
+            // ZIP decrypts here (the extract stage). On a password failure, hand the
+            // selected model path back so the retry can skip the selection dialog.
+            let bundle = crate::archive::extract_model_bundle(
+                &archive_data,
+                format,
+                contents,
+                model_index,
+                password.as_deref(),
+            )
+            .map_err(|e| {
+                archive_password_prompt(e, &source_path, append, Some(model_path.clone()))
+            })?;
             check_cancel(cancel)?;
 
             // UnityPackage: build pkg_index on the BG thread and hand it to the main thread.
@@ -1258,6 +1299,8 @@ fn cpu_parse_source_inner(
             path,
             preloaded,
             append,
+            password,
+            auto_select_model,
         } => {
             check_cancel(cancel)?;
 
@@ -1281,16 +1324,24 @@ fn cpu_parse_source_inner(
             let format = crate::archive::archive_format_from_ext(&ext)
                 .with_context(|| t!("error.unsupported_archive_format", ext = ext).into_owned())?;
 
-            // List the models contained in the archive.
-            let contents = crate::archive::list_models(&archive_data, format)?;
+            // List the models contained in the archive. Solid formats (7z/RAR)
+            // decrypt everything here, so password failures surface at this stage.
+            let contents = crate::archive::list_models(&archive_data, format, password.as_deref())
+                .map_err(|e| {
+                    archive_password_prompt(e, &path, append, auto_select_model.clone())
+                })?;
 
             check_cancel(cancel)?;
 
-            // 7z: once entries are extracted, release the compressed payload to reduce memory peak.
+            // 7z/RAR: once entries are extracted, release the compressed payload to reduce memory peak.
             // Reload re-reads from disk (kept in memory only when is_temp).
-            let archive_data = if format == crate::archive::ArchiveFormat::SevenZ && !is_temp {
+            let archive_data = if matches!(
+                format,
+                crate::archive::ArchiveFormat::SevenZ | crate::archive::ArchiveFormat::Rar
+            ) && !is_temp
+            {
                 log::debug!(
-                    "7z: releasing {} bytes of compressed data (entries already extracted)",
+                    "7z/RAR: releasing {} bytes of compressed data (entries already extracted)",
                     archive_data.len()
                 );
                 Arc::from([] as [u8; 0])
@@ -1305,6 +1356,8 @@ fn cpu_parse_source_inner(
                 source_path: path.clone(),
                 is_temp,
                 append,
+                password,
+                auto_select_model,
             };
 
             let ir = IrModel::default();
@@ -1501,10 +1554,10 @@ impl ViewerApp {
         // Append mode.
         if append {
             // unitypackage / archive build their index on the BG thread.
-            if format == FileFormat::UnityPackage
-                || format == FileFormat::Zip
-                || format == FileFormat::SevenZ
-            {
+            if matches!(
+                format,
+                FileFormat::UnityPackage | FileFormat::Zip | FileFormat::SevenZ | FileFormat::Rar
+            ) {
                 self.spawn_bg_index_load(path, format, true);
                 return;
             }
@@ -1574,7 +1627,10 @@ impl ViewerApp {
             self.spawn_bg_index_load(path, format, false);
             return;
         }
-        if matches!(format, FileFormat::Zip | FileFormat::SevenZ) {
+        if matches!(
+            format,
+            FileFormat::Zip | FileFormat::SevenZ | FileFormat::Rar
+        ) {
             self.normalize_pose = false;
             self.normalize_to_tstance = false;
             self.spawn_bg_index_load(path, format, false);
@@ -1687,10 +1743,31 @@ impl ViewerApp {
                 path: path.clone(),
                 preloaded,
                 append,
+                password: None,
+                auto_select_model: None,
             }
         };
         // Index loads always return a kind_override, so the fallback is never used.
         self.spawn_bg_task(input, BgLoadKind::ArchiveInitial, path, |_| {});
+    }
+
+    /// Restart an archive load with the password entered in the dialog.
+    /// Always goes back through the index stage; `auto_select_model` skips the
+    /// model-selection dialog when the user had already picked one (ZIP).
+    pub(super) fn spawn_bg_archive_index_retry(
+        &mut self,
+        p: super::pending::PendingArchivePassword,
+    ) {
+        use super::pending::BgLoadKind;
+
+        let input = CpuParseInput::ArchiveIndex {
+            path: p.path.clone(),
+            preloaded: None,
+            append: p.append,
+            password: Some(p.input),
+            auto_select_model: p.auto_select_model,
+        };
+        self.spawn_bg_task(input, BgLoadKind::ArchiveInitial, p.path, |_| {});
     }
 
     /// Decompress and parse an in-archive model on a BG thread.
@@ -1709,6 +1786,7 @@ impl ViewerApp {
             append,
             normalize_pose: self.normalize_pose,
             normalize_to_tstance: self.normalize_to_tstance,
+            password: p.password,
         };
         let fallback = if append {
             BgLoadKind::ArchiveAppend
@@ -2037,12 +2115,32 @@ impl ViewerApp {
                 source_path,
                 is_temp,
                 append,
+                password,
+                auto_select_model,
             } => {
                 if contents.models.is_empty() {
                     anyhow::bail!(t!("error.archive_no_models_found").into_owned());
                 }
 
-                if contents.models.len() == 1 {
+                // Password-retry: reload the model the user already picked
+                // before the password prompt, skipping the selection dialog.
+                let preselected = auto_select_model
+                    .as_ref()
+                    .and_then(|sel| contents.models.iter().position(|(_, p, _, _)| p == sel));
+
+                if let Some(model_index) = preselected {
+                    self.pending.archive_load = Some(PendingArchiveLoad {
+                        archive_data,
+                        format,
+                        contents,
+                        model_index,
+                        source_path,
+                        shown: false,
+                        append,
+                        is_temp,
+                        password,
+                    });
+                } else if contents.models.len() == 1 {
                     self.pending.archive_load = Some(PendingArchiveLoad {
                         archive_data,
                         format,
@@ -2052,6 +2150,7 @@ impl ViewerApp {
                         shown: false,
                         append,
                         is_temp,
+                        password,
                     });
                 } else {
                     log::info!("Found {} models in archive:", contents.models.len());
@@ -2065,6 +2164,7 @@ impl ViewerApp {
                         source_path,
                         append,
                         is_temp,
+                        password,
                     });
                 }
             }
@@ -2316,7 +2416,7 @@ impl ViewerApp {
             FileFormat::Obj => self.try_load_obj(&path),
             FileFormat::Stl => self.try_load_stl(&path),
             FileFormat::DirectX => self.try_load_x(&path),
-            FileFormat::Zip | FileFormat::SevenZ => self.try_load_archive(&path),
+            FileFormat::Zip | FileFormat::SevenZ | FileFormat::Rar => self.try_load_archive(&path),
             _ => self.try_load_vrm(&path),
         };
 
@@ -2327,7 +2427,7 @@ impl ViewerApp {
                     FileFormat::UnityPackage => {
                         log::info!("Unitypackage indexed: {}", path.display());
                     }
-                    FileFormat::Zip | FileFormat::SevenZ => {
+                    FileFormat::Zip | FileFormat::SevenZ | FileFormat::Rar => {
                         log::info!("Archive indexed: {}", path.display());
                     }
                     _ => {
@@ -2667,7 +2767,7 @@ impl ViewerApp {
         let format = crate::archive::archive_format_from_ext(&ext)
             .with_context(|| t!("error.unsupported_archive_format", ext = ext).into_owned())?;
 
-        let contents = crate::archive::list_models(&archive_data, format)?;
+        let contents = crate::archive::list_models(&archive_data, format, None)?;
 
         if contents.models.is_empty() {
             anyhow::bail!(t!("error.archive_no_models_found").into_owned());
@@ -2684,6 +2784,7 @@ impl ViewerApp {
                 shown: false,
                 append,
                 is_temp,
+                password: None,
             });
         } else {
             // Multiple models → show the selection dialog.
@@ -2698,6 +2799,7 @@ impl ViewerApp {
                 source_path: path.to_path_buf(),
                 append,
                 is_temp,
+                password: None,
             });
         }
         Ok(())
@@ -2724,6 +2826,7 @@ impl ViewerApp {
             pending.format,
             pending.contents,
             pending.model_index,
+            pending.password.as_deref(),
         )?;
 
         // UnityPackage: double-extract and feed back into the existing unitypackage flow.
@@ -2880,7 +2983,9 @@ impl ViewerApp {
         let format = crate::archive::archive_format_from_ext(&ext)
             .with_context(|| t!("error.unsupported_archive_format", ext = ext).into_owned())?;
 
-        let contents = crate::archive::list_models(data, format)?;
+        // Reload has no password retained (by design: passwords are never kept);
+        // encrypted archives fail here with the password-required message.
+        let contents = crate::archive::list_models(data, format, None)?;
 
         // Re-locate the same model by `selected_entry_path`.
         let model_index = contents
@@ -2895,7 +3000,8 @@ impl ViewerApp {
                 .into_owned())
             })?;
 
-        let bundle = crate::archive::extract_model_bundle(data, format, contents, model_index)?;
+        let bundle =
+            crate::archive::extract_model_bundle(data, format, contents, model_index, None)?;
         let _ = inner_kind; // use bundle.kind instead
         self.build_ir_from_archive_bundle(&bundle, original_path)
     }
@@ -2918,7 +3024,7 @@ impl ViewerApp {
         let format = crate::archive::archive_format_from_ext(&ext)
             .with_context(|| t!("error.unsupported_archive_format", ext = ext).into_owned())?;
 
-        let contents = crate::archive::list_models(data, format)?;
+        let contents = crate::archive::list_models(data, format, None)?;
 
         let model_index = contents
             .models
@@ -2932,7 +3038,8 @@ impl ViewerApp {
                 .into_owned())
             })?;
 
-        let bundle = crate::archive::extract_model_bundle(data, format, contents, model_index)?;
+        let bundle =
+            crate::archive::extract_model_bundle(data, format, contents, model_index, None)?;
         Ok(bundle.model.data)
     }
 
@@ -5429,7 +5536,7 @@ impl ViewerApp {
         let format = crate::archive::archive_format_from_ext(&ext)
             .with_context(|| t!("error.unsupported_archive_format", ext = ext).into_owned())?;
 
-        let contents = crate::archive::list_models(data, format)?;
+        let contents = crate::archive::list_models(data, format, None)?;
 
         let model_index = contents
             .models
@@ -5443,7 +5550,8 @@ impl ViewerApp {
                 .into_owned())
             })?;
 
-        let bundle = crate::archive::extract_model_bundle(data, format, contents, model_index)?;
+        let bundle =
+            crate::archive::extract_model_bundle(data, format, contents, model_index, None)?;
 
         let pkg_data = bundle.model.data;
 
@@ -5649,6 +5757,7 @@ impl ViewerApp {
                         "vrma",
                         "zip",
                         "7z",
+                        "rar",
                     ],
                 )
                 .add_filter("VRM (.vrm)", &["vrm"])
@@ -5659,7 +5768,7 @@ impl ViewerApp {
                 .add_filter("STL (.stl)", &["stl"])
                 .add_filter("DirectX text (.x)", &["x"])
                 .add_filter("UnityPackage (.unitypackage)", &["unitypackage"])
-                .add_filter(filter_archive, &["zip", "7z"])
+                .add_filter(filter_archive, &["zip", "7z", "rar"])
                 .add_filter("VRMA (.vrma)", &["vrma"]);
             if let Some(ref dir) = initial_dir {
                 dialog = dialog.set_directory(dir);
@@ -5698,6 +5807,7 @@ impl ViewerApp {
                         "unitypackage",
                         "zip",
                         "7z",
+                        "rar",
                     ],
                 )
                 .add_filter("VRM (.vrm)", &["vrm"])
@@ -5705,7 +5815,7 @@ impl ViewerApp {
                 .add_filter("PMX (.pmx)", &["pmx"])
                 .add_filter("PMD (.pmd)", &["pmd"])
                 .add_filter("UnityPackage (.unitypackage)", &["unitypackage"])
-                .add_filter(filter_archive, &["zip", "7z"]);
+                .add_filter(filter_archive, &["zip", "7z", "rar"]);
             if let Some(ref dir) = initial_dir {
                 dialog = dialog.set_directory(dir);
             }
@@ -5733,7 +5843,7 @@ impl ViewerApp {
             }
             return;
         }
-        if matches!(ext.as_str(), "zip" | "7z") {
+        if matches!(ext.as_str(), "zip" | "7z" | "rar") {
             match self.try_load_archive_for_append(&path) {
                 Ok(()) => {}
                 Err(e) => {
@@ -6500,6 +6610,7 @@ impl ViewerApp {
                         | "unitypackage"
                         | "zip"
                         | "7z"
+                        | "rar"
                 );
 
                 // Unify temp / non-temp paths through a single PendingLoadDispatch.

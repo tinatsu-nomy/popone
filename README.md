@@ -6,7 +6,7 @@ A 3D viewer for VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x files.
 
 ## Download
 
-Latest release: **[popone-v0.5.14.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.5.14/popone-v0.5.14.exe)**
+Latest release: **[popone-v0.5.15.exe](https://github.com/tinatsu-nomy/popone/releases/download/v0.5.15/popone-v0.5.15.exe)**
 
 All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 
@@ -67,6 +67,7 @@ On Windows, [Windows SDK](https://developer.microsoft.com/windows/downloads/wind
 | tar | .unitypackage (tar.gz) extraction |
 | zip | ZIP archive extraction |
 | sevenz-rust2 | 7z archive extraction |
+| unrar | RAR archive extraction (official UnRAR library) |
 | tobj | OBJ/MTL parser |
 | toml | TOML config parser |
 | dunce | UNC path simplification |
@@ -108,6 +109,7 @@ On Windows, [Windows SDK](https://developer.microsoft.com/windows/downloads/wind
 | [tar](https://github.com/alexcrichton/tar-rs) | MIT OR Apache-2.0 |
 | [zip](https://github.com/zip-rs/zip2) | MIT |
 | [sevenz-rust2](https://github.com/hasenbanck/sevenz-rust2) | Apache-2.0 |
+| [unrar](https://github.com/muja/unrar.rs) | MIT OR Apache-2.0 (bindings) / UnRAR license (bundled UnRAR source; see THIRD_PARTY_NOTICES.md) |
 | [tobj](https://github.com/tatsy/tobj) | MIT |
 | [clap](https://github.com/clap-rs/clap) | MIT OR Apache-2.0 |
 | [anyhow](https://github.com/dtolnay/anyhow) / [thiserror](https://github.com/dtolnay/thiserror) | MIT OR Apache-2.0 |

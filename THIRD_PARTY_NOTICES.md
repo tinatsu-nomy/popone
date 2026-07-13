@@ -5,6 +5,68 @@ The source code of popone itself is licensed under [0BSD](LICENSE).
 
 ---
 
+## UnRAR
+
+- **Component:** The official UnRAR source code (statically linked into the binary via the [`unrar` crate](https://crates.io/crates/unrar), which vendors it through `unrar_sys`)
+- **Copyright:** Alexander L. Roshal
+- **License:** UnRAR license (free for all purposes, with restrictions below)
+- **Source:** https://www.rarlab.com/rar_add.htm
+- **Note:** popone uses UnRAR **for extraction only**. Per the UnRAR license, the UnRAR source code may not be used to re-create the proprietary RAR compression algorithm; popone does not create RAR archives.
+
+```
+ ******    *****   ******   UnRAR - free utility for RAR archives
+ **   **  **   **  **   **  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ ******   *******  ******    License for use and distribution of
+ **   **  **   **  **   **   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ **   **  **   **  **   **         FREE portable version
+                                   ~~~~~~~~~~~~~~~~~~~~~
+
+      The source code of UnRAR utility is freeware. This means:
+
+   1. All copyrights to RAR and the utility UnRAR are exclusively
+      owned by the author - Alexander Roshal.
+
+   2. UnRAR source code may be used in any software to handle
+      RAR archives without limitations free of charge, but cannot be
+      used to develop RAR (WinRAR) compatible archiver and to
+      re-create RAR compression algorithm, which is proprietary.
+      Distribution of modified UnRAR source code in separate form
+      or as a part of other software is permitted, provided that
+      full text of this paragraph, starting from "UnRAR source code"
+      words, is included in license, or in documentation if license
+      is not available, and in source code comments of resulting package.
+
+   3. The UnRAR utility may be freely distributed. It is allowed
+      to distribute UnRAR inside of other software packages.
+
+   4. THE RAR ARCHIVER AND THE UnRAR UTILITY ARE DISTRIBUTED "AS IS".
+      NO WARRANTY OF ANY KIND IS EXPRESSED OR IMPLIED.  YOU USE AT 
+      YOUR OWN RISK. THE AUTHOR WILL NOT BE LIABLE FOR DATA LOSS, 
+      DAMAGES, LOSS OF PROFITS OR ANY OTHER KIND OF LOSS WHILE USING
+      OR MISUSING THIS SOFTWARE.
+
+   5. Installing and using the UnRAR utility signifies acceptance of
+      these terms and conditions of the license.
+
+   6. If you don't agree with terms of the license you must remove
+      UnRAR files from your storage devices and cease to use the
+      utility.
+
+      Thank you for your interest in RAR and UnRAR.
+
+
+                                            Alexander L. Roshal
+```
+
+## RAR Test Fixtures
+
+- **Files:** `tests/data/version.rar`, `tests/data/crypted.rar`, `tests/data/comment-hpw-password.rar`
+- **Source:** Test data from the [`unrar` crate repository](https://github.com/muja/unrar.rs) (muja/unrar.rs)
+- **License:** MIT OR Apache-2.0
+- **Note:** Small sample archives used only by the automated test suite; they are not part of the distributed binary.
+
+---
+
 ## Application Icon & Splash Image
 
 - **Files:** `assets/popone_icon.ico`, `assets/popone_icon.png`, `assets/popone_image.png`

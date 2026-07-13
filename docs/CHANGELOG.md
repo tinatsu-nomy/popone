@@ -3,77 +3,82 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.5.14 (2026-07-08)](#v0514-2026-07-08)
+  - [v0.5.15 (2026-07-13)](#v0515-2026-07-13)
     - [New Features](#new-features)
-    - [Bug Fixes (found while adding the above)](#bug-fixes-found-while-adding-the-above)
+    - [Internals](#internals)
     - [Tests](#tests)
     - [Scope Notes](#scope-notes)
-  - [v0.5.13 (2026-07-06)](#v0513-2026-07-06)
-    - [Bug Fixes](#bug-fixes)
+  - [v0.5.14 (2026-07-08)](#v0514-2026-07-08)
+    - [New Features](#new-features-1)
+    - [Bug Fixes (found while adding the above)](#bug-fixes-found-while-adding-the-above)
     - [Tests](#tests-1)
     - [Scope Notes](#scope-notes-1)
-  - [v0.5.12 (2026-06-11)](#v0512-2026-06-11)
-    - [Bug Fixes](#bug-fixes-1)
-    - [Internals](#internals)
+  - [v0.5.13 (2026-07-06)](#v0513-2026-07-06)
+    - [Bug Fixes](#bug-fixes)
     - [Tests](#tests-2)
     - [Scope Notes](#scope-notes-2)
-  - [v0.5.11 (2026-05-16)](#v0511-2026-05-16)
-    - [New Features](#new-features-1)
-    - [Tests](#tests-3)
+  - [v0.5.12 (2026-06-11)](#v0512-2026-06-11)
+    - [Bug Fixes](#bug-fixes-1)
     - [Internals](#internals-1)
+    - [Tests](#tests-3)
     - [Scope Notes](#scope-notes-3)
-  - [v0.5.10 (2026-05-15)](#v0510-2026-05-15)
-    - [Bug Fixes](#bug-fixes-2)
+  - [v0.5.11 (2026-05-16)](#v0511-2026-05-16)
+    - [New Features](#new-features-2)
+    - [Tests](#tests-4)
     - [Internals](#internals-2)
     - [Scope Notes](#scope-notes-4)
+  - [v0.5.10 (2026-05-15)](#v0510-2026-05-15)
+    - [Bug Fixes](#bug-fixes-2)
+    - [Internals](#internals-3)
+    - [Scope Notes](#scope-notes-5)
   - [v0.5.9 (2026-05-05)](#v059-2026-05-05)
     - [New Features / Improvements](#new-features--improvements)
     - [Internals (i18n housekeeping)](#internals-i18n-housekeeping)
-    - [Scope Notes](#scope-notes-5)
+    - [Scope Notes](#scope-notes-6)
   - [v0.5.8 (2026-04-22)](#v058-2026-04-22)
-    - [Internals](#internals-3)
-  - [v0.5.7 (2026-04-22)](#v057-2026-04-22)
-    - [New Features](#new-features-2)
     - [Internals](#internals-4)
-  - [v0.5.6 (2026-04-14)](#v056-2026-04-14)
+  - [v0.5.7 (2026-04-22)](#v057-2026-04-22)
     - [New Features](#new-features-3)
     - [Internals](#internals-5)
+  - [v0.5.6 (2026-04-14)](#v056-2026-04-14)
+    - [New Features](#new-features-4)
+    - [Internals](#internals-6)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
   - [v0.5.5 (2026-04-13)](#v055-2026-04-13)
     - [New Features (Phase 1)](#new-features-phase-1)
     - [New Features (Phase 2)](#new-features-phase-2)
     - [New Features (Phase 3)](#new-features-phase-3)
-    - [Internals](#internals-6)
-    - [Scope Notes](#scope-notes-6)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
-    - [Tests](#tests-4)
-  - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
-    - [New Features](#new-features-4)
     - [Internals](#internals-7)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
+    - [Scope Notes](#scope-notes-7)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
     - [Tests](#tests-5)
-  - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
+  - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
     - [New Features](#new-features-5)
     - [Internals](#internals-8)
-  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
+    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
+    - [Tests](#tests-6)
+  - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
     - [New Features](#new-features-6)
     - [Internals](#internals-9)
+  - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
+    - [New Features](#new-features-7)
+    - [Internals](#internals-10)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-3)
   - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
-    - [New Features](#new-features-7)
+    - [New Features](#new-features-8)
     - [Performance](#performance)
-    - [Internals](#internals-10)
+    - [Internals](#internals-11)
     - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-4)
-    - [Tests](#tests-6)
+    - [Tests](#tests-7)
     - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
-    - [New Features](#new-features-8)
-    - [Behavior Changes](#behavior-changes)
-    - [Tests](#tests-7)
-  - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
     - [New Features](#new-features-9)
+    - [Behavior Changes](#behavior-changes)
+    - [Tests](#tests-8)
+  - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
+    - [New Features](#new-features-10)
     - [Behavior Changes](#behavior-changes-1)
-    - [Internals](#internals-11)
+    - [Internals](#internals-12)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -81,6 +86,31 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.15 (2026-07-13)
+
+An archive feature release: RAR archive support and password-protected archive support (GUI only).
+
+### New Features
+
+- **RAR archive support** — `.rar` files (RAR4 / RAR5) can now be opened everywhere ZIP / 7z already worked: viewer file dialog, drag & drop, append (Shift + drop), and CLI conversion / `--list-models`. Extraction uses the official UnRAR library (statically linked via the `unrar` crate); like 7z, RAR is a solid format, so matching entries are fully extracted in one pass under the same 2 GB total cap. See `THIRD_PARTY_NOTICES.md` for the UnRAR license.
+- **Password-protected archives (GUI only)** — Encrypted ZIP (ZipCrypto / AES), 7z (including encrypted headers), and RAR (including encrypted headers) now prompt for a password in the viewer instead of failing with a generic error. A wrong password reopens the dialog with an error line, and for ZIP (which decrypts at the extract stage) the model picked before the prompt is re-selected automatically after the retry. **The password is held in memory only for the retried load — it is never written to `popone.toml`, never logged, and not remembered across loads.** The CLI intentionally has no password prompt; encrypted archives fail with a message pointing to the GUI.
+
+### Internals
+
+- `PoponeError` gains `ArchivePasswordRequired` / `ArchiveBadPassword` variants; all three archive backends (zip / sevenz-rust2 / unrar) normalize their password errors into them.
+- ZIP listing switched from `by_index` to `by_index_raw`, so encrypted ZIPs can be listed (and their model list shown) without a password — ZIP encrypts entry payloads only.
+- The zip crate's `aes-crypto` feature is enabled for AES-encrypted ZIP support.
+
+### Tests
+
+- Password round-trip tests for AES-encrypted ZIP and header-encrypted 7z (built in-memory with the zip / sevenz-rust2 writers): listing, missing-password, wrong-password, and correct-password paths.
+- RAR tests against small fixtures from the unrar crate repository (plain, content-encrypted, header-encrypted): password-required detection, header decryption with the correct password, wrong-password failure, and broken-file rejection.
+
+### Scope Notes
+
+- Reloading a password-protected archive prompts again by design (the password is not retained). The CLI does not support encrypted archives.
+- Creating RAR archives is not supported (and is prohibited by the UnRAR license); extraction only.
 
 ## v0.5.14 (2026-07-08)
 

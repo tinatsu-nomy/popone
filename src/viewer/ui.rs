@@ -328,6 +328,7 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
 
     // In-archive model-selection dialog.
     show_archive_select_dialog(ctx, app);
+    show_archive_password_dialog(ctx, app);
 
     // unitypackage manual texture-assignment dialog + real-time preview.
     app.prepare_tex_match_views();
@@ -743,9 +744,81 @@ fn show_archive_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
             shown: false,
             append: pending.append,
             is_temp: pending.is_temp,
+            password: pending.password,
         });
     } else if cancelled || !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.pending.archive = None;
+    }
+}
+
+/// Password-input dialog for encrypted archives. The entered password is used
+/// once for the retried load and never persisted (see `PendingArchivePassword`).
+fn show_archive_password_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
+    let Some(pending) = app.pending.archive_password.as_mut() else {
+        return;
+    };
+    // Already submitted: keep the dialog hidden while the retry is dispatched.
+    if pending.submitted {
+        return;
+    }
+
+    let mut submitted = false;
+    let mut cancelled = false;
+    let mut open = true;
+
+    egui::Window::new(t!("viewer.dialog.archive_password.title"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .default_pos(ctx.screen_rect().center())
+        .pivot(egui::Align2::CENTER_CENTER)
+        .show(ctx, |ui| {
+            let file_name = pending
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
+            ui.label(t!(
+                "viewer.dialog.archive_password.message",
+                name = file_name
+            ));
+            if let Some(ref err) = pending.error {
+                ui.colored_label(egui::Color32::from_rgb(0xE0, 0x60, 0x60), err);
+            }
+            let edit = egui::TextEdit::singleline(&mut pending.input)
+                .password(true)
+                .desired_width(240.0);
+            let response = ui.add(edit);
+            // Focus the field when the dialog opens so the user can type immediately.
+            if !response.has_focus() && pending.input.is_empty() && pending.error.is_none() {
+                response.request_focus();
+            }
+            let enter_pressed =
+                response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            ui.separator();
+            ui.horizontal(|ui| {
+                let ok_enabled = !pending.input.is_empty();
+                if ui
+                    .add_enabled(
+                        ok_enabled,
+                        egui::Button::new(t!("viewer.dialog.archive_password.ok")),
+                    )
+                    .clicked()
+                    || (enter_pressed && ok_enabled)
+                {
+                    submitted = true;
+                }
+                if ui.button(t!("viewer.dialog.common.cancel")).clicked() {
+                    cancelled = true;
+                }
+            });
+        });
+
+    if submitted {
+        pending.error = None;
+        pending.submitted = true;
+    } else if cancelled || !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.pending.archive_password = None;
     }
 }
 
