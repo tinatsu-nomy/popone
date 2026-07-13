@@ -1041,6 +1041,39 @@ mod tests {
         assert_eq!(bundle.model.data, b"STL secret data");
     }
 
+    /// Regression test: a solid 7z whose first entry is *not* extracted
+    /// (filtered out) used to corrupt every following entry.
+    /// sevenz-rust2's BlockDecoder does not drain unread bytes of a skipped
+    /// entry, so the next entry's reader started mid-stream and failed CRC
+    /// verification (`ChecksumVerificationFailed`) on intact archives.
+    #[test]
+    fn test_sevenz_solid_with_skipped_leading_entry() {
+        // One solid block: [pose.vpd (filtered out), model.stl (extracted)]
+        let vpd_data = vec![0xABu8; 4096];
+        let stl_data = b"STL solid block data".to_vec();
+        let mut buf = Vec::new();
+        {
+            let mut writer =
+                sevenz_rust2::ArchiveWriter::new(std::io::Cursor::new(&mut buf)).unwrap();
+            let entries = vec![
+                sevenz_rust2::ArchiveEntry::new_file("Poses/pose.vpd"),
+                sevenz_rust2::ArchiveEntry::new_file("model.stl"),
+            ];
+            let readers = vec![
+                sevenz_rust2::SourceReader::new(std::io::Cursor::new(vpd_data)),
+                sevenz_rust2::SourceReader::new(std::io::Cursor::new(stl_data.clone())),
+            ];
+            writer.push_archive_entries(entries, readers).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let contents = list_models(&buf, ArchiveFormat::SevenZ, None).unwrap();
+        assert_eq!(contents.models.len(), 1);
+        assert_eq!(contents.models[0].3, ArchiveModelKind::Stl);
+        let bundle = extract_model_bundle(&buf, ArchiveFormat::SevenZ, contents, 0, None).unwrap();
+        assert_eq!(bundle.model.data, stl_data);
+    }
+
     #[test]
     fn test_rar_format_from_ext() {
         assert_eq!(archive_format_from_ext("rar"), Some(ArchiveFormat::Rar));

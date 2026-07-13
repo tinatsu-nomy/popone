@@ -34,6 +34,16 @@ pub fn extract_filtered(
     // `dest` is unused (we handle bytes inside the callback) but required by the API.
     let dummy_dest = std::env::temp_dir();
 
+    // Solid 7z blocks decode as one continuous stream, and sevenz-rust2's
+    // BlockDecoder does NOT drain the unread bytes of an entry the callback
+    // skips -- the next entry's reader would then start mid-stream and fail
+    // CRC verification (ChecksumVerificationFailed on perfectly intact
+    // archives). Read skipped entries to the end to keep the stream aligned.
+    let drain = |reader: &mut dyn std::io::Read| -> std::result::Result<bool, sevenz_rust2::Error> {
+        std::io::copy(reader, &mut std::io::sink())?;
+        Ok(true)
+    };
+
     let extract_fn = |entry: &sevenz_rust2::ArchiveEntry,
                       reader: &mut dyn std::io::Read,
                       _dest_path: &std::path::PathBuf|
@@ -41,7 +51,7 @@ pub fn extract_filtered(
         let name = entry.name();
         let norm_path = match normalize_archive_path(name) {
             Ok(p) => p,
-            Err(_) => return Ok(true), // skip unsafe paths
+            Err(_) => return drain(reader), // skip unsafe paths
         };
 
         if entry.is_directory() {
@@ -49,7 +59,7 @@ pub fn extract_filtered(
         }
 
         if !should_extract(&norm_path) {
-            return Ok(true); // skip unwanted files
+            return drain(reader); // skip unwanted files
         }
 
         let size = entry.size();

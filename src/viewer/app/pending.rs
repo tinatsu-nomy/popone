@@ -1158,6 +1158,9 @@ impl ViewerApp {
                         if msg.contains("bg load cancelled") {
                             log::info!("Bg load cancelled (req={})", current_id);
                         } else {
+                            // Also log the failure: the toast is transient, and
+                            // without this the log file holds no trace at all.
+                            log::error!("Bg load failed (req={}): {}", current_id, msg);
                             self.convert_message = Some(ConvertMessage::failure(msg));
                         }
                     }
