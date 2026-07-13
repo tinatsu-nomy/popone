@@ -88,7 +88,7 @@
 
 [日本語](CHANGELOG.jp.md)
 
-## v0.5.15 (2026-07-13)
+## v0.5.15 (2026-07-14)
 
 An archive feature release: RAR archive support and password-protected archive support (GUI only).
 
