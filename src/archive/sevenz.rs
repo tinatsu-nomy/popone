@@ -2,30 +2,21 @@
 
 use crate::error::Result;
 use rust_i18n::t;
-use std::path::Path;
 
-use super::{normalize_archive_path, ArchiveEntry, MODEL_EXTENSIONS, TEXTURE_EXTENSIONS};
-
-/// Whether the extension is one we want to extract (shared with the RAR extractor).
-pub(super) fn should_extract(path: &Path) -> bool {
-    let ext = crate::path_ext_lower(path);
-    MODEL_EXTENSIONS.contains(&ext.as_str())
-        || TEXTURE_EXTENSIONS.contains(&ext.as_str())
-        || ext == "txt"
-        || ext == "spa"
-        || ext == "sph"
-        || ext == "mtl"
-}
+use super::{normalize_archive_path, should_extract, ArchiveEntry};
 
 /// Extract a 7z archive, keeping only model/texture extensions in memory.
 /// `max_total_bytes`: total extraction size limit.
 /// `password`: for AES-encrypted archives (header and/or content encryption).
 /// Encrypted archives without a password fail with `ArchivePasswordRequired`
 /// (mapped from `sevenz_rust2::Error::PasswordRequired` in `error.rs`).
+/// `include_archives`: also keep nested archives (zip/7z/rar) for one-level
+/// nested extraction; pass false when this call itself extracts a nested one.
 pub fn extract_filtered(
     data: &[u8],
     max_total_bytes: u64,
     password: Option<&str>,
+    include_archives: bool,
 ) -> Result<Vec<ArchiveEntry>> {
     let cursor = std::io::Cursor::new(data);
     let mut entries = Vec::new();
@@ -58,7 +49,7 @@ pub fn extract_filtered(
             return Ok(true);
         }
 
-        if !should_extract(&norm_path) {
+        if !should_extract(&norm_path, include_archives) {
             return drain(reader); // skip unwanted files
         }
 

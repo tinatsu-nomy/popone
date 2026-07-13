@@ -48,6 +48,8 @@
 | 7z (`.7z`) | Auto-detects and extracts VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage from archive |
 | RAR (`.rar`) | Auto-detects and extracts VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage from archive (RAR4 / RAR5, extraction only) |
 
+Archives nested one level deep (a ZIP / 7z / RAR inside the archive) are also expanded and their models merged into the selection list.
+
 ## Quick Start
 
 ```bash

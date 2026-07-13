@@ -48,6 +48,8 @@
 | 7z (`.7z`) | アーカイブ内の VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage を自動検出・展開 |
 | RAR (`.rar`) | アーカイブ内の VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage を自動検出・展開（RAR4 / RAR5、展開専用） |
 
+アーカイブの中にさらにアーカイブ（ZIP / 7z / RAR）がある場合も 1 段まで展開し、内側のモデルを選択一覧に合流させる。
+
 ## クイックスタート
 
 ```bash

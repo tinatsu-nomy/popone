@@ -32,8 +32,28 @@ pub const MODEL_EXTENSIONS: &[&str] = &[
 /// Texture extensions (`psd` excluded -- multi-hundred-MB files risk OOM).
 pub const TEXTURE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff", "dds"];
 
+/// Nested-archive extensions. Archives found inside an archive are expanded
+/// one level deep and their models merged into the listing (a common MMD
+/// distribution shape: readme files next to an inner ZIP holding the model).
+pub const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "7z", "rar"];
+
 /// Extraction size cap: 2 GB.
 const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Whether the extension is one we want to extract from an archive.
+/// `include_archives`: also extract nested archives (top level only -- the
+/// depth limit that keeps self-referential "archive quine" bombs from
+/// recursing forever).
+pub(crate) fn should_extract(path: &Path, include_archives: bool) -> bool {
+    let ext = crate::path_ext_lower(path);
+    MODEL_EXTENSIONS.contains(&ext.as_str())
+        || TEXTURE_EXTENSIONS.contains(&ext.as_str())
+        || ext == "txt"
+        || ext == "spa"
+        || ext == "sph"
+        || ext == "mtl"
+        || (include_archives && ARCHIVE_EXTENSIONS.contains(&ext.as_str()))
+}
 
 /// Archive entry metadata (used for listing; no payload).
 pub struct ArchiveEntryMeta {
@@ -114,10 +134,12 @@ pub struct ModelBundle {
 /// Result of an archive model listing.
 pub struct ArchiveContents {
     /// (index, normalized internal path, display filename, kind).
+    /// Models from nested archives use the composite path `outer/inner.zip/model.pmx`.
     pub models: Vec<(usize, PathBuf, String, ArchiveModelKind)>,
-    /// For 7z: holds every extracted entry.
+    /// 7z/RAR: every extracted entry. ZIP: entries expanded from nested
+    /// archives (composite paths); plain outer entries stay metadata-only.
     entries: Option<Vec<ArchiveEntry>>,
-    /// For ZIP: only metadata.
+    /// For ZIP: metadata of the outer archive's own entries.
     metas: Option<Vec<ArchiveEntryMeta>>,
 }
 
@@ -157,10 +179,15 @@ pub fn archive_format_from_ext(ext: &str) -> Option<ArchiveFormat> {
 /// inside `ArchiveContents` so that `extract_model_bundle` can reuse them without
 /// re-extracting.
 ///
+/// Archives nested one level deep (zip/7z/rar inside the archive -- a common
+/// MMD distribution shape) are expanded and their models merged into the
+/// listing under the composite path `outer/inner.zip/model.pmx`. Deeper
+/// nesting is deliberately not expanded.
+///
 /// `password`: for encrypted archives. Encryption raises
 /// `PoponeError::ArchivePasswordRequired` / `ArchiveBadPassword` so the viewer
-/// can prompt the user and retry. ZIP never needs it at the listing stage
-/// (only entry payloads are encrypted).
+/// can prompt the user and retry. The same password is tried on nested
+/// archives (plaintext ones ignore it).
 pub fn list_models(
     data: &[u8],
     format: ArchiveFormat,
@@ -169,24 +196,49 @@ pub fn list_models(
     match format {
         ArchiveFormat::Zip => {
             let metas = zip_extract::list_entries(data)?;
-            let models = find_models_from_metas(&metas);
+            let mut models = find_models_from_metas(&metas);
+
+            // One-level nested archives: pull their bytes, expand, merge.
+            let nested_paths: Vec<PathBuf> = metas
+                .iter()
+                .filter(|m| path_to_archive_format(&m.path).is_some())
+                .map(|m| m.path.clone())
+                .collect();
+            let mut entries: Vec<ArchiveEntry> = Vec::new();
+            if !nested_paths.is_empty() {
+                let refs: Vec<&Path> = nested_paths.iter().map(|p| p.as_path()).collect();
+                let nested_archives =
+                    zip_extract::extract_files(data, &refs, MAX_TOTAL_BYTES, password)?;
+                let used: u64 = nested_archives.iter().map(|e| e.data.len() as u64).sum();
+                let mut remaining = MAX_TOTAL_BYTES.saturating_sub(used);
+                for arc in nested_archives {
+                    remaining = expand_nested_archive(arc, remaining, password, &mut entries)?;
+                }
+            }
+            models.extend(find_models_from_entries(&entries));
             Ok(ArchiveContents {
                 models,
-                entries: None,
+                entries: (!entries.is_empty()).then_some(entries),
                 metas: Some(metas),
             })
         }
-        ArchiveFormat::SevenZ => {
-            let entries = sevenz::extract_filtered(data, MAX_TOTAL_BYTES, password)?;
-            let models = find_models_from_entries(&entries);
-            Ok(ArchiveContents {
-                models,
-                entries: Some(entries),
-                metas: None,
-            })
-        }
-        ArchiveFormat::Rar => {
-            let entries = rar::extract_filtered(data, MAX_TOTAL_BYTES, password)?;
+        ArchiveFormat::SevenZ | ArchiveFormat::Rar => {
+            let raw_entries = match format {
+                ArchiveFormat::SevenZ => {
+                    sevenz::extract_filtered(data, MAX_TOTAL_BYTES, password, true)?
+                }
+                _ => rar::extract_filtered(data, MAX_TOTAL_BYTES, password, true)?,
+            };
+            let used: u64 = raw_entries.iter().map(|e| e.data.len() as u64).sum();
+            let mut remaining = MAX_TOTAL_BYTES.saturating_sub(used);
+            let mut entries = Vec::with_capacity(raw_entries.len());
+            for e in raw_entries {
+                if path_to_archive_format(&e.path).is_some() {
+                    remaining = expand_nested_archive(e, remaining, password, &mut entries)?;
+                } else {
+                    entries.push(e);
+                }
+            }
             let models = find_models_from_entries(&entries);
             Ok(ArchiveContents {
                 models,
@@ -195,6 +247,57 @@ pub fn list_models(
             })
         }
     }
+}
+
+/// Archive format of a nested-archive path (by extension), if any.
+fn path_to_archive_format(path: &Path) -> Option<ArchiveFormat> {
+    archive_format_from_ext(&crate::path_ext_lower(path))
+}
+
+/// Expand one nested archive into `out`, prefixing inner paths with the
+/// archive's own path (`outer/inner.zip` + `model/a.pmx` -> composite path).
+/// Returns the updated remaining-bytes budget; the nested archive's raw bytes
+/// are dropped on return. Password errors propagate (so the viewer can prompt
+/// and retry); any other failure is logged and the nested archive is skipped,
+/// keeping the outer listing usable.
+fn expand_nested_archive(
+    arc: ArchiveEntry,
+    remaining: u64,
+    password: Option<&str>,
+    out: &mut Vec<ArchiveEntry>,
+) -> Result<u64> {
+    let Some(inner_format) = path_to_archive_format(&arc.path) else {
+        out.push(arc);
+        return Ok(remaining);
+    };
+    let inner = match inner_format {
+        ArchiveFormat::Zip => zip_extract::extract_filtered(&arc.data, remaining, password),
+        ArchiveFormat::SevenZ => sevenz::extract_filtered(&arc.data, remaining, password, false),
+        ArchiveFormat::Rar => rar::extract_filtered(&arc.data, remaining, password, false),
+    };
+    let inner = match inner {
+        Ok(entries) => entries,
+        Err(e @ (PoponeError::ArchivePasswordRequired | PoponeError::ArchiveBadPassword)) => {
+            return Err(e)
+        }
+        Err(e) => {
+            log::warn!(
+                "Nested archive skipped (failed to expand): {} - {}",
+                arc.path.display(),
+                e
+            );
+            return Ok(remaining);
+        }
+    };
+    let mut used = 0u64;
+    for e in inner {
+        used += e.data.len() as u64;
+        out.push(ArchiveEntry {
+            path: arc.path.join(&e.path),
+            data: e.data,
+        });
+    }
+    Ok(remaining.saturating_sub(used))
 }
 
 /// Detect models from a metadata listing.
@@ -267,7 +370,23 @@ pub fn extract_model_bundle(
 
     match format {
         ArchiveFormat::Zip => {
-            extract_bundle_from_zip(data, &model_path, kind, contents.metas.as_deref(), password)
+            // Models from a nested archive live in `entries` (already
+            // decompressed at listing time); outer models use the metas path.
+            let in_entries = contents
+                .entries
+                .as_ref()
+                .is_some_and(|es| es.iter().any(|e| e.path == model_path));
+            if in_entries {
+                extract_bundle_from_entries(contents.entries.unwrap_or_default(), &model_path, kind)
+            } else {
+                extract_bundle_from_zip(
+                    data,
+                    &model_path,
+                    kind,
+                    contents.metas.as_deref(),
+                    password,
+                )
+            }
         }
         ArchiveFormat::SevenZ | ArchiveFormat::Rar => {
             extract_bundle_from_entries(contents.entries.unwrap_or_default(), &model_path, kind)
@@ -1072,6 +1191,182 @@ mod tests {
         assert_eq!(contents.models[0].3, ArchiveModelKind::Stl);
         let bundle = extract_model_bundle(&buf, ArchiveFormat::SevenZ, contents, 0, None).unwrap();
         assert_eq!(bundle.model.data, stl_data);
+    }
+
+    /// Build a plain (stored) ZIP from (name, data) pairs.
+    fn build_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            for (name, data) in files {
+                writer.start_file(*name, options).unwrap();
+                std::io::Write::write_all(&mut writer, data).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        buf
+    }
+
+    /// Nested archive: an inner ZIP (model + texture) next to readme files,
+    /// mirroring the common MMD distribution shape.
+    #[test]
+    fn test_nested_zip_in_zip() {
+        let inner = build_zip(&[
+            ("model/chara.fbx", b"FBX fake data"),
+            ("model/body.png", b"PNG fake data"),
+        ]);
+        let outer = build_zip(&[
+            ("dist/readme.txt", b"please read"),
+            ("dist/inner.zip", &inner),
+        ]);
+
+        let contents = list_models(&outer, ArchiveFormat::Zip, None).unwrap();
+        assert_eq!(contents.models.len(), 1);
+        assert_eq!(
+            contents.models[0].1,
+            PathBuf::from("dist/inner.zip/model/chara.fbx")
+        );
+        assert_eq!(contents.models[0].3, ArchiveModelKind::Fbx);
+
+        let bundle = extract_model_bundle(&outer, ArchiveFormat::Zip, contents, 0, None).unwrap();
+        assert_eq!(bundle.model.data, b"FBX fake data");
+        // The texture next to the model inside the nested archive is collected too.
+        assert_eq!(bundle.textures.len(), 1);
+        assert_eq!(bundle.textures[0].0, "body.png");
+    }
+
+    /// Models directly in the outer ZIP and inside a nested one are both listed.
+    #[test]
+    fn test_nested_zip_mixed_with_outer_model() {
+        let inner = build_zip(&[("inner_model.stl", b"inner STL")]);
+        let outer = build_zip(&[("outer_model.stl", b"outer STL"), ("inner.zip", &inner)]);
+
+        let contents = list_models(&outer, ArchiveFormat::Zip, None).unwrap();
+        let mut paths: Vec<PathBuf> = contents
+            .models
+            .iter()
+            .map(|(_, p, _, _)| p.clone())
+            .collect();
+        paths.sort();
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("inner.zip/inner_model.stl"),
+                PathBuf::from("outer_model.stl")
+            ]
+        );
+
+        // Outer model still extracts through the metas path.
+        let outer_idx = contents
+            .models
+            .iter()
+            .position(|(_, p, _, _)| p == Path::new("outer_model.stl"))
+            .unwrap();
+        let bundle =
+            extract_model_bundle(&outer, ArchiveFormat::Zip, contents, outer_idx, None).unwrap();
+        assert_eq!(bundle.model.data, b"outer STL");
+
+        // Nested model extracts from the expanded entries.
+        let contents = list_models(&outer, ArchiveFormat::Zip, None).unwrap();
+        let inner_idx = contents
+            .models
+            .iter()
+            .position(|(_, p, _, _)| p == Path::new("inner.zip/inner_model.stl"))
+            .unwrap();
+        let bundle =
+            extract_model_bundle(&outer, ArchiveFormat::Zip, contents, inner_idx, None).unwrap();
+        assert_eq!(bundle.model.data, b"inner STL");
+    }
+
+    /// Expansion stops at one level: an archive inside a nested archive is
+    /// not expanded (self-referential archive-bomb guard).
+    #[test]
+    fn test_nested_depth_limit() {
+        let innermost = build_zip(&[("deep_model.stl", b"too deep")]);
+        let inner = build_zip(&[("level2.zip", &innermost)]);
+        let outer = build_zip(&[("level1.zip", &inner), ("shallow.stl", b"shallow")]);
+
+        let contents = list_models(&outer, ArchiveFormat::Zip, None).unwrap();
+        let paths: Vec<PathBuf> = contents
+            .models
+            .iter()
+            .map(|(_, p, _, _)| p.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            [PathBuf::from("shallow.stl")],
+            "level-2 models must not be listed"
+        );
+    }
+
+    /// Cross-format nesting: a solid 7z inside a ZIP.
+    #[test]
+    fn test_nested_7z_in_zip() {
+        let mut inner = Vec::new();
+        {
+            let mut writer =
+                sevenz_rust2::ArchiveWriter::new(std::io::Cursor::new(&mut inner)).unwrap();
+            let entry = sevenz_rust2::ArchiveEntry::new_file("model.stl");
+            writer
+                .push_archive_entry(entry, Some(&b"7z nested STL"[..]))
+                .unwrap();
+            writer.finish().unwrap();
+        }
+        let outer = build_zip(&[("pack/archive.7z", &inner)]);
+
+        let contents = list_models(&outer, ArchiveFormat::Zip, None).unwrap();
+        assert_eq!(contents.models.len(), 1);
+        assert_eq!(
+            contents.models[0].1,
+            PathBuf::from("pack/archive.7z/model.stl")
+        );
+        let bundle = extract_model_bundle(&outer, ArchiveFormat::Zip, contents, 0, None).unwrap();
+        assert_eq!(bundle.model.data, b"7z nested STL");
+    }
+
+    /// A plaintext outer ZIP holding an encrypted inner ZIP: the password
+    /// prompt propagates, and the retry password must not break re-reading
+    /// the outer plaintext entries.
+    #[test]
+    fn test_nested_encrypted_inner_zip() {
+        let inner = build_encrypted_zip("secret");
+        let outer = build_zip(&[("readme.txt", b"plain"), ("locked.zip", &inner)]);
+
+        // Without a password: the nested expansion reports that one is required.
+        let Err(err) = list_models(&outer, ArchiveFormat::Zip, None) else {
+            panic!("listing must fail without the nested archive's password");
+        };
+        assert!(matches!(err, PoponeError::ArchivePasswordRequired));
+
+        // With the password: the nested model is listed and extracts
+        // (plaintext outer entries ignore the password).
+        let contents = list_models(&outer, ArchiveFormat::Zip, Some("secret")).unwrap();
+        assert_eq!(contents.models.len(), 1);
+        assert_eq!(
+            contents.models[0].1,
+            PathBuf::from("locked.zip/model/test.stl")
+        );
+        let bundle =
+            extract_model_bundle(&outer, ArchiveFormat::Zip, contents, 0, Some("secret")).unwrap();
+        assert_eq!(bundle.model.data, b"STL secret data");
+    }
+
+    /// A corrupt nested archive must not break the outer listing.
+    #[test]
+    fn test_nested_broken_archive_skipped() {
+        let outer = build_zip(&[
+            ("broken.zip", b"this is not a zip"),
+            ("model.stl", b"still fine"),
+        ]);
+        let contents = list_models(&outer, ArchiveFormat::Zip, None).unwrap();
+        let paths: Vec<PathBuf> = contents
+            .models
+            .iter()
+            .map(|(_, p, _, _)| p.clone())
+            .collect();
+        assert_eq!(paths, [PathBuf::from("model.stl")]);
     }
 
     #[test]

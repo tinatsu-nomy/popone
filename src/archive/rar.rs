@@ -14,10 +14,13 @@ use super::{normalize_archive_path, ArchiveEntry};
 /// Extract a RAR archive, keeping only model/texture extensions in memory.
 /// `max_total_bytes`: total extraction size limit.
 /// `password`: for encrypted archives (both header and content encryption).
+/// `include_archives`: also keep nested archives (zip/7z/rar) for one-level
+/// nested extraction; pass false when this call itself extracts a nested one.
 pub fn extract_filtered(
     data: &[u8],
     max_total_bytes: u64,
     password: Option<&str>,
+    include_archives: bool,
 ) -> Result<Vec<ArchiveEntry>> {
     // UnRAR only accepts file paths; stage the bytes in a temp file.
     let mut tmp = tempfile::Builder::new().suffix(".rar").tempfile()?;
@@ -53,7 +56,7 @@ pub fn extract_filtered(
             }
         };
 
-        if !super::sevenz::should_extract(&norm_path) {
+        if !super::should_extract(&norm_path, include_archives) {
             open = cursor.skip()?;
             continue;
         }
@@ -121,14 +124,14 @@ mod tests {
 
     #[test]
     fn plain_rar_opens_without_password() {
-        let entries = extract_filtered(PLAIN_RAR, NO_LIMIT, None).unwrap();
+        let entries = extract_filtered(PLAIN_RAR, NO_LIMIT, None, true).unwrap();
         // No model/texture extensions inside -> empty, but the archive iterates cleanly.
         assert!(entries.is_empty());
     }
 
     #[test]
     fn header_encrypted_without_password_reports_password_required() {
-        let Err(err) = extract_filtered(HEADER_ENCRYPTED_RAR, NO_LIMIT, None) else {
+        let Err(err) = extract_filtered(HEADER_ENCRYPTED_RAR, NO_LIMIT, None, true) else {
             panic!("header-encrypted RAR without a password must fail");
         };
         assert!(
@@ -139,7 +142,8 @@ mod tests {
 
     #[test]
     fn header_encrypted_with_password_opens() {
-        let entries = extract_filtered(HEADER_ENCRYPTED_RAR, NO_LIMIT, Some("password")).unwrap();
+        let entries =
+            extract_filtered(HEADER_ENCRYPTED_RAR, NO_LIMIT, Some("password"), true).unwrap();
         // Header decryption succeeded; the only entry (`.gitignore`) is filtered out.
         assert!(entries.is_empty());
     }
@@ -148,19 +152,19 @@ mod tests {
     fn header_encrypted_with_wrong_password_fails() {
         // RAR4 has no password-check value, so a wrong password may surface as
         // BadPassword or as generic corruption -- either way it must not succeed.
-        let result = extract_filtered(HEADER_ENCRYPTED_RAR, NO_LIMIT, Some("wrong-password"));
+        let result = extract_filtered(HEADER_ENCRYPTED_RAR, NO_LIMIT, Some("wrong-password"), true);
         assert!(result.is_err());
     }
 
     #[test]
     fn content_encrypted_non_model_entries_are_skipped() {
         // Content-encrypted entries that our filter skips never trigger a prompt.
-        let entries = extract_filtered(CONTENT_ENCRYPTED_RAR, NO_LIMIT, None).unwrap();
+        let entries = extract_filtered(CONTENT_ENCRYPTED_RAR, NO_LIMIT, None, true).unwrap();
         assert!(entries.is_empty());
     }
 
     #[test]
     fn broken_rar_reports_error() {
-        assert!(extract_filtered(b"this is not a rar file", NO_LIMIT, None).is_err());
+        assert!(extract_filtered(b"this is not a rar file", NO_LIMIT, None, true).is_err());
     }
 }

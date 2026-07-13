@@ -105,9 +105,13 @@ pub fn extract_files(
             ));
         }
 
+        // Only pass the password to entries that are actually encrypted:
+        // `by_index_decrypt` on a plaintext entry runs the ZipCrypto validator
+        // against plain data and fails (relevant for mixed ZIPs and for outer
+        // plaintext ZIPs re-read with the password meant for a nested one).
         let file = match password {
-            Some(pw) => archive.by_index_decrypt(i, pw.as_bytes()),
-            None => archive.by_index(i),
+            Some(pw) if encrypted => archive.by_index_decrypt(i, pw.as_bytes()),
+            _ => archive.by_index(i),
         }
         .map_err(|e| match e {
             zip::result::ZipError::InvalidPassword => PoponeError::ArchiveBadPassword,
@@ -126,4 +130,23 @@ pub fn extract_files(
         });
     }
     Ok(results)
+}
+
+/// Extract every entry matching the shared extension filter (nested archives
+/// excluded -- this is the one-level expansion of an archive found *inside*
+/// another archive, so going deeper is deliberately not supported).
+/// `max_total_bytes`: total extraction size limit.
+pub fn extract_filtered(
+    data: &[u8],
+    max_total_bytes: u64,
+    password: Option<&str>,
+) -> Result<Vec<ArchiveEntry>> {
+    let metas = list_entries(data)?;
+    let wanted: Vec<std::path::PathBuf> = metas
+        .into_iter()
+        .filter(|m| super::should_extract(&m.path, false))
+        .map(|m| m.path)
+        .collect();
+    let refs: Vec<&std::path::Path> = wanted.iter().map(|p| p.as_path()).collect();
+    extract_files(data, &refs, max_total_bytes, password)
 }
