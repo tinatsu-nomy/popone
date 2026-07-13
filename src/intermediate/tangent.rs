@@ -52,6 +52,34 @@ fn has_valid_tangent(tangent: Vec4) -> bool {
     tangent.truncate().length_squared() > TANGENT_VALID_THRESHOLD
 }
 
+/// Whether the referenced positions span a usable tangent basis.
+///
+/// mikktspace-0.2.0 panics (index out of bounds in `GenerateSharedVerticesIndexList`)
+/// when every referenced position is identical or non-finite: the vertex-merge
+/// grid divides by the extent of the widest axis, `(fVal - fMin) / (fMax - fMin)`
+/// becomes NaN, every entry hashes into cell 0, and the next cell's offset lands
+/// one past the hash-table end *before* the empty-cell check. Zero-extent meshes
+/// are real data — MMD models often collapse hidden parts to a single point and
+/// expand them via vertex morphs — so detect them here and skip generation
+/// (tangents are meaningless without positional extent anyway).
+fn has_tangent_basis(positions: &[[f32; 3]], indices: &[u32]) -> bool {
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for &vi in indices {
+        let Some(p) = positions.get(vi as usize) else {
+            return false; // out-of-range index: do not trust the geometry
+        };
+        for c in 0..3 {
+            if !p[c].is_finite() {
+                return false; // NaN/Inf positions also break the merge grid
+            }
+            min[c] = min[c].min(p[c]);
+            max[c] = max[c].max(p[c]);
+        }
+    }
+    (0..3).any(|c| max[c] > min[c])
+}
+
 /// Generate MikkTSpace tangents for every vertex of an `IrMesh`.
 ///
 /// `normal_tex_coord` is the TEXCOORD set index referenced by `normalTexture`.
@@ -90,6 +118,21 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
 
     let corner_count = mesh.indices.len();
 
+    // Degenerate geometry (all points identical / NaN) panics inside
+    // mikktspace-0.2.0 -- fall back to default tangents instead.
+    if !has_tangent_basis(&positions, &mesh.indices) {
+        log::info!(
+            "MikkTSpace skipped (degenerate geometry, e.g. morph-collapsed part): mesh='{}' - using default tangents",
+            mesh.name
+        );
+        for v in mesh.vertices_mut() {
+            if !has_valid_tangent(v.tangent) {
+                v.tangent = Vec4::new(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+        return;
+    }
+
     // MikkTSpace generation (block scope keeps the indices borrow tight)
     let corner_tangents_opt = {
         let mut geom = MikkGeometry {
@@ -99,7 +142,19 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
             indices: &mesh.indices,
             corner_tangents: vec![[0.0; 4]; corner_count],
         };
-        let ok = mikktspace::generate_tangents(&mut geom);
+        // Safety net for other panics in the mikktspace C-to-Rust port: treat a
+        // panic like a normal generation failure (default tangents). On panic,
+        // `geom` is discarded untouched, so AssertUnwindSafe is sound here.
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            mikktspace::generate_tangents(&mut geom)
+        }))
+        .unwrap_or_else(|_| {
+            log::warn!(
+                "MikkTSpace panicked during tangent generation: mesh='{}' - using default tangents",
+                mesh.name
+            );
+            false
+        });
         if ok {
             Some(geom.corner_tangents)
         } else {
@@ -249,5 +304,106 @@ pub fn generate_tangents(mesh: &mut IrMesh, normal_tex_coord: u32) {
                 v.tangent = Vec4::new(1.0, 0.0, 0.0, 1.0);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::intermediate::types::{IrMesh, IrVertex};
+    use glam::{Vec2, Vec3};
+    use std::sync::Arc;
+
+    fn make_vertex(position: Vec3, uv: Vec2) -> IrVertex {
+        IrVertex {
+            position,
+            normal: Vec3::Y,
+            uv,
+            tangent: Vec4::ZERO,
+            weights: [(0, 0.0); 4],
+            weight_count: 0,
+            edge_scale: 1.0,
+        }
+    }
+
+    fn make_mesh(vertices: Vec<IrVertex>, indices: Vec<u32>) -> IrMesh {
+        IrMesh {
+            name: "test".to_string(),
+            vertices: Arc::new(vertices),
+            indices: Arc::new(indices),
+            material_index: 0,
+            morph_targets: Arc::new(Vec::new()),
+            node_index: 0,
+            uvs1: Vec::new(),
+        }
+    }
+
+    /// Regression test: a mesh whose every vertex sits at the same point
+    /// (MMD parts collapsed to a point, expanded later by vertex morphs)
+    /// used to panic inside mikktspace-0.2.0 with "index out of bounds".
+    #[test]
+    fn collapsed_mesh_gets_default_tangents_without_panic() {
+        let p = Vec3::new(1.25, -3.5, 0.75);
+        let vertices: Vec<IrVertex> = (0..9)
+            .map(|i| make_vertex(p, Vec2::new(i as f32 * 0.1, 0.0)))
+            .collect();
+        let indices: Vec<u32> = (0..9).collect();
+        let mut mesh = make_mesh(vertices, indices);
+
+        generate_tangents(&mut mesh, 0);
+
+        for v in mesh.vertices.iter() {
+            assert_eq!(v.tangent, Vec4::new(1.0, 0.0, 0.0, 1.0));
+        }
+    }
+
+    /// NaN positions also break the mikktspace merge grid -> default tangents.
+    #[test]
+    fn nan_position_gets_default_tangents_without_panic() {
+        let mut vertices = vec![
+            make_vertex(Vec3::ZERO, Vec2::new(0.0, 0.0)),
+            make_vertex(Vec3::X, Vec2::new(1.0, 0.0)),
+            make_vertex(Vec3::Z, Vec2::new(0.0, 1.0)),
+        ];
+        vertices[1].position = Vec3::new(f32::NAN, 0.0, 0.0);
+        let mut mesh = make_mesh(vertices, vec![0, 1, 2]);
+
+        generate_tangents(&mut mesh, 0);
+
+        for v in mesh.vertices.iter() {
+            assert_eq!(v.tangent, Vec4::new(1.0, 0.0, 0.0, 1.0));
+        }
+    }
+
+    /// A well-formed triangle still gets real MikkTSpace tangents.
+    #[test]
+    fn regular_mesh_generates_valid_tangents() {
+        let vertices = vec![
+            make_vertex(Vec3::ZERO, Vec2::new(0.0, 0.0)),
+            make_vertex(Vec3::X, Vec2::new(1.0, 0.0)),
+            make_vertex(Vec3::Z, Vec2::new(0.0, 1.0)),
+        ];
+        let mut mesh = make_mesh(vertices, vec![0, 1, 2]);
+
+        generate_tangents(&mut mesh, 0);
+
+        for v in mesh.vertices.iter() {
+            assert!(has_valid_tangent(v.tangent), "tangent = {:?}", v.tangent);
+        }
+    }
+
+    #[test]
+    fn has_tangent_basis_detects_extent() {
+        // Zero extent
+        let flat = vec![[1.0f32, 2.0, 3.0]; 3];
+        assert!(!has_tangent_basis(&flat, &[0, 1, 2]));
+        // Positive extent
+        let spread = vec![[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+        assert!(has_tangent_basis(&spread, &[0, 1, 2]));
+        // Non-finite
+        let nan = vec![[f32::NAN, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+        assert!(!has_tangent_basis(&nan, &[0, 1, 2]));
+        // Out-of-range index
+        assert!(!has_tangent_basis(&spread, &[0, 1, 5]));
     }
 }

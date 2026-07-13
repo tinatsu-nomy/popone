@@ -5,6 +5,7 @@
 - [Changelog](#changelog)
   - [v0.5.15 (2026-07-13)](#v0515-2026-07-13)
     - [New Features](#new-features)
+    - [Bug Fixes](#bug-fixes)
     - [Internals](#internals)
     - [Tests](#tests)
     - [Scope Notes](#scope-notes)
@@ -14,11 +15,11 @@
     - [Tests](#tests-1)
     - [Scope Notes](#scope-notes-1)
   - [v0.5.13 (2026-07-06)](#v0513-2026-07-06)
-    - [Bug Fixes](#bug-fixes)
+    - [Bug Fixes](#bug-fixes-1)
     - [Tests](#tests-2)
     - [Scope Notes](#scope-notes-2)
   - [v0.5.12 (2026-06-11)](#v0512-2026-06-11)
-    - [Bug Fixes](#bug-fixes-1)
+    - [Bug Fixes](#bug-fixes-2)
     - [Internals](#internals-1)
     - [Tests](#tests-3)
     - [Scope Notes](#scope-notes-3)
@@ -28,7 +29,7 @@
     - [Internals](#internals-2)
     - [Scope Notes](#scope-notes-4)
   - [v0.5.10 (2026-05-15)](#v0510-2026-05-15)
-    - [Bug Fixes](#bug-fixes-2)
+    - [Bug Fixes](#bug-fixes-3)
     - [Internals](#internals-3)
     - [Scope Notes](#scope-notes-5)
   - [v0.5.9 (2026-05-05)](#v059-2026-05-05)
@@ -95,6 +96,10 @@ An archive feature release: RAR archive support and password-protected archive s
 
 - **RAR archive support** — `.rar` files (RAR4 / RAR5) can now be opened everywhere ZIP / 7z already worked: viewer file dialog, drag & drop, append (Shift + drop), and CLI conversion / `--list-models`. Extraction uses the official UnRAR library (statically linked via the `unrar` crate); like 7z, RAR is a solid format, so matching entries are fully extracted in one pass under the same 2 GB total cap. See `THIRD_PARTY_NOTICES.md` for the UnRAR license.
 - **Password-protected archives (GUI only)** — Encrypted ZIP (ZipCrypto / AES), 7z (including encrypted headers), and RAR (including encrypted headers) now prompt for a password in the viewer instead of failing with a generic error. A wrong password reopens the dialog with an error line, and for ZIP (which decrypts at the extract stage) the model picked before the prompt is re-selected automatically after the retry. **The password is held in memory only for the retried load — it is never written to `popone.toml`, never logged, and not remembered across loads.** The CLI intentionally has no password prompt; encrypted archives fail with a message pointing to the GUI.
+
+### Bug Fixes
+
+- **Panic on morph-collapsed meshes (mikktspace index out of bounds)** — Loading a PMX (or any model) containing a sub-mesh whose every vertex sits at the same point — a common MMD technique where hidden parts are collapsed to a point and expanded via vertex morphs — crashed the background load thread with `index out of bounds` inside `mikktspace-0.2.0` (`GenerateSharedVerticesIndexList`: with zero positional extent the merge-grid division becomes NaN, every entry hashes into cell 0, and the next cell's offset indexes one past the hash-table end before the empty-cell check). Tangent generation now detects zero-extent / non-finite geometry up front and assigns default tangents (meaningless without positional extent anyway), and a `catch_unwind` safety net converts any other panic inside the mikktspace port into the normal "generation failed" fallback. Confirmed against a real model whose hidden glasses parts were collapsed to a point.
 
 ### Internals
 
