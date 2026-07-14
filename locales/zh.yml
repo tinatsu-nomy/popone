@@ -266,6 +266,8 @@ viewer:
     append_tooltip: "追加加载模型（也支持 Shift+拖放）"
     log: "日志"
     log_tooltip: "在独立窗口中打开 / 关闭日志查看器"
+    text: "文本"
+    text_tooltip: "显示 / 隐藏压缩包内的文本文件列表"
     model_name_label: "模型名称:"
     model_name_hint: "(无扩展名)"
     reset: "重置 (R)"
@@ -316,6 +318,7 @@ viewer:
       title: "选择压缩包内模型"
       message1: "在压缩包中发现多个模型。"
       message2: "请选择要加载的文件。"
+      text_files: "文本文件（点击在单独窗口中查看）:"
     archive_password:
       title: "压缩文件密码"
       message: "「%{name}」受密码保护。请输入密码（不会被记住）。"
@@ -684,6 +687,11 @@ viewer:
     pkg_textures: "pkg 纹理 (%{count})"
     textures_group: "纹理: %{group} (%{count})"
     textures_all: "纹理 (%{count})"
+  text_viewer:
+    list_title: "文本文件"
+    list_hint: "点击在单独窗口中查看（可同时打开多个）"
+    open_hover: "在单独窗口中查看"
+    truncated: "※ 文件过大，仅显示开头部分"
   log_viewer:
     follow_tail: "自动追踪"
     follow_tail_hover: "新日志到达时自动滚动到底部"

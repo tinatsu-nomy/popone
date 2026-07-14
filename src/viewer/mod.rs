@@ -9,6 +9,7 @@ pub mod log_viewer;
 pub mod mesh;
 #[cfg(target_os = "windows")]
 pub mod single_instance;
+pub mod text_viewer;
 pub mod texture;
 pub mod ui;
 pub mod watchdog;

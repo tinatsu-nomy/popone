@@ -105,13 +105,32 @@ pub struct PendingArchivePassword {
 /// Marker error raised by the BG parse thread when an archive needs a
 /// password (or the supplied one was wrong). Carries enough context for the
 /// main thread to reopen the password dialog and retry the load.
-#[derive(Debug)]
 pub struct ArchivePasswordPrompt {
     pub path: PathBuf,
     pub append: bool,
     pub auto_select_model: Option<PathBuf>,
     /// True when a password was supplied but rejected.
     pub bad_password: bool,
+    /// Listing-stage failures attach the outer archive's text documents
+    /// (readme etc., extracted without nested expansion) so the text viewer
+    /// works while the password dialog is up — MMD readmes typically hold the
+    /// password hint. `None` at the extract stage (texts were already set at
+    /// listing time and must be kept).
+    pub texts: Option<Vec<(PathBuf, Vec<u8>)>>,
+}
+
+impl std::fmt::Debug for ArchivePasswordPrompt {
+    // Manual impl: skip `texts` payloads (a derived Debug would dump the
+    // readme bytes into logs whenever the error is debug-formatted).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArchivePasswordPrompt")
+            .field("path", &self.path)
+            .field("append", &self.append)
+            .field("auto_select_model", &self.auto_select_model)
+            .field("bad_password", &self.bad_password)
+            .field("texts", &self.texts.as_ref().map(|t| t.len()))
+            .finish()
+    }
 }
 
 impl std::fmt::Display for ArchivePasswordPrompt {
@@ -1143,6 +1162,12 @@ impl ViewerApp {
                             prompt.bad_password,
                             prompt.path.display()
                         );
+                        // Listing-stage failures carry the outer texts: make
+                        // the readme readable while the dialog is up (it often
+                        // holds the password hint).
+                        if let Some(texts) = prompt.texts.clone() {
+                            self.set_archive_text_files(texts, prompt.append);
+                        }
                         self.pending.archive_password = Some(PendingArchivePassword {
                             path: prompt.path.clone(),
                             append: prompt.append,

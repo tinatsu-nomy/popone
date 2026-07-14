@@ -517,6 +517,9 @@ pub struct ViewerApp {
     /// Model for the log viewer window (drawn as a separate OS window via
     /// `show_viewport_deferred`).
     pub log_viewer: super::log_viewer::SharedLogViewer,
+    /// Model for the archive text viewer (file list + per-document windows,
+    /// each drawn as a separate OS window via `show_viewport_deferred`).
+    pub text_viewer: super::text_viewer::SharedTextViewer,
     /// Directory of the most recently opened model file (dialog only).
     pub last_model_dir: Option<PathBuf>,
     /// Selected FBX file name inside the unitypackage (used for matching on reload).
@@ -744,6 +747,71 @@ impl ViewerApp {
             }
         });
     }
+
+    /// Draws the archive-text-viewer list window plus one deferred viewport
+    /// (separate OS window) per opened document.
+    ///
+    /// Deferred for the same reason as the log viewer: scrolling a readme must
+    /// not wake the parent's 3D rendering. The static document content also
+    /// needs no periodic repaint.
+    fn show_text_viewer_windows(&self, ctx: &egui::Context) {
+        // --- File-list window (inside the main viewport). ---
+        let mut clicked: Option<usize> = None;
+        {
+            let mut m = self.text_viewer.lock().unwrap_or_else(|p| p.into_inner());
+            if m.list_visible {
+                let mut open = true;
+                egui::Window::new(t!("viewer.text_viewer.list_title"))
+                    .open(&mut open)
+                    .resizable(true)
+                    .default_width(360.0)
+                    .show(ctx, |ui| {
+                        ui.label(
+                            egui::RichText::new(t!("viewer.text_viewer.list_hint"))
+                                .color(egui::Color32::from_gray(0xA0))
+                                .size(11.0),
+                        );
+                        ui.separator();
+                        egui::ScrollArea::vertical()
+                            .max_height(320.0)
+                            .show(ui, |ui| {
+                                clicked = m.list_ui(ui);
+                            });
+                    });
+                if !open {
+                    m.list_visible = false;
+                }
+            }
+            if let Some(i) = clicked {
+                if let Some(vp_id) = m.open_doc(i) {
+                    ctx.send_viewport_cmd_to(vp_id, egui::ViewportCommand::Focus);
+                }
+            }
+        }
+
+        // --- One deferred viewport per open document. ---
+        let open_docs: Vec<(std::path::PathBuf, String)> = {
+            let m = self.text_viewer.lock().unwrap_or_else(|p| p.into_inner());
+            m.docs
+                .iter()
+                .filter(|d| d.open)
+                .map(|d| (d.path.clone(), d.title.clone()))
+                .collect()
+        };
+        for (path, title) in open_docs {
+            let vp_id = super::text_viewer::doc_viewport_id(&path);
+            let builder = egui::ViewportBuilder::default()
+                .with_title(format!("POPONE - {title}"))
+                .with_inner_size([560.0, 520.0]);
+            let model = Arc::clone(&self.text_viewer);
+            ctx.show_viewport_deferred(vp_id, builder, move |child_ctx, _class| {
+                let mut m = model.lock().unwrap_or_else(|p| p.into_inner());
+                if let Some(doc) = m.docs.iter_mut().find(|d| d.path == path) {
+                    super::text_viewer::draw_doc_window(child_ctx, doc);
+                }
+            });
+        }
+    }
 }
 
 /// State for first-frame validation/application of the window position.
@@ -868,6 +936,9 @@ impl ViewerApp {
             log_buffer,
             log_viewer: Arc::new(std::sync::Mutex::new(
                 super::log_viewer::LogViewerModel::from_config(&app_config.log_viewer),
+            )),
+            text_viewer: Arc::new(std::sync::Mutex::new(
+                super::text_viewer::TextViewerModel::default(),
             )),
             last_model_dir,
             selected_fbx_name: None,
@@ -2368,6 +2439,26 @@ impl eframe::App for ViewerApp {
                         m.toggle_visible();
                     }
 
+                    // Archive text files (readme etc.): shown only when the
+                    // current archive actually contains text documents.
+                    {
+                        let text_count = {
+                            let m = self.text_viewer.lock().unwrap_or_else(|p| p.into_inner());
+                            m.files.len()
+                        };
+                        if text_count > 0
+                            && menu_btn(
+                                ui,
+                                &format!("{} ({})", t!("viewer.topbar.text"), text_count),
+                            )
+                            .on_hover_text(t!("viewer.topbar.text_tooltip"))
+                            .clicked()
+                        {
+                            let mut m = self.text_viewer.lock().unwrap_or_else(|p| p.into_inner());
+                            m.list_visible = !m.list_visible;
+                        }
+                    }
+
                     // Model name (editable). Reflected in both the title bar
                     // and the PMX output file name. Shares its value with the
                     // "Model name:" TextEdit on the right panel.
@@ -2882,6 +2973,10 @@ impl eframe::App for ViewerApp {
         // Render the log viewer window (a separate OS window).
         // No-op when `visible == false`.
         self.show_log_viewer(ctx);
+
+        // Render the archive-text-viewer list window and document windows.
+        // No-op when no text files are listed / opened.
+        self.show_text_viewer_windows(ctx);
     }
 
     fn on_exit(&mut self) {

@@ -266,6 +266,8 @@ viewer:
     append_tooltip: "モデルを追加読み込み（Shift+D&Dでも可）"
     log: "ログ"
     log_tooltip: "ログビュアーを別ウインドウで開く / 閉じる"
+    text: "テキスト"
+    text_tooltip: "アーカイブ内のテキストファイル一覧を表示 / 非表示"
     model_name_label: "モデル名:"
     model_name_hint: "(拡張子なし)"
     reset: "リセット(R)"
@@ -316,6 +318,7 @@ viewer:
       title: "アーカイブ内モデル選択"
       message1: "アーカイブ内に複数のモデルが見つかりました。"
       message2: "読み込むファイルを選択してください。"
+      text_files: "テキストファイル（クリックで別ウインドウ表示）:"
     archive_password:
       title: "アーカイブのパスワード"
       message: "「%{name}」はパスワードで保護されています。パスワードを入力してください（記憶はされません）。"
@@ -684,6 +687,11 @@ viewer:
     pkg_textures: "pkg テクスチャ (%{count})"
     textures_group: "テクスチャ: %{group} (%{count})"
     textures_all: "テクスチャ (%{count})"
+  text_viewer:
+    list_title: "テキストファイル"
+    list_hint: "クリックで別ウインドウに表示します（複数同時に開けます）"
+    open_hover: "別ウインドウで表示"
+    truncated: "※ ファイルが大きいため先頭部分のみ表示しています"
   log_viewer:
     follow_tail: "自動追尾"
     follow_tail_hover: "新しいログが来たら自動で最下部へスクロール"

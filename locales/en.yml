@@ -266,6 +266,8 @@ viewer:
     append_tooltip: "Append a model (also Shift+drag-and-drop)"
     log: "Log"
     log_tooltip: "Open / close log viewer in a separate window"
+    text: "Text"
+    text_tooltip: "Show / hide the list of text files in the archive"
     model_name_label: "Model name:"
     model_name_hint: "(no extension)"
     reset: "Reset (R)"
@@ -316,6 +318,7 @@ viewer:
       title: "Select Model in Archive"
       message1: "Multiple models found in the archive."
       message2: "Select a file to load."
+      text_files: "Text files (click to open in a separate window):"
     archive_password:
       title: "Archive Password"
       message: "\"%{name}\" is password-protected. Enter the password (it will not be remembered)."
@@ -684,6 +687,11 @@ viewer:
     pkg_textures: "Pkg textures (%{count})"
     textures_group: "Textures: %{group} (%{count})"
     textures_all: "Textures (%{count})"
+  text_viewer:
+    list_title: "Text Files"
+    list_hint: "Click to open in a separate window (multiple can be open at once)"
+    open_hover: "Open in a separate window"
+    truncated: "* File is large; only the beginning is shown"
   log_viewer:
     follow_tail: "Auto-tail"
     follow_tail_hover: "Automatically scroll to bottom when new logs arrive"

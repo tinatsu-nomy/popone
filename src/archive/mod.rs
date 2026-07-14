@@ -32,6 +32,13 @@ pub const MODEL_EXTENSIONS: &[&str] = &[
 /// Texture extensions (`psd` excluded -- multi-hundred-MB files risk OOM).
 pub const TEXTURE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tga", "bmp", "tif", "tiff", "dds"];
 
+/// Text-document extensions offered by the viewer's text viewer (readme etc.).
+pub const TEXT_EXTENSIONS: &[&str] = &["txt", "md"];
+
+/// Per-file size cap for text-viewer extraction. Readme-class documents are
+/// tiny; anything bigger is skipped to keep memory use bounded.
+const MAX_TEXT_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
 /// Nested-archive extensions. Archives found inside an archive are expanded
 /// one level deep and their models merged into the listing (a common MMD
 /// distribution shape: readme files next to an inner ZIP holding the model).
@@ -48,7 +55,7 @@ pub(crate) fn should_extract(path: &Path, include_archives: bool) -> bool {
     let ext = crate::path_ext_lower(path);
     MODEL_EXTENSIONS.contains(&ext.as_str())
         || TEXTURE_EXTENSIONS.contains(&ext.as_str())
-        || ext == "txt"
+        || TEXT_EXTENSIONS.contains(&ext.as_str())
         || ext == "spa"
         || ext == "sph"
         || ext == "mtl"
@@ -141,6 +148,127 @@ pub struct ArchiveContents {
     entries: Option<Vec<ArchiveEntry>>,
     /// For ZIP: metadata of the outer archive's own entries.
     metas: Option<Vec<ArchiveEntryMeta>>,
+}
+
+/// Whether the path has a text-document extension (readme etc.).
+fn is_text_path(path: &Path) -> bool {
+    TEXT_EXTENSIONS.contains(&crate::path_ext_lower(path).as_str())
+}
+
+impl ArchiveContents {
+    /// Extract text documents (readme etc.) for the viewer's text viewer.
+    ///
+    /// Best-effort: failures are logged and produce a partial (possibly empty)
+    /// list instead of an error, so a broken readme never blocks a model load.
+    /// `data` / `password` are only consulted for ZIP outer entries; 7z/RAR
+    /// entries and nested-archive expansions were already extracted at the
+    /// listing stage and live in `entries`.
+    pub fn extract_text_files(
+        &self,
+        data: &[u8],
+        format: ArchiveFormat,
+        password: Option<&str>,
+    ) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut texts: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+        if let Some(entries) = &self.entries {
+            for e in entries {
+                if is_text_path(&e.path) && (e.data.len() as u64) <= MAX_TEXT_FILE_BYTES {
+                    texts.push((e.path.clone(), e.data.clone()));
+                }
+            }
+        }
+        // ZIP: outer entries are metadata-only, so pull just the text files here.
+        if format == ArchiveFormat::Zip {
+            if let Some(metas) = &self.metas {
+                let wanted: Vec<&Path> = metas
+                    .iter()
+                    .filter(|m| is_text_path(&m.path) && m.size <= MAX_TEXT_FILE_BYTES)
+                    .map(|m| m.path.as_path())
+                    .collect();
+                if !wanted.is_empty() {
+                    match zip_extract::extract_files(data, &wanted, MAX_TOTAL_BYTES, password) {
+                        Ok(entries) => {
+                            texts.extend(entries.into_iter().map(|e| (e.path, e.data)));
+                        }
+                        Err(e) => log::warn!("Text extraction from ZIP failed: {e}"),
+                    }
+                }
+            }
+        }
+        texts.sort_by(|a, b| a.0.cmp(&b.0));
+        texts.dedup_by(|a, b| a.0 == b.0);
+        texts
+    }
+}
+
+/// Best-effort extraction of text documents from an archive's *own* entries,
+/// without expanding nested archives. Used when a listing fails because a
+/// nested archive is encrypted: the outer readme (which typically holds the
+/// password hint in MMD distributions) must stay readable while the password
+/// dialog is up. Failures are logged and yield an empty list.
+pub fn extract_outer_text_files(
+    data: &[u8],
+    format: ArchiveFormat,
+    password: Option<&str>,
+) -> Vec<(PathBuf, Vec<u8>)> {
+    let result = match format {
+        ArchiveFormat::Zip => zip_extract::list_entries(data).and_then(|metas| {
+            let wanted: Vec<&Path> = metas
+                .iter()
+                .filter(|m| is_text_path(&m.path) && m.size <= MAX_TEXT_FILE_BYTES)
+                .map(|m| m.path.as_path())
+                .collect();
+            if wanted.is_empty() {
+                Ok(Vec::new())
+            } else {
+                zip_extract::extract_files(data, &wanted, MAX_TOTAL_BYTES, password)
+            }
+        }),
+        ArchiveFormat::SevenZ => sevenz::extract_filtered(data, MAX_TOTAL_BYTES, password, false),
+        ArchiveFormat::Rar => rar::extract_filtered(data, MAX_TOTAL_BYTES, password, false),
+    };
+    match result {
+        Ok(entries) => {
+            let mut texts: Vec<(PathBuf, Vec<u8>)> = entries
+                .into_iter()
+                .filter(|e| is_text_path(&e.path) && (e.data.len() as u64) <= MAX_TEXT_FILE_BYTES)
+                .map(|e| (e.path, e.data))
+                .collect();
+            texts.sort_by(|a, b| a.0.cmp(&b.0));
+            texts
+        }
+        Err(e) => {
+            log::warn!("Outer text extraction failed: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// Decode text bytes for display: BOM-aware UTF-8 / UTF-16, then plain UTF-8,
+/// then Shift_JIS (the common encoding for MMD readmes), finally lossy UTF-8.
+/// Line endings are normalized to `\n`.
+pub fn decode_text_bytes(bytes: &[u8]) -> String {
+    let decoded = if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        String::from_utf8_lossy(rest).into_owned()
+    } else if bytes.starts_with(&[0xFF, 0xFE]) {
+        encoding_rs::UTF_16LE.decode(&bytes[2..]).0.into_owned()
+    } else if bytes.starts_with(&[0xFE, 0xFF]) {
+        encoding_rs::UTF_16BE.decode(&bytes[2..]).0.into_owned()
+    } else if let Ok(s) = std::str::from_utf8(bytes) {
+        s.to_string()
+    } else {
+        let (s, _, had_errors) = encoding_rs::SHIFT_JIS.decode(bytes);
+        if had_errors {
+            String::from_utf8_lossy(bytes).into_owned()
+        } else {
+            s.into_owned()
+        }
+    };
+    if decoded.contains('\r') {
+        decoded.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        decoded
+    }
 }
 
 /// Normalize a path (rejects `..` and absolute-path components).
@@ -1043,6 +1171,128 @@ mod tests {
         assert_eq!(contents.models.len(), 1);
         assert_eq!(contents.models[0].2, "model.pmx");
         assert_eq!(contents.models[0].3, ArchiveModelKind::Pmx);
+    }
+
+    #[test]
+    fn test_extract_text_files_zip() {
+        // ZIP: text documents (.txt / .md) are pulled from the metadata listing;
+        // oversized text files and non-text entries are skipped.
+        let mut buf = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            writer.start_file("model/model.pmx", options).unwrap();
+            std::io::Write::write_all(&mut writer, b"PMX test data").unwrap();
+            writer.start_file("readme.txt", options).unwrap();
+            std::io::Write::write_all(&mut writer, b"how to use").unwrap();
+            writer.start_file("docs/manual.md", options).unwrap();
+            std::io::Write::write_all(&mut writer, b"# manual").unwrap();
+            writer.start_file("huge.txt", options).unwrap();
+            std::io::Write::write_all(&mut writer, &vec![b'a'; (MAX_TEXT_FILE_BYTES + 1) as usize])
+                .unwrap();
+            writer.start_file("tex/body.png", options).unwrap();
+            std::io::Write::write_all(&mut writer, b"PNG fake data").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let contents = list_models(&buf, ArchiveFormat::Zip, None).unwrap();
+        let texts = contents.extract_text_files(&buf, ArchiveFormat::Zip, None);
+        let paths: Vec<String> = texts
+            .iter()
+            .map(|(p, _)| p.to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert_eq!(paths, vec!["docs/manual.md", "readme.txt"]);
+        assert_eq!(texts[1].1, b"how to use");
+    }
+
+    #[test]
+    fn test_extract_text_files_from_entries() {
+        // 7z/RAR-style: text documents already live in `entries` (listing stage);
+        // `data` is not consulted, matching the post-listing payload release.
+        let contents = ArchiveContents {
+            models: Vec::new(),
+            entries: Some(vec![
+                ArchiveEntry {
+                    path: PathBuf::from("inner.zip/readme.txt"),
+                    data: b"nested readme".to_vec(),
+                },
+                ArchiveEntry {
+                    path: PathBuf::from("model.pmx"),
+                    data: b"PMX".to_vec(),
+                },
+            ]),
+            metas: None,
+        };
+        let texts = contents.extract_text_files(&[], ArchiveFormat::SevenZ, None);
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].0, PathBuf::from("inner.zip/readme.txt"));
+        assert_eq!(texts[0].1, b"nested readme");
+    }
+
+    /// Nested texts (outer readme + one inside the nested archive) are all listed.
+    #[test]
+    fn test_extract_text_files_nested() {
+        let inner = build_zip(&[
+            ("model/model.pmx", b"PMX"),
+            ("model/inner_readme.txt", b"inner notes"),
+        ]);
+        let outer = build_zip(&[("readme.txt", b"outer notes"), ("inner.zip", &inner)]);
+
+        let contents = list_models(&outer, ArchiveFormat::Zip, None).unwrap();
+        let texts = contents.extract_text_files(&outer, ArchiveFormat::Zip, None);
+        let paths: Vec<String> = texts
+            .iter()
+            .map(|(p, _)| p.to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert_eq!(
+            paths,
+            vec!["inner.zip/model/inner_readme.txt", "readme.txt"]
+        );
+    }
+
+    /// MMD distribution shape: a plaintext readme next to an encrypted inner
+    /// ZIP. The listing fails with a password request, but the outer readme
+    /// must stay extractable so the viewer can show it alongside the password
+    /// dialog (the readme typically holds the password hint).
+    #[test]
+    fn test_extract_outer_text_files_encrypted_nested() {
+        let inner = build_encrypted_zip("secret");
+        let outer = build_zip(&[("readme.txt", b"password is secret"), ("inner.zip", &inner)]);
+
+        let Err(err) = list_models(&outer, ArchiveFormat::Zip, None) else {
+            panic!("listing must fail on the encrypted nested archive");
+        };
+        assert!(
+            matches!(err, PoponeError::ArchivePasswordRequired),
+            "expected ArchivePasswordRequired, got: {err:?}"
+        );
+
+        let texts = extract_outer_text_files(&outer, ArchiveFormat::Zip, None);
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].0, PathBuf::from("readme.txt"));
+        assert_eq!(texts[0].1, b"password is secret");
+    }
+
+    #[test]
+    fn test_decode_text_bytes_variants() {
+        // Plain UTF-8
+        assert_eq!(decode_text_bytes("日本語".as_bytes()), "日本語");
+        // UTF-8 with BOM (BOM stripped)
+        let mut bom = vec![0xEF, 0xBB, 0xBF];
+        bom.extend_from_slice("abc".as_bytes());
+        assert_eq!(decode_text_bytes(&bom), "abc");
+        // UTF-16LE with BOM
+        let mut u16le = vec![0xFF, 0xFE];
+        for unit in "あ".encode_utf16() {
+            u16le.extend_from_slice(&unit.to_le_bytes());
+        }
+        assert_eq!(decode_text_bytes(&u16le), "あ");
+        // Shift_JIS ("日本語")
+        let (sjis, _, _) = encoding_rs::SHIFT_JIS.encode("日本語");
+        assert_eq!(decode_text_bytes(&sjis), "日本語");
+        // CRLF is normalized to LF
+        assert_eq!(decode_text_bytes(b"a\r\nb\rc"), "a\nb\nc");
     }
 
     #[test]

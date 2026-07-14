@@ -723,6 +723,29 @@ fn show_archive_select_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                         }
                     }
                 });
+            // Bundled text documents (readme etc.): open in a separate window
+            // without leaving the dialog, so the readme can guide the choice.
+            let clicked_text = {
+                let m = app.text_viewer.lock().unwrap_or_else(|p| p.into_inner());
+                if m.files.is_empty() {
+                    None
+                } else {
+                    ui.separator();
+                    ui.label(t!("viewer.dialog.archive_select.text_files"));
+                    egui::ScrollArea::vertical()
+                        .id_salt("archive_select_text_list")
+                        .max_height(120.0)
+                        .show(ui, |ui| m.list_ui(ui))
+                        .inner
+                }
+            };
+            if let Some(i) = clicked_text {
+                let mut m = app.text_viewer.lock().unwrap_or_else(|p| p.into_inner());
+                if let Some(vp_id) = m.open_doc(i) {
+                    ui.ctx()
+                        .send_viewport_cmd_to(vp_id, egui::ViewportCommand::Focus);
+                }
+            }
             ui.separator();
             if ui.button(t!("viewer.dialog.common.cancel")).clicked() {
                 cancelled = true;

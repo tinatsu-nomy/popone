@@ -144,6 +144,7 @@ fn archive_password_prompt(
     path: &Path,
     append: bool,
     auto_select_model: Option<PathBuf>,
+    texts: Option<Vec<(PathBuf, Vec<u8>)>>,
 ) -> anyhow::Error {
     use crate::error::PoponeError;
     match e {
@@ -153,6 +154,7 @@ fn archive_password_prompt(
                 append,
                 auto_select_model,
                 bad_password: matches!(e, PoponeError::ArchiveBadPassword),
+                texts,
             })
         }
         other => other.into(),
@@ -445,7 +447,8 @@ fn cpu_parse_source_inner(
                 password.as_deref(),
             )
             .map_err(|e| {
-                archive_password_prompt(e, &source_path, append, Some(model_path.clone()))
+                // Extract stage: texts were already set at listing time (None keeps them).
+                archive_password_prompt(e, &source_path, append, Some(model_path.clone()), None)
             })?;
             check_cancel(cancel)?;
 
@@ -1328,7 +1331,22 @@ fn cpu_parse_source_inner(
             // decrypt everything here, so password failures surface at this stage.
             let contents = crate::archive::list_models(&archive_data, format, password.as_deref())
                 .map_err(|e| {
-                    archive_password_prompt(e, &path, append, auto_select_model.clone())
+                    // Listing stage: attach the outer texts (readme etc.) so the
+                    // viewer can show them alongside the password dialog. Only
+                    // worth computing for password errors.
+                    let texts = matches!(
+                        e,
+                        crate::error::PoponeError::ArchivePasswordRequired
+                            | crate::error::PoponeError::ArchiveBadPassword
+                    )
+                    .then(|| {
+                        crate::archive::extract_outer_text_files(
+                            &archive_data,
+                            format,
+                            password.as_deref(),
+                        )
+                    });
+                    archive_password_prompt(e, &path, append, auto_select_model.clone(), texts)
                 })?;
 
             check_cancel(cancel)?;
@@ -2122,6 +2140,12 @@ impl ViewerApp {
                     anyhow::bail!(t!("error.archive_no_models_found").into_owned());
                 }
 
+                // Feed bundled text documents (readme etc.) into the text viewer.
+                // ZIP reads them out of `archive_data` here; 7z/RAR entries were
+                // already extracted at the listing stage.
+                let texts = contents.extract_text_files(&archive_data, format, password.as_deref());
+                self.set_archive_text_files(texts, append);
+
                 // Password-retry: reload the model the user already picked
                 // before the password prompt, skipping the selection dialog.
                 let preselected = auto_select_model
@@ -2743,6 +2767,32 @@ impl ViewerApp {
         Ok(())
     }
 
+    /// Feed archive text documents (readme etc.) into the text viewer.
+    /// Fresh loads replace the list; append loads merge into it.
+    pub(super) fn set_archive_text_files(&mut self, texts: Vec<(PathBuf, Vec<u8>)>, append: bool) {
+        let files: Vec<crate::viewer::text_viewer::TextFileEntry> = texts
+            .into_iter()
+            .map(|(path, data)| crate::viewer::text_viewer::TextFileEntry {
+                name: path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                path,
+                data,
+            })
+            .collect();
+        if !files.is_empty() {
+            log::info!("Found {} text file(s) in archive", files.len());
+        }
+        let mut m = self.text_viewer.lock().unwrap_or_else(|p| p.into_inner());
+        if append {
+            m.extend_files(files);
+        } else {
+            m.replace_files(files);
+        }
+    }
+
     /// Load an archive (ZIP / 7z).
     fn try_load_archive(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         self.try_load_archive_impl(path, false)
@@ -2772,6 +2822,10 @@ impl ViewerApp {
         if contents.models.is_empty() {
             anyhow::bail!(t!("error.archive_no_models_found").into_owned());
         }
+
+        // Feed bundled text documents (readme etc.) into the text viewer.
+        let texts = contents.extract_text_files(&archive_data, format, None);
+        self.set_archive_text_files(texts, append);
 
         if contents.models.len() == 1 {
             // Exactly one model → defer loading.
