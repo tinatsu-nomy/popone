@@ -3,7 +3,7 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
-  - [v0.5.16 (in development)](#v0516-in-development)
+  - [v0.5.16 (2026-07-15)](#v0516-2026-07-15)
     - [Improvements](#improvements)
     - [New Features](#new-features)
   - [v0.5.15 (2026-07-14)](#v0515-2026-07-14)
@@ -91,7 +91,7 @@
 
 [日本語](CHANGELOG.jp.md)
 
-## v0.5.16 (in development)
+## v0.5.16 (2026-07-15)
 
 ### Improvements
 
