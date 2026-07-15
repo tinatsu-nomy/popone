@@ -1095,6 +1095,13 @@ impl ViewerApp {
             let mut alive = true;
             if let Some(opt_path) = Self::poll_receiver(rx, &mut alive) {
                 if let Some(path) = opt_path {
+                    // Race guard: a selection dialog may have appeared while the
+                    // native file dialog was open (e.g. a BG archive listing
+                    // finished in the meantime). Reject rather than clobber it.
+                    if self.reject_load_during_dialog(&path) {
+                        self.pending.file_dialog = None;
+                        return;
+                    }
                     if let Some(dir) = path.parent() {
                         self.last_model_dir = Some(dir.to_path_buf());
                     }

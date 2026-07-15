@@ -348,6 +348,7 @@ viewer:
       no_model_loaded: "No model is loaded"
       load_model_first: "Please load a model first"
       busy_loading: "Cannot open animation while a model is loading. Wait for it to finish, then retry."
+      dialog_open: "Cannot load another file while a dialog is open. Close the dialog first."
       vrma_needs_vrm: "Please load a VRM model first to load VRMA"
       anim_needs_model: "Please load a model first to load an animation"
     progress:

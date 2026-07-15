@@ -4,6 +4,7 @@
 
 - [Changelog](#changelog)
   - [v0.5.16 (in development)](#v0516-in-development)
+    - [Improvements](#improvements)
     - [New Features](#new-features)
   - [v0.5.15 (2026-07-14)](#v0515-2026-07-14)
     - [New Features](#new-features-1)
@@ -91,6 +92,10 @@
 [日本語](CHANGELOG.jp.md)
 
 ## v0.5.16 (in development)
+
+### Improvements
+
+- **Load requests are rejected while a selection dialog is open** — While a selection / input dialog (archive model selection, UnityPackage model selection, FBX load method, OBJ/STL import options, archive password, manual texture assignment) is awaiting a decision, new load requests via drag & drop, the Open / Append buttons, a second-instance launch, or reload are rejected with a toast. Previously another load could start behind the dialog and clobber the pending choice, leading to undefined behavior.
 
 ### New Features
 

@@ -348,6 +348,7 @@ viewer:
       no_model_loaded: "未加载模型"
       load_model_first: "请先加载模型"
       busy_loading: "模型加载中无法打开动画。请在加载完成后再试。"
+      dialog_open: "对话框打开时无法加载其他文件。请先关闭对话框。"
       vrma_needs_vrm: "请先加载 VRM 模型再加载 VRMA"
       anim_needs_model: "请先加载模型再加载动画"
     progress:

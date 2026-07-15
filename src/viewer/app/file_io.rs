@@ -4511,6 +4511,16 @@ impl ViewerApp {
         if self.loaded.is_none() {
             return;
         }
+        // A reload while a selection dialog is up would race the pending choice.
+        let current_path = self
+            .loaded
+            .as_ref()
+            .map(|l| l.source.display_path().to_path_buf());
+        if let Some(path) = current_path {
+            if self.reject_load_during_dialog(&path) {
+                return;
+            }
+        }
         // Restore the preview before reload (while the old model's GPU resources are still valid).
         self.cancel_tex_match_preview();
         // Suppress the texture-picker dialog during reload.
@@ -5788,6 +5798,13 @@ impl ViewerApp {
         if self.pending.file_dialog.is_some() {
             return;
         }
+        // No new load while a selection dialog awaits a decision.
+        if self.selection_dialog_active() {
+            self.convert_message = Some(ConvertMessage::failure(
+                t!("viewer.toast.precondition.dialog_open").into_owned(),
+            ));
+            return;
+        }
         let initial_dir = self.last_model_dir.clone();
         let dialog_title = t!("viewer.dialog.open_model.title").into_owned();
         let filter_supported = t!("viewer.dialog.open_model.filter_supported").into_owned();
@@ -5837,6 +5854,13 @@ impl ViewerApp {
     pub(super) fn open_append_dialog(&mut self, ctx: &egui::Context) {
         // Skip if a dialog is already open.
         if self.pending.file_dialog.is_some() {
+            return;
+        }
+        // No new load while a selection dialog awaits a decision.
+        if self.selection_dialog_active() {
+            self.convert_message = Some(ConvertMessage::failure(
+                t!("viewer.toast.precondition.dialog_open").into_owned(),
+            ));
             return;
         }
         let initial_dir = self.last_model_dir.clone();
@@ -6611,6 +6635,38 @@ impl ViewerApp {
         self.normalize_shader_state();
     }
 
+    /// Whether a selection / input dialog is awaiting a user decision
+    /// (archive model selection, package model selection, FBX load-method
+    /// choice, OBJ/STL import options, archive password, manual texture
+    /// assignment).
+    pub(super) fn selection_dialog_active(&self) -> bool {
+        self.pending.archive.is_some()
+            || self.pending.unity_pkg.is_some()
+            || self.pending.fbx_choice.is_some()
+            || self.pending.import_options.is_some()
+            || self.pending.archive_password.is_some()
+            || self.tex.pending_match.is_some()
+    }
+
+    /// Reject a new load request while a selection dialog is up. Dispatching
+    /// at that point would clobber the dialog's backing pending state
+    /// mid-choice (e.g. replace the archive selection list) and leave the
+    /// load flow undefined. Returns true (with a toast + log) when the
+    /// request must be dropped.
+    pub(super) fn reject_load_during_dialog(&mut self, path: &Path) -> bool {
+        if !self.selection_dialog_active() {
+            return false;
+        }
+        log::warn!(
+            "Load request rejected (selection dialog open): {}",
+            path.display()
+        );
+        self.convert_message = Some(ConvertMessage::failure(
+            t!("viewer.toast.precondition.dialog_open").into_owned(),
+        ));
+        true
+    }
+
     /// Drag-and-drop handling. Returns `(image_hovering, model_hovering)`.
     pub(super) fn process_drag_and_drop(&mut self, ctx: &egui::Context) -> (bool, bool) {
         let (dropped_files, hover_ext, shift_held) = ctx.input(|i| {
@@ -6637,6 +6693,11 @@ impl ViewerApp {
         let is_hover_model = MODEL_EXTENSIONS.contains(&hover_ext.as_str());
 
         if !dropped_files.is_empty() {
+            // While a selection dialog is up, drops (models and images alike)
+            // would race the pending choice — reject them wholesale.
+            if self.reject_load_during_dialog(&dropped_files[0]) {
+                return (is_hover_image, is_hover_model);
+            }
             let mut image_files: Vec<PathBuf> = Vec::new();
             let mut model_file: Option<PathBuf> = None;
             for path in dropped_files {

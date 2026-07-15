@@ -2317,6 +2317,10 @@ impl eframe::App for ViewerApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             if !path.as_os_str().is_empty() {
+                // A second-instance launch must not clobber an open selection dialog.
+                if self.reject_load_during_dialog(&path) {
+                    continue;
+                }
                 self.pending
                     .bg_state
                     .submit_dispatch(pending::PendingLoadDispatch {
