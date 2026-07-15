@@ -260,7 +260,11 @@ viewer:
     pmx_export: "PMX 导出"
     uvmap_export: "UV 贴图导出"
     animation: "动画"
+  appearance:
+    title: "外观设置"
   topbar:
+    appearance: "外观"
+    appearance_tooltip: "打开外观设置窗口"
     open: "打开"
     append: "添加"
     append_tooltip: "追加加载模型（也支持 Shift+拖放）"

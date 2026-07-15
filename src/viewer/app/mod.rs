@@ -564,6 +564,9 @@ pub struct ViewerApp {
     /// Flag indicating the theme was applied (re-applied on the first `update`
     /// to counter eframe's style reset).
     theme_applied: bool,
+    /// Open/close state of the appearance-settings window (session only,
+    /// toggled from the top bar).
+    appearance_window_open: bool,
     /// Colors of the theme currently in effect. Refreshed every frame so the
     /// System appearance mode follows OS light/dark switches.
     pub(crate) palette: theme::ThemePalette,
@@ -957,6 +960,7 @@ impl ViewerApp {
             uv_edit_window_open: false,
             uv_edit_bg_tex: None,
             theme_applied: false,
+            appearance_window_open: false,
             palette,
             next_request_id: 0,
             reload_snapshot: None,
@@ -2404,8 +2408,16 @@ impl eframe::App for ViewerApp {
                         }
                     }
 
-                    // Fit / Reset buttons + right-panel resizable toggle on the right edge.
+                    // Appearance / Fit / Reset buttons + right-panel resizable
+                    // toggle on the right edge.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Appearance settings window toggle (rightmost).
+                        if menu_btn(ui, &t!("viewer.topbar.appearance"))
+                            .on_hover_text(t!("viewer.topbar.appearance_tooltip"))
+                            .clicked()
+                        {
+                            self.appearance_window_open = !self.appearance_window_open;
+                        }
                         if menu_btn(ui, &t!("viewer.topbar.reset"))
                             .on_hover_text(t!("viewer.topbar.reset_tooltip"))
                             .clicked()
@@ -2441,6 +2453,21 @@ impl eframe::App for ViewerApp {
 
         // Right side panel.
         ui::show_side_panel(ctx, self);
+
+        // Appearance-settings window (opened from the top bar).
+        if self.appearance_window_open {
+            let mut open = true;
+            egui::Window::new(t!("viewer.appearance.title"))
+                .open(&mut open)
+                .resizable(false)
+                .default_width(240.0)
+                .show(ctx, |ui| {
+                    ui::show_appearance_settings(ui, self);
+                });
+            if !open {
+                self.appearance_window_open = false;
+            }
+        }
 
         // Consume material-edit dirty flags (§C):
         // Look at `material_dirty` set by UI actions and call

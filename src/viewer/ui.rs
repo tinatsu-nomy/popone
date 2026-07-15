@@ -3536,11 +3536,15 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
 }
 
 /// Appearance preset selector (v0.5.17: System / Light / Dark / Custom) plus
-/// the custom color pickers. Changes take effect immediately and persist into
+/// the custom color pickers, shown in the dedicated window opened from the
+/// top bar's "外観" button. Changes take effect immediately and persist into
 /// `popone.toml` `[theme]` on exit.
-fn show_appearance_settings(ui: &mut egui::Ui, app: &mut ViewerApp) {
+pub(crate) fn show_appearance_settings(ui: &mut egui::Ui, app: &mut ViewerApp) {
     use super::app::persistence::{ThemeConfig, ThemeMode};
     use super::theme;
+
+    // Editing base for Custom: the palette effective before this frame's change.
+    let base_palette = app.palette;
 
     let mode_label = |m: ThemeMode| -> std::borrow::Cow<'static, str> {
         match m {
@@ -3572,13 +3576,19 @@ fn show_appearance_settings(ui: &mut egui::Ui, app: &mut ViewerApp) {
     let mut theme_changed = selected != current;
     if theme_changed {
         app.app_config.theme.mode = Some(selected);
+        if selected == ThemeMode::Custom {
+            // Start editing from the look in effect right before the switch
+            // (e.g. Light -> Custom seeds the light colors). Colors the user
+            // already set are kept.
+            theme::seed_custom_defaults(&mut app.app_config.theme, &base_palette);
+        }
     }
 
     // Custom colors: pickers for the six `[theme]` entries.
     if app.app_config.theme.effective_mode() == ThemeMode::Custom {
         let cfg = &mut app.app_config.theme;
         // Prefill unset entries so the pickers show the effective colors
-        // (also covers legacy hand-edited configs with partial entries).
+        // (covers legacy hand-edited configs with partial entries).
         theme::fill_custom_defaults(cfg);
 
         let color_row = |ui: &mut egui::Ui,
@@ -3661,7 +3671,6 @@ fn show_appearance_settings(ui: &mut egui::Ui, app: &mut ViewerApp) {
     if theme_changed {
         app.palette = theme::apply(ui.ctx(), &app.app_config.theme);
     }
-    ui.separator();
 }
 
 /// Display tab: display settings + material display.
@@ -3673,8 +3682,6 @@ fn show_tab_display(
     // Display settings.
     ui.heading(egui::RichText::new(t!("viewer.section.display_settings")).color(app.palette.text));
     ui.separator();
-
-    show_appearance_settings(ui, app);
 
     if ui.small_button(t!("viewer.display.light_reset")).clicked() {
         let d = DisplaySettings::default();

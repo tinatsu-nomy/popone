@@ -84,19 +84,25 @@ impl ThemePalette {
         }
     }
 
-    /// The custom palette: dark base overridden by the `[theme]` hex colors.
+    /// The custom palette: the `[theme]` hex colors (dark defaults for unset
+    /// entries). Darkness is inferred from the panel background so light-ish
+    /// custom palettes get readable text; `open_bg` / `extreme_bg` are derived
+    /// from the panel color (the offsets reproduce both built-in palettes).
     pub fn custom(cfg: &ThemeConfig) -> Self {
         let d = Self::dark_default();
+        let panel_bg = theme_color(&cfg.panel_bg, d.panel_bg);
+        let dark = luma(panel_bg) < 128;
+        let (open_shift, extreme_shift) = if dark { (0x0D, -0x08) } else { (-0x0D, 0x12) };
         Self {
-            dark: true,
-            panel_bg: theme_color(&cfg.panel_bg, d.panel_bg),
+            dark,
+            panel_bg,
             border: theme_color(&cfg.border, d.border),
             accent: theme_color(&cfg.accent, d.accent),
             text: theme_color(&cfg.text, d.text),
             widget_bg: theme_color(&cfg.widget_bg, d.widget_bg),
             active: theme_color(&cfg.active, d.active),
-            open_bg: d.open_bg,
-            extreme_bg: d.extreme_bg,
+            open_bg: shift_color(panel_bg, open_shift),
+            extreme_bg: shift_color(panel_bg, extreme_shift),
         }
     }
 
@@ -181,6 +187,17 @@ fn theme_color(opt: &Option<String>, default: Color32) -> Color32 {
         .unwrap_or(default)
 }
 
+/// Approximate relative luminance (0-255, Rec. 601 weights).
+fn luma(c: Color32) -> u8 {
+    ((c.r() as u32 * 299 + c.g() as u32 * 587 + c.b() as u32 * 114) / 1000) as u8
+}
+
+/// Shift each channel by `delta`, clamped to 0-255.
+fn shift_color(c: Color32, delta: i16) -> Color32 {
+    let sh = |v: u8| (v as i16 + delta).clamp(0, 255) as u8;
+    Color32::from_rgb(sh(c.r()), sh(c.g()), sh(c.b()))
+}
+
 /// Strong (emphasized) text color for the given darkness.
 pub fn strong_text(dark: bool) -> Color32 {
     if dark {
@@ -219,21 +236,28 @@ pub fn color_hex(c: Color32) -> String {
     format!("{:02X}{:02X}{:02X}", c.r(), c.g(), c.b())
 }
 
-/// Fill unset custom colors with the dark defaults (so the color pickers in
-/// the GUI show the effective colors when switching to Custom).
-pub fn fill_custom_defaults(cfg: &mut ThemeConfig) {
-    let d = ThemePalette::dark_default();
+/// Fill unset custom colors from the given base palette (so the color pickers
+/// in the GUI show the effective colors). Used when switching to Custom: the
+/// palette in effect right before the switch becomes the editing base, while
+/// colors the user already set are kept.
+pub fn seed_custom_defaults(cfg: &mut ThemeConfig, base: &ThemePalette) {
     let fill = |slot: &mut Option<String>, v: Color32| {
         if slot.is_none() {
             *slot = Some(color_hex(v));
         }
     };
-    fill(&mut cfg.panel_bg, d.panel_bg);
-    fill(&mut cfg.border, d.border);
-    fill(&mut cfg.accent, d.accent);
-    fill(&mut cfg.text, d.text);
-    fill(&mut cfg.widget_bg, d.widget_bg);
-    fill(&mut cfg.active, d.active);
+    fill(&mut cfg.panel_bg, base.panel_bg);
+    fill(&mut cfg.border, base.border);
+    fill(&mut cfg.accent, base.accent);
+    fill(&mut cfg.text, base.text);
+    fill(&mut cfg.widget_bg, base.widget_bg);
+    fill(&mut cfg.active, base.active);
+}
+
+/// `seed_custom_defaults` with the default (dark) palette — the "reset colors"
+/// baseline and the gap filler for legacy hand-edited configs.
+pub fn fill_custom_defaults(cfg: &mut ThemeConfig) {
+    seed_custom_defaults(cfg, &ThemePalette::dark_default());
 }
 
 /// Apply the theme in `cfg` to the egui context (both dark/light `Visuals`,
@@ -292,6 +316,30 @@ mod tests {
         assert_eq!(custom.text, dark.text);
         assert_eq!(custom.widget_bg, dark.widget_bg);
         assert_eq!(custom.active, dark.active);
+    }
+
+    #[test]
+    fn test_custom_seeded_from_light_stays_light() {
+        // Switching Light -> Custom seeds the light colors; the custom palette
+        // must then behave as a light theme (text helpers, derived colors).
+        let mut cfg = ThemeConfig::default();
+        let light = ThemePalette::light_default();
+        seed_custom_defaults(&mut cfg, &light);
+        let custom = ThemePalette::custom(&cfg);
+        assert!(!custom.dark);
+        assert_eq!(custom.panel_bg, light.panel_bg);
+        assert_eq!(custom.text, light.text);
+        // The derivation offsets reproduce the built-in light palette exactly.
+        assert_eq!(custom.open_bg, light.open_bg);
+        assert_eq!(custom.extreme_bg, light.extreme_bg);
+        // And the dark defaults reproduce the built-in dark palette.
+        let mut dark_cfg = ThemeConfig::default();
+        fill_custom_defaults(&mut dark_cfg);
+        let dark = ThemePalette::custom(&dark_cfg);
+        let d = ThemePalette::dark_default();
+        assert!(dark.dark);
+        assert_eq!(dark.open_bg, d.open_bg);
+        assert_eq!(dark.extreme_bg, d.extreme_bg);
     }
 
     #[test]

@@ -260,7 +260,11 @@ viewer:
     pmx_export: "PMX 変換"
     uvmap_export: "UVマップ出力"
     animation: "アニメーション"
+  appearance:
+    title: "外観設定"
   topbar:
+    appearance: "外観"
+    appearance_tooltip: "外観設定ウィンドウを開く"
     open: "開く"
     append: "追加"
     append_tooltip: "モデルを追加読み込み（Shift+D&Dでも可）"

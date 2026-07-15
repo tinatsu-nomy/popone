@@ -260,7 +260,11 @@ viewer:
     pmx_export: "PMX Export"
     uvmap_export: "UV Map Export"
     animation: "Animation"
+  appearance:
+    title: "Appearance Settings"
   topbar:
+    appearance: "Appearance"
+    appearance_tooltip: "Open the appearance settings window"
     open: "Open"
     append: "Append"
     append_tooltip: "Append a model (also Shift+drag-and-drop)"
