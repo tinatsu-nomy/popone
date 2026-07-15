@@ -202,10 +202,28 @@ impl Default for LogViewerConfig {
     }
 }
 
+/// Appearance preset (v0.5.17, the GUI "外観" selector).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    /// Follow the OS light/dark setting.
+    System,
+    /// Fixed light theme.
+    Light,
+    /// Fixed dark theme (v0 design; the pre-v0.5.17 look).
+    Dark,
+    /// Custom: dark base overridden by the hex colors below.
+    Custom,
+}
+
 /// GUI theme color settings. Values are 6-digit hex (e.g. "4A90D9", "#4A90D9").
 /// Unspecified entries fall back to the default dark-theme colors.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ThemeConfig {
+    /// Appearance preset. `None` = legacy config: treated as Custom when any
+    /// hex color is set (so hand-edited themes keep their look), Dark otherwise.
+    #[serde(default)]
+    pub mode: Option<ThemeMode>,
     /// Panel / window background color (default: "1D1D1D")
     pub panel_bg: Option<String>,
     /// Border color (default: "333333")
@@ -221,6 +239,25 @@ pub struct ThemeConfig {
 }
 
 impl ThemeConfig {
+    /// Resolve the effective appearance mode (see the `mode` field docs).
+    pub fn effective_mode(&self) -> ThemeMode {
+        self.mode.unwrap_or(if self.has_custom_colors() {
+            ThemeMode::Custom
+        } else {
+            ThemeMode::Dark
+        })
+    }
+
+    /// Whether any custom hex color is set.
+    pub fn has_custom_colors(&self) -> bool {
+        self.panel_bg.is_some()
+            || self.border.is_some()
+            || self.accent.is_some()
+            || self.text.is_some()
+            || self.widget_bg.is_some()
+            || self.active.is_some()
+    }
+
     /// Convert a hex color string ("RRGGBB" or "#RRGGBB") into (r, g, b).
     pub fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
         let s = s.trim().trim_start_matches('#');
@@ -843,6 +880,44 @@ mod tests {
         let parsed: AppConfig = toml::from_str(legacy).expect("legacy should parse");
         assert!(!parsed.behavior.disable_single_instance);
         assert!(!parsed.behavior.exit_on_escape);
+    }
+
+    #[test]
+    fn test_theme_mode_legacy_defaults() {
+        // Pre-v0.5.17 popone.toml without `mode`: no custom colors -> Dark.
+        let legacy = "[directory]\nlast_model = 'C:\\\\Test'\n";
+        let parsed: AppConfig = toml::from_str(legacy).expect("legacy should parse");
+        assert_eq!(parsed.theme.effective_mode(), ThemeMode::Dark);
+
+        // Hand-edited [theme] colors without `mode` keep their look -> Custom.
+        let custom = "[theme]\npanel_bg = '202020'\n";
+        let parsed: AppConfig = toml::from_str(custom).expect("custom should parse");
+        assert_eq!(parsed.theme.effective_mode(), ThemeMode::Custom);
+    }
+
+    #[test]
+    fn test_theme_mode_roundtrip() {
+        for mode in [
+            ThemeMode::System,
+            ThemeMode::Light,
+            ThemeMode::Dark,
+            ThemeMode::Custom,
+        ] {
+            let cfg = AppConfig {
+                theme: ThemeConfig {
+                    mode: Some(mode),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let text = toml::to_string_pretty(&cfg).unwrap();
+            let parsed: AppConfig = toml::from_str(&text).unwrap();
+            assert_eq!(parsed.theme.effective_mode(), mode);
+        }
+        // The lowercase serde form is the on-disk contract.
+        let parsed: AppConfig =
+            toml::from_str("[theme]\nmode = 'system'\n").expect("lowercase mode should parse");
+        assert_eq!(parsed.theme.effective_mode(), ThemeMode::System);
     }
 
     #[test]

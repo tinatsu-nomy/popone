@@ -11,5 +11,6 @@ pub mod mesh;
 pub mod single_instance;
 pub mod text_viewer;
 pub mod texture;
+pub mod theme;
 pub mod ui;
 pub mod watchdog;

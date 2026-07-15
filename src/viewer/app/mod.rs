@@ -26,12 +26,8 @@ use super::animation::AnimationState;
 use super::camera::OrbitCamera;
 use super::gpu::{DrawMode, GpuRenderer, LightMode, RenderParams, ShaderOverride, ShaderSelection};
 use super::mesh::GpuModel;
+use super::theme;
 use super::ui;
-
-/// Dark theme panel background color (#1D1D1D)
-const DARK_PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x1D, 0x1D);
-/// Dark theme border color (#333333)
-const DARK_BORDER_COLOR: egui::Color32 = egui::Color32::from_rgb(0x33, 0x33, 0x33);
 
 // Re-exports from submodules
 pub use helpers::{FbxLoadMode, PkgModelType, PreloadedData, ReloadableSource, TextureSource};
@@ -565,13 +561,12 @@ pub struct ViewerApp {
     /// release the old `TextureId` via `renderer.free_texture` and re-register
     /// with `register_native_texture`.
     pub uv_edit_bg_tex: Option<(usize, egui::TextureId)>,
-    /// Flag indicating dark-theme applied (re-applied on the first `update` to
-    /// counter eframe's style reset).
-    dark_theme_applied: bool,
-    /// Panel background color resolved from the theme.
-    theme_panel_bg: egui::Color32,
-    /// Border color resolved from the theme.
-    theme_border: egui::Color32,
+    /// Flag indicating the theme was applied (re-applied on the first `update`
+    /// to counter eframe's style reset).
+    theme_applied: bool,
+    /// Colors of the theme currently in effect. Refreshed every frame so the
+    /// System appearance mode follows OS light/dark switches.
+    pub(crate) palette: theme::ThemePalette,
     /// Generation-number counter for background loads. Incremented by every
     /// `fresh_request_id` call. Used to identify and discard the result of an
     /// older load.
@@ -768,7 +763,7 @@ impl ViewerApp {
                     .show(ctx, |ui| {
                         ui.label(
                             egui::RichText::new(t!("viewer.text_viewer.list_hint"))
-                                .color(egui::Color32::from_gray(0xA0))
+                                .color(self.palette.gray_text(0xA0))
                                 .size(11.0),
                         );
                         ui.separator();
@@ -837,13 +832,14 @@ impl ViewerApp {
         // Load Japanese fonts.
         Self::setup_cjk_fonts(&cc.egui_ctx);
 
-        // Dark theme (Blender / Substance Painter style); colors are configurable via popone.toml [theme].
-        let theme = app_config
+        // Appearance theme (System / Light / Dark / Custom); the preset and
+        // custom colors are configurable via popone.toml [theme].
+        let theme_config = app_config
             .as_ref()
             .map(|c| &c.theme)
             .cloned()
             .unwrap_or_default();
-        Self::setup_dark_theme(&cc.egui_ctx, &theme);
+        let palette = theme::apply(&cc.egui_ctx, &theme_config);
 
         // Load splash image.
         let splash_texture = Self::load_splash_texture(&cc.egui_ctx);
@@ -960,9 +956,8 @@ impl ViewerApp {
             uv_edit: uv_edit::UvEditState::default(),
             uv_edit_window_open: false,
             uv_edit_bg_tex: None,
-            dark_theme_applied: false,
-            theme_panel_bg: Self::theme_color(&theme.panel_bg, DARK_PANEL_BG),
-            theme_border: Self::theme_color(&theme.border, DARK_BORDER_COLOR),
+            theme_applied: false,
+            palette,
             next_request_id: 0,
             reload_snapshot: None,
             heartbeat: super::watchdog::start(Duration::from_secs(5), Duration::from_secs(2)),
@@ -1021,81 +1016,6 @@ impl ViewerApp {
         let pixels = image.into_raw();
         let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
         Some(ctx.load_texture("splash", color_image, egui::TextureOptions::LINEAR))
-    }
-
-    /// Applies the v0-design-conformant dark theme.
-    /// Converts a hex string to `Color32` (with a default).
-    fn theme_color(opt: &Option<String>, default: egui::Color32) -> egui::Color32 {
-        opt.as_ref()
-            .and_then(|s| persistence::ThemeConfig::parse_hex(s))
-            .map(|(r, g, b)| egui::Color32::from_rgb(r, g, b))
-            .unwrap_or(default)
-    }
-
-    fn setup_dark_theme(ctx: &egui::Context, theme: &persistence::ThemeConfig) {
-        let mut visuals = egui::Visuals::dark();
-
-        let panel_bg = Self::theme_color(&theme.panel_bg, DARK_PANEL_BG);
-        let border = Self::theme_color(&theme.border, DARK_BORDER_COLOR);
-        let accent = Self::theme_color(&theme.accent, egui::Color32::from_rgb(0x4A, 0x90, 0xD9));
-        let text_color = Self::theme_color(&theme.text, egui::Color32::from_gray(0xD0));
-        let widget_bg =
-            Self::theme_color(&theme.widget_bg, egui::Color32::from_rgb(0x25, 0x25, 0x25));
-        let active_color =
-            Self::theme_color(&theme.active, egui::Color32::from_rgb(0x2A, 0x5A, 0x8A));
-
-        // Panel / window background.
-        visuals.panel_fill = panel_bg;
-        visuals.window_fill = panel_bg;
-
-        // Border.
-        let border_stroke = egui::Stroke::new(1.0, border);
-        visuals.window_stroke = border_stroke;
-
-        // Common widget text color.
-        let fg = egui::Stroke::new(1.0, text_color);
-
-        // noninteractive (labels, separators, etc.).
-        visuals.widgets.noninteractive.bg_stroke = border_stroke;
-        visuals.widgets.noninteractive.fg_stroke = fg;
-
-        // inactive (button at rest).
-        visuals.widgets.inactive.bg_fill = widget_bg;
-        visuals.widgets.inactive.weak_bg_fill = widget_bg;
-        visuals.widgets.inactive.bg_stroke = border_stroke;
-        visuals.widgets.inactive.fg_stroke = fg;
-
-        // hovered: accent color.
-        visuals.widgets.hovered.bg_fill = accent;
-        visuals.widgets.hovered.weak_bg_fill = accent;
-        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, accent);
-        visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-
-        // active (while pressed).
-        visuals.widgets.active.bg_fill = active_color;
-        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, active_color);
-        visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-
-        // open (expanded ComboBox, etc.).
-        visuals.widgets.open.bg_fill = egui::Color32::from_rgb(0x2A, 0x2A, 0x2A);
-        visuals.widgets.open.bg_stroke = border_stroke;
-        visuals.widgets.open.fg_stroke = fg;
-
-        // Selection / accent.
-        visuals.selection.bg_fill = accent;
-        visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-
-        // Extreme background (e.g., interior of `TextEdit`).
-        visuals.extreme_bg_color = egui::Color32::from_rgb(0x15, 0x15, 0x15);
-
-        // Make the scrollbar thinner.
-        let mut spacing = ctx.style().spacing.clone();
-        spacing.scroll.bar_width = 6.0;
-
-        let mut style = (*ctx.style()).clone();
-        style.visuals = visuals;
-        style.spacing = spacing;
-        ctx.set_style(style);
     }
 
     pub(crate) fn finish_load(
@@ -2303,13 +2223,16 @@ impl eframe::App for ViewerApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
-        // Dark theme: `new()`'s settings can be overwritten by eframe's
+        // Theme: `new()`'s settings can be overwritten by eframe's
         // initialization, so reapply on the first `update()` (subsequent
         // frames skip via the flag).
-        if !self.dark_theme_applied {
-            Self::setup_dark_theme(ctx, &self.app_config.theme);
-            self.dark_theme_applied = true;
+        if !self.theme_applied {
+            theme::apply(ctx, &self.app_config.theme);
+            self.theme_applied = true;
         }
+        // Refresh the effective palette every frame: with the System
+        // appearance mode `ctx.theme()` flips when the OS setting changes.
+        self.palette = theme::effective_palette(ctx, &self.app_config.theme);
 
         // IPC: receive file paths from other processes.
         #[cfg(target_os = "windows")]
@@ -2389,14 +2312,12 @@ impl eframe::App for ViewerApp {
         let (is_hover_image, is_hover_model) = self.process_drag_and_drop(ctx);
         self.process_keyboard_shortcuts(ctx);
 
-        // Dark theme: explicitly set the panel background here (the theme itself
-        // was set once in `new()`).
-        let dark_panel = self.theme_panel_bg;
-        let dark_border = egui::Stroke::new(1.0, self.theme_border);
+        // Panel background / border follow the effective theme palette.
         let panel_frame = egui::Frame::new()
-            .fill(dark_panel)
-            .stroke(dark_border)
+            .fill(self.palette.panel_bg)
+            .stroke(egui::Stroke::new(1.0, self.palette.border))
             .inner_margin(egui::Margin::same(4));
+        let strong_text = self.palette.strong_text();
 
         // Top bar.
         egui::TopBottomPanel::top("top_bar")
@@ -2405,17 +2326,15 @@ impl eframe::App for ViewerApp {
                 bar.horizontal(|ui| {
                     // Top-bar button: transparent background normally; the
                     // global theme's blue takes effect on hover.
-                    let border33 = self.theme_border;
+                    let border = self.palette.border;
                     ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
                     ui.visuals_mut().widgets.inactive.bg_fill = egui::Color32::TRANSPARENT;
-                    ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border33);
+                    ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(1.0, border);
 
-                    // Menu-button helper for the dark theme (lets the visuals win, no `.fill()`).
+                    // Menu-button helper (lets the visuals win, no `.fill()`).
                     let menu_btn = |ui: &mut egui::Ui, label: &str| -> egui::Response {
                         let btn = egui::Button::new(
-                            egui::RichText::new(label)
-                                .color(egui::Color32::WHITE)
-                                .size(12.0),
+                            egui::RichText::new(label).color(strong_text).size(12.0),
                         );
                         ui.add(btn)
                     };
@@ -2470,13 +2389,13 @@ impl eframe::App for ViewerApp {
                         ui.separator();
                         ui.label(
                             egui::RichText::new(t!("viewer.topbar.model_name_label"))
-                                .color(egui::Color32::from_gray(0xB0))
+                                .color(self.palette.gray_text(0xB0))
                                 .size(11.0),
                         );
                         let response = ui.add(
                             egui::TextEdit::singleline(&mut self.export.model_display_name)
                                 .desired_width(240.0)
-                                .text_color(egui::Color32::WHITE)
+                                .text_color(strong_text)
                                 .font(egui::FontId::proportional(12.0))
                                 .hint_text(t!("viewer.topbar.model_name_hint")),
                         );
@@ -2505,7 +2424,7 @@ impl eframe::App for ViewerApp {
                         // The current state is highlighted via `selected()`.
                         let resizable_label =
                             egui::RichText::new(t!("viewer.topbar.panel_resizable_label"))
-                                .color(egui::Color32::WHITE)
+                                .color(strong_text)
                                 .size(12.0);
                         let resizable_btn = egui::Button::new(resizable_label)
                             .selected(self.display.panel_resizable);
@@ -2540,7 +2459,7 @@ impl eframe::App for ViewerApp {
         egui::TopBottomPanel::bottom("status_bar")
             .frame(panel_frame)
             .show(ctx, |ui| {
-                ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
+                ui.visuals_mut().override_text_color = Some(strong_text);
                 ui.horizontal_centered(|ui| {
                     if let Some(ref loaded) = self.loaded {
                         let ir = &loaded.ir;
@@ -2568,9 +2487,11 @@ impl eframe::App for ViewerApp {
                             let tex_total = ir.materials.len();
                             ui.separator();
                             let tex_color = if tex_set == tex_total {
-                                egui::Color32::from_rgb(0x40, 0xC0, 0x40)
+                                self.palette
+                                    .accent_text(egui::Color32::from_rgb(0x40, 0xC0, 0x40))
                             } else {
-                                egui::Color32::from_rgb(0xD0, 0xA0, 0x40)
+                                self.palette
+                                    .accent_text(egui::Color32::from_rgb(0xD0, 0xA0, 0x40))
                             };
                             ui.label(
                                 egui::RichText::new(&loaded.mat_cache.tex_status_text)
@@ -2591,7 +2512,7 @@ impl eframe::App for ViewerApp {
         egui::TopBottomPanel::bottom("shortcut_hints")
             .frame(panel_frame)
             .show(ctx, |ui| {
-                let hint_color = egui::Color32::WHITE;
+                let hint_color = strong_text;
                 let hint_font = egui::FontId::proportional(10.0);
                 ui.horizontal(|ui| {
                     ui.label(

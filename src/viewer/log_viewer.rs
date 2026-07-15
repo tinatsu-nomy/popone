@@ -430,13 +430,18 @@ impl LogViewerModel {
 /// Draw a single row. For multi-line messages, only the first line is rendered;
 /// the rest is shown in the hover tooltip.
 fn draw_log_row(ui: &mut egui::Ui, line: &LogLine) {
+    let dark = ui.visuals().dark_mode;
     let color = match line.level {
-        LogLevel::Error => egui::Color32::from_rgb(0xFF, 0x60, 0x60),
-        LogLevel::Warn => egui::Color32::from_rgb(0xE0, 0xC0, 0x40),
-        LogLevel::Info => egui::Color32::WHITE,
-        LogLevel::Debug => egui::Color32::from_rgb(0x90, 0x90, 0x90),
-        LogLevel::Trace => egui::Color32::from_rgb(0x70, 0x70, 0x70),
-        LogLevel::Unknown => egui::Color32::from_rgb(0xB0, 0xB0, 0xB0),
+        LogLevel::Error => {
+            super::theme::accent_text(dark, egui::Color32::from_rgb(0xFF, 0x60, 0x60))
+        }
+        LogLevel::Warn => {
+            super::theme::accent_text(dark, egui::Color32::from_rgb(0xE0, 0xC0, 0x40))
+        }
+        LogLevel::Info => super::theme::strong_text(dark),
+        LogLevel::Debug => super::theme::gray_text(dark, 0x90),
+        LogLevel::Trace => super::theme::gray_text(dark, 0x70),
+        LogLevel::Unknown => super::theme::gray_text(dark, 0xB0),
     };
 
     let first_line = line.message.lines().next().unwrap_or("");

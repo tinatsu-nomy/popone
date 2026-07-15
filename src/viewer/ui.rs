@@ -15,11 +15,6 @@ use super::export_filter::build_filtered_ir;
 use super::gpu::{DrawMode, LightMode, ShaderSelection};
 use crate::intermediate::types::CullMode;
 
-/// Dark theme panel background color (#1D1D1D).
-const DARK_PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x1D, 0x1D);
-/// Dark theme border color (#333333).
-const DARK_BORDER_COLOR: egui::Color32 = egui::Color32::from_rgb(0x33, 0x33, 0x33);
-
 // Material-row icons (migrated in v0.5.3 from [S][C][N][B][edit] to emoji).
 // `NotoEmoji-Regular` included in egui's `FontDefinitions::default()` works as
 // a fallback, so codepoints absent from Noto Sans JP/SC are still expected to
@@ -52,11 +47,10 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
     // already synced.
     app.sync_ir_thumb_cache();
 
-    let dark_panel = DARK_PANEL_BG;
-    let dark_border = egui::Stroke::new(1.0, DARK_BORDER_COLOR);
+    let pal = app.palette;
     let panel_frame = egui::Frame::new()
-        .fill(dark_panel)
-        .stroke(dark_border)
+        .fill(pal.panel_bg)
+        .stroke(egui::Stroke::new(1.0, pal.border))
         .inner_margin(egui::Margin::same(4));
 
     // The Display tab's toggle controls resize behavior.
@@ -114,12 +108,11 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
         .resizable(panel_resizable)
         .frame(panel_frame)
         .show(ctx, |ui| {
-            // Force all side-panel text white.
-            ui.visuals_mut().widgets.noninteractive.fg_stroke =
-                egui::Stroke::new(1.0, egui::Color32::WHITE);
-            ui.visuals_mut().widgets.inactive.fg_stroke =
-                egui::Stroke::new(1.0, egui::Color32::WHITE);
-            ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
+            // Force all side-panel text to the strong color (white on dark).
+            let strong = pal.strong_text();
+            ui.visuals_mut().widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, strong);
+            ui.visuals_mut().widgets.inactive.fg_stroke = egui::Stroke::new(1.0, strong);
+            ui.visuals_mut().override_text_color = Some(strong);
 
             // Tab bar (v0 design: flat style, equal width, no gaps).
             ui.horizontal(|ui| {
@@ -141,16 +134,13 @@ pub fn show_side_panel(ctx: &egui::Context, app: &mut ViewerApp) {
                     let is_active = app.side_panel_tab == tab;
                     let text = egui::RichText::new(label).size(11.0);
                     let text = if is_active {
+                        // White stays readable on the accent blue in both themes.
                         text.color(egui::Color32::WHITE).strong()
                     } else {
-                        text.color(egui::Color32::from_gray(0xD0))
+                        text.color(pal.text)
                     };
                     let btn = egui::Button::new(text)
-                        .fill(if is_active {
-                            egui::Color32::from_rgb(0x4A, 0x90, 0xD9)
-                        } else {
-                            egui::Color32::from_rgb(0x2A, 0x2A, 0x2A)
-                        })
+                        .fill(if is_active { pal.accent } else { pal.open_bg })
                         .min_size(egui::vec2(tab_width, 20.0));
                     if ui.add(btn).clicked() {
                         app.side_panel_tab = tab;
@@ -1536,8 +1526,8 @@ pub fn show_material_editor_window(ctx: &egui::Context, app: &mut ViewerApp) {
     // `shortcut_hints`, giving the panel stacking order
     // "bottom = status_bar / middle = shortcut_hints / top = this edit panel".
     let panel_frame = egui::Frame::new()
-        .fill(DARK_PANEL_BG)
-        .stroke(egui::Stroke::new(1.0, DARK_BORDER_COLOR))
+        .fill(app.palette.panel_bg)
+        .stroke(egui::Stroke::new(1.0, app.palette.border))
         .inner_margin(egui::Margin::same(4));
     let panel_inner = egui::TopBottomPanel::bottom("material_editor_panel")
         .resizable(true)
@@ -2958,18 +2948,17 @@ pub fn show_texture_drop_dialog(ctx: &egui::Context, app: &mut ViewerApp) {
                             .get(mat_idx)
                             .and_then(|s| s.as_deref())
                             .unwrap_or("");
-                        let row = ui.horizontal(|ui| {
-                            let ind_resp = ui.label(indicator);
-                            let cb = ui.checkbox(&mut preview.selection[mat_idx], name);
-                            if !src_name.is_empty() {
-                                ui.label(
-                                    egui::RichText::new(src_name)
-                                        .small()
-                                        .color(egui::Color32::from_gray(0x90)),
-                                );
-                            }
-                            ind_resp.contains_pointer() || cb.contains_pointer()
-                        });
+                        let row =
+                            ui.horizontal(|ui| {
+                                let ind_resp = ui.label(indicator);
+                                let cb = ui.checkbox(&mut preview.selection[mat_idx], name);
+                                if !src_name.is_empty() {
+                                    ui.label(egui::RichText::new(src_name).small().color(
+                                        super::theme::gray_text(ui.visuals().dark_mode, 0x90),
+                                    ));
+                                }
+                                ind_resp.contains_pointer() || cb.contains_pointer()
+                            });
                         // Material-row hover -> highlight in the 3D view.
                         if row.inner {
                             for (di, d) in loaded.gpu_model.draws.iter().enumerate() {
@@ -3352,9 +3341,7 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
     };
     let ir = &loaded.ir;
 
-    ui.heading(
-        egui::RichText::new(t!("viewer.section.model_info")).color(egui::Color32::from_gray(0xD0)),
-    );
+    ui.heading(egui::RichText::new(t!("viewer.section.model_info")).color(app.palette.text));
     ui.separator();
     // Name (single row).
     egui::Grid::new("model_info_name")
@@ -3420,10 +3407,7 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
     if !ir.comment.is_empty() {
         if ir.source_format.is_pmx_pmd() {
             // PMX/PMD: show the free-form comment as is.
-            ui.heading(
-                egui::RichText::new(t!("viewer.section.comment"))
-                    .color(egui::Color32::from_gray(0xD0)),
-            );
+            ui.heading(egui::RichText::new(t!("viewer.section.comment")).color(app.palette.text));
             ui.separator();
             egui::ScrollArea::vertical()
                 .max_height(200.0)
@@ -3473,10 +3457,7 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
         std::collections::HashSet::new()
     };
 
-    ui.heading(
-        egui::RichText::new(t!("viewer.section.expression_morphs"))
-            .color(egui::Color32::from_gray(0xD0)),
-    );
+    ui.heading(egui::RichText::new(t!("viewer.section.expression_morphs")).color(app.palette.text));
     ui.separator();
     ui.horizontal(|ui| {
         ui.label(t!("viewer.morph.filter_label"));
@@ -3554,6 +3535,135 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
     }
 }
 
+/// Appearance preset selector (v0.5.17: System / Light / Dark / Custom) plus
+/// the custom color pickers. Changes take effect immediately and persist into
+/// `popone.toml` `[theme]` on exit.
+fn show_appearance_settings(ui: &mut egui::Ui, app: &mut ViewerApp) {
+    use super::app::persistence::{ThemeConfig, ThemeMode};
+    use super::theme;
+
+    let mode_label = |m: ThemeMode| -> std::borrow::Cow<'static, str> {
+        match m {
+            ThemeMode::System => t!("viewer.display.appearance_system"),
+            ThemeMode::Light => t!("viewer.display.appearance_light"),
+            ThemeMode::Dark => t!("viewer.display.appearance_dark"),
+            ThemeMode::Custom => t!("viewer.display.appearance_custom"),
+        }
+    };
+
+    let current = app.app_config.theme.effective_mode();
+    let mut selected = current;
+    ui.horizontal(|ui| {
+        ui.label(t!("viewer.display.appearance_label"));
+        egui::ComboBox::from_id_salt("appearance_mode")
+            .selected_text(mode_label(selected))
+            .show_ui(ui, |ui| {
+                for m in [
+                    ThemeMode::System,
+                    ThemeMode::Light,
+                    ThemeMode::Dark,
+                    ThemeMode::Custom,
+                ] {
+                    ui.selectable_value(&mut selected, m, mode_label(m));
+                }
+            });
+    });
+
+    let mut theme_changed = selected != current;
+    if theme_changed {
+        app.app_config.theme.mode = Some(selected);
+    }
+
+    // Custom colors: pickers for the six `[theme]` entries.
+    if app.app_config.theme.effective_mode() == ThemeMode::Custom {
+        let cfg = &mut app.app_config.theme;
+        // Prefill unset entries so the pickers show the effective colors
+        // (also covers legacy hand-edited configs with partial entries).
+        theme::fill_custom_defaults(cfg);
+
+        let color_row = |ui: &mut egui::Ui,
+                         label: std::borrow::Cow<'static, str>,
+                         slot: &mut Option<String>,
+                         changed: &mut bool| {
+            ui.label(label.as_ref());
+            let (r, g, b) = slot
+                .as_deref()
+                .and_then(ThemeConfig::parse_hex)
+                .unwrap_or((0, 0, 0));
+            let mut rgb = [r, g, b];
+            if ui.color_edit_button_srgb(&mut rgb).changed() {
+                *slot = Some(theme::color_hex(egui::Color32::from_rgb(
+                    rgb[0], rgb[1], rgb[2],
+                )));
+                *changed = true;
+            }
+        };
+
+        egui::Grid::new("appearance_custom_colors")
+            .num_columns(4)
+            .show(ui, |ui| {
+                color_row(
+                    ui,
+                    t!("viewer.display.theme_panel_bg"),
+                    &mut cfg.panel_bg,
+                    &mut theme_changed,
+                );
+                color_row(
+                    ui,
+                    t!("viewer.display.theme_widget_bg"),
+                    &mut cfg.widget_bg,
+                    &mut theme_changed,
+                );
+                ui.end_row();
+                color_row(
+                    ui,
+                    t!("viewer.display.theme_text"),
+                    &mut cfg.text,
+                    &mut theme_changed,
+                );
+                color_row(
+                    ui,
+                    t!("viewer.display.theme_border"),
+                    &mut cfg.border,
+                    &mut theme_changed,
+                );
+                ui.end_row();
+                color_row(
+                    ui,
+                    t!("viewer.display.theme_accent"),
+                    &mut cfg.accent,
+                    &mut theme_changed,
+                );
+                color_row(
+                    ui,
+                    t!("viewer.display.theme_active"),
+                    &mut cfg.active,
+                    &mut theme_changed,
+                );
+                ui.end_row();
+            });
+
+        if ui
+            .small_button(t!("viewer.display.theme_reset_colors"))
+            .clicked()
+        {
+            cfg.panel_bg = None;
+            cfg.border = None;
+            cfg.accent = None;
+            cfg.text = None;
+            cfg.widget_bg = None;
+            cfg.active = None;
+            theme::fill_custom_defaults(cfg);
+            theme_changed = true;
+        }
+    }
+
+    if theme_changed {
+        app.palette = theme::apply(ui.ctx(), &app.app_config.theme);
+    }
+    ui.separator();
+}
+
 /// Display tab: display settings + material display.
 fn show_tab_display(
     ui: &mut egui::Ui,
@@ -3561,11 +3671,10 @@ fn show_tab_display(
     tex_assign_request: &mut Option<TexAssignRequest>,
 ) {
     // Display settings.
-    ui.heading(
-        egui::RichText::new(t!("viewer.section.display_settings"))
-            .color(egui::Color32::from_gray(0xD0)),
-    );
+    ui.heading(egui::RichText::new(t!("viewer.section.display_settings")).color(app.palette.text));
     ui.separator();
+
+    show_appearance_settings(ui, app);
 
     if ui.small_button(t!("viewer.display.light_reset")).clicked() {
         let d = DisplaySettings::default();
@@ -3966,10 +4075,7 @@ fn show_tab_display(
     let mat_src_tex = &loaded.mat_cache.source_tex_names;
     let num_draws = draw_info.len();
 
-    ui.heading(
-        egui::RichText::new(t!("viewer.section.material_display"))
-            .color(egui::Color32::from_gray(0xD0)),
-    );
+    ui.heading(egui::RichText::new(t!("viewer.section.material_display")).color(app.palette.text));
     ui.separator();
     let small = egui::TextStyle::Small;
     ui.horizontal(|ui| {
@@ -4599,17 +4705,20 @@ fn show_file_tree(ui: &mut egui::Ui, app: &ViewerApp) {
     let Some(ref loaded) = app.loaded else { return };
 
     ui.add_space(12.0);
-    ui.heading(
-        egui::RichText::new(t!("viewer.section.file_structure"))
-            .color(egui::Color32::from_gray(0xD0)),
-    );
+    ui.heading(egui::RichText::new(t!("viewer.section.file_structure")).color(app.palette.text));
     ui.separator();
 
-    let dir_color = egui::Color32::from_rgb(0xE0, 0xC0, 0x60);
-    let file_color = egui::Color32::from_gray(0xC0);
-    let tex_color = egui::Color32::from_rgb(0x80, 0xD0, 0x80);
-    let anim_color = egui::Color32::from_rgb(0x80, 0xB0, 0xE0);
-    let path_color = egui::Color32::from_gray(0x80);
+    let dir_color = app
+        .palette
+        .accent_text(egui::Color32::from_rgb(0xE0, 0xC0, 0x60));
+    let file_color = app.palette.gray_text(0xC0);
+    let tex_color = app
+        .palette
+        .accent_text(egui::Color32::from_rgb(0x80, 0xD0, 0x80));
+    let anim_color = app
+        .palette
+        .accent_text(egui::Color32::from_rgb(0x80, 0xB0, 0xE0));
+    let path_color = app.palette.gray_text(0x80);
 
     // -- Build the load chain --
     // Level 0: opened file (source).
@@ -4932,9 +5041,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         || app.pending.pkg_load.is_some()
         || app.export.pending_mkdir.is_some();
 
-    ui.heading(
-        egui::RichText::new(t!("viewer.section.pmx_export")).color(egui::Color32::from_gray(0xD0)),
-    );
+    ui.heading(egui::RichText::new(t!("viewer.section.pmx_export")).color(app.palette.text));
     ui.separator();
 
     // Output directory (where `converted_modelXX` is created).
@@ -4949,7 +5056,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
         ui.label(
             egui::RichText::new(&dir_label)
                 .small()
-                .color(egui::Color32::from_gray(0x60)),
+                .color(app.palette.gray_text(0x60)),
         );
     });
     ui.horizontal(|ui| {
@@ -5204,7 +5311,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 ui.label(
                     egui::RichText::new(&dir_label)
                         .small()
-                        .color(egui::Color32::from_gray(0x60)),
+                        .color(app.palette.gray_text(0x60)),
                 );
             });
             ui.horizontal(|ui| {
@@ -5249,10 +5356,7 @@ fn show_tab_export(ui: &mut egui::Ui, app: &mut ViewerApp) {
     ui.add_space(12.0);
 
     // UV map export.
-    ui.heading(
-        egui::RichText::new(t!("viewer.section.uvmap_export"))
-            .color(egui::Color32::from_gray(0xD0)),
-    );
+    ui.heading(egui::RichText::new(t!("viewer.section.uvmap_export")).color(app.palette.text));
     ui.separator();
     ui.add_enabled_ui(has_model && !is_processing, |ui| {
         // Do not relaunch while the dialog is open.
@@ -5729,9 +5833,7 @@ fn write_convert_log(
 fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
     use super::animation::LoopMode;
 
-    ui.heading(
-        egui::RichText::new(t!("viewer.section.animation")).color(egui::Color32::from_gray(0xD0)),
-    );
+    ui.heading(egui::RichText::new(t!("viewer.section.animation")).color(app.palette.text));
     ui.separator();
 
     // VRMA library.
@@ -5747,9 +5849,9 @@ fn show_animation_controls(ui: &mut egui::Ui, app: &mut ViewerApp) {
                 let is_active = app.anim.active_index == Some(i);
                 // [play][x] filename (clicking play switches).
                 let play_icon = if is_active {
-                    egui::RichText::new("▶").color(egui::Color32::from_rgb(0x4A, 0x90, 0xD9))
+                    egui::RichText::new("▶").color(app.palette.accent)
                 } else {
-                    egui::RichText::new("▶").color(egui::Color32::from_gray(0x60))
+                    egui::RichText::new("▶").color(app.palette.gray_text(0x60))
                 };
                 if ui.small_button(play_icon).clicked() && !is_active {
                     switch_to = Some(i);
