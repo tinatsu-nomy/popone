@@ -3536,15 +3536,14 @@ fn show_tab_control(ui: &mut egui::Ui, app: &mut ViewerApp) {
 }
 
 /// Appearance preset selector (v0.5.17: System / Light / Dark / Custom) plus
-/// the custom color pickers, shown in the dedicated window opened from the
-/// top bar's "外観" button. Changes take effect immediately and persist into
-/// `popone.toml` `[theme]` on exit.
+/// the color pickers, shown in the dedicated window opened from the top bar's
+/// "外観" button. The pickers are always visible and show the effective colors
+/// of the current preset; editing any of them forks the preset into Custom
+/// with the shown colors as the base. Changes take effect immediately and
+/// persist into `popone.toml` `[theme]` on exit.
 pub(crate) fn show_appearance_settings(ui: &mut egui::Ui, app: &mut ViewerApp) {
-    use super::app::persistence::{ThemeConfig, ThemeMode};
+    use super::app::persistence::ThemeMode;
     use super::theme;
-
-    // Editing base for Custom: the palette effective before this frame's change.
-    let base_palette = app.palette;
 
     let mode_label = |m: ThemeMode| -> std::borrow::Cow<'static, str> {
         match m {
@@ -3573,99 +3572,81 @@ pub(crate) fn show_appearance_settings(ui: &mut egui::Ui, app: &mut ViewerApp) {
             });
     });
 
-    let mut theme_changed = selected != current;
-    if theme_changed {
+    if selected != current {
         app.app_config.theme.mode = Some(selected);
-        if selected == ThemeMode::Custom {
-            // Start editing from the look in effect right before the switch
-            // (e.g. Light -> Custom seeds the light colors). Colors the user
-            // already set are kept.
-            theme::seed_custom_defaults(&mut app.app_config.theme, &base_palette);
-        }
+        // Apply immediately so the pickers below show the new preset's colors.
+        app.palette = theme::apply(ui.ctx(), &app.app_config.theme);
     }
 
-    // Custom colors: pickers for the six `[theme]` entries.
-    if app.app_config.theme.effective_mode() == ThemeMode::Custom {
-        let cfg = &mut app.app_config.theme;
-        // Prefill unset entries so the pickers show the effective colors
-        // (covers legacy hand-edited configs with partial entries).
-        theme::fill_custom_defaults(cfg);
+    ui.separator();
 
-        let color_row = |ui: &mut egui::Ui,
-                         label: std::borrow::Cow<'static, str>,
-                         slot: &mut Option<String>,
-                         changed: &mut bool| {
-            ui.label(label.as_ref());
-            let (r, g, b) = slot
-                .as_deref()
-                .and_then(ThemeConfig::parse_hex)
-                .unwrap_or((0, 0, 0));
-            let mut rgb = [r, g, b];
-            if ui.color_edit_button_srgb(&mut rgb).changed() {
-                *slot = Some(theme::color_hex(egui::Color32::from_rgb(
-                    rgb[0], rgb[1], rgb[2],
-                )));
-                *changed = true;
+    // Color pickers (always visible): show the effective colors of the
+    // current preset (for Custom: the `[theme]` colors, dark defaults for
+    // unset entries).
+    let display = theme::effective_palette(ui.ctx(), &app.app_config.theme);
+    let labels = [
+        t!("viewer.display.theme_panel_bg"),
+        t!("viewer.display.theme_widget_bg"),
+        t!("viewer.display.theme_text"),
+        t!("viewer.display.theme_border"),
+        t!("viewer.display.theme_accent"),
+        t!("viewer.display.theme_active"),
+    ];
+    let mut colors = [
+        display.panel_bg,
+        display.widget_bg,
+        display.text,
+        display.border,
+        display.accent,
+        display.active,
+    ];
+    let mut any_edit = false;
+    egui::Grid::new("appearance_custom_colors")
+        .num_columns(4)
+        .show(ui, |ui| {
+            for (i, (label, color)) in labels.iter().zip(colors.iter_mut()).enumerate() {
+                ui.label(label.as_ref());
+                let mut rgb = [color.r(), color.g(), color.b()];
+                if ui.color_edit_button_srgb(&mut rgb).changed() {
+                    *color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                    any_edit = true;
+                }
+                if i % 2 == 1 {
+                    ui.end_row();
+                }
             }
-        };
+        });
 
-        egui::Grid::new("appearance_custom_colors")
-            .num_columns(4)
-            .show(ui, |ui| {
-                color_row(
-                    ui,
-                    t!("viewer.display.theme_panel_bg"),
-                    &mut cfg.panel_bg,
-                    &mut theme_changed,
-                );
-                color_row(
-                    ui,
-                    t!("viewer.display.theme_widget_bg"),
-                    &mut cfg.widget_bg,
-                    &mut theme_changed,
-                );
-                ui.end_row();
-                color_row(
-                    ui,
-                    t!("viewer.display.theme_text"),
-                    &mut cfg.text,
-                    &mut theme_changed,
-                );
-                color_row(
-                    ui,
-                    t!("viewer.display.theme_border"),
-                    &mut cfg.border,
-                    &mut theme_changed,
-                );
-                ui.end_row();
-                color_row(
-                    ui,
-                    t!("viewer.display.theme_accent"),
-                    &mut cfg.accent,
-                    &mut theme_changed,
-                );
-                color_row(
-                    ui,
-                    t!("viewer.display.theme_active"),
-                    &mut cfg.active,
-                    &mut theme_changed,
-                );
-                ui.end_row();
-            });
+    let mut theme_changed = false;
+    if any_edit {
+        // Editing from a preset forks it into Custom; all six colors are
+        // materialized so the untouched ones keep the preset's values.
+        let cfg = &mut app.app_config.theme;
+        cfg.mode = Some(ThemeMode::Custom);
+        cfg.panel_bg = Some(theme::color_hex(colors[0]));
+        cfg.widget_bg = Some(theme::color_hex(colors[1]));
+        cfg.text = Some(theme::color_hex(colors[2]));
+        cfg.border = Some(theme::color_hex(colors[3]));
+        cfg.accent = Some(theme::color_hex(colors[4]));
+        cfg.active = Some(theme::color_hex(colors[5]));
+        theme_changed = true;
+    }
 
-        if ui
+    // Reset to the default (dark) colors; only meaningful for Custom.
+    if app.app_config.theme.effective_mode() == ThemeMode::Custom
+        && ui
             .small_button(t!("viewer.display.theme_reset_colors"))
             .clicked()
-        {
-            cfg.panel_bg = None;
-            cfg.border = None;
-            cfg.accent = None;
-            cfg.text = None;
-            cfg.widget_bg = None;
-            cfg.active = None;
-            theme::fill_custom_defaults(cfg);
-            theme_changed = true;
-        }
+    {
+        let cfg = &mut app.app_config.theme;
+        cfg.panel_bg = None;
+        cfg.border = None;
+        cfg.accent = None;
+        cfg.text = None;
+        cfg.widget_bg = None;
+        cfg.active = None;
+        theme::fill_custom_defaults(cfg);
+        theme_changed = true;
     }
 
     if theme_changed {
