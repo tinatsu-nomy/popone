@@ -143,7 +143,7 @@
     - [Lighting](#lighting)
     - [MMD Ambient Separation](#mmd-ambient-separation)
   - [Viewer Display Styles](#viewer-display-styles)
-    - [Dark Theme](#dark-theme)
+    - [Appearance Themes (v0.5.17: System / Light / Dark / Custom)](#appearance-themes-v0517-system--light--dark--custom)
     - [VRM Meta Info Color Badges](#vrm-meta-info-color-badges)
     - [Splash Image](#splash-image)
     - [Rigid Body Display](#rigid-body-display)
@@ -2358,19 +2358,23 @@ Standard shaders use `camera.ambient` / `camera.ambient_ground` (hemisphere ambi
 
 ## Viewer Display Styles
 
-### Dark Theme
+### Appearance Themes (v0.5.17: System / Light / Dark / Custom)
 
-Blender / Substance Painter style dark theme applied every frame via `setup_dark_theme()`. Each panel (top bar, side panel, status bar) uses explicit `egui::Frame::new().fill().stroke()` to bypass egui's default panel frame generation.
+Colors are centralized in `ThemePalette` (`viewer/theme.rs`); the preset (System / Light / Dark / Custom) is switched from the appearance settings window opened via the "Appearance" button at the right end of the top bar. Both theme `Visuals` are registered via egui 0.31's `ctx.set_visuals_of(Theme::Dark / Light, …)` and the follow mode is set with `ctx.set_theme(ThemePreference)`. "System" tracks the OS light/dark setting live at runtime via winit's `ThemeChanged`. The effective palette is resolved from `ctx.theme()` every frame into `ViewerApp.palette`; each panel (top bar, side panel, status bar) applies the palette colors explicitly via `egui::Frame::new().fill().stroke()` (bypassing egui's default panel frame generation).
 
-| Element | Color |
-|---------|-------|
-| Panel background | `#1D1D1D` |
-| Section header | `#2A2A2A` |
-| Widget background | `#252525` |
-| Border | `#333333` |
-| Accent (selection/hover) | `#4A90D9` |
-| Active (pressed) | `#2A5A8A` |
-| Text | `#FFFFFF` (`override_text_color`) |
+The default (Dark) is Blender / Substance Painter style:
+
+| Element | Dark | Light |
+|---------|------|-------|
+| Panel background | `#1D1D1D` | `#E2E2E2` |
+| Section header / open | `#2A2A2A` | `#D5D5D5` |
+| Widget background | `#252525` | `#DADADA` |
+| Border | `#333333` | `#BBBBBB` |
+| Accent (selection/hover) | `#4A90D9` | `#4A90D9` (shared) |
+| Active (pressed) | `#2A5A8A` | `#A9C7E8` |
+| Text (strong) | `#FFFFFF` (`override_text_color`) | `#101010` |
+
+Light's neutral grays are the dark grays inverted (`0x1D → 0xE2` etc.). Theme-aware text colors resolve via `theme::gray_text(dark, level)` (inverted to `255 - level` on light) / `strong_text(dark)` / `accent_text(dark, c)` (darkened to 0.55x on light). "Custom" applies the six `[theme]` colors; the color pickers are always visible and editing any color forks the current look into Custom. Darkness is inferred from the panel background luminance (Rec. 601, threshold 128), and `open_bg` / `extreme_bg` are derived from the panel color by offsets (dark: +0x0D / -0x08, light: -0x0D / +0x12 — these reproduce both built-in palettes exactly). The 3D viewport clear color stays independent from the egui theme (`bg_brightness` via the View tab's "Background" slider).
 
 Notes:
 - `Button::fill()` overrides all states (inactive/hovered/active) — do not use. Hover color is controlled by global `widgets.hovered`
@@ -3092,7 +3096,7 @@ When specifying a JSON file output by DumpHumanoidParams.cs, model-specific preQ
 Stored in `%LOCALAPPDATA%\popone` on Windows, falling back to the exe directory on other platforms. `persistence::data_dir()` determines the path, and `migrate_from_exe_dir()` moves existing files from the old exe-adjacent location on first launch. Stores window position/size, last-opened directories, and log settings.
 
 - **Log settings**: `[log]` section with `level` (error/warn/info/debug, default: debug) and `keep` (log file retention count, default: 5). Config is loaded before logger initialization so settings take effect from the first log message. Invalid `level` values fall back to `debug`
-- **Theme colors**: `[theme]` section with 6 optional hex color fields: `panel_bg` (default: `1D1D1D`), `border` (`333333`), `accent` (`4A90D9`), `text` (`D0D0D0`), `widget_bg` (`252525`), `active` (`2A5A8A`). Values accept `"RRGGBB"` or `"#RRGGBB"` format. `ThemeConfig::parse_hex()` trims `#` prefix, validates 6-char length, and returns `(u8, u8, u8)`. Resolved colors are cached in `ViewerApp.theme_panel_bg` / `theme_border` for per-frame panel rendering. `setup_dark_theme()` applies the resolved colors to egui `Visuals` (panel_fill, window_fill, widget states, selection, border strokes). Unspecified fields fall back to hardcoded defaults (`DARK_PANEL_BG`, `DARK_BORDER_COLOR`)
+- **Appearance theme**: `[theme]` section. `mode` (`system` / `light` / `dark` / `custom`, v0.5.17) selects the appearance preset. Legacy configs without `mode` are interpreted as `custom` when any color is set, `dark` otherwise (`ThemeConfig::effective_mode()`, backward compatible). The six custom colors are optional hex fields: `panel_bg` (default: `1D1D1D`), `border` (`333333`), `accent` (`4A90D9`), `text` (`D0D0D0`), `widget_bg` (`252525`), `active` (`2A5A8A`). Values accept `"RRGGBB"` or `"#RRGGBB"`; `ThemeConfig::parse_hex()` trims the `#` prefix, validates 6-char length, and returns `(u8, u8, u8)`. They apply only when `mode = "custom"`, via `theme::apply()` and `ThemePalette` into egui `Visuals` (see the "Appearance Themes" section). The preset and custom colors are also editable from the GUI appearance settings window and saved on exit
 - **Position**: Saved from `outer_rect.min`, restored via `ViewportCommand::OuterPosition`. No drift due to coordinate system consistency
 - **Size**: Saved from `inner_rect` width/height, restored via `with_inner_size`
 - **Change detection**: 1px epsilon comparison. Position/size not updated while maximized or minimized
