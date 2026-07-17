@@ -16,7 +16,7 @@
     - [Unity `.anim` Residuals](#unity-anim-residuals)
     - [Archive Parent-Directory References](#archive-parent-directory-references)
   - [Code Quality](#code-quality)
-    - [GPU Shader Automated Tests](#gpu-shader-automated-tests)
+    - [Unit Tests for Lighting Math](#unit-tests-for-lighting-math)
     - [7z Extraction Phase 1 Memory Peak](#7z-extraction-phase-1-memory-peak)
   - [External Feature Requests](#external-feature-requests)
     - [High Priority (3+ reviews)](#high-priority-3-reviews)
@@ -27,9 +27,6 @@
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
 
-
-
-
 # Roadmap
 
 [日本語](ROADMAP.jp.md)
@@ -37,8 +34,6 @@
 This document tracks planned work, future improvements, and external feature requests for `popone`. Items in this list are **not** yet implemented. Completed work is recorded in [CHANGELOG.md](CHANGELOG.md).
 
 Current target: **v0.6.0**
-
-> **Note:** v0.5.4 shipped per-slot UV transform. v0.5.5 shipped **Phase 1 + Phase 2 + Phase 3 A-1 / A-2 / A-3 / A-4 / A-5** of the per-vertex UV editor (single/multi-vertex select/drag, rectangle selection with additive/subtractive modes, zoom/pan, rotate/scale, undo/redo, texture background, detachable OS window, UV0 / UV1 set switching, 2D gizmo handles, PMX UV morph editing). See [CHANGELOG.md](CHANGELOG.md#v055-2026-04-13). v0.5.6 shipped IR→PMX UV morph round-trip writer and auto morph-weight 1.0 during edit mode. See [CHANGELOG.md](CHANGELOG.md#v056-2026-04-14). v0.5.7 switched the missing-texture fallback pixel to white by default (with a runtime-toggleable magenta diagnostic mode) and unified all failure paths onto a single shared 1×1 texture for instant `queue.write_texture` color swapping. See [CHANGELOG.md](CHANGELOG.md#v057-2026-04-22). v0.5.8 pinned the CI Rust toolchain in-repo via `rust-toolchain.toml` so local and GitHub Actions builds use the exact same compiler. See [CHANGELOG.md](CHANGELOG.md#v058-2026-04-22). v0.5.9 routed CLI / viewer strings through `rust-i18n`, translated every Japanese comment / `assert!` / `panic!` site to English, and added a resizable right-side panel with width persistence, an improved UV edit window, and a unified `log_viewer.toml` format. See [CHANGELOG.md](CHANGELOG.md#v059-2026-05-05). The follow-up items below are smaller improvements for v0.6.0 or beyond.
 
 ## Targeted for v0.6.0
 
@@ -105,11 +100,9 @@ Until this is implemented, affected archives will fail to locate textures with w
 
 ## Code Quality
 
-### GPU Shader Automated Tests
+### Unit Tests for Lighting Math
 
-The `naga` WGSL compile test shipped in v0.5.11 (every shader source in `viewer/gpu.rs` / `viewer/bloom.rs` is parsed + validated through naga in CI under `cargo test --features viewer`). See [CHANGELOG.md](CHANGELOG.md#v0511-2026-05-16). Remaining:
-
-- **Unit tests for Rust-side lighting math** — `calc_lighting_mtoon_core` and helpers should have deterministic unit tests with known inputs
+Add deterministic unit tests with known inputs for `calc_lighting_mtoon_core` and other Rust-side helpers (the naga WGSL compile tests themselves shipped in v0.5.11 — see [CHANGELOG.md](CHANGELOG.md#v0511-2026-05-16))
 
 ### 7z Extraction Phase 1 Memory Peak
 
@@ -134,7 +127,6 @@ These items were surfaced during seven rounds of Gemini external reviews during 
 
 | ID | Feature | Scope |
 |----|---------|-------|
-| F-2 | ~~Simple material editor with presets~~ | **Delivered in v0.5.0** — full material editor drawer with 25+ parameter sliders, 3 built-in presets, MME output |
 | F-5 | Bone mapping editor | GUI editing and saving of bone correspondence tables |
 | F-7 | Physics simulation strengthening + tuning GUI | Real-time cloth / spring bone with rigid-body / joint parameter sliders |
 | F-12 | Sequential capture / transparent PNG | PNG sequence with alpha or ProRes output for compositing in After Effects / Photoshop |

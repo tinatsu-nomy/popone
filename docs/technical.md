@@ -60,6 +60,9 @@
   - [Direct Archive Loading](#direct-archive-loading)
     - [archive Module](#archive-module)
     - [Viewer Integration](#viewer-integration)
+    - [Password-Protected Archives (v0.5.15)](#password-protected-archives-v0515)
+    - [Nested Archives (v0.5.15)](#nested-archives-v0515)
+    - [In-Archive Text Viewer (v0.5.16)](#in-archive-text-viewer-v0516)
     - [CLI](#cli)
   - [Drag & Drop Loading](#drag--drop-loading)
     - [Temp Path Detection](#temp-path-detection)
@@ -551,13 +554,13 @@ v0.5.7 replaces the per-failure 1×1 texture with a **process-shared `SharedFall
 - `upload_single_texture` `decode_image_to_rgba_with_hint` error branch
 - `upload_textures` unsupported `gltf::image::Format` branch
 
-Because wgpu `TextureView::clone` only bumps an internal Arc, per-failure GPU allocation drops from one `wgpu::Texture` to zero, and the material BindGroups all bind the same underlying texture. Switching the color at runtime — via the "テクスチャ欠落時フォールバックを白に" toggle in the Display tab — calls `set_white_texture_fallback_dynamic(enabled, &queue)`, which flips an `AtomicBool` and (if the shared texture is already initialised) calls `queue.write_texture` with 4 bytes. The view references are unchanged, so no BindGroup re-binding is needed and the new color appears from the next frame. The preference persists in `popone.toml` `[display] white_texture_fallback` via `DisplaySettings` and the new `DisplayConfig` (all `#[serde(default)]` so older TOML files without a `[display]` block are forward-compatible).
+Because wgpu `TextureView::clone` only bumps an internal Arc, per-failure GPU allocation drops from one `wgpu::Texture` to zero, and the material BindGroups all bind the same underlying texture. Switching the color at runtime — via the "Fall back to white on missing texture" toggle in the Display tab — calls `set_white_texture_fallback_dynamic(enabled, &queue)`, which flips an `AtomicBool` and (if the shared texture is already initialised) calls `queue.write_texture` with 4 bytes. The view references are unchanged, so no BindGroup re-binding is needed and the new color appears from the next frame. The preference persists in `popone.toml` `[display] white_texture_fallback` via `DisplaySettings` and the new `DisplayConfig` (all `#[serde(default)]` so older TOML files without a `[display]` block are forward-compatible).
 
 ### Mipmap Generation
 
 GPU textures are uploaded with a full mipmap chain. The number of mip levels is `floor(log2(max(w,h))) + 1`.
 
-- **u8 sRGB-space resize** — `image::imageops::resize` (Triangle filter) is applied directly to `RgbaImage` in sRGB space. While linear-space resize is mathematically more correct, the visual difference is imperceptible compared to the overhead of f32 conversion (256MB allocations + `powf` calls), so speed takes priority
+- **Linear-space resize** — sRGB u8 is converted to linear f32 (LUT-accelerated), downscaled with `image::imageops::resize` (Triangle filter), then converted back to sRGB u8 (`resize_srgb` / the mip-chain loop in `viewer/texture.rs`, `rgba8_to_linear_f32` / `linear_f32_to_rgba8` in `color.rs`). Resizing in sRGB space darkens shadow regions, so color correctness takes priority
 - **NPOT support** — Each level dimension is `max(1, dim >> level)`, supporting non-power-of-two textures
 - **GPU max size** — Textures exceeding `max_texture_dimension_2d` are pre-downscaled using the same sRGB-correct resize before mip generation
 - **Sampler** — `mipmap_filter: Linear` was already set, now effective with multiple mip levels
@@ -673,7 +676,7 @@ pub struct UnityPackageIndex {
 ```
 
 `build_unity_package_index()` extracts the tar.gz once, then all subsequent lookups use `by_guid` / `by_path`.
-Built for both direct viewer loading and archive (ZIP / 7z) loading paths.
+Built for both direct viewer loading and archive (ZIP / 7z / RAR) loading paths.
 
 After index construction, `build_prefab_fbx_map()` populates the Prefab caches:
 1. **Phase 1 (parallel)**: All `.prefab` entries are parsed via `rayon::par_iter` (`detect_prefab_format` + `parse_prefab_new` + `parse_prefab_old`). Mixed-format Prefabs always run both parsers.
@@ -751,7 +754,7 @@ The `show_file_tree()` function displays the load chain as a tree below the mate
 | Load Method | Tree Structure |
 |---|---|
 | Direct VRM/FBX/PMX | `source.vrm` → textures |
-| Archive (ZIP/7z) | `archive.zip` → `entry.vrm` → textures |
+| Archive (ZIP/7z/RAR) | `archive.zip` → `entry.vrm` → textures |
 | UnityPackage (direct FBX) | `pkg.unitypackage` → textures |
 | UnityPackage (Prefab) | `pkg.unitypackage` → `Prefab.prefab` → `Body.fbx` / `Hair.fbx` → textures |
 
@@ -795,16 +798,16 @@ For each material, `SourceMaterialRef { renderer_path, slot_index }` is set usin
 
 ### archive Module
 
-A unified API for detecting and extracting model files from ZIP / 7z archives.
+A unified API for detecting and extracting model files from ZIP / 7z / RAR archives.
 
 #### 2-Stage API
 
-| Function | ZIP | 7z | Description |
+| Function | ZIP | 7z / RAR | Description |
 |----------|-----|-----|-------------|
 | `list_models` | Metadata only | Full extraction of target extensions (streaming constraint) | Returns model list |
 | `extract_model_bundle` | Extracts selected files only | Uses already-extracted entries | Returns model + textures/aux_files |
 
-Due to `sevenz-rust2`'s streaming API constraint, 7z extracts all files with target extensions into memory at `list_models` time (`MAX_TOTAL_BYTES = 2GB` limit). Extracted entries are held in `ArchiveContents` and reused by `extract_model_bundle` without re-extraction.
+Due to `sevenz-rust2`'s streaming API constraint, 7z extracts all files with target extensions into memory at `list_models` time (`MAX_TOTAL_BYTES = 2GB` limit). Skipped entries inside solid blocks are drained into `io::sink` to keep CRC validation intact. Extracted entries are held in `ArchiveContents` and reused by `extract_model_bundle` without re-extraction. RAR uses the same filtered-full-extraction approach (`extract_filtered` in `archive/rar.rs`; the `unrar` crate only accepts file paths, so extraction goes through a temp file).
 
 #### PMX/PMD Texture Reference Resolution
 
@@ -840,7 +843,7 @@ Same deferred loading pattern as `PendingUnityPackage` / `PendingPkgModelLoad`:
 
 #### Nested UnityPackage in Archives (Double Extraction)
 
-Detects `.unitypackage` files inside ZIP / 7z and double-extracts to load inner VRM / FBX models.
+Detects `.unitypackage` files inside ZIP / 7z / RAR and double-extracts to load inner VRM / FBX models.
 
 1. `list_models` detects `.unitypackage` as `ArchiveModelKind::UnityPackage`
 2. `extract_model_bundle` extracts only the `.unitypackage` body (sibling textures are not needed)
@@ -850,6 +853,18 @@ Detects `.unitypackage` files inside ZIP / 7z and double-extracts to load inner 
 6. On reload, `reload_archive_unitypackage` re-extracts archive → re-extracts unitypackage → re-selects model via `selected_fbx_name`
 
 Extraction size limit: Both the outer archive (`MAX_TOTAL_BYTES = 2GB`) and inner `.unitypackage` (same 2GB) are protected.
+
+### Password-Protected Archives (v0.5.15)
+
+Encrypted ZIP (ZipCrypto / AES) / 7z / RAR archives are supported. This is a GUI-only feature: when a password is required, the viewer shows an input dialog. The password is used only for that load and never persisted (reload asks again). Passing an encrypted archive to the CLI returns an error directing the user to the GUI. RAR supports both header and content encryption (RAR4 has no password-check value, so a wrong password may surface as a CRC error).
+
+### Nested Archives (v0.5.15)
+
+Archives inside archives (one level deep) can be extracted. When the inner archive is password-protected, text files from the outer archive (readme files, which often contain the password) are still listed alongside the password dialog.
+
+### In-Archive Text Viewer (v0.5.16)
+
+`viewer/text_viewer.rs`. Lists text files (`.txt` / `.md`) bundled in ZIP / 7z / RAR archives; clicking one opens it in an OS-level separate window (`show_viewport_deferred`). Character encoding is auto-detected among UTF-8 (with/without BOM), UTF-16 (BOM), and Shift_JIS, with newline normalization. Files over 4 MB are excluded; display is capped at the first 1,000,000 characters. The list is replaced on each archive load (appended on model append) and kept after loading a regular model until the next archive load.
 
 ### CLI
 
@@ -1004,7 +1019,7 @@ Model parsing and GPU resource construction are split into a CPU phase (backgrou
  - Format detection
  - .vrma / .glb/.gltf animation / .anim → immediate (no BG, preserves prior_loading)
  - FBX (mesh+anim) → PendingFbxChoice dialog
- - UnityPackage / zip / 7z → spawn_bg_index_load()
+ - UnityPackage / zip / 7z / rar → spawn_bg_index_load()
  - Otherwise → spawn_bg_load()
  → All spawn_bg_* functions delegate to spawn_bg_task() common helper
  → pending.bg_state = BackgroundLoadState::Loading(BgLoadHandle { rx, cancel, request_id })
@@ -1037,7 +1052,7 @@ A pure function that doesn't take `&self`, safe to call from background threads.
 Dispatches on the main thread:
 - **Immediate**: VRMA, GLB/glTF animation, .anim (no model load, no GPU resource ops)
 - **Interactive UI**: FBX choice dialog (keeps `self.preloaded = dispatch.preloaded` for existing method compatibility)
-- **Background**: VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage / ZIP / 7z (all formats)
+- **Background**: VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage / ZIP / 7z / RAR (all formats)
 
 ### `apply_bg_load_result` Method
 
@@ -1073,7 +1088,7 @@ After BG parsing completes, GPU texture upload and model construction are split 
 **Frame-split texture upload:**
 - `start_deferred_gpu_build()` creates `PendingGpuBuild` with merged IR and per-material display flags
 - `process_pending_tasks` (split into `poll_*` methods) uploads `GPU_UPLOAD_BATCH` (4) textures per frame via `upload_single_texture`
-- Progress overlay shows "GPU構築中..." during upload
+- Progress overlay shows "Building GPU..." during upload
 
 **Completion:**
 - When all textures are uploaded, `build_gpu_model_inner` constructs vertex/index buffers
@@ -1085,7 +1100,7 @@ After BG parsing completes, GPU texture upload and model construction are split 
 - On GPU build failure, `rollback_append` (via `IrRollbackSnapshot::rollback()`) truncates the merged IR to pre-merge size and restores the old `GpuModel`
 
 **Load cancellation:**
-- Cancel button ("中止") and Escape key trigger `cancel_bg_load`
+- The "Cancel" button and Escape key trigger `cancel_bg_load`
 - Cancels BG thread via `AtomicBool`, clears all pending state, sets `self.loaded = None`
 - `pre_decode_textures` checks cancel flag per-texture to avoid prolonged CPU usage after cancel
 - GPU build phase: cancel button triggers `cancel_gpu_build`, clearing `PendingGpuBuild`
@@ -1199,7 +1214,7 @@ The `.unitypackage` model selection dialog supports multi-select via checkboxes:
 - `PendingMultiLoad.total_count` tracks the total number of selected models
 - `PendingPkgModelLoad.batch_progress: Option<(usize, usize)>` carries `(current, total)` from queue pop time
 - Progress is stored in `PendingPkgModelLoad` itself (not derived from `multi_load`) to survive cleanup of the last item
-- Toast shows "読み込み中 (N/M)：filename" at load start, "読み込み完了 (N/M): filename" on success
+- A toast (`viewer.toast.progress.loaded`) shows "Loaded (N/M): filename" as each model completes
 
 **Abort Behavior:**
 - If any model load fails (returns `Err` or `append_from_pkg` returns `false`), `multi_load` is set to `None`
@@ -1343,7 +1358,7 @@ In addition to the existing `pmx_output_path` / `material_display` / `camera` fi
 
 | Field | Reason |
 |---|---|
-| `side_panel_tab: SidePanelTab` | `finish_load_with_gpu` resets it to `Info`; `restore_snapshot_on_success` writes it back so toggling A/T stance on the `[出力]` tab stays on that tab |
+| `side_panel_tab: SidePanelTab` | `finish_load_with_gpu` resets it to `Info`; `restore_snapshot_on_success` writes it back so toggling A/T stance on the `[Export]` tab stays on that tab |
 | `model_display_name: String` | Preserves the model name the user typed in the top bar / right panel (which doubles as the PMX output filename) |
 
 Restoration order:
@@ -1358,7 +1373,7 @@ reload_current()
   - self.refresh_derived_from_display_name() regenerates window title + pmx_output_path
 ```
 
-Fresh loads (file dialog, D&D, IPC, etc.) do not go through `save_reload_snapshot()`, so `finish_load_with_gpu`'s `Info` reset stays in effect and the side panel starts from the `[情報]` tab as before.
+Fresh loads (file dialog, D&D, IPC, etc.) do not go through `save_reload_snapshot()`, so `finish_load_with_gpu`'s `Info` reset stays in effect and the side panel starts from the `[Info]` tab as before.
 
 #### ② `PendingLoadDispatch::is_reload` flag
 
@@ -1876,7 +1891,7 @@ VRM 0.x-specific additional migration:
 
 #### Texture Index Normalization
 
-In glTF, `textures[]` and `images[]` are separate arrays, and `TextureInfo.index` refers to a texture index. Since `IrModel.textures` is built by image array order, `read_texture_info()` normalizes glTF texture indices to **image indices** via `document.textures().nth(i).source().index()` before storing in `IrTextureInfo.index`. This ensures all downstream consumers (viewer bind groups, export_filter pruning, merge offset) safely operate on image indices. VRM 0.0 `_OutlineWidthTexture` is similarly resolved to image index. `texCoord >= 2` is unsupported; an error is logged and the texture is disabled (`None` is returned) to prevent silent misrendering. Texture references previously set via core glTF API are also explicitly cleared by the raw JSON result, ensuring fail-close behavior.
+In glTF, `textures[]` and `images[]` are separate arrays, and `TextureInfo.index` refers to a texture index. Since `IrModel.textures` is built by image array order, `read_texture_info()` normalizes glTF texture indices to **image indices** via `document.textures().nth(i).source().index()` before storing in `IrTextureInfo.index`. This ensures all downstream consumers (viewer bind groups, export_filter pruning, merge offset) safely operate on image indices. VRM 0.0 `_OutlineWidthTexture` is similarly resolved to image index. `texCoord >= 2` is unsupported; a warning is logged and the texture falls back to `texCoord=0` (graceful degradation — the UVs become inaccurate but the texture is not lost; see "Limitations").
 
 ### UV Animation
 
@@ -2129,7 +2144,7 @@ When appending a model, guest-side `material_index` values inside `IrMorphKind::
 
 ### UV Morph IR → PMX Roundtrip Writeback (v0.5.6)
 
-The v0.5.5 UV editor (Phase 3 A-2) already imported, edited and runtime-composited PMX UV morphs, but the PMX writer stubbed out `IrMorphKind::Uv` as an empty group morph. Edits therefore vanished on "PMX load → UV morph edit → PMX save". v0.5.6 closes the loop.
+The v0.5.5 UV editor (Phase 3 A-2) already imported, edited and runtime-composited PMX UV morphs, but the PMX writer stubbed out `IrMorphKind::Uv` as an empty group morph, so UV morphs never reached PMX output. v0.5.6 completes the writer-side write-back. Note that PMX / PMD-loaded models keep the GUI PMX-conversion button disabled (view-only; see "Limitations"), so there is no GUI path that runs this write-back from a PMX-loaded model — edits are persisted via "Save history" (`popone_history.json`).
 
 #### IR global vertex index ≡ PMX vertex index
 
@@ -2379,7 +2394,7 @@ Light's neutral grays are the dark grays inverted (`0x1D → 0xE2` etc.). Theme-
 Notes:
 - `Button::fill()` overrides all states (inactive/hovered/active) — do not use. Hover color is controlled by global `widgets.hovered`
 - `Button::stroke()` similarly overrides hover border color — do not use
-- Side panel width fixed with `width_range(280.0..=280.0)` + `resizable(false)`
+- Side panel resizing is off by default (`resizable(false)` + `width_range` locked to the current width). Turning on the panel-resize toggle in the Display tab enables dragging within `width_range(280.0..=600.0)`, persisted to `[display] panel_width`. Turning it off locks the panel at its current width (initial value 280 px)
 
 ### VRM Meta Info Color Badges
 
@@ -2392,7 +2407,7 @@ Permission and license values are displayed as colored badges using `egui::RichT
 | Deny | `#601818` | `#FF8080` | Prohibited (disallow, prohibited, Redistribution_Prohibited, etc.) |
 | Neutral | `#404040` | `#A0A0A0` | Neutral (unnecessary, Other) |
 
-The data layer (`ir.comment`) retains English labels for PMX comment field output. Japanese labels are applied only at UI display time via `meta_section_ja()` / `meta_label_ja()`, with tooltips and badges from `meta_label_tooltip()` / `format_meta_value()`.
+The data layer (`ir.comment`) retains English labels for PMX comment field output. Localized labels are applied only at UI display time via `meta_section_ja()` / `meta_label_ja()` (historical names — internally they resolve to the active UI language ja/en/zh via `t!()`), with tooltips and badges from `meta_label_tooltip()` / `format_meta_value()`.
 
 ### Splash Image
 
@@ -3095,7 +3110,7 @@ When specifying a JSON file output by DumpHumanoidParams.cs, model-specific preQ
 
 Stored in `%LOCALAPPDATA%\popone` on Windows, falling back to the exe directory on other platforms. `persistence::data_dir()` determines the path, and `migrate_from_exe_dir()` moves existing files from the old exe-adjacent location on first launch. Stores window position/size, last-opened directories, and log settings.
 
-- **Log settings**: `[log]` section with `level` (error/warn/info/debug, default: debug) and `keep` (log file retention count, default: 5). Config is loaded before logger initialization so settings take effect from the first log message. Invalid `level` values fall back to `debug`
+- **Log settings**: `[log]` section with `level` (error/warn/info/debug, default: debug). Config is loaded before logger initialization so settings take effect from the first log message. Invalid `level` values fall back to `debug`. The former `keep` key (log file retention count) was removed together with automatic log rotation in v0.4.0 and is now ignored if present
 - **Appearance theme**: `[theme]` section. `mode` (`system` / `light` / `dark` / `custom`, v0.5.17) selects the appearance preset. Legacy configs without `mode` are interpreted as `custom` when any color is set, `dark` otherwise (`ThemeConfig::effective_mode()`, backward compatible). The six custom colors are optional hex fields: `panel_bg` (default: `1D1D1D`), `border` (`333333`), `accent` (`4A90D9`), `text` (`D0D0D0`), `widget_bg` (`252525`), `active` (`2A5A8A`). Values accept `"RRGGBB"` or `"#RRGGBB"`; `ThemeConfig::parse_hex()` trims the `#` prefix, validates 6-char length, and returns `(u8, u8, u8)`. They apply only when `mode = "custom"`, via `theme::apply()` and `ThemePalette` into egui `Visuals` (see the "Appearance Themes" section). The preset and custom colors are also editable from the GUI appearance settings window and saved on exit
 - **Position**: Saved from `outer_rect.min`, restored via `ViewportCommand::OuterPosition`. No drift due to coordinate system consistency
 - **Size**: Saved from `inner_rect` width/height, restored via `with_inner_size`
@@ -3146,7 +3161,7 @@ On panic, `flush_log_buffer` inside `panic.set_hook` writes the in-memory buffer
 
 ### Log Viewer (Separate Window)
 
-Implemented in `popone/src/viewer/log_viewer.rs`. Opens an OS-level separate window from the top-bar "ログ" button and streams the contents of `SharedLogBuffer` in real time.
+Implemented in `popone/src/viewer/log_viewer.rs`. Opens an OS-level separate window from the top-bar "Log" button and streams the contents of `SharedLogBuffer` in real time.
 
 #### Choice of egui API
 
@@ -3337,11 +3352,15 @@ src/
 ├── main.rs Entry point (no args or no output specified → viewer / output specified → CLI conversion)
 ├── lib.rs Library API
 ├── error.rs Error type definitions (PoponeError enum, thiserror, ResultExt trait)
+├── i18n.rs UI localization (rust-i18n, ja/en/zh, OS locale detection + POPONE_LOCALE override)
+├── color.rs sRGB ↔ linear color-space conversion helpers (LUT-accelerated, used for mip generation / resize)
+├── psd.rs PSD decoder (PSD → RGBA, shared by CLI PNG conversion and viewer display; the PSD / PSB writer lives in convert/uvmap.rs)
 ├── unitypackage.rs .unitypackage (tar.gz) asset extraction + Prefab texture mapping (GUID resolution, Variant recursion, multi-format support)
 ├── archive/
-│ ├── mod.rs ZIP / 7z unified API (list_models, extract_model_bundle)
-│ ├── zip_extract.rs ZIP extraction (2-pass: metadata listing → selective extraction)
-│ └── sevenz.rs 7z extraction (filtered full extraction, chunked read with size limit)
+│ ├── mod.rs ZIP / 7z / RAR unified API (list_models, extract_model_bundle, nested archives, passwords)
+│ ├── zip_extract.rs ZIP extraction (2-pass: metadata listing → selective extraction, ZipCrypto / AES encryption support)
+│ ├── sevenz.rs 7z extraction (filtered full extraction, chunked read with size limit, solid-block drain, encryption support)
+│ └── rar.rs RAR extraction (unrar crate, official UnRAR library, encryption support)
 ├── vrm/
 │ ├── loader.rs GLB loading / extension data extraction (file and byte array support)
 │ ├── detect.rs VRM version auto-detection
@@ -3360,6 +3379,9 @@ src/
 │ ├── blendshape.rs Blend shape extraction
 │ ├── animation.rs FBX animation extraction (Stack/Layer/CurveNode/Curve hierarchy, byte array support)
 │ └── humanoid.rs Humanoid rig auto-detection and mapping (namespace prefix stripping, CamelCase support)
+├── directx/
+│ ├── parser.rs DirectX .x text-format parser (Shift_JIS / UTF-8; binary and compressed formats raise an explicit error)
+│ └── extract.rs DirectX .x → intermediate representation (IrModel) extraction
 ├── pmx/
 │ ├── types.rs PMX data type definitions
 │ ├── reader.rs PMX 2.0/2.1 binary loading (UTF-16LE/UTF-8, SoftBody skip)
@@ -3381,7 +3403,7 @@ src/
 │ └── animation.rs Unity .anim Muscle conversion (SwingTwist decomposition)
 ├── intermediate/
 │ ├── types.rs Intermediate representation (IrModel / IrBone / IrMesh / IrMaterial / MtoonParams / CullMode etc., SourceFormat / merge 3-level fallback)
-│ ├── tangent.rs MikkTSpace tangent generation (mikktspace crate)
+│ ├── tangent.rs MikkTSpace tangent generation (mikktspace crate, degenerate-mesh pre-detection)
 │ ├── animation.rs Animation intermediate representation (VrmaAnimation / BoneChannel)
 │ └── pose.rs Stance conversion (T→A / A→T, physics sync support)
 ├── convert/
@@ -3391,20 +3413,30 @@ src/
 │ ├── morph.rs Expression → morph name map
 │ ├── physics.rs SpringBone → rigid body / joint conversion (V0/V1)
 │ ├── texture.rs Texture PNG output
-│ └── uvmap.rs UV map PSD output (material layers, boundary wrap, group folders)
+│ ├── uvmap.rs UV map PSD / PSB output (material layers, boundary wrap, group folders, auto PSB switch over 2 GiB)
+│ └── mme/ray_mmd.rs MME (ray-mmd) material .fx output (category inference, Shift-JIS + CR+LF)
 └── viewer/ ← Compiled only when feature = "viewer"
- ├── app/ eframe::App state management (split into 5 modules)
+ ├── app/ eframe::App state management (split into 9 modules)
  │ ├── mod.rs ViewerApp struct definition, initialization, eframe::App impl
- │ ├── file_io.rs File loading, drag & drop, reload
+ │ ├── file_io.rs File loading, drag & drop, reload, background loading
  │ ├── texture_mgmt.rs Texture assignment and preview
+ │ ├── material_edit.rs Material editor drawer state (parameter overrides, dirty tracking)
+ │ ├── material_presets.rs Material presets (MToon 1.0 / lilToon / PMX compatible)
+ │ ├── uv_edit.rs Per-vertex UV edit window state (UV morph editing, undo/redo)
+ │ ├── persistence.rs Settings persistence (popone.toml / popone_history.json, Named Mutex exclusion)
  │ ├── pending.rs Deferred task processing (PendingState / ExportState)
  │ └── helpers.rs Utility types and functions (ReloadableSource / TextureSource / is_temp_path etc.)
  ├── gpu.rs wgpu pipeline / offscreen rendering / visualization buffer dirty flag
+ ├── bloom.rs Bloom post effect (Dual Kawase, emissive MRT separation)
  ├── mesh.rs IrModel → GPU vertex buffer conversion
- ├── texture.rs Texture GPU upload (MIME hint support)
+ ├── texture.rs Texture GPU upload (MIME hint support, linear-space mip generation)
  ├── camera.rs Orbit camera
  ├── grid.rs Grid floor
+ ├── theme.rs Appearance theme (system / light / dark / custom, ThemePalette → egui Visuals)
  ├── ui.rs Info panel / morph sliders / conversion button / PMX/PMD grayed out
+ ├── log_viewer.rs Log viewer separate window (show_viewport_deferred, level filters, auto tail-follow)
+ ├── text_viewer.rs In-archive text viewer (.txt / .md listing, separate windows, encoding auto-detection)
+ ├── watchdog.rs Main-thread responsiveness watchdog (heartbeat, freeze-detection logs)
  ├── export_filter.rs Visible materials only export filter (IrModel → filtered IrModel)
  ├── animation.rs Animation playback / retargeting (VRMA/glTF/FBX support)
  └── single_instance.rs Single instance control (Named Mutex + Named Pipe IPC, Windows only)
@@ -3442,10 +3474,14 @@ println!("Bones: {}, Vertices: {}", stats.bones, stats.vertices);
 ## Tests
 
 ```bash
+# Core (CLI conversion) tests
 cargo test
+
+# Tests including the viewer (the viewer feature is off by default, so this is a separate run; CI runs both)
+cargo test --features viewer
 ```
 
-Run the full suite via `cargo test`. Integration tests support environment variables for test data paths:
+Integration tests support environment variables for test data paths:
 
 ```bash
 # Test data root directory
@@ -3465,7 +3501,7 @@ For detailed per-version improvements and internal changes, see the [Changelog](
 
 - **PMX/PMD is view-only** — PMX conversion (re-export) is not supported. Only viewer display and UV map output
 - **Texture size limit** — Textures exceeding the GPU's `max_texture_dimension_2d` (typically 8192px) are automatically downscaled in `upload_rgba_to_gpu` (using `image::imageops::resize` with Triangle filter). Does not affect PMX conversion output (viewer display only)
-- **Extraction size limit** — Archive (ZIP / 7z) and `.unitypackage` (tar.gz) extraction is capped at 2GB total (`MAX_TOTAL_BYTES`). `.unitypackage` uses dual protection: header size pre-check + actual bytes post-check
+- **Extraction size limit** — Archive (ZIP / 7z / RAR) and `.unitypackage` (tar.gz) extraction is capped at 2GB total (`MAX_TOTAL_BYTES`). `.unitypackage` uses dual protection: header size pre-check + actual bytes post-check
 - **MMD-specialized models** — Models specialized for MMD rendering may not display some surfaces correctly
 - **PMX 2.1 SoftBody** — Skipped (not supported)
 - **Only `TEXCOORD_0` / `TEXCOORD_1` are supported** — When glTF `TextureInfo.texCoord` is 2 or higher, it falls back to `texCoord=0` (`warn` log emitted). Texture UV will be inaccurate but rendering is preserved (graceful degradation). Rationale:

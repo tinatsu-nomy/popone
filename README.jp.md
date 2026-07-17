@@ -22,6 +22,7 @@ VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x を 3D 表示します。
 ## 注意事項
 
 - 本ツールの使用により発生したいかなる問題についても、作者は一切の責任を負いません。
+- UI は日本語・英語・中国語に対応しています（OS の言語設定に自動追従。環境変数 `POPONE_LOCALE`（`ja` / `en` / `zh`）で強制切替可能）。
 
 ## ライセンス
 
@@ -39,7 +40,7 @@ VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x を 3D 表示します。
 [Rust](https://www.rust-lang.org/tools/install)（stable）が必要です。
 
 ```bash
-# CLI のみ（VRM/FBX/PMX 変換）
+# CLI のみ（VRM / FBX / OBJ / STL / DirectX .x / UnityPackage / ZIP / 7z / RAR → PMX 変換）
 cargo build --release
 
 # ビューア付き（3D ビューア GUI）
@@ -74,6 +75,9 @@ Windows では exe にアイコンを埋め込むために [Windows SDK](https:/
 | clap | CLI 引数パーサー |
 | anyhow / thiserror | エラーハンドリング |
 | log / fern / chrono / env_logger | ログ出力 |
+| rayon | 並列イテレーション（UnityPackage アセット処理） |
+| pathdiff | 相対パス計算（MME `.fx` の `#include` 解決） |
+| rust-i18n / sys-locale | UI ローカライズ（ja / en / zh）と OS ロケール検出 |
 
 </details>
 
@@ -117,6 +121,10 @@ Windows では exe にアイコンを埋め込むために [Windows SDK](https:/
 | [dunce](https://gitlab.com/kornelski/dunce) | CC0-1.0 OR MIT-0 OR Apache-2.0 |
 | [tempfile](https://github.com/Stebalien/tempfile) | MIT OR Apache-2.0 |
 | [env_logger](https://github.com/rust-cli/env_logger) | MIT OR Apache-2.0 |
+| [rayon](https://github.com/rayon-rs/rayon) | MIT OR Apache-2.0 |
+| [pathdiff](https://github.com/Manishearth/pathdiff) | MIT OR Apache-2.0 |
+| [rust-i18n](https://github.com/longbridge/rust-i18n) | MIT |
+| [sys-locale](https://github.com/1Password/sys-locale) | MIT OR Apache-2.0 |
 
 ### ビューア依存
 

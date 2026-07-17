@@ -22,7 +22,7 @@ All releases: [Releases](https://github.com/tinatsu-nomy/popone/releases)
 ## Disclaimer
 
 - The author assumes no responsibility for any issues arising from the use of this tool.
-- The user interface is in Japanese.
+- The user interface is localized in Japanese, English, and Chinese, following the OS language setting (can be overridden with the `POPONE_LOCALE` environment variable: `ja` / `en` / `zh`).
 
 ## License
 
@@ -40,7 +40,7 @@ See [Usage](docs/usage.md) for details.
 Requires [Rust](https://www.rust-lang.org/tools/install) (stable).
 
 ```bash
-# CLI only (VRM/FBX/PMX converter)
+# CLI only (converts VRM / FBX / OBJ / STL / DirectX .x / UnityPackage / ZIP / 7z / RAR to PMX)
 cargo build --release
 
 # With viewer (3D viewer GUI)
@@ -75,6 +75,9 @@ On Windows, [Windows SDK](https://developer.microsoft.com/windows/downloads/wind
 | clap | CLI argument parser |
 | anyhow / thiserror | Error handling |
 | log / fern / chrono / env_logger | Logging |
+| rayon | Parallel iteration (UnityPackage asset processing) |
+| pathdiff | Relative path computation (MME `.fx` `#include` resolution) |
+| rust-i18n / sys-locale | UI localization (ja / en / zh) and OS locale detection |
 
 </details>
 
@@ -118,6 +121,10 @@ On Windows, [Windows SDK](https://developer.microsoft.com/windows/downloads/wind
 | [dunce](https://gitlab.com/kornelski/dunce) | CC0-1.0 OR MIT-0 OR Apache-2.0 |
 | [tempfile](https://github.com/Stebalien/tempfile) | MIT OR Apache-2.0 |
 | [env_logger](https://github.com/rust-cli/env_logger) | MIT OR Apache-2.0 |
+| [rayon](https://github.com/rayon-rs/rayon) | MIT OR Apache-2.0 |
+| [pathdiff](https://github.com/Manishearth/pathdiff) | MIT OR Apache-2.0 |
+| [rust-i18n](https://github.com/longbridge/rust-i18n) | MIT |
+| [sys-locale](https://github.com/1Password/sys-locale) | MIT OR Apache-2.0 |
 
 ### Viewer
 

@@ -112,11 +112,13 @@ pub struct DisplayConfig {
     #[serde(default = "DisplayConfig::default_true")]
     pub white_texture_fallback: bool,
     /// Whether the right tool panel is resizable. When true the user can drag the edge.
-    /// false (default) locks the panel at 280 px and disables content-driven auto-resize.
+    /// false (default) locks the panel at the current `panel_width` and disables
+    /// content-driven auto-resize.
     #[serde(default)]
     pub panel_resizable: bool,
     /// Width of the right tool panel (px). Persists the user's drag-resized width.
-    /// Range is [280, 600]. Unused while `panel_resizable = false`.
+    /// Range is [280, 600] (initial value 280). Used in both modes: the drag range
+    /// when `panel_resizable = true`, the locked width when false.
     #[serde(default = "DisplayConfig::default_panel_width")]
     pub panel_width: f32,
 }
