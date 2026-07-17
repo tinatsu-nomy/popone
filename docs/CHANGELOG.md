@@ -4,65 +4,25 @@
 
 - [Changelog](#changelog)
   - [v0.5.18 (2026-07-18)](#v0518-2026-07-18)
-    - [Highlights](#highlights)
-    - [Release notes](#release-notes)
   - [v0.5.17 (2026-07-16)](#v0517-2026-07-16)
-    - [Highlights](#highlights-1)
-    - [Release notes](#release-notes-1)
   - [v0.5.16 (2026-07-15)](#v0516-2026-07-15)
-    - [Highlights](#highlights-2)
-    - [Release notes](#release-notes-2)
   - [v0.5.15 (2026-07-14)](#v0515-2026-07-14)
-    - [Highlights](#highlights-3)
-    - [Release notes](#release-notes-3)
   - [v0.5.14 (2026-07-08)](#v0514-2026-07-08)
-    - [Highlights](#highlights-4)
-    - [Release notes](#release-notes-4)
   - [v0.5.13 (2026-07-06)](#v0513-2026-07-06)
-    - [Highlights](#highlights-5)
-    - [Release notes](#release-notes-5)
   - [v0.5.12 (2026-06-11)](#v0512-2026-06-11)
-    - [Highlights](#highlights-6)
-    - [Release notes](#release-notes-6)
   - [v0.5.11 (2026-05-16)](#v0511-2026-05-16)
-    - [Highlights](#highlights-7)
-    - [Release notes](#release-notes-7)
   - [v0.5.10 (2026-05-15)](#v0510-2026-05-15)
-    - [Highlights](#highlights-8)
-    - [Release notes](#release-notes-8)
   - [v0.5.9 (2026-05-05)](#v059-2026-05-05)
-    - [Highlights](#highlights-9)
-    - [Release notes](#release-notes-9)
   - [v0.5.8 (2026-04-22)](#v058-2026-04-22)
-    - [Highlights](#highlights-10)
-    - [Release notes](#release-notes-10)
   - [v0.5.7 (2026-04-22)](#v057-2026-04-22)
-    - [Highlights](#highlights-11)
-    - [Release notes](#release-notes-11)
-  - [v0.5.6 (2026-04-14)](#v056-2026-04-14)
-    - [Highlights](#highlights-12)
-    - [Release notes](#release-notes-12)
+  - [v0.5.6 (2026-04-15)](#v056-2026-04-15)
   - [v0.5.5 (2026-04-13)](#v055-2026-04-13)
-    - [Highlights](#highlights-13)
-    - [Release notes](#release-notes-13)
   - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
-    - [Highlights](#highlights-14)
-    - [Release notes](#release-notes-14)
   - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
-    - [Highlights](#highlights-15)
-    - [Release notes](#release-notes-15)
   - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
-    - [Highlights](#highlights-16)
-    - [Release notes](#release-notes-16)
   - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
-    - [Highlights](#highlights-17)
-    - [Release notes](#release-notes-17)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
-    - [Highlights](#highlights-18)
-    - [Release notes](#release-notes-18)
   - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
-    - [Highlights](#highlights-19)
-    - [Release notes](#release-notes-19)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -382,7 +342,7 @@ Fixes a visible regression on PMX models whose internal texture list references 
 - `set_white_texture_fallback_dynamic(enabled, &queue)` flips the `AtomicBool` and, if the shared texture is already initialised, calls `queue.write_texture` with 4 bytes. Not reloading the GPU view means no BindGroup re-binding, so the toggle is safe to press mid-frame.
 - `DisplaySettings` gains a `white_texture_fallback: bool` field (default `true`) mirrored into a new `AppConfig.display: DisplayConfig` section for persistence. `DisplayConfig` uses `#[serde(default)]` throughout so existing `popone.toml` files without a `[display]` block load without issues.
 
-## v0.5.6 (2026-04-14)
+## v0.5.6 (2026-04-15)
 
 Two follow-up improvements to the UV editor.
 
@@ -730,4 +690,10 @@ Added a separate-window log viewer and reworked log file persistence around the 
 
 ## v0.3.0 (2026-04-11)
 
-Initial public release. Focused on documentation MECE restructuring, UX improvements, and UnityPackage-related bug fixes.
+### Highlights
+
+- **Initial public release**
+
+### Release notes
+
+- Documentation MECE restructuring, UX improvements, and UnityPackage-related bug fixes.
