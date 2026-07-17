@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 975" font-family="'Segoe UI','Noto Sans JP',sans-serif" font-size="12">
-  <title>popone module map (v0.5.17)</title>
+  <title>popone module map (v0.5.18)</title>
   <desc>Module responsibility map: root utilities, container extraction, format input modules (model files produce an IrModel, animation files produce a VrmaAnimation), the intermediate representation, the conversion and export modules, and the viewer feature with its app state, rendering, UI and shading components.</desc>
 
   <rect width="1100" height="975" fill="#FAFAFA" rx="8"/>
 
-  <text x="550" y="30" text-anchor="middle" font-size="17" font-weight="bold" fill="#333">popone — module map (v0.5.17)</text>
+  <text x="550" y="30" text-anchor="middle" font-size="17" font-weight="bold" fill="#333">popone — module map (v0.5.18)</text>
 
   <!-- ═══ src/ (root) ═══ -->
   <rect x="30" y="55" width="265" height="215" rx="6" fill="#ECEFF1" stroke="#607D8B" stroke-width="1.5"/>

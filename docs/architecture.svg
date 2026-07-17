@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 940" font-family="'Segoe UI','Noto Sans JP',sans-serif" font-size="12">
-  <title>popone data flow (v0.5.17)</title>
+  <title>popone data flow (v0.5.18)</title>
   <desc>All startup inputs pass through the main.rs dispatch (CLI inspection with --list-models, which needs no output, or --dump, which still requires the output argument; CLI convert when an output path is given without --dump; viewer otherwise). Container extractors unpack UnityPackage and ZIP/7z/RAR archives; format loaders produce an IrModel that the viewer displays or that convert/ and pmx/ turn into PMX, MME and texture outputs. Direct .pmx/.pmd input cannot be converted; PMX/PMD inside archives can be converted by the CLI archive conversion only; any PMX/PMD opened in the viewer is view-only.</desc>
   <defs>
     <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
@@ -24,7 +24,7 @@
 
   <rect width="1100" height="940" fill="#FAFAFA" rx="8"/>
 
-  <text x="550" y="30" text-anchor="middle" font-size="17" font-weight="bold" fill="#333">popone — data flow (v0.5.17)</text>
+  <text x="550" y="30" text-anchor="middle" font-size="17" font-weight="bold" fill="#333">popone — data flow (v0.5.18)</text>
 
   <!-- ═══ Input files ═══ -->
   <rect x="30" y="55" width="120" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
