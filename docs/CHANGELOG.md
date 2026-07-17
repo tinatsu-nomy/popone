@@ -4,89 +4,65 @@
 
 - [Changelog](#changelog)
   - [v0.5.18 (2026-07-18)](#v0518-2026-07-18)
-    - [Improvements](#improvements)
+    - [Highlights](#highlights)
+    - [Release notes](#release-notes)
   - [v0.5.17 (2026-07-16)](#v0517-2026-07-16)
-    - [New Features](#new-features)
+    - [Highlights](#highlights-1)
+    - [Release notes](#release-notes-1)
   - [v0.5.16 (2026-07-15)](#v0516-2026-07-15)
-    - [Improvements](#improvements-1)
-    - [New Features](#new-features-1)
+    - [Highlights](#highlights-2)
+    - [Release notes](#release-notes-2)
   - [v0.5.15 (2026-07-14)](#v0515-2026-07-14)
-    - [New Features](#new-features-2)
-    - [Bug Fixes](#bug-fixes)
-    - [Internals](#internals)
-    - [Tests](#tests)
-    - [Scope Notes](#scope-notes)
+    - [Highlights](#highlights-3)
+    - [Release notes](#release-notes-3)
   - [v0.5.14 (2026-07-08)](#v0514-2026-07-08)
-    - [New Features](#new-features-3)
-    - [Bug Fixes (found while adding the above)](#bug-fixes-found-while-adding-the-above)
-    - [Tests](#tests-1)
-    - [Scope Notes](#scope-notes-1)
+    - [Highlights](#highlights-4)
+    - [Release notes](#release-notes-4)
   - [v0.5.13 (2026-07-06)](#v0513-2026-07-06)
-    - [Bug Fixes](#bug-fixes-1)
-    - [Tests](#tests-2)
-    - [Scope Notes](#scope-notes-2)
+    - [Highlights](#highlights-5)
+    - [Release notes](#release-notes-5)
   - [v0.5.12 (2026-06-11)](#v0512-2026-06-11)
-    - [Bug Fixes](#bug-fixes-2)
-    - [Internals](#internals-1)
-    - [Tests](#tests-3)
-    - [Scope Notes](#scope-notes-3)
+    - [Highlights](#highlights-6)
+    - [Release notes](#release-notes-6)
   - [v0.5.11 (2026-05-16)](#v0511-2026-05-16)
-    - [New Features](#new-features-4)
-    - [Tests](#tests-4)
-    - [Internals](#internals-2)
-    - [Scope Notes](#scope-notes-4)
+    - [Highlights](#highlights-7)
+    - [Release notes](#release-notes-7)
   - [v0.5.10 (2026-05-15)](#v0510-2026-05-15)
-    - [Bug Fixes](#bug-fixes-3)
-    - [Internals](#internals-3)
-    - [Scope Notes](#scope-notes-5)
+    - [Highlights](#highlights-8)
+    - [Release notes](#release-notes-8)
   - [v0.5.9 (2026-05-05)](#v059-2026-05-05)
-    - [New Features / Improvements](#new-features--improvements)
-    - [Internals (i18n housekeeping)](#internals-i18n-housekeeping)
-    - [Scope Notes](#scope-notes-6)
+    - [Highlights](#highlights-9)
+    - [Release notes](#release-notes-9)
   - [v0.5.8 (2026-04-22)](#v058-2026-04-22)
-    - [Internals](#internals-4)
+    - [Highlights](#highlights-10)
+    - [Release notes](#release-notes-10)
   - [v0.5.7 (2026-04-22)](#v057-2026-04-22)
-    - [New Features](#new-features-5)
-    - [Internals](#internals-5)
+    - [Highlights](#highlights-11)
+    - [Release notes](#release-notes-11)
   - [v0.5.6 (2026-04-14)](#v056-2026-04-14)
-    - [New Features](#new-features-6)
-    - [Internals](#internals-6)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review)
+    - [Highlights](#highlights-12)
+    - [Release notes](#release-notes-12)
   - [v0.5.5 (2026-04-13)](#v055-2026-04-13)
-    - [New Features (Phase 1)](#new-features-phase-1)
-    - [New Features (Phase 2)](#new-features-phase-2)
-    - [New Features (Phase 3)](#new-features-phase-3)
-    - [Internals](#internals-7)
-    - [Scope Notes](#scope-notes-7)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-1)
-    - [Tests](#tests-5)
+    - [Highlights](#highlights-13)
+    - [Release notes](#release-notes-13)
   - [v0.5.4 (2026-04-13)](#v054-2026-04-13)
-    - [New Features](#new-features-7)
-    - [Internals](#internals-8)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-2)
-    - [Tests](#tests-6)
+    - [Highlights](#highlights-14)
+    - [Release notes](#release-notes-14)
   - [v0.5.3 (2026-04-13)](#v053-2026-04-13)
-    - [New Features](#new-features-8)
-    - [Internals](#internals-9)
+    - [Highlights](#highlights-15)
+    - [Release notes](#release-notes-15)
   - [v0.5.2 (2026-04-13)](#v052-2026-04-13)
-    - [New Features](#new-features-9)
-    - [Internals](#internals-10)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-3)
+    - [Highlights](#highlights-16)
+    - [Release notes](#release-notes-16)
   - [v0.5.1 (2026-04-13)](#v051-2026-04-13)
-    - [New Features](#new-features-10)
-    - [Performance](#performance)
-    - [Internals](#internals-11)
-    - [Bug Fixes (Pre-Release Review)](#bug-fixes-pre-release-review-4)
-    - [Tests](#tests-7)
-    - [Deferred → v0.6.0](#deferred-%E2%86%92-v060)
+    - [Highlights](#highlights-17)
+    - [Release notes](#release-notes-17)
   - [v0.5.0 (2026-04-13)](#v050-2026-04-13)
-    - [New Features](#new-features-11)
-    - [Behavior Changes](#behavior-changes)
-    - [Tests](#tests-8)
+    - [Highlights](#highlights-18)
+    - [Release notes](#release-notes-18)
   - [v0.4.0 (2026-04-11)](#v040-2026-04-11)
-    - [New Features](#new-features-12)
-    - [Behavior Changes](#behavior-changes-1)
-    - [Internals](#internals-12)
+    - [Highlights](#highlights-19)
+    - [Release notes](#release-notes-19)
   - [v0.3.0 (2026-04-11)](#v030-2026-04-11)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
@@ -97,23 +73,42 @@
 
 ## v0.5.18 (2026-07-18)
 
-### Improvements
+### Highlights
+
+- **Full-length PMX / PMD comment display**
+
+### Release notes
+
+#### Improvements
 
 - **Full-length PMX / PMD comment display** — The comment section in the Info tab was rendered inside a nested scroll region with a fixed 200 px height (about 11 lines), so longer comments had to be scrolled within that small frame. The nested scroll region has been removed and the comment is now laid out directly in the Info tab, using the full height of the info area (anything beyond that scrolls with the Info tab itself). This also removes the scroll-position trap caused by nested same-direction scroll areas
 
 ## v0.5.17 (2026-07-16)
 
-### New Features
+### Highlights
+
+- **Appearance presets**
+
+### Release notes
+
+#### New Features
 
 - **Appearance presets** — The appearance settings window, opened from the "Appearance" button at the right end of the top bar, switches the app colors between four presets: System / Light / Dark / Custom. "System" follows the OS light/dark setting live at runtime. "Dark" is the previous look (still the default). "Light" is a new light color scheme. The color pickers for the six colors (background, buttons, text, border, accent, active) are always visible and reflect the effective colors of the current preset; editing any of them automatically forks the preset into "Custom" based on the colors shown at that moment, with the untouched colors inheriting the preset's values (the six colors are stored in `popone.toml` `[theme]`, previously a hand-edit-only hidden setting). The "Reset colors" button restores the default (dark) values. Light/dark behavior is inferred from the background luminance, so bright custom palettes keep readable text. The selected preset and custom colors are persisted to `popone.toml`. Existing configs with hand-edited `[theme]` colors are automatically treated as "Custom", so their look does not change. The log viewer, text viewer, and panel text colors follow the theme as well. The 3D viewport background remains independently controlled by the "Background" slider on the View tab.
 
 ## v0.5.16 (2026-07-15)
 
-### Improvements
+### Highlights
+
+- **Load requests are rejected while a selection dialog is open**
+- **Archive text viewer**
+
+### Release notes
+
+#### Improvements
 
 - **Load requests are rejected while a selection dialog is open** — While a selection / input dialog (archive model selection, UnityPackage model selection, FBX load method, OBJ/STL import options, archive password, manual texture assignment) is awaiting a decision, new load requests via drag & drop, the Open / Append buttons, a second-instance launch, or reload are rejected with a toast. Previously another load could start behind the dialog and clobber the pending choice, leading to undefined behavior.
 
-### New Features
+#### New Features
 
 - **Archive text viewer** — Text files bundled in ZIP / 7z / RAR archives (`.txt` / `.md`; readmes, terms of use, etc.) are now listed separately from model files. When an archive contains text documents, a "Text (n)" button appears on the top bar; clicking a file in the list window opens its content in a separate OS window, and multiple documents can be open at once. The same list also appears in the multi-model selection dialog, so the readme can guide which model to load. Encoding is auto-detected (UTF-8 with/without BOM, UTF-16 with BOM, Shift_JIS), and texts inside nested archives (one level) are included. The list is replaced per archive load (merged on append) and stays available after loading a plain model file, until the next archive is opened. When listing fails because a nested archive is password-protected, the outer texts (readmes, which often hold the password hint) are still listed alongside the password dialog. Files over 4 MB are skipped; display is capped at the first 1,000,000 characters.
 
@@ -121,31 +116,43 @@
 
 An archive feature release: RAR archive support and password-protected archive support (GUI only).
 
-### New Features
+### Highlights
+
+- **RAR archive support**
+- **Password-protected archives (GUI only)**
+- **Nested archives (one level)**
+- **Panic on morph-collapsed meshes (mikktspace index out of bounds)**
+- **Solid 7z archives failed with `ChecksumVerificationFailed` when skipped files precede the model**
+- **Password applied to plaintext ZIP entries broke extraction**
+- **Background load failures were not logged**
+
+### Release notes
+
+#### New Features
 
 - **RAR archive support** — `.rar` files (RAR4 / RAR5) can now be opened everywhere ZIP / 7z already worked: viewer file dialog, drag & drop, append (Shift + drop), and CLI conversion / `--list-models`. Extraction uses the official UnRAR library (statically linked via the `unrar` crate); like 7z, RAR is a solid format, so matching entries are fully extracted in one pass under the same 2 GB total cap. See `THIRD_PARTY_NOTICES.md` for the UnRAR license.
 - **Password-protected archives (GUI only)** — Encrypted ZIP (ZipCrypto / AES), 7z (including encrypted headers), and RAR (including encrypted headers) now prompt for a password in the viewer instead of failing with a generic error. A wrong password reopens the dialog with an error line, and for ZIP (which decrypts at the extract stage) the model picked before the prompt is re-selected automatically after the retry. **The password is held in memory only for the retried load — it is never written to `popone.toml`, never logged, and not remembered across loads.** The CLI intentionally has no password prompt; encrypted archives fail with a message pointing to the GUI.
 - **Nested archives (one level)** — Archives containing another archive (ZIP / 7z / RAR in any combination) now expand the inner archive and merge its models into the selection list under the composite path `outer/inner.zip/model.pmx` — the common MMD distribution shape of "readme files next to an inner (often password-protected) ZIP" loads directly. The same password is applied to the inner archive when prompted (plaintext entries ignore it). Expansion is deliberately limited to one level of nesting (a guard against self-referential archive bombs); a corrupt inner archive is skipped with a warning instead of failing the outer listing.
 
-### Bug Fixes
+#### Bug Fixes
 
 - **Panic on morph-collapsed meshes (mikktspace index out of bounds)** — Loading a PMX (or any model) containing a sub-mesh whose every vertex sits at the same point — a common MMD technique where hidden parts are collapsed to a point and expanded via vertex morphs — crashed the background load thread with `index out of bounds` inside `mikktspace-0.2.0` (`GenerateSharedVerticesIndexList`: with zero positional extent the merge-grid division becomes NaN, every entry hashes into cell 0, and the next cell's offset indexes one past the hash-table end before the empty-cell check). Tangent generation now detects zero-extent / non-finite geometry up front and assigns default tangents (meaningless without positional extent anyway), and a `catch_unwind` safety net converts any other panic inside the mikktspace port into the normal "generation failed" fallback. Confirmed against a real model whose hidden glasses parts were collapsed to a point.
 - **Solid 7z archives failed with `ChecksumVerificationFailed` when skipped files precede the model** — Solid 7z blocks decode as one continuous stream, and sevenz-rust2's `BlockDecoder` does not drain the unread bytes of an entry the extraction callback skips. Because popone's filtered extraction skips non-model/texture files (e.g. `.vpd` pose files) without reading them, any solid archive whose skipped files precede the model had every following entry read from a shifted stream position, failing CRC verification on perfectly intact archives (7-Zip itself reported "Everything is Ok"). Skipped entries are now drained to keep the stream aligned. Confirmed against a real solid 7z (LZMA2, one block) with a `Poses/` folder ahead of the PMX.
 - **Password applied to plaintext ZIP entries broke extraction** — `by_index_decrypt` on an unencrypted entry runs the ZipCrypto validator against plain data and fails; the password is now only passed to entries whose header says they are encrypted (relevant for mixed ZIPs and for plaintext outer ZIPs re-read with a password meant for a nested archive).
 - **Background load failures were not logged** — Load errors only showed a transient toast; if it was missed, the log file held no trace ("no log output" reports). Failures are now also written to the log as `ERROR`.
 
-### Internals
+#### Internals
 
 - `PoponeError` gains `ArchivePasswordRequired` / `ArchiveBadPassword` variants; all three archive backends (zip / sevenz-rust2 / unrar) normalize their password errors into them.
 - ZIP listing switched from `by_index` to `by_index_raw`, so encrypted ZIPs can be listed (and their model list shown) without a password — ZIP encrypts entry payloads only.
 - The zip crate's `aes-crypto` feature is enabled for AES-encrypted ZIP support.
 
-### Tests
+#### Tests
 
 - Password round-trip tests for AES-encrypted ZIP and header-encrypted 7z (built in-memory with the zip / sevenz-rust2 writers): listing, missing-password, wrong-password, and correct-password paths.
 - RAR tests against small fixtures from the unrar crate repository (plain, content-encrypted, header-encrypted): password-required detection, header decryption with the correct password, wrong-password failure, and broken-file rejection.
 
-### Scope Notes
+#### Scope Notes
 
 - Reloading a password-protected archive prompts again by design (the password is not retained). The CLI does not support encrypted archives.
 - Creating RAR archives is not supported (and is prohibited by the UnRAR license); extraction only.
@@ -154,21 +161,29 @@ An archive feature release: RAR archive support and password-protected archive s
 
 A hidden-option release. Adds a `[behavior]` section to `popone.toml` with no corresponding GUI toggle — both flags only take effect when the file is edited by hand.
 
-### New Features
+### Highlights
+
+- **Disable single-instance option**
+- **Exit-on-Escape option**
+- **Config write exclusion when `disable_single_instance` is enabled**
+
+### Release notes
+
+#### New Features
 
 - **Disable single-instance option** — Adding `[behavior] disable_single_instance = true` to `popone.toml` skips the existing Named Mutex / Named Pipe single-instance control entirely, allowing multiple `popone` windows to run at the same time. Defaults to `false` (previous behavior unchanged).
 - **Exit-on-Escape option** — Adding `[behavior] exit_on_escape = true` to `popone.toml` makes pressing Escape in the main window close it immediately (sends the same `ViewportCommand::Close` as clicking the close button). Defaults to `false` (previous behavior unchanged; only the existing per-dialog Escape handlers fire).
 
-### Bug Fixes (found while adding the above)
+#### Bug Fixes (found while adding the above)
 
 - **Config write exclusion when `disable_single_instance` is enabled** — The `atomic_write()` helper shared by `popone.toml` and `popone_history.json` uses fixed `.tmp`/`.bak` sibling paths, which assumes exactly one process ever writes at a time. That assumption used to be guaranteed by the Named Mutex forcing a single instance, but `disable_single_instance = true` removes that guarantee — closing multiple windows at nearly the same time could otherwise corrupt or drop one side's settings. `atomic_write()` now acquires a second Named Mutex (`Local\popone_viewer_config_write_lock`) to serialize writes across processes, with a 3-second timeout that falls back to writing without the lock (rather than losing the user's settings) on failure.
 
-### Tests
+#### Tests
 
 - **`BehaviorConfig` backward-compat / round-trip tests** — Verify a pre-existing `popone.toml` without a `[behavior]` section loads both flags as `false`, and that explicit values survive a toml round-trip.
 - **Concurrent-write regression test** — Verifies that 8 threads calling `save_config()` at once never corrupt `popone.toml` and leave no stray `.tmp`/`.bak` files afterward (a Windows named mutex serializes across threads of one process the same way it does across processes, so this exercises the same lock path without needing separate OS processes).
 
-### Scope Notes
+#### Scope Notes
 
 - Neither option has a GUI toggle; behavior is unchanged from previous releases unless `popone.toml` is edited by hand.
 
@@ -176,15 +191,21 @@ A hidden-option release. Adds a `[behavior]` section to `popone.toml` with no co
 
 A bug-fix release. PMX models loaded directly from a ZIP / 7z archive now resolve texture references whose filename case differs from the archive entry (e.g. a material referencing `body.PNG` while the archive stores `body.png`), so those textures no longer load as an empty "format error" white fallback.
 
-### Bug Fixes
+### Highlights
+
+- **Case-insensitive PMX texture lookup for archive loads**
+
+### Release notes
+
+#### Bug Fixes
 
 - **Case-insensitive PMX texture lookup for archive loads** — When a PMX is loaded from inside a ZIP / 7z, its texture references are matched against the archive's in-memory files (`aux_files`). The lookup was case-sensitive, so a PMX authored on a case-insensitive filesystem (Windows / macOS) that references `textures/body.PNG` while the archive entry is `textures/body.png` failed to find the bytes, leaving the texture empty and surfacing as an image-decode "format error" (white fallback). The archive *extraction* side already matched case-insensitively, so the file was present in `aux_files` under its real name — only the *retrieval* in `extract_textures` was strict. It now falls back to a case-insensitive match, fixing both the ZIP and 7z paths. Loading the same model from an already-extracted folder was unaffected because the OS resolves the case on disk.
 
-### Tests
+#### Tests
 
 - **Case-insensitive aux lookup tests** — Added `test_aux_get_ignore_case` (helper level: differing extension and directory case) and `test_extract_textures_case_insensitive_aux` (a PMX referencing `Body_D.PNG` against an archive `body_d.png` resolves the correct bytes) to `pmx/extract.rs`.
 
-### Scope Notes
+#### Scope Notes
 
 - No output format changes. The exact-match lookup is tried first, so correctly-cased references are unaffected; the case-insensitive pass is only a fallback. Disk loads on case-sensitive filesystems (e.g. Linux) with a case-mismatched reference remain a separate, unaddressed edge case.
 
@@ -192,19 +213,26 @@ A bug-fix release. PMX models loaded directly from a ZIP / 7z archive now resolv
 
 A bug-fix release. OBJ files that reference a `.mtl` living in a subdirectory now resolve the textures named inside that `.mtl` relative to the `.mtl`'s own directory instead of the `.obj`'s directory, so subdirectory-organized OBJ assets no longer load with missing textures.
 
-### Bug Fixes
+### Highlights
+
+- **MTL subdirectory texture resolution**
+- **Unified disk and in-memory OBJ paths**
+
+### Release notes
+
+#### Bug Fixes
 
 - **MTL subdirectory texture resolution** — When an `.obj` references a material library via `mtllib sub/dir/model.mtl`, the texture names written inside that `.mtl` (e.g. `map_Kd body.png`) are relative to the `.mtl`, not the `.obj`. Previously every texture was resolved only against the `.obj`'s directory, so any OBJ that kept its `.mtl` + textures in a subdirectory loaded with missing (white-fallback) textures. The loader now records each `mtllib` directory and tries it as a prefix before falling back to the `.obj` directory, so both subdirectory and flat layouts resolve correctly.
 
-### Internals
+#### Internals
 
 - **Unified disk and in-memory OBJ paths** — `load_obj_with_params` now reads the file and delegates to `load_obj_from_data_with_params`, so disk loads go through the same custom `mtl_loader` closure used by archive / in-memory loads. This is what lets the disk path capture the `.mtl` directories (the previous `tobj::load_obj` default loader discarded them).
 
-### Tests
+#### Tests
 
 - **OBJ MTL-subdirectory resolution tests** — Added `texture_resolves_relative_to_mtl_subdirectory` (a `.mtl` + texture nested under a subdirectory) and `texture_resolves_in_flat_layout` (regression for the `.mtl`-next-to-`.obj` case) to `obj/extract.rs`. Both write real files to a temp directory and assert the resolved texture bytes.
 
-### Scope Notes
+#### Scope Notes
 
 - No output format changes. Flat-layout OBJ assets (the common case) are unaffected — the `.obj`-directory lookup remains as a fallback.
 
@@ -212,21 +240,29 @@ A bug-fix release. OBJ files that reference a `.mtl` living in a subdirectory no
 
 A quality-hardening follow-up to v0.5.10. It closes the verification gap left by the PSD→PSB auto-promotion (which previously had only estimator unit tests), adds automated WGSL shader compilation tests so a broken shader fragment fails `cargo test` instead of at viewer launch, and makes the PSD→PSB promotion explicit in the success toast. No output format changes: ordinary models still write a byte-identical `.psd`.
 
-### New Features
+### Highlights
+
+- **Explicit toast when UV export auto-promotes PSD → PSB**
+- **`naga` dev-dependency**
+- **CI runs viewer-gated tests**
+
+### Release notes
+
+#### New Features
 
 - **Explicit toast when UV export auto-promotes PSD → PSB** — When the UV map writer crosses the 1.9 GiB threshold and switches the output to `.psb`, the success toast now uses a dedicated message stating that the format was auto-switched from PSD because the layer data exceeded the PSD 2 GiB limit (instead of silently showing a `.psb` path the user did not ask for). Ordinary `.psd` exports are unchanged. Added `viewer.toast.uvmap.exported_psb` to the `en` / `ja` / `zh` locale catalogs.
 
-### Tests
+#### Tests
 
 - **PSD/PSB round-trip parse-back test** — `convert/uvmap.rs` gains a test that writes both a PSD and a PSB on a small canvas and re-parses the produced bytes, asserting the signature / version / header fields and the structural invariant `section_start + declared_layer_section_len + image_data_len == file_len`. This invariant fails the instant a length field overflows or is written at the wrong width — exactly the v0.5.10 silent-corruption failure mode — so the PSB container is now provably openable rather than only size-estimated.
 - **naga WGSL shader compile tests** — The macro-assembled shader sources in `viewer/gpu.rs` (10 shaders) and `viewer/bloom.rs` (`BLOOM_SHADER_SRC`) are now fed through naga's WGSL front-end + validator (the same front-end wgpu uses). A syntax mistake in any `macro_rules!` fragment now fails `cargo test` instead of only surfacing when the viewer launches.
 
-### Internals
+#### Internals
 
 - **`naga` dev-dependency** — Added `naga = { version = "24", features = ["wgsl-in"] }` under `[dev-dependencies]`. Version `24` resolves to the same `naga 24.0.0` that `wgpu 24` already pulls transitively, so no extra copy is added to the dependency tree.
 - **CI runs viewer-gated tests** — `.github/workflows/ci.yml` gained a `cargo test --features viewer` step. The shader compile tests live under the `viewer` feature, so the pre-existing `cargo test` step (CLI-only) would never have executed them.
 
-### Scope Notes
+#### Scope Notes
 
 - No change to exported file bytes for ordinary models — `.psd` outputs remain bit-identical to v0.5.10. The only user-visible change is the more explicit toast wording when auto-promotion to PSB occurs.
 
@@ -234,18 +270,28 @@ A quality-hardening follow-up to v0.5.10. It closes the verification gap left by
 
 A targeted bug-fix release for the **UV map PSD output 2 GiB silent-failure**. UV map exports that previously produced a corrupt `.psd` (unopenable in Photoshop / Krita / Affinity / GIMP) now transparently switch to the **PSB (Large Document Format / `.psb`)** container when the estimated layer section would exceed the PSD `u32` length limit. No other behaviour changes; small models still write a regular `.psd`.
 
-### Bug Fixes
+### Highlights
+
+- **UV map PSD 2 GiB silent corruption resolved**
+- **`PsFormat::Psd` / `PsFormat::Psb` enum in `convert/uvmap.rs`**
+- **`estimate_layer_section_bytes()` helper**
+- **`export_uv_map_grouped()` return type**
+- **Tests**
+
+### Release notes
+
+#### Bug Fixes
 
 - **UV map PSD 2 GiB silent corruption resolved** — Previously, exporting a UV map for a high-resolution / many-material merged model could silently produce a corrupt `.psd` because the PSD format encodes the layer-and-mask information section length as `u32` (≈ 2 GiB limit). The writer now estimates the layer section size up front and, when it crosses a conservative 1.9 GiB threshold, auto-promotes to PSB: the file signature flips to `8BPB`, the version to `2`, the relevant section / channel length fields widen from `u32` to `u64`, and the output extension is rewritten from `.psd` to `.psb`. The path actually written is returned through the export API so the toast and log lines reflect the real filename. Small-to-mid models continue to be written as ordinary PSD with no change in output.
 
-### Internals
+#### Internals
 
 - **`PsFormat::Psd` / `PsFormat::Psb` enum in `convert/uvmap.rs`** — The writer now carries a format flag end-to-end. The three PSD/PSB structural deltas (outer "Layer and Mask Information" length, inner "Layer Info" length, and per-channel data length) are localised inside `write_section_length()` / `push_section_length()` helpers, so the body of the writer stays format-neutral.
 - **`estimate_layer_section_bytes()` helper** — Computes a slight over-approximation of the layer section size (per-layer overhead rounded up to 512 bytes, plus `4 × (2 + pixel_count)` for content layers) and is compared against the new `PSD_TO_PSB_THRESHOLD_BYTES = 1.9 GiB` constant to decide format.
 - **`export_uv_map_grouped()` return type** — Changed from `io::Result<()>` to `io::Result<PathBuf>` so the caller learns the actual path (including the `.psb` rewrite). `viewer/app/pending.rs` was updated to feed that path back into the success toast.
 - **Tests** — Six new unit tests cover extension rewriting (`.psd` ↔ `.psb`), PSD vs PSB header bytes (`8BPS` / version 1 vs `8BPB` / version 2), the +24-byte expected size delta of the length fields between formats, layer-section size estimate monotonicity, and the realistic-payload threshold crossing (4096 × 4096 × 30 layers crosses the boundary; a single 4 k layer stays well below).
 
-### Scope Notes
+#### Scope Notes
 
 - File handling remains unchanged for ordinary models — no migration is required and existing `.psd` outputs are bit-identical to those produced by v0.5.9.
 - PSB (`.psb`) is supported by Photoshop CS / 2021+, Krita, Affinity Photo, and GIMP (via plug-in). The promotion threshold is intentionally conservative (1.9 GiB rather than the hard 2 GiB limit) to leave headroom for the per-layer record overhead the estimator cannot tightly bound.
@@ -254,14 +300,29 @@ A targeted bug-fix release for the **UV map PSD output 2 GiB silent-failure**. U
 
 An **internal i18n housekeeping release** for `popone`. CLI help / error messages / viewer UI strings are now resolved dynamically through `rust-i18n`, with Japanese / English / Chinese locales bundled into the binary and selected from the OS language (overridable via the `POPONE_LOCALE` environment variable). Most of the Japanese comments and `assert!` / `expect()` / `panic!` messages in the Rust sources were translated to English (a small remainder persists). On a Japanese-language OS the UI renders as before, so behaviour there is effectively unchanged from v0.5.8. The release also bundles small UI improvements: an opt-in resizable right-side panel, better UV-edit-window resize behaviour, and a unified format for the `[log_viewer]` section.
 
-### New Features / Improvements
+### Highlights
+
+- **Resizable right-side panel with width persistence**
+- **Stable on-screen model size when toggling the material editor**
+- **UV edit window: improved resize behaviour and locked 1:1 UV aspect**
+- **Unify the `[log_viewer]` section format with `[window]`**
+- **CLI and internal error i18n**
+- **Viewer UI literal strings → `t!()`**
+- **Viewer `assert!` / `expect()` / `panic!` messages translated to English**
+- **Viewer source comments in English**
+- **Non-UI source comments in English**
+- **uvmap test fix-up**
+
+### Release notes
+
+#### New Features / Improvements
 
 - **Resizable right-side panel with width persistence** — The right-side tab panel (Info / Display / Export / Animation / Archive / etc.) can now be made resizable (`egui::SidePanel::resizable(panel_resizable)`, off by default and enabled via the Display-tab toggle). The width can be adjusted by dragging the panel border, and the resizable flag plus the chosen width are persisted to `popone.toml` under the `[display]` section (`panel_resizable` / `panel_width`). The previous fixed-width layout cramped the material editor and the file tree on smaller windows.
 - **Stable on-screen model size when toggling the material editor** — Because changing the right-panel width also resizes the 3D viewport, opening or closing the material editor used to make the model visibly grow or shrink. The fix adjusts camera distance (rather than FOV) when the right panel toggles, so the rendered model keeps the same on-screen size before and after.
 - **UV edit window: improved resize behaviour and locked 1:1 UV aspect** — The UV edit window is now a resizable `egui::Window` with a sane minimum size, so it can be enlarged or shrunk freely to inspect the texture background and UV wireframe. Inside the canvas the UV space is rendered with a fixed **1:1 aspect ratio**, so resizing the window in either direction never distorts the UV layout.
 - **Unify the `[log_viewer]` section format with `[window]`** — The persistence format for the log viewer window position / size inside `popone.toml` now uses the same scalar layout (`x` / `y` / `width` / `height`) as the `[window]` section (previously `[f32; 2]` values were serialized as vertical arrays, breaking formatting consistency). The sections now share an identical shape, simplifying manual edits.
 
-### Internals (i18n housekeeping)
+#### Internals (i18n housekeeping)
 
 The bulk of this release is the **`rust-i18n`-based dynamic resolution of CLI and viewer strings, plus an English-language sweep across Rust sources**, split across roughly 50 commits in the `v0.5.8..v0.5.9` range. The project policy is now: **logs = English (fixed) / UI = locale-switchable via `t!()` / source comments = English**.
 
@@ -272,7 +333,7 @@ The bulk of this release is the **`rust-i18n`-based dynamic resolution of CLI an
 - **Non-UI source comments in English** — Comments outside the viewer (convert pipeline, mid-size files, archive, unity, ray-mmd MME, intermediate types, `pmx/build`, `vrm/extract`, test code) were translated through batches 2 through 4f.
 - **uvmap test fix-up** — Two `uvmap` unit tests had been matching error strings literally and broke when those strings moved into `t!()`. They were re-pointed at the resolved English messages so the test suite stays green.
 
-### Scope Notes
+#### Scope Notes
 
 - The UI labels users see are now routed through `t!()` instead of being baked in; on a Japanese OS the wording and layout are unchanged from v0.5.8. The `popone.toml` persistence schema is backward-compatible except for one detail: the new `[display]` section (`panel_resizable` / `panel_width`) is added, and the `[log_viewer]` geometry keys were renamed from `position` / `size` (`[f32; 2]`) to scalar `x` / `y` / `width` / `height` — old keys from v0.5.8 are silently discarded, so the log viewer window position/size resets once after upgrading.
 - Log output language remains **fixed to English** (the `log` crate's sink). The UI locale ships in three languages (ja / en / zh) and follows the OS language, overridable via the `POPONE_LOCALE` environment variable.
@@ -281,7 +342,16 @@ The bulk of this release is the **`rust-i18n`-based dynamic resolution of CLI an
 
 A maintenance release that pins the CI Rust toolchain in-repo so that local and GitHub Actions builds use the exact same compiler. No behavioral or feature changes.
 
-### Internals
+### Highlights
+
+- **Add `rust-toolchain.toml`**
+- **Add `rust-version = "1.93"` to `Cargo.toml`**
+- **Switch CI Rust install from `dtolnay/rust-toolchain@stable` to `actions-rust-lang/setup-rust-toolchain@v1`**
+- **Include `rust-toolchain.toml` in the CI cache key**
+
+### Release notes
+
+#### Internals
 
 - **Add `rust-toolchain.toml`** — A new `popone/rust-toolchain.toml` declares `channel = "1.93.1"`, `components = ["rustfmt", "clippy"]`, and `profile = "minimal"`. Running any `cargo` command under `popone/` now causes `rustup` to install and switch to that exact version automatically, eliminating "works on my machine" issues caused by stable point-release drift between contributors.
 - **Add `rust-version = "1.93"` to `Cargo.toml`** — The Cargo MSRV metadata is now explicit, so older toolchains running `cargo install` or `cargo build` get a clear error message before compilation starts.
@@ -292,13 +362,21 @@ A maintenance release that pins the CI Rust toolchain in-repo so that local and 
 
 Fixes a visible regression on PMX models whose internal texture list references a file that does not exist on disk, and adds a runtime toggle for the fallback color.
 
-### New Features
+### Highlights
+
+- **White texture fallback (default)**
+- **Display option: `テクスチャ欠落時フォールバックを白に` toggle**
+- **Dynamic switchover**
+
+### Release notes
+
+#### New Features
 
 - **White texture fallback (default)** — When a PMX texture references a path that has no real file on disk (e.g. `textures\Skin.png` while the actual asset lives under `toon\`), or when decoding fails for any other reason, the previous behaviour baked a **1×1 magenta** pixel into GPU and used it everywhere the missing texture was referenced. For toon / sphere slots used in multiplicative / additive composition, this caused strong pink/magenta color bleeding on the affected material (commonly the face). v0.5.7 replaces the fallback pixel with **1×1 white (255,255,255,255)** by default, which neutralises the bleed without changing any other lighting path.
 - **Display option: `テクスチャ欠落時フォールバックを白に` toggle** — A new checkbox under the Display tab (below "MSAA") lets you switch between the white (default) and the historical magenta fallback on demand. The magenta mode is kept as a diagnostic option for spotting missing assets quickly. The preference persists across sessions under `[display] white_texture_fallback` in `popone.toml`.
 - **Dynamic switchover** — Toggling the option is immediate: no model reload required. All failure paths now share a single 1×1 fallback texture via `queue.write_texture`, so only 1 pixel needs to be rewritten on the GPU — material BindGroups and draw pipelines are left untouched, and the new color appears in the next frame.
 
-### Internals
+#### Internals
 
 - `viewer/texture.rs` gains a `SharedFallback { tex, srgb_view, unorm_view }` singleton behind a `Mutex<Option<_>>`, lazily initialised on first failure-path upload. All three fallback paths — empty `IrTexture.data` (`upload_single_texture`), `decode_image_to_rgba_with_hint` failure (same), and the unsupported `gltf::image::Format` branch (`upload_textures`) — return clones of the shared sRGB / Unorm `TextureView` pair. Because wgpu `TextureView::clone` only bumps an internal Arc, per-failure allocation goes from one 1×1 `wgpu::Texture` to zero.
 - `set_white_texture_fallback_dynamic(enabled, &queue)` flips the `AtomicBool` and, if the shared texture is already initialised, calls `queue.write_texture` with 4 bytes. Not reloading the GPU view means no BindGroup re-binding, so the toggle is safe to press mid-frame.
@@ -308,18 +386,26 @@ Fixes a visible regression on PMX models whose internal texture list references 
 
 Two follow-up improvements to the UV editor.
 
-### New Features
+### Highlights
+
+- **PMX UV morph IR→PMX roundtrip writeback**
+- **Auto-set morph weight to 1.0 during edit mode**
+- **Side-panel slider lock during edit**
+
+### Release notes
+
+#### New Features
 
 - **PMX UV morph IR→PMX roundtrip writeback** — Up through v0.5.5, `IrMorphKind::Uv` was stubbed out as an empty Group by the PMX writer, so any UV morph edits were lost on PMX save. `build_morphs` in `build.rs` now emits `PmxMorphOffsets::Uv` directly, leveraging the fact that the IR global vertex index produced during `build_vertices_and_faces` (sequential `mesh.vertices` push) is identical to the resulting PMX vertex index. The morph type byte (UV0=3, UV1..4=4..7) is reconstructed from `channel`. Duplicate offsets on the same vertex are coalesced and the output is sorted by `vertex_index` for deterministic writes. UV morphs now round-trip through PMX output at the writer level (PMX / PMD-loaded models themselves remain view-only — there is no GUI path to re-export them to PMX; edits are persisted via "Save history").
 - **Auto-set morph weight to 1.0 during edit mode** — Entering UV morph edit mode in the UV editor immediately stashes `app.morph_weights[active_morph]` and sets it to `1.0`, restoring the original value on exit (whether via ComboBox switch, "out-of-list" fallback after IR change, or any future code path). The stash/restore logic is centralised in the new `UvEditState::switch_active_morph` helper, so all entry points share consistent behaviour.
 - **Side-panel slider lock during edit** — While a UV morph is being edited, the corresponding row in the "表情モーフ" side panel disables its slider, `0`/`1` buttons, and DragValue, and shows a `(UV編集中)` hint next to the morph name. The "全リセット" (reset all) button also skips the locked morph to prevent the stash/live-value drift.
 
-### Internals
+#### Internals
 
 - `UvEditState` gains a `morph_weight_saved: Option<f32>` field. The new `switch_active_morph(new_morph, &mut weights)` helper is the only sanctioned way to change `active_morph`; direct assignment is by design discouraged. `reset()` also clears `morph_weight_saved` to ensure stale indices from a previous IR are dropped on reload.
 - `pmx/build.rs` `build_morphs` log statistics now include a `uv` count (`Morphs: N (vertex=A, group=B, uv=C)`). Out-of-range vertex indices are warned and skipped defensively.
 
-### Bug Fixes (Pre-Release Review)
+#### Bug Fixes (Pre-Release Review)
 
 - **[Codex 0.5.6/01 P1]** Reloading or A-/T-stance conversion while a UV morph was being edited would persist the locked `1.0` weight: `save_reload_snapshot` captured the temporary value, and `finish_load_with_gpu`'s `uv_edit.reset()` then dropped `morph_weight_saved`, so the post-reload weight stayed at `1.0` with no way back. Fixed by calling `switch_active_morph(None, &mut self.morph_weights)` at the start of `save_reload_snapshot` so the snapshot always captures the user-intended weight.
 - **[Codex 0.5.6/02 P1]** UV morph edit overrides held the displayed value (`base + morph offset`) under a key that had no way to distinguish base vs morph. After reload, `apply_to_ir` was writing those overrides back to the base UV, baking the morph offset into base; re-enabling the morph then double-applied the offset, corrupting both the visible mesh and IR state. Fixed by clearing `overrides` / `pristine_uvs` / `undo` / `redo` / `selected` in `save_reload_snapshot` whenever a UV morph was being edited. Morph edits are already written to the IR via `write_displayed_uv`, so there is no need to preserve the overrides across a reload (and `overrides` is now strictly scoped to base-UV edits).
@@ -330,7 +416,16 @@ Two follow-up improvements to the UV editor.
 
 Introduces a **per-vertex UV editing window** invoked from the material editor panel. v0.5.4 delivered material-level UV transform (offset / scale / rotation). v0.5.5 goes one layer deeper with **Phase 1** (single-vertex editor + persistence + reload-safe state), **Phase 2** (texture-background preview, rectangle selection, zoom/pan, rotate/scale, undo/redo, Ctrl+A), and **Phase 3** follow-ups (additive/subtractive rect selection, detachable independent OS window, UV1 editing, 2D gizmo handles, PMX UV morph editing).
 
-### New Features (Phase 1)
+### Highlights
+
+- **Per-vertex UV edit window (Phases 1-3)** — vertex drag, rectangle selection (add / subtract), zoom / pan, rotate / scale, undo / redo
+- **PMX UV morph editing / UV1 editing / detachable OS window / texture background**
+- **Per-vertex UV edit persistence** (history save, kept across reload)
+- **6 pre-release review fixes** (edits lost on reload, drag over-accumulation, Y-axis flip, etc.)
+
+### Release notes
+
+#### New Features (Phase 1)
 
 - **UV Edit Window** — A new "UV 編集" button appears in the material editor panel header. Clicking it opens a dedicated floating `egui::Window` (`Id::new("uv_edit_window")`, 1-instance) whose title reflects the active material name. The window renders a square UV canvas (up to 260×260 px) of the active material's triangle wireframe in UV space with **v=0 at the top** / **v=1 at the bottom**, matching the `convert/uvmap.rs` PSD export so both views are directly comparable.
 - **Vertex Pick & Drag** — Clicking within 12 px of a UV vertex selects it (yellow). Dragging translates the selected vertex in UV space. Edits are written directly to `IrMesh.vertices_mut()[*].uv`, so re-exports (PMX writer) immediately reflect the change.
@@ -338,7 +433,7 @@ Introduces a **per-vertex UV editing window** invoked from the material editor p
 - **Vertex UV Persistence** — `TextureHistoryFile` gains `vertex_uv_overrides: HashMap<path, Vec<VertexUvOverrideEntry>>` (JSON version bumped to v3). "履歴を保存" now writes per-vertex UV deltas alongside texture and parameter deltas; "履歴呼出" restores them and syncs the GPU vertex buffer.
 - **GPU Sync on Mouse-Up** — `GpuModel::sync_uvs_from_ir` re-uploads the full vertex buffer only on drag-stop. Per-frame edits during the drag touch only CPU-side `IrVertex.uv` to keep the frame rate unaffected.
 
-### New Features (Phase 2)
+#### New Features (Phase 2)
 
 - **Texture Background (2-1)** — The active material's BaseColor texture is rendered as a canvas background via `register_native_texture` + `painter.image`, scoped to the UV [0,1] region. A 1-entry cache (`ViewerApp.uv_edit_bg_tex`) re-registers only when the active material changes, and `finish_load_with_gpu` frees the `egui::TextureId` on model switch to avoid GPU leaks. PMX/PMD materials that lack `base_color_tex_info` fall back to `mat.texture_index`.
 - **Rectangle Selection + Bulk Translate (2-2)** — Left-drag starting far from any vertex begins rectangle selection (clears existing selection, re-fills on every frame from vertices inside the rect). Left-drag starting near a vertex enters Move mode (auto-selects the vertex under cursor if none was selected) and translates the whole selection. `UvDragMode { None, Move, Rect }` drives the branch, and `drag_start_uvs` is a `HashMap` so 1-vertex and N-vertex drags share the same code path.
@@ -347,7 +442,7 @@ Introduces a **per-vertex UV editing window** invoked from the material editor p
 - **Undo / Redo (2-5)** — `UvUndoEntry { before, after }` records one entry per drag (on `drag_stopped` Move). `Ctrl+Z` undoes, `Ctrl+Y` / `Ctrl+Shift+Z` redoes. GUI buttons "⟲ 元に戻す" / "⟳ やり直す" mirror the shortcuts. Undo stack is capped at 50 entries (FIFO). New edits clear the redo stack (standard semantics). `wants_keyboard_input()` guard prevents collision with TextEdit widgets elsewhere in the app.
 - **Select All (Ctrl+A)** — Adds all vertices of the active material to `selected` (existing selection is preserved, not replaced). A "全選択" button provides the same action from the GUI.
 
-### New Features (Phase 3)
+#### New Features (Phase 3)
 
 - **Additive / Subtractive Rectangle Selection (A-4)** — Previously rectangle selection always replaced the existing selection. Now Shift+drag adds the rect-inside vertices to the current selection, Ctrl+drag removes them. `UvRectBehavior { Replace, Add, Subtract }` is decided at `drag_started()` time from the modifier keys; `rect_initial_selected` snapshots the pre-drag selection so the per-frame rebuild `initial ± inside` stays consistent when the rect shrinks or expands. Ctrl is reused instead of Alt to avoid collision with Move-mode's "rotate" assignment (mode is already fixed by drag-start position, so Ctrl's meaning is unambiguous per mode).
 - **Detachable Independent OS Window (A-3)** — A new "⬈ 分離" button in the UV edit toolbar promotes the floating `egui::Window` to a real OS-level window via `ctx.show_viewport_immediate` (eframe 0.31 viewport API). Once detached, the UV editor lives in its own desktop window with its own title bar, resize handles, and minimize/close buttons; the main viewer keeps running the 3D scene behind. "⬓ 結合" snaps it back into the main window. `UvEditState.detached: bool` carries the preference across the session (but not across reloads, since `reset` preserves it). `ViewportId::from_hash_of("uv_edit_viewport")` keeps OS-level window position and size stable between toggles. The × button on the native window frame closes the editor by flipping `uv_edit_window_open = false`; the detached preference is preserved so reopening goes straight back to a separate window.
@@ -355,7 +450,7 @@ Introduces a **per-vertex UV editing window** invoked from the material editor p
 - **Visual 2D Gizmo Handles (A-5)** — A selection-bbox gizmo is drawn whenever 2 or more vertices are selected (with non-degenerate bbox). Four orange square handles appear at the bbox corners for scale, and a blue circle above the top edge (24 px outside) is the rotate handle. Dragging a corner scales around the opposite corner (Photoshop/Blender convention); dragging the rotate handle rotates around the bbox center. Gizmo-initiated drags do not require any modifier key — `UvGizmoAction { ScaleCorner { sign_u, sign_v }, Rotate }` is decided at `drag_started()` time from the hit test and takes priority over the modifier-key interpretation in the Move branch. Modifier-based scale/rotate (Ctrl/Alt) is still available for users who prefer keyboard-driven transforms. Handle pick radius is 10 px; rotate handle is placed first in the hit test so it wins when it overlaps a corner's pick region.
 - **PMX UV Morph Editing (A-2)** — PMX morph types 3〜7 (UV0 morph / additional UV1〜UV4 morphs) are now read into the IR as `IrMorphKind::Uv { channel, offsets: Vec<(global_vi, [f32; 4])> }` instead of being silently dropped at extract time. A new `GpuMorphEntry::Uv` variant is added to the GPU morph pipeline and `apply_gpu_morph_recursive` now accumulates `(du, dv) * weight` into `vertex.uv` (channel=0) or `vertex.uv1` (channel=1) on every morph apply. The UV editor gains a "編集対象" ComboBox that lists every `Uv` morph in the active model; picking one switches the canvas into "morph edit mode" where read/draw/pick/drag/gizmo operate on `base_uv + morph_offset` and writes update the morph's per-vertex offset map (via `write_displayed_uv` / `read_displayed_uv`). Selecting a morph auto-syncs `active_uv_set` to the morph's channel and resets in-flight drag state, selection, and undo history so UV0, UV1, and per-morph edit spaces stay isolated. **Limitations:** (1) channels ≥ 2 (UV2〜UV4) are read and retained but not GPU-applied (vertex shader has UV0/UV1 only); (2) IR→PMX writer currently emits empty group morphs for `IrMorphKind::Uv` because the PMX-vertex-index reverse map is not kept, so round-trip writing of UV morphs is deferred to a later version; (3) the UV editor preview assumes weight=1.0 so users need to scrub the morph weight slider in the side panel to see the effect in the 3D viewport.
 
-### Internals
+#### Internals
 
 - New `src/viewer/app/uv_edit.rs` introduces `UvEditState` and grows across phases:
   - Phase 1: `overrides`, `selected`, `active_material`, `dragging`, `pending_restore`
@@ -370,13 +465,13 @@ Introduces a **per-vertex UV editing window** invoked from the material editor p
 - `uv_to_canvas` / `canvas_to_uv` now take `view_offset: [f32; 2]` and `view_zoom: f32` parameters. Since all rendering/picking/drag/rect math flows through these two functions, Phase 2-3's pan/zoom automatically applies to every interaction with a single centralized change.
 - Drag handling uses a `start_uv + (cursor_uv - press_uv)` formulation (and rotation/scale analogues) to stay robust regardless of the `drag_delta()` frame/cumulative semantics across egui versions.
 
-### Scope Notes
+#### Scope Notes
 
 - **UV0 only.** UV1 (`IrMesh.uvs1`), morph UV, and multi UV-set switching are planned for Phase 3 (v0.5.7+).
 - **Single window instance.** Multi-material side-by-side editing is Phase 3.
 - **Clear-all is destructive.** "編集をすべてクリア" drops overrides / selected / undo stack / redo stack / pristine_uvs. Reload is required to restore the original (pre-edit) UVs since no global pristine snapshot is kept.
 
-### Bug Fixes (Pre-Release Review)
+#### Bug Fixes (Pre-Release Review)
 
 - **review_result_01 [P1] Reload dropped per-vertex UV edits** — `finish_load_with_gpu` unconditionally called `self.uv_edit.reset()`, so any A-stance / T-stance conversion or `reload_current()` discarded unsaved UV edits. `ReloadSnapshot` now carries `uv_edit_overrides` / `uv_edit_active_material` / `uv_edit_window_open`; `restore_snapshot_on_success` reapplies overrides via `apply_to_ir` and re-uploads the GPU vertex buffer via `sync_uvs_from_ir`. `restore_snapshot_on_failure` also restores the override map so the in-memory state stays consistent after a failed reload.
 - **review_result_02 [P1] Drag-move over-accumulated per frame** — The original implementation added `response.drag_delta()` to the current UV every `dragged()` frame. Because the delta behavior depends on the egui version and can be cumulative from drag-press, long drags caused the vertex UV to fly far beyond the cursor. The implementation now captures each selected vertex's UV *and* the cursor UV position on `drag_started()`, then on every `dragged()` frame recomputes `new_uv = start_uv + (cursor_uv - press_uv)`. Added `canvas_to_uv` helper and `UvEditState::{drag_start_uvs, drag_press_uv}` fields (cleared on drag-stop and `reset()`).
@@ -385,7 +480,7 @@ Introduces a **per-vertex UV editing window** invoked from the material editor p
 - **review_result_05 [P2] Undo left stale entries in overrides** — `apply_undo` / `apply_redo` unconditionally did `overrides.insert(k, v)`, so a vertex returned to its initial UV by undo still appeared as "edited" in the UI count and in `to_entries()`-based history save. A lazy-recorded `pristine_uvs` (populated by `record_pristine` on the first drag of each vertex, `or_insert` semantics) now lets undo/redo call `overrides.remove` whenever the resulting UV equals the pristine value. Memory cost scales with the number of *ever-edited* vertices only, avoiding the all-vertex snapshot that was explicitly rejected in Phase 1.
 - **review_result_06 [P2] Clear-all ignored pristine_uvs** — Following review 05, the clear-all button also needs to drop `pristine_uvs`, otherwise a later edit session reuses a stale pristine baseline and undo cannot return to an "unedited" state.
 
-### Tests
+#### Tests
 
 - Full test suite (179 tests) continues to pass. UV-edit logic is UI-driven; downstream data flow (IR → GpuModel → PMX writer) is covered by existing round-trip tests.
 
@@ -393,13 +488,22 @@ Introduces a **per-vertex UV editing window** invoked from the material editor p
 
 Adds per-slot UV transform (offset / scale / rotation) editing to the material editor panel. Nine slots that carry `KHR_texture_transform` data are supported: BaseColor / Emissive / Normal / Shade / ShadingShift / RimMultiply / OutlineWidth / Matcap / UvAnimMask.
 
-### New Features
+### Highlights
+
+- **Per-slot UV Transform Editing**
+- **UV Transform Persistence**
+- **Coexistence with Expression-driven UV Animation**
+- **review_result_01 [P1] Newly-assigned slot UV edits were not persisted**
+
+### Release notes
+
+#### New Features
 
 - **Per-slot UV Transform Editing** — A new compact widget (offset X/Y, scale X/Y, rotation°, and a ⟲ reset button) appears directly beneath each texture slot thumbnail. It is displayed only when a texture is actually assigned, writes into `IrTextureInfo.offset / scale / rotation`, and flows through the existing 9 uniform pairs (`base_uv / shade_uv / ...`) to the shader. Rotation is entered in degrees and stored as radians.
 - **UV Transform Persistence** — `MaterialParamOverride` gains nine `TextureUvOverride { offset, scale, rotation }` fields. Edits are persisted per normalized model path in `popone_history.json` and restored across reload / A-stance conversion / viewer restart. Pre-v0.5.4 JSON files remain fully readable via `#[serde(default)]`.
 - **Coexistence with Expression-driven UV Animation** — The v0.5.1 `IrTextureTransformBind` pipeline remains independent; static UV overrides apply first and Expression animation accumulates on top without interference.
 
-### Internals
+#### Internals
 
 - Introduces `TextureUvOverride { offset: Option<[f32;2]>, scale: Option<[f32;2]>, rotation: Option<f32> }`. All fields are optional so partial saves are possible and serialized size stays minimal.
 - `apply_to` only writes UV parameters when the corresponding `IrTextureInfo` is already `Some`. Unassigned slots are a no-op (the override never synthesizes a default `IrTextureInfo::from_index(0)` and cannot bind the wrong texture).
@@ -407,11 +511,11 @@ Adds per-slot UV transform (offset / scale / rotation) editing to the material e
 - `diff_from` skips all six MToon-slot UV overrides when `enable_mtoon == Some(false)`, preserving round-trip consistency.
 - Adds `uv_transform_widget` / `record_uv_override` helpers in `ui.rs`, invoked from all nine slots.
 
-### Bug Fixes (Pre-Release Review)
+#### Bug Fixes (Pre-Release Review)
 
 - **review_result_01 [P1] Newly-assigned slot UV edits were not persisted** — `TextureUvOverride::diff()` only produced a delta for `(Some, Some)` cases, so when a user assigned a texture to a previously-empty slot and then tweaked its UV transform, the UV delta was silently dropped at save time. The diff now falls back to comparing against the identity transform (offset=0 / scale=1 / rotation=0) when `pristine` is `None`, so newly-assigned slot UV edits round-trip through `popone_history.json`.
 
-### Tests
+#### Tests
 
 - UV round-trip coverage for BaseColor and MToon-slot (shade) diff → apply.
 - Verification that unassigned slots remain unassigned after `apply_to`, and that MToon is never auto-initialized by UV overrides alone.
@@ -424,7 +528,17 @@ Adds per-slot UV transform (offset / scale / rotation) editing to the material e
 
 Material editor UI refresh: the floating window has been replaced with a fixed bottom-dock panel above the shortcut hint bar. Material name editing, row thumbnail buttons, emoji icons, and on/off bulk normal toggles are introduced in a single pass.
 
-### New Features
+### Highlights
+
+- **Material Name Editing**
+- **Dockable Material Editor Panel**
+- **Thumbnail Leading Button**
+- **Emoji Icon Set**
+- **On/Off Bulk Normal Controls**
+
+### Release notes
+
+#### New Features
 
 - **Material Name Editing** — A `TextEdit` field is added at the top of the material editor panel, allowing in-place name changes. Edits are recorded via `MaterialParamOverride.name: Option<String>` into `material_overrides`, and are restored across reload / A-stance conversion / `popone_history.json` save. After editing, `update_mat_cache()` refreshes the side panel material list immediately.
 - **Dockable Material Editor Panel** — The old floating `egui::Window` has been converted to `egui::TopBottomPanel::bottom("material_editor_panel")`. It is pinned directly above the shortcut hint bar, resizable via its top edge, and its content is wrapped in `ScrollArea::vertical`. A `[×]` button in the header closes the panel. When the edit icon is off, the panel is not declared at all, so the central viewport automatically expands.
@@ -432,7 +546,7 @@ Material editor UI refresh: the floating window has been replaced with a fixed b
 - **Emoji Icon Set** — The `[S][C][N][B][編]` labels on material rows and group headers are replaced with `✨🗑🗺💡✏`. The constants `ICON_SMOOTH / ICON_CLEAR_NORMAL / ICON_NORMAL_MAP / ICON_EMISSIVE / ICON_EDIT` are consolidated at the top of `ui.rs`.
 - **On/Off Bulk Normal Controls** — The "法線平滑化（一括）" / "カスタム法線クリア（一括）" checkboxes are replaced with `label + [on] + [off]` compact button rows. The existing rule of skipping normal-textured materials on the "on" path is preserved.
 
-### Internals
+#### Internals
 
 - Added `name: Option<String>` to `MaterialParamOverride`. Because `String` is not `Copy`, it is handled outside the existing `merge!` / `diff_field!` macros with explicit `clone()` in `merge_from` / `diff_from` / `apply_to`.
 - Expanded the visibility of `update_mat_cache` from `pub(super)` to `pub(in crate::viewer)` so that `ui.rs` can rebuild the name cache after an edit.
@@ -443,7 +557,16 @@ Material editor UI refresh: the floating window has been replaced with a fixed b
 
 Texture thumbnails are now integrated into each material editor parameter section. Texture assignments and their related parameters can be seen in one place.
 
-### New Features
+### Highlights
+
+- **Texture Thumbnails Integrated into Sections**
+- **Thumbnail as Button**
+- **X Icon for Unassigned Slots**
+- **Per-Slot Reset**
+
+### Release notes
+
+#### New Features
 
 - **Texture Thumbnails Integrated into Sections** — The old consolidated "テクスチャスロット" section has been dissolved, and thumbnail + assignment UI is now placed at the top of each material parameter section:
   - **Basic**: BaseColor
@@ -458,7 +581,7 @@ Texture thumbnails are now integrated into each material editor parameter sectio
 - **X Icon for Unassigned Slots** — Unassigned slots render a placeholder button with an `×` symbol, using theme-consistent colors from `widgets.inactive`. Clicking opens the file dialog for new assignment.
 - **Per-Slot Reset** — The existing small `×` reset button at the end of each row is preserved, visible only when a texture is assigned.
 
-### Internals
+#### Internals
 
 - Added `TextureState::ir_thumb_cache: Vec<Option<egui::TextureId>>`, a cache of 64px thumbnail TextureIds parallel to `loaded.ir.textures`. Reuses the same thumbnail pipeline as the existing `pkg_thumb_cache` (UnityPackage textures).
 - Added four methods: `rebuild_ir_thumb_cache` / `append_ir_thumb_cache` / `clear_ir_thumb_cache` / `sync_ir_thumb_cache`. `sync` compares `loaded.ir.textures.len()` with cache length and performs differential updates: append for growth, rebuild for shrinkage, clear when no model is loaded.
@@ -466,7 +589,7 @@ Texture thumbnails are now integrated into each material editor parameter sectio
 - `show_material_editor_window` calls `sync_ir_thumb_cache` at entry so UI thumbnails track external changes (model swap, BG load completion) to `ir.textures` length.
 - Added shared `texture_slot_widget()` helper function. Each section calls it and it returns `(assign_clicked, reset_clicked)` bool pair — the caller then sets `pending_tex_request` / `pending_tex_clear`, keeping borrow boundaries clean.
 
-### Bug Fixes (Pre-Release Review)
+#### Bug Fixes (Pre-Release Review)
 
 - **[review_01 P1] Stale thumbnails after model swap** — `finish_load_with_gpu` / `cancel_gpu_build` / `cancel_bg_index_load` now call `clear_ir_thumb_cache()`. Without this, when the previous and next models happened to have the same texture count, `sync_ir_thumb_cache()` would early-return on length comparison and reuse the previous model's `TextureId`s, showing incorrect thumbnails.
 - **[review_01 P2] Thumbnail not updated after PSD→PNG conversion** — `poll_pending_psd_conversions()` now regenerates the `TextureId` for the converted index on completion. Since length is unchanged, `sync_ir_thumb_cache()` would not rebuild, and in cases where the initial PSD decode failed (`None` thumbnail), the slot would remain permanently blank even after successful PNG conversion.
@@ -476,7 +599,17 @@ Texture thumbnails are now integrated into each material editor parameter sectio
 
 VRM 1.0 Expression material binds playback, auxiliary texture slot persistence, and material editor drawer UX improvements.
 
-### New Features
+### Highlights
+
+- **VRM 1.0 Expression material bind playback** (materialColorBinds / textureTransformBinds)
+- **Sphere / Toon slot editing and auxiliary texture slot persistence**
+- **Material editor UX improvements** (dirty indicator, copy / paste, stronger PMX-unsupported badges)
+- **DrawCall uniform buffer optimization**
+- **8 bug fixes around Expressions / material editing**
+
+### Release notes
+
+#### New Features
 
 - **Expression Material Binds (VRM 1.0)** — The viewer now plays back `materialColorBinds` and `textureTransformBinds` in VRM 1.0 Expressions. Six color targets (`color` / `emissionColor` / `shadeColor` / `matcapColor` / `rimColor` / `outlineColor`) and UV scale/offset blend additively across multiple simultaneously-active expressions following the VRM 1.0 spec algorithm: `finalValue = baseValue + Σ((targetValue − baseValue) × weight)`. Base values are captured at load time and refreshed when the material editor modifies a material, so editor-adjusted values become the new base that expressions blend against.
 - **Sphere / Toon Texture Slot Editing** — The material editor drawer "テクスチャスロット" section now exposes the MMD-specific `Sphere` and `Toon` slots. Each slot has a file dialog button and `×` reset button matching the existing 8 auxiliary slots.
@@ -485,18 +618,18 @@ VRM 1.0 Expression material binds playback, auxiliary texture slot persistence, 
 - **Material Parameter Copy / Paste** — The material editor drawer toolbar row gains "コピー" and "ペースト" buttons. Copy captures the `diff_from(pristine, current)` result into a session-local clipboard; paste applies it to the currently-edited material with the standard dirty-tracking flow. Texture assignments are intentionally excluded (path-dependent) so only color/scalar values transfer between materials.
 - **PMX-Unsupported Badge Visual Enhancement** — The Rim / MatCap / UV Animation collapsing sections previously embedded `(PMX非対応)` as plain text in the section title. The title is now clean and each section body opens with a color-coded `⚠ PMX 非対応` badge with a hover tooltip: "この項目は PMX 出力では反映されません。MME (.fx) 出力やビューアプレビューでは反映されます。"
 
-### Performance
+#### Performance
 
 - **DrawCall Uniform Buffer Optimization** — `DrawCall` now holds a persistent `wgpu::Buffer` (`material_buf`) with `UNIFORM | COPY_DST` usage. `create_material_bind_group` was split into `serialize_material_uniform` / `create_material_buffer_and_bind_group` / `write_material_buffer`. The existing bind group rebuild path now uses `queue.write_buffer` for uniform-only updates, avoiding full bind group recreation on every material edit or expression frame. This is the enabler for per-frame Expression material bind updates without GPU resource churn.
 
-### Internals
+#### Internals
 
 - New enum variant `IrMorphKind::Material { color_binds, uv_binds }` alongside existing `Vertex` and `Group`. VRM Expressions with both vertex morphs and material binds are emitted as two separate IrMorphs with the same name, so the existing name-based `morph_weights` mapping drives both simultaneously without requiring a compound variant.
 - New types `MaterialColorBindType`, `IrMaterialColorBind`, `IrTextureTransformBind` in `intermediate::types`. `MaterialColorBindType::from_vrm_str` parses the VRM 1.0 `type` string to the enum.
 - New `GpuMorphEntry::Material` variant and `MaterialBaseValues` struct on `GpuModel`, plus a pure function `accumulate_expression_materials()` that iterates active material morphs, accumulates color and UV deltas per material, and returns `Vec<Option<MaterialParams>>` for dirty materials.
 - `IrModel::merge()` now offsets `material_index` in `IrMorphKind::Material` variants (color_binds and uv_binds) when merging models.
 
-### Bug Fixes (Pre-Release Review)
+#### Bug Fixes (Pre-Release Review)
 
 A series of five Codex review rounds surfaced integration issues between the new Expression material-bind path, the history-recall flow, and the existing material editor. All were resolved before shipping:
 
@@ -509,11 +642,11 @@ A series of five Codex review rounds surfaced integration issues between the new
 - **`material_index` not remapped in visible-only export** — `build_filtered_ir()` cloned `IrMorphKind::Material` binds verbatim, leaving stale indices into the pre-filter material array. Fixed by running `color_binds` / `uv_binds` through `mat_remap` with `filter_map`, dropping binds whose target material was excluded.
 - **Empty Material morphs leaking into filtered IR** — Material morphs whose binds all pointed at excluded materials still survived as empty morphs, producing "dead expressions" in PMX output. Fixed by deriving `morph_alive[i]` for `IrMorphKind::Material` from whether any bind targets a surviving material after remap, cascading through the existing Group convergence pass.
 
-### Tests
+#### Tests
 
 - 235 unit tests (up from 230 in v0.5.0). New coverage: `MaterialColorBindType::from_vrm_str` for all 6 valid strings plus unknown/empty fallback, `IrModel::merge()` material index offset for Material morphs, and `TextureHistoryEntry` slot field serde (backward-compat default, explicit slot parse, roundtrip).
 
-### Deferred → v0.6.0
+#### Deferred → v0.6.0
 
 - UV transform editing UI for the remaining texture slots (RimMultiply / OutlineWidth / Matcap / UvAnimMask) — existing code has no UV transform editing UI for any slot yet, so this becomes a larger scope than originally anticipated.
 - Drag-and-drop slot selection dialog when material editor is open.
@@ -528,7 +661,19 @@ A series of five Codex review rounds surfaced integration issues between the new
 
 Material editor drawer with full-parameter editing for MToon + lilToon, and MME (ray-mmd) material file generator.
 
-### New Features
+### Highlights
+
+- **Material Editor Drawer**
+- **Full MToon / lilToon parameter editing**
+- **Per-slot and per-material reset**
+- **Built-in material presets**
+- **Edit persistence in `popone_history.json`**
+- **MME (ray-mmd) material file generator**
+- **`ShaderFamily::Mtoon` is now the primary decision axis**
+
+### Release notes
+
+#### New Features
 
 - **Material Editor Drawer** — A floating `egui::Window` opens from a "編" button on each material row. Sections: Basic (diffuse / alpha mode / base color texture), Shade (shade_color / shading_toony / shading_shift + texture), Outline (edge_color / width mode / outline width texture), Rim (parametric rim / rim multiply texture), MatCap, UV animation, Emissive / Normal, Other, and an MME output preview.
 - **Full MToon / lilToon parameter editing** — All 25+ colors, scalars, and aux texture slots (normal / emissive / shade / shadingShift / rim / outline / matcap / uvAnimMask) are editable. Edited values are reflected live on both the standard and MMD-compatible render paths.
@@ -537,11 +682,11 @@ Material editor drawer with full-parameter editing for MToon + lilToon, and MME 
 - **Edit persistence in `popone_history.json`** — Per-material edit records (color/scalar diffs + MME category override) are saved alongside the existing texture history and restored on reload.
 - **MME (ray-mmd) material file generator** — The Export tab includes an "MME マテリアル (.fx) も出力" checkbox under the PMX conversion section. When checked, PMX conversion also emits `<model>_mme/material_<name>.fx` files using `CUSTOM_ENABLE`-based templates (Standard / Skin / HairAniso / Glass / Cloth / ClearCoat / Emissive). The ray-mmd root folder can be set via folder picker in the Export tab; defaults to the current directory (`.\`) when not configured. `#include` paths are resolved with `pathdiff` + `dunce` canonicalization, with a fallback when relative path computation fails. Non-PMX-capable textures (normal / emissive / matcap / rim / shading shift) are copied to `<model>_mme/textures/` with relative path references. All `.fx` and `README.txt` files are encoded in Shift-JIS with CR+LF line endings for MMD/MME compatibility. If the `#include` target (`material_common_2.0.fxsub`) does not exist at the resolved path, a warning is shown in the conversion result (files are still written).
 
-### Behavior Changes
+#### Behavior Changes
 
 - **`ShaderFamily::Mtoon` is now the primary decision axis** for PMX conversion, replacing the older `is_mtoon()` (`mtoon.is_some()`) check. This lets the material editor safely surface MToon parameters on non-MToon materials without flipping the PMX export into MToon-style ambient/specular output. Users must explicitly tick an "MToon 有効化" checkbox in the drawer to promote a material.
 
-### Tests
+#### Tests
 
 - 230 unit tests (up from 185 in v0.4.0). New coverage includes: `MaterialParamOverride` diff/apply round-trips, `RayMmdMaterialKind` category inference (Japanese/mixed-case/prefixed names), `generate_fx` section completeness and CR+LF encoding, `TextureSlot::is_linear` full-variant coverage.
 
@@ -550,7 +695,20 @@ Material editor drawer with full-parameter editing for MToon + lilToon, and MME 
 
 Added a separate-window log viewer and reworked log file persistence around the principle that no log files are written unless the user explicitly asks for them or a panic occurs.
 
-### New Features
+### Highlights
+
+- **Log Viewer (Separate OS Window)**
+- **Level Filter**
+- **Auto Tail Following**
+- **Manual Log Export**
+- **Persistence**
+- **No automatic log file generation on normal exit.**
+- **Panic dumps go directly to `panic_<ts>.log`.**
+- **Log rotation removed.**
+
+### Release notes
+
+#### New Features
 
 - **Log Viewer (Separate OS Window)** — A new top-level "ログ" toolbar button now opens an independent OS window that streams the in-memory log buffer in real time. Built on `eframe`'s `show_viewport_deferred`, the log viewer is independent of the main 3D viewport: it can be moved to a different monitor, minimized separately, and does not force the main 3D scene to re-render when new log lines arrive (~150ms polling cadence inside the deferred closure).
 - **Level Filter** — Toggle Error / Warn / Info / Debug visibility independently. Lines are color-coded (Error = red, Warn = yellow, Info = white, Debug / Trace = gray, Unknown = light gray). Multi-line messages such as backtraces are kept as a single logical entry.
@@ -558,13 +716,13 @@ Added a separate-window log viewer and reworked log file persistence around the 
 - **Manual Log Export** — A "ログ保存" button writes the current in-memory log to a user-chosen path via the native file dialog. A "フォルダを開く" button opens the logs directory in the OS file explorer.
 - **Persistence** — Log viewer visibility, window position/size, and level filter state are saved to `popone.toml` (`[log_viewer]` section) and restored on next launch.
 
-### Behavior Changes
+#### Behavior Changes
 
 - **No automatic log file generation on normal exit.** Previously the in-memory log buffer was flushed to `popone_<ts>.log` on every clean exit. v0.4.0 removes this; the buffer stays in memory and is discarded when the process exits cleanly. Use the new "ログ保存" button if you need to keep a session's logs.
 - **Panic dumps go directly to `panic_<ts>.log`.** The previous "write to `popone_<ts>.log` then copy to `panic_<ts>.log`" path produced two files per crash. Now a single `panic_<ts>.log` is written.
 - **Log rotation removed.** `rotate_logs` and the related `[log] keep` setting have been removed. Files in `%LOCALAPPDATA%\popone\logs\` now only exist as a result of explicit user action (manual export) or panics, so the auto-deletion bucket is no longer appropriate. Existing `popone.toml` files with a `[log] keep = N` line continue to load (the field is silently ignored).
 
-### Internals
+#### Internals
 
 - New module `popone/src/viewer/log_viewer.rs` with handwritten `[HH:MM:SS.mmm][LEVEL] message` parser, ring buffer (20,000 line cap), incremental filter index, and 17 unit tests covering parser edge cases (multi-line concat, leading fragment after byte-level drain, CRLF, level filtering, geometry round-trip, in-session reopen).
 - `LogViewerModel` is held behind `Arc<Mutex<LogViewerModel>>` so the `show_viewport_deferred` closure (which requires `Fn + Send + Sync + 'static`) can capture it via `Arc::clone`.
