@@ -131,7 +131,7 @@ If the viewer is already running, subsequent launches pass the file path to the 
 - **T-Stance Conversion** — Convert A-stance models to T-stance (bones, mesh, morphs, rigid bodies, joints synced)
 - **VRMA Animation** — Auto-mapping from PMX Japanese bone names to VRM humanoid names enables VRMA animation playback. Supports rotation/move grants, so D-bones (leg D, etc.) correctly follow FK animations
 - **UI Restrictions** — PMX conversion button, normal smoothing, and custom normal clear are grayed out when PMX/PMD is loaded. "Outline drawing" checkbox is also grayed out for models without MToon outlines
-- **Comment Display** — PMX/PMD comments shown in model info panel
+- **Comment Display** — PMX/PMD comments shown in model info panel. Since v0.5.18 the full text is laid out directly in the Info tab (previously scrolled inside a fixed frame of about 11 lines)
 
 ### Changelog
 

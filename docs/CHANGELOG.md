@@ -3,10 +3,12 @@
 **Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Changelog](#changelog)
+  - [v0.5.18 (2026-07-18)](#v0518-2026-07-18)
+    - [Improvements](#improvements)
   - [v0.5.17 (2026-07-16)](#v0517-2026-07-16)
     - [New Features](#new-features)
   - [v0.5.16 (2026-07-15)](#v0516-2026-07-15)
-    - [Improvements](#improvements)
+    - [Improvements](#improvements-1)
     - [New Features](#new-features-1)
   - [v0.5.15 (2026-07-14)](#v0515-2026-07-14)
     - [New Features](#new-features-2)
@@ -92,6 +94,12 @@
 # Changelog
 
 [日本語](CHANGELOG.jp.md)
+
+## v0.5.18 (2026-07-18)
+
+### Improvements
+
+- **Full-length PMX / PMD comment display** — The comment section in the Info tab was rendered inside a nested scroll region with a fixed 200 px height (about 11 lines), so longer comments had to be scrolled within that small frame. The nested scroll region has been removed and the comment is now laid out directly in the Info tab, using the full height of the info area (anything beyond that scrolls with the Info tab itself). This also removes the scroll-position trap caused by nested same-direction scroll areas
 
 ## v0.5.17 (2026-07-16)
 

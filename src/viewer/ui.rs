@@ -3406,14 +3406,13 @@ fn show_tab_info(ui: &mut egui::Ui, app: &mut ViewerApp) {
     // Meta info / comment.
     if !ir.comment.is_empty() {
         if ir.source_format.is_pmx_pmd() {
-            // PMX/PMD: show the free-form comment as is.
+            // PMX/PMD: show the free-form comment as is, at full length.
+            // The comment is the last element of the Info tab, so the tab's
+            // outer scroll area handles overflow — nesting a fixed-height
+            // scroll region here would cap the visible area and trap scrolling.
             ui.heading(egui::RichText::new(t!("viewer.section.comment")).color(app.palette.text));
             ui.separator();
-            egui::ScrollArea::vertical()
-                .max_height(200.0)
-                .show(ui, |ui| {
-                    ui.label(&ir.comment);
-                });
+            ui.label(&ir.comment);
         } else {
             show_meta_info(ui, &ir.comment);
         }
