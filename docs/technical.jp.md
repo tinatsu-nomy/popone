@@ -1049,7 +1049,7 @@ apply_tex_preview:
 ### `route_load_dispatch` メソッド
 
 メインスレッドで以下を振り分ける:
-- **即時実行**: VRMA、GLB/glTF アニメ、.anim（モデルロード不要、GPU リソース操作なし）
+- **即時実行**: VRMA、GLB/glTF アニメ、.anim（モデルの再ロードは行わないが、適用対象モデルは事前ロード必須。GPU リソース操作なし）
 - **対話 UI**: FBX choice ダイアログ（`self.preloaded = dispatch.preloaded` で既存メソッド互換性を維持）
 - **バックグラウンド**: VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage / ZIP / 7z / RAR（全フォーマット対応）
 
@@ -1078,7 +1078,7 @@ VRM/GLB ロードで PNG エンコード/デコードの往復を避ける最適
 - **`IrTexture::is_raw_rgba()`**: `matches!(self.data, TextureData::RawRgba { .. })` で判定
 - **`IrTexture::raw_dims()`**: `RawRgba` なら `Some((width, height))`、`Encoded` なら `None` を返す
 - **`upload_textures_from_ir`**: `TextureData::RawRgba` に直接マッチし、デコードなしで GPU にアップロード
-- **`write_all_textures_from_ir`（PMX エクスポート）**: `TextureData::RawRgba` にマッチし、`image::RgbaImage::save` で PNG エンコードして出力
+- **`write_all_textures_from_ir`（PMX エクスポート）**: `TextureData::RawRgba` にマッチし、`image::RgbaImage::save` で出力ファイル名の拡張子に従って再エンコードして保存
 
 ### 遅延 GPU ビルド
 
@@ -3340,13 +3340,19 @@ exit_on_escape = true
 
 ## コードベースアーキテクチャ
 
-![アーキテクチャ](architecture.svg)
+データフロー図（入力 → ロード → IrModel → ビューア / PMX 出力）:
+
+![データフロー](architecture.svg)
+
+モジュール責務図（ディレクトリ別のファイル構成と役割）:
+
+![モジュール構成](architecture_modules.svg)
 
 ## ソースファイル構成
 
 ```
 src/
-├── main.rs エントリポイント（引数なし or 出力未指定→ビューア / 出力指定→CLI変換）
+├── main.rs エントリポイント（出力指定→CLI変換 / --list-models・--dump→CLI情報表示（--dump は出力引数必須）/ それ以外→ビューア）
 ├── lib.rs ライブラリ API
 ├── error.rs エラー型定義（PoponeError enum、thiserror、ResultExt トレイト）
 ├── i18n.rs UI ローカライズ（rust-i18n、ja/en/zh、OS ロケール検出 + POPONE_LOCALE 上書き）
@@ -3409,7 +3415,7 @@ src/
 │ ├── material.rs 材質変換
 │ ├── morph.rs Expression → モーフ名マップ
 │ ├── physics.rs SpringBone → 剛体・ジョイント変換（V0/V1）
-│ ├── texture.rs テクスチャ PNG 書き出し
+│ ├── texture.rs テクスチャ書き出し（Encoded は原バイト・原形式を維持、RawRGBA は出力ファイル名の拡張子に従い再エンコード、保持された PSD はデコード可能なら PNG・失敗時は PSD 維持）
 │ ├── uvmap.rs UVマップ PSD / PSB 出力（材質レイヤー分け、境界ラップ、グループフォルダ、2GiB 超で PSB 自動切替）
 │ └── mme/ray_mmd.rs MME（ray-mmd）マテリアル .fx 出力（カテゴリ推定、Shift-JIS + CR+LF）
 └── viewer/ ← feature = "viewer" 時のみコンパイル
@@ -3496,7 +3502,7 @@ export POPONE_TEST_PMD_MIKU_V2=/path/to/初音ミクVer2.pmd
 
 ## 制限事項
 
-- **PMX/PMD は閲覧専用** — PMX 変換（再出力）は非対応。ビューア表示と UV マップ出力のみ
+- **PMX/PMD は閲覧専用** — PMX 変換（再出力）は非対応。ビューア表示と UV マップ出力のみ。例外: アーカイブ（ZIP / 7z / RAR）内の PMX / PMD は CLI のアーカイブ変換（`ArchiveModelKind::Pmx/Pmd` → IR → build）でのみ再出力可能。ビューアで開いた場合はアーカイブ経由でも常に閲覧専用
 - **テクスチャサイズ制限** — GPU の `max_texture_dimension_2d`（一般的に 8192px）を超えるテクスチャは `upload_rgba_to_gpu` で自動縮小される（`image::imageops::resize` による Triangle フィルタ）。PMX 変換出力には影響しない（ビューア表示のみ）
 - **展開サイズ上限** — アーカイブ（ZIP / 7z / RAR）および `.unitypackage` (tar.gz) の展開サイズは合計 2GB が上限（`MAX_TOTAL_BYTES`）。`.unitypackage` はヘッダサイズによる事前チェック + 実展開後の再チェックの二重防御
 - **MMD 特化モデル** — MMD レンダリングに特化したモデルは一部サーフェイスが正しく表示されない場合がある

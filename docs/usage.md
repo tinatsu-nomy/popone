@@ -141,7 +141,7 @@ See [Changelog](CHANGELOG.md) for version-by-version changes.
 
 ### Animation Playback
 
-- Load VRMA / glTF / FBX animations via drag & drop or dialog
+- Load VRMA / glTF / FBX animations via drag & drop or dialog (a target model must be loaded first)
 - Humanoid retargeting support (apply across different models)
 - 4 loop modes (None / Normal / A-B repeat / Ping-pong)
 - Speed control, frame stepping, seek bar, expression keyframe sync
@@ -162,8 +162,8 @@ popone.exe archive.7z output.pmx --model-name "model.pmx"
 | Output | Description |
 |--------|-------------|
 | PMX 2.0 (`.pmx`) | For MikuMikuDance / PmxEditor. Auto-inserts MMD standard bones, IK, and physics |
-| Texture PNG | Output to `textures/` folder (PSD textures are automatically converted to PNG) |
-| UV Map PSD | Per-material layers with model-based group folders (from viewer) |
+| Textures (`textures/*`) | Written in original format or PNG depending on the input path: non-PSD textures whose original bytes are retained keep their format, textures normalized to PNG at load time (e.g. FBX) are written as PNG, and retained PSD bytes are converted to PNG when decodable (kept as PSD on decode failure) |
+| UV Map PSD / PSB | Per-material layers with model-based group folders (from viewer; auto-switches to PSB above ~2 GiB) |
 
 - In the viewer, "PMX Convert" button exports immediately to `converted_modelXX/` directory. Output folder opens automatically in Explorer. Base output directory is configurable in the "Export" tab. Output PMX filename is taken from the editable "Model name" field in the top bar / right panel. The initial value is the source filename (the Prefab name when loaded via a Prefab, or the archive filename when loaded via an archive)
 - Auto-detection of VRM 0.0 / 1.0 / FBX / OBJ / STL / DirectX .x / UnityPackage / ZIP / 7z / RAR
@@ -269,7 +269,7 @@ Shader information recorded in VRM 0.0 `materialProperties` is auto-detected and
 ## Notes & Limitations
 
 - **PMX output** — Output PMX files are intended for further adjustment in tools like PmxEditor
-- **PMX/PMD is view-only** — PMX conversion (re-export) is not supported. Viewer display and UV map export only
+- **PMX/PMD is view-only** — PMX conversion (re-export) is not supported. Viewer display and UV map export only. Exception: PMX / PMD contained in archives (ZIP / 7z / RAR) can be re-exported to PMX **via the CLI archive conversion only** (when opened in the viewer, they remain view-only even via archives)
 - **Sphere Mode 3 (sub-texture) unsupported** — Requires additional UVs, not implemented. Detected with warning log and disabled
 - **Texture size limit** — Textures exceeding the GPU's `max_texture_dimension_2d` (typically 8192px) are automatically downscaled. This may result in slight quality loss. Does not affect PMX conversion output (viewer display only)
 - **Mipmap generation** — All textures are uploaded with a full mipmap chain. Downsampling is performed in linear color space (sRGB-correct) to eliminate moiré and aliasing when the camera is pulled back
@@ -302,7 +302,7 @@ Output: `target/release/popone.exe`
 ```bash
 popone <input> [output.pmx] [options]
 
-When output is omitted, the viewer opens automatically (viewer feature build only).
+When output is omitted, the viewer opens automatically (viewer feature build only). Exceptions: `--list-models` lists archive contents on the CLI with no output argument, and `--dump` writes no PMX but still requires the output argument.
 
 Options:
   --dump                  Print bone/vertex counts only (no PMX output)
@@ -323,7 +323,7 @@ Options:
 ## Output Files
 
 - **PMX** — Written to the specified path
-- **Textures** — PNG files in `textures/` next to the PMX
+- **Textures** — Written to `textures/` next to the PMX (original format or PNG depending on the input path; see the output table under "PMX (MikuMikuDance) Conversion")
 - **Log** — `.log` file in the same directory (not generated with `--dump`)
 
 ## Conversion Example

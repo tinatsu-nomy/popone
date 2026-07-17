@@ -1,7 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 820" font-family="'Segoe UI','Noto Sans JP',sans-serif" font-size="13">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 940" font-family="'Segoe UI','Noto Sans JP',sans-serif" font-size="12">
+  <title>popone data flow (v0.5.17)</title>
+  <desc>All startup inputs pass through the main.rs dispatch (CLI inspection with --list-models, which needs no output, or --dump, which still requires the output argument; CLI convert when an output path is given without --dump; viewer otherwise). Container extractors unpack UnityPackage and ZIP/7z/RAR archives; format loaders produce an IrModel that the viewer displays or that convert/ and pmx/ turn into PMX, MME and texture outputs. Direct .pmx/.pmd input cannot be converted; PMX/PMD inside archives can be converted by the CLI archive conversion only; any PMX/PMD opened in the viewer is view-only.</desc>
   <defs>
     <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
       <path d="M0,0 L8,3 L0,6" fill="#555"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#F9A825"/>
     </marker>
     <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
       <path d="M0,0 L8,3 L0,6" fill="#3080D0"/>
@@ -12,211 +17,173 @@
     <marker id="arrow-purple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
       <path d="M0,0 L8,3 L0,6" fill="#7B1FA2"/>
     </marker>
+    <marker id="arrow-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#C62828"/>
+    </marker>
   </defs>
 
-  <!-- 背景 -->
-  <rect width="1060" height="820" fill="#FAFAFA" rx="8"/>
+  <rect width="1100" height="940" fill="#FAFAFA" rx="8"/>
 
-  <!-- タイトル -->
-  <text x="520" y="30" text-anchor="middle" font-size="16" font-weight="bold" fill="#333">popone アーキテクチャ (v0.5.9)</text>
+  <text x="550" y="30" text-anchor="middle" font-size="17" font-weight="bold" fill="#333">popone — data flow (v0.5.17)</text>
 
-  <!-- 入力ファイル -->
-  <rect x="20" y="50" width="130" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
-  <text x="85" y="73" text-anchor="middle" font-weight="bold" fill="#1A56DB">VRM (.vrm/.glb)</text>
+  <!-- ═══ Input files ═══ -->
+  <rect x="30" y="55" width="120" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
+  <text x="90" y="78" text-anchor="middle" font-weight="bold" fill="#1A56DB">.vrm / .glb</text>
 
-  <rect x="165" y="50" width="100" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
-  <text x="215" y="73" text-anchor="middle" font-weight="bold" fill="#1A56DB">FBX (.fbx)</text>
+  <rect x="165" y="55" width="80" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
+  <text x="205" y="78" text-anchor="middle" font-weight="bold" fill="#1A56DB">.fbx</text>
 
-  <rect x="280" y="50" width="100" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
-  <text x="330" y="73" text-anchor="middle" font-weight="bold" fill="#1A56DB">PMX (.pmx)</text>
+  <rect x="260" y="55" width="110" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
+  <text x="315" y="78" text-anchor="middle" font-weight="bold" fill="#1A56DB">.pmx / .pmd</text>
 
-  <rect x="395" y="50" width="100" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
-  <text x="445" y="73" text-anchor="middle" font-weight="bold" fill="#1A56DB">PMD (.pmd)</text>
+  <rect x="385" y="55" width="140" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
+  <text x="455" y="78" text-anchor="middle" font-weight="bold" fill="#1A56DB">.obj / .stl / .x</text>
 
-  <rect x="510" y="50" width="95" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
-  <text x="557" y="73" text-anchor="middle" font-weight="bold" fill="#1A56DB">OBJ (.obj)</text>
+  <rect x="565" y="55" width="140" height="36" rx="18" fill="#FFF8E1" stroke="#F9A825" stroke-width="1.5"/>
+  <text x="635" y="78" text-anchor="middle" font-weight="bold" fill="#B26A00">.unitypackage</text>
 
-  <rect x="620" y="50" width="90" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
-  <text x="665" y="73" text-anchor="middle" font-weight="bold" fill="#1A56DB">STL (.stl)</text>
+  <rect x="715" y="55" width="180" height="36" rx="18" fill="#FFF8E1" stroke="#F9A825" stroke-width="1.5"/>
+  <text x="805" y="72" text-anchor="middle" font-weight="bold" fill="#B26A00">.zip / .7z / .rar</text>
+  <text x="805" y="86" text-anchor="middle" font-size="10" fill="#B26A00">password (GUI) / nested (1 level)</text>
 
-  <rect x="725" y="50" width="100" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
-  <text x="775" y="73" text-anchor="middle" font-weight="bold" fill="#1A56DB">DirectX (.x)</text>
+  <!-- ═══ main.rs dispatch ═══ -->
+  <rect x="70" y="125" width="760" height="106" rx="6" fill="#ECEFF1" stroke="#607D8B" stroke-width="1.5"/>
+  <text x="450" y="147" text-anchor="middle" font-weight="bold" fill="#37474F">main.rs — dispatch (startup inputs)</text>
+  <text x="90" y="169" font-size="12" fill="#444">--list-models (archives; no output needed) → CLI inspection</text>
+  <text x="90" y="187" font-size="12" fill="#444">--dump (output argument still required; no PMX written) → CLI inspection</text>
+  <text x="90" y="205" font-size="12" fill="#444">output given (without --dump) → CLI convert</text>
+  <text x="90" y="223" font-size="12" fill="#444">no output and neither flag → viewer (GUI)</text>
 
-  <!-- 出力ファイル -->
-  <rect x="880" y="170" width="120" height="36" rx="18" fill="#FDE8E8" stroke="#E04040" stroke-width="1.5"/>
-  <text x="940" y="193" text-anchor="middle" font-weight="bold" fill="#C02020">PMX (.pmx)</text>
+  <!-- pills → dispatch -->
+  <line x1="90" y1="91" x2="120" y2="123" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="205" y1="91" x2="215" y2="123" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="315" y1="91" x2="320" y2="123" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="455" y1="91" x2="450" y2="123" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="635" y1="91" x2="630" y2="123" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="805" y1="91" x2="795" y2="123" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
 
-  <rect x="880" y="220" width="120" height="36" rx="18" fill="#E8F5E9" stroke="#2E7D32" stroke-width="1.5"/>
-  <text x="940" y="243" text-anchor="middle" font-weight="bold" fill="#1B5E20">MME (.fx)</text>
+  <!-- ═══ Container extractors ═══ -->
+  <rect x="545" y="245" width="145" height="94" rx="6" fill="#FFF3E0" stroke="#F9A825" stroke-width="1.5"/>
+  <text x="617" y="265" text-anchor="middle" font-weight="bold" fill="#B26A00">unitypackage.rs</text>
+  <text x="557" y="285" font-size="10" fill="#444">GUID index</text>
+  <text x="557" y="299" font-size="10" fill="#444">Prefab / VRM / FBX selection</text>
+  <text x="557" y="313" font-size="10" fill="#444">Prefab → textures</text>
 
-  <!-- 分岐ラベル -->
-  <text x="240" y="112" font-size="11" fill="#666">[引数あり] CLI 変換 (VRM/FBX/OBJ/STL/DirectX)</text>
-  <text x="160" y="520" font-size="11" fill="#666">[引数なし] ビューア (全形式対応)</text>
+  <rect x="705" y="245" width="200" height="94" rx="6" fill="#FFF3E0" stroke="#F9A825" stroke-width="1.5"/>
+  <text x="805" y="265" text-anchor="middle" font-weight="bold" fill="#B26A00">archive/</text>
+  <text x="717" y="285" font-size="10" fill="#444">list_models · extract_model_bundle</text>
+  <text x="717" y="299" font-size="10" fill="#444">ZipCrypto / AES · 7z · RAR</text>
+  <text x="717" y="313" font-size="10" fill="#444">nested (1 level) + .unitypackage</text>
+  <text x="717" y="327" font-size="10" fill="#444">passwords: viewer (GUI) only</text>
 
-  <!-- ── モジュールボックス群 ── -->
+  <!-- dispatch → extractors -->
+  <line x1="617" y1="231" x2="617" y2="243" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="805" y1="231" x2="805" y2="243" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <!-- archive → unitypackage (nested .unitypackage) -->
+  <line x1="703" y1="285" x2="692" y2="285" stroke="#F9A825" stroke-width="1.5" stroke-dasharray="3,3" marker-end="url(#arrow-orange)"/>
 
-  <!-- vrm/ -->
-  <rect x="30" y="140" width="140" height="120" rx="6" fill="#E3F2FD" stroke="#1976D2" stroke-width="1.5"/>
-  <text x="100" y="160" text-anchor="middle" font-weight="bold" fill="#1565C0">vrm/</text>
-  <text x="45" y="180" font-size="11" fill="#444">loader</text>
-  <text x="45" y="196" font-size="11" fill="#444">extract</text>
-  <text x="45" y="212" font-size="11" fill="#444">detect</text>
-  <text x="45" y="228" font-size="11" fill="#444">types_v0 / v1</text>
+  <!-- ═══ Format loaders ═══ -->
+  <rect x="120" y="370" width="560" height="60" rx="6" fill="#E3F2FD" stroke="#1976D2" stroke-width="1.5"/>
+  <text x="400" y="392" text-anchor="middle" font-weight="bold" fill="#1565C0">format loaders</text>
+  <text x="400" y="414" text-anchor="middle" font-size="12" fill="#444">vrm/ · fbx/ · pmx/ · pmd/ · obj/ · stl/ · directx/</text>
 
-  <!-- fbx/ -->
-  <rect x="190" y="140" width="140" height="150" rx="6" fill="#E3F2FD" stroke="#1976D2" stroke-width="1.5"/>
-  <text x="260" y="160" text-anchor="middle" font-weight="bold" fill="#1565C0">fbx/</text>
-  <text x="205" y="180" font-size="11" fill="#444">parser</text>
-  <text x="205" y="196" font-size="11" fill="#444">scene</text>
-  <text x="205" y="212" font-size="11" fill="#444">extract</text>
-  <text x="205" y="228" font-size="11" fill="#444">bone / mesh / skin</text>
-  <text x="205" y="244" font-size="11" fill="#444">texture (近傍検索キャッシュ)</text>
-  <text x="205" y="260" font-size="11" fill="#444">humanoid (6リグ+日英混合) / blendshape</text>
+  <!-- dispatch → loaders (plain model files) -->
+  <line x1="250" y1="231" x2="250" y2="368" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
 
-  <!-- pmx/ (読み書き両対応) -->
-  <rect x="350" y="140" width="140" height="120" rx="6" fill="#FCE4EC" stroke="#C62828" stroke-width="1.5"/>
-  <text x="420" y="160" text-anchor="middle" font-weight="bold" fill="#B71C1C">pmx/</text>
-  <text x="365" y="180" font-size="11" fill="#444">reader — PMX 読み込み</text>
-  <text x="365" y="196" font-size="11" fill="#444">extract — → IrModel</text>
-  <text x="365" y="212" font-size="11" fill="#444">build — IrModel → PMX</text>
-  <text x="365" y="228" font-size="11" fill="#444">writer — PMX 書き出し</text>
+  <!-- extractors → loaders -->
+  <path d="M617,339 L617,368" fill="none" stroke="#F9A825" stroke-width="1.5" stroke-dasharray="3,3" marker-end="url(#arrow-orange)"/>
+  <path d="M805,339 L805,405 L682,405" fill="none" stroke="#F9A825" stroke-width="1.5" stroke-dasharray="3,3" marker-end="url(#arrow-orange)"/>
+  <text x="812" y="358" font-size="10" fill="#B26A00">inner models + textures</text>
 
-  <!-- pmd/ -->
-  <rect x="510" y="140" width="130" height="100" rx="6" fill="#FCE4EC" stroke="#C62828" stroke-width="1.5"/>
-  <text x="575" y="160" text-anchor="middle" font-weight="bold" fill="#B71C1C">pmd/</text>
-  <text x="525" y="180" font-size="11" fill="#444">reader — PMD 読み込み</text>
-  <text x="525" y="196" font-size="11" fill="#444">extract — → IrModel</text>
-  <text x="525" y="212" font-size="11" fill="#444">types (Shift_JIS)</text>
+  <!-- ═══ IrModel ═══ -->
+  <rect x="270" y="480" width="260" height="62" rx="6" fill="#FFF3E0" stroke="#E65100" stroke-width="1.5"/>
+  <text x="400" y="502" text-anchor="middle" font-weight="bold" fill="#BF360C">intermediate/ — IrModel</text>
+  <text x="400" y="522" text-anchor="middle" font-size="11" fill="#444">merge (append) · tangent · stance A↔T</text>
 
-  <!-- obj/ -->
-  <rect x="660" y="140" width="120" height="80" rx="6" fill="#E3F2FD" stroke="#1976D2" stroke-width="1.5"/>
-  <text x="720" y="160" text-anchor="middle" font-weight="bold" fill="#1565C0">obj/</text>
-  <text x="675" y="180" font-size="11" fill="#444">extract (tobj)</text>
-  <text x="675" y="196" font-size="11" fill="#444">MTL / テクスチャ解決</text>
+  <line x1="400" y1="430" x2="400" y2="478" stroke="#3080D0" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
 
-  <!-- stl/ -->
-  <rect x="800" y="140" width="100" height="80" rx="6" fill="#E3F2FD" stroke="#1976D2" stroke-width="1.5"/>
-  <text x="850" y="160" text-anchor="middle" font-weight="bold" fill="#1565C0">stl/</text>
-  <text x="815" y="180" font-size="11" fill="#444">reader (ASCII/Bin)</text>
-  <text x="815" y="196" font-size="11" fill="#444">extract (Z→Y-Up)</text>
+  <!-- convert-scope note -->
+  <text x="350" y="562" font-size="10" fill="#666">CLI cannot convert direct .pmx / .pmd input;</text>
+  <text x="350" y="576" font-size="10" fill="#666">archive-contained .pmx / .pmd: CLI convert only</text>
+  <text x="350" y="590" font-size="10" fill="#666">(viewer-loaded PMX / PMD is always view-only)</text>
 
-  <!-- directx/ -->
-  <rect x="920" y="140" width="120" height="100" rx="6" fill="#E3F2FD" stroke="#1976D2" stroke-width="1.5"/>
-  <text x="980" y="160" text-anchor="middle" font-weight="bold" fill="#1565C0">directx/</text>
-  <text x="935" y="180" font-size="11" fill="#444">parser (text .x)</text>
-  <text x="935" y="196" font-size="11" fill="#444">extract (Frame階層)</text>
-  <text x="935" y="212" font-size="11" fill="#444">材質参照 / DDS</text>
+  <!-- ═══ Viewer ═══ -->
+  <rect x="60" y="610" width="370" height="120" rx="6" fill="#F3E5F5" stroke="#7B1FA2" stroke-width="1.5"/>
+  <text x="245" y="632" text-anchor="middle" font-weight="bold" fill="#6A1B9A">viewer/  (feature = "viewer")</text>
+  <text x="78" y="654" font-size="12" fill="#444">egui + wgpu — displays all loaded formats</text>
+  <text x="78" y="672" font-size="12" fill="#444">MToon / MMD / Bloom · material edit · UV edit</text>
+  <text x="78" y="690" font-size="12" fill="#444">log viewer · text viewer · themes</text>
+  <text x="78" y="708" font-size="12" fill="#444">animation.rs — retarget / grant / expressions</text>
 
-  <!-- intermediate/ -->
-  <rect x="200" y="320" width="165" height="100" rx="6" fill="#FFF3E0" stroke="#E65100" stroke-width="1.5"/>
-  <text x="282" y="340" text-anchor="middle" font-weight="bold" fill="#BF360C">intermediate/</text>
-  <text x="215" y="362" font-size="11" fill="#444">IrModel (中間表現)</text>
-  <text x="215" y="378" font-size="11" fill="#444">tangent (MikkTSpace)</text>
-  <text x="215" y="394" font-size="11" fill="#444">pose / types / animation</text>
+  <path d="M330,542 L245,608" fill="none" stroke="#7B1FA2" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
 
-  <!-- convert/ -->
-  <rect x="400" y="320" width="150" height="166" rx="6" fill="#E8F5E9" stroke="#2E7D32" stroke-width="1.5"/>
-  <text x="475" y="340" text-anchor="middle" font-weight="bold" fill="#1B5E20">convert/</text>
-  <text x="415" y="362" font-size="11" fill="#444">coord — 座標変換</text>
-  <text x="415" y="378" font-size="11" fill="#444">bone_map — ボーン名</text>
-  <text x="415" y="394" font-size="11" fill="#444">material — 材質変換</text>
-  <text x="415" y="410" font-size="11" fill="#444">morph — モーフ名</text>
-  <text x="415" y="426" font-size="11" fill="#444">physics — 物理変換</text>
-  <text x="415" y="442" font-size="11" fill="#444">texture / uvmap (group)</text>
-  <text x="415" y="458" font-size="11" fill="#444">mme/ — ray-mmd .fx 生成</text>
+  <!-- animation inputs -->
+  <rect x="60" y="775" width="310" height="36" rx="18" fill="#E8F0FE" stroke="#4285F4" stroke-width="1.5"/>
+  <text x="215" y="792" text-anchor="middle" font-weight="bold" fill="#1A56DB">.vrma · .gltf/.glb anim · .fbx anim · .anim</text>
+  <text x="215" y="806" text-anchor="middle" font-size="10" fill="#1A56DB">applied to an already-loaded model</text>
+  <line x1="215" y1="773" x2="215" y2="732" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
 
-  <!-- viewer/ -->
-  <rect x="40" y="540" width="310" height="274" rx="6" fill="#F3E5F5" stroke="#7B1FA2" stroke-width="1.5"/>
-  <text x="195" y="560" text-anchor="middle" font-weight="bold" fill="#6A1B9A">viewer/</text>
-  <text x="50" y="558" font-size="10" fill="#9C27B0">feature = "viewer"</text>
-  <text x="55" y="582" font-size="11" fill="#444">app/mod.rs — ViewerApp + eframe::App + スプラッシュ画像</text>
-  <text x="55" y="598" font-size="11" fill="#444">app/file_io.rs — ファイル読み込み・D&amp;D</text>
-  <text x="55" y="614" font-size="11" fill="#444">app/texture_mgmt.rs — テクスチャ管理</text>
-  <text x="55" y="630" font-size="11" fill="#444">app/pending.rs — 遅延タスク</text>
-  <text x="55" y="646" font-size="11" fill="#444">app/material_edit.rs — 材質編集 (diff/apply/presets/コピペ/スロット毎 UV 変形 v0.5.4)</text>
-  <text x="55" y="662" font-size="11" fill="#444">app/persistence.rs — セッション設定・テクスチャ履歴(全スロット)・材質編集の永続化</text>
-  <text x="55" y="678" font-size="11" fill="#444">gpu.rs — wgpu パイプライン・描画</text>
-  <text x="55" y="694" font-size="11" fill="#444">mesh.rs — IrModel → GPU バッファ / サンプラーキャッシュ</text>
-  <text x="55" y="710" font-size="11" fill="#444">camera.rs — FOV30° / 視点依存fit / Shift精密</text>
-  <text x="55" y="726" font-size="11" fill="#444">ui.rs — 情報パネル(メタバッジ)・モーフ(絞り込み)・変換・ダークテーマ・ファイル構成ツリー・材質グループ(一括S/C/表示)</text>
-  <text x="55" y="742" font-size="11" fill="#444">export_filter.rs — 材質フィルタ出力</text>
-  <text x="55" y="758" font-size="11" fill="#444">MToon 2色トゥーン+アウトライン+リム+MatCap+補助Tex+UVアニメ+emissive+法線マップTBN+CullMode+4段階描画順+動的距離ソート+ライトカラー+半球ambient / UTS2/lilToon/Poiyomi近似 / MMD: トゥーン・エッジ・スフィア / Wire: 全パイプライン統一 / Bloom: MRT emissive分離+Dual Kawase</text>
-  <text x="55" y="774" font-size="11" fill="#444">animation.rs — VRMA再生・リターゲ・付与(grant)・Expression材質バインド(v0.5.1)</text>
-  <text x="55" y="790" font-size="11" fill="#444">single_instance.rs — Named Mutex+Pipe IPC (Win)</text>
-  <text x="55" y="806" font-size="11" fill="#444">watchdog.rs — メインスレッド応答性監視 (AtomicU64 heartbeat)</text>
+  <!-- viewer outputs -->
+  <rect x="470" y="745" width="180" height="36" rx="18" fill="#E8F5E9" stroke="#2E7D32" stroke-width="1.5"/>
+  <text x="560" y="768" text-anchor="middle" font-weight="bold" fill="#1B5E20">UV map .psd / .psb</text>
+  <rect x="470" y="795" width="180" height="36" rx="18" fill="#E8F5E9" stroke="#2E7D32" stroke-width="1.5"/>
+  <text x="560" y="818" text-anchor="middle" font-weight="bold" fill="#1B5E20">.log (manual save)</text>
+  <path d="M430,700 L560,700 L560,743" fill="none" stroke="#40A050" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <path d="M430,715 L455,715 L455,813 L468,813" fill="none" stroke="#40A050" stroke-width="1.5" marker-end="url(#arrow-green)"/>
 
-  <!-- ── 矢印（データフロー） ── -->
+  <!-- ═══ Convert path ═══ -->
+  <rect x="640" y="480" width="200" height="108" rx="6" fill="#E8F5E9" stroke="#2E7D32" stroke-width="1.5"/>
+  <text x="740" y="502" text-anchor="middle" font-weight="bold" fill="#1B5E20">convert/</text>
+  <text x="655" y="524" font-size="11" fill="#444">coord · bone_map · material</text>
+  <text x="655" y="541" font-size="11" fill="#444">morph · physics · texture</text>
+  <text x="655" y="558" font-size="11" fill="#444">uvmap (PSD / PSB writer)</text>
+  <text x="655" y="575" font-size="11" fill="#444">mme/ — ray-mmd .fx</text>
 
-  <!-- VRM → vrm/ -->
-  <line x1="85" y1="86" x2="85" y2="138" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="532" y1="510" x2="638" y2="510" stroke="#40A050" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <text x="545" y="502" font-size="10" fill="#40A050">CLI / viewer convert</text>
 
-  <!-- FBX → fbx/ -->
-  <line x1="215" y1="86" x2="240" y2="138" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="880" y="500" width="180" height="60" rx="6" fill="#FCE4EC" stroke="#C62828" stroke-width="1.5"/>
+  <text x="970" y="522" text-anchor="middle" font-weight="bold" fill="#B71C1C">pmx/ build + writer</text>
+  <text x="970" y="542" text-anchor="middle" font-size="11" fill="#444">MMD standard bones · IK</text>
 
-  <!-- PMX → pmx/ -->
-  <line x1="330" y1="86" x2="390" y2="138" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="840" y1="520" x2="878" y2="520" stroke="#40A050" stroke-width="1.5" marker-end="url(#arrow-green)"/>
 
-  <!-- PMD → pmd/ -->
-  <line x1="445" y1="86" x2="555" y2="138" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <!-- outputs -->
+  <text x="920" y="348" font-size="10" fill="#666">CLI also writes a conversion .log</text>
+  <text x="920" y="362" font-size="10" fill="#666">next to the output file</text>
 
-  <!-- OBJ → obj/ -->
-  <line x1="557" y1="86" x2="700" y2="138" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="860" y="370" width="210" height="36" rx="18" fill="#FDE8E8" stroke="#E04040" stroke-width="1.5"/>
+  <text x="965" y="387" text-anchor="middle" font-weight="bold" fill="#C02020">.pmx + textures/*</text>
+  <text x="965" y="401" text-anchor="middle" font-size="10" fill="#C02020">(original format or PNG)</text>
 
-  <!-- STL → stl/ -->
-  <line x1="665" y1="86" x2="835" y2="138" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="860" y="420" width="210" height="36" rx="18" fill="#E8F5E9" stroke="#2E7D32" stroke-width="1.5"/>
+  <text x="965" y="437" text-anchor="middle" font-weight="bold" fill="#1B5E20">MME .fx + README.txt</text>
+  <text x="965" y="451" text-anchor="middle" font-size="10" fill="#1B5E20">+ auxiliary textures/</text>
 
-  <!-- vrm/ → intermediate/ -->
-  <path d="M100,260 L100,360 L198,360" fill="none" stroke="#3080D0" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <path d="M1060,515 L1080,515 L1080,388 L1072,388" fill="none" stroke="#E04040" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+  <path d="M800,478 L800,438 L858,438" fill="none" stroke="#C62828" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#arrow-red)"/>
+  <text x="748" y="608" font-size="10" fill="#C62828">MME: viewer-only, generated after successful PMX export</text>
 
-  <!-- fbx/ → intermediate/ -->
-  <path d="M260,290 L260,370 L198,370" fill="none" stroke="#3080D0" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <!-- viewer → convert (PMX convert button) -->
+  <path d="M430,670 L740,670 L740,590" fill="none" stroke="#C62828" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#arrow-red)"/>
+  <text x="452" y="686" font-size="10" fill="#C62828">PMX convert button — all formats except PMX/PMD-loaded (view-only)</text>
 
-  <!-- pmx/ extract → intermediate/ -->
-  <path d="M420,260 L420,310 L367,340" fill="none" stroke="#3080D0" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
-
-  <!-- pmd/ extract → intermediate/ -->
-  <path d="M575,240 L575,310 L367,350" fill="none" stroke="#3080D0" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
-
-  <!-- obj/ → intermediate/ -->
-  <path d="M720,220 L720,310 L367,360" fill="none" stroke="#3080D0" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
-
-  <!-- stl/ → intermediate/ -->
-  <path d="M850,220 L850,310 L367,370" fill="none" stroke="#3080D0" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
-
-  <!-- DirectX → directx/ -->
-  <line x1="775" y1="86" x2="960" y2="138" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-
-  <!-- directx/ → intermediate/ -->
-  <path d="M980,240 L980,310 L367,375" fill="none" stroke="#3080D0" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
-
-  <!-- intermediate/ → pmx/ build (CLI出力) -->
-  <path d="M367,380 L660,380 L660,260 L490,210" fill="none" stroke="#40A050" stroke-width="1.5" marker-end="url(#arrow-green)"/>
-  <text x="670" y="340" font-size="10" fill="#40A050">CLI 変換</text>
-
-  <!-- pmx/ writer → PMX output -->
-  <path d="M490,190 L660,190 L878,190" fill="none" stroke="#E04040" stroke-width="1.5" marker-end="url(#arrow)"/>
-
-  <!-- convert/ → intermediate/pmx (参照) -->
-  <line x1="400" y1="400" x2="367" y2="380" stroke="#40A050" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow-green)"/>
-
-  <!-- intermediate/ → viewer/ -->
-  <path d="M282,420 L282,480 L195,480 L195,538" fill="none" stroke="#7B1FA2" stroke-width="1.5" marker-end="url(#arrow-purple)"/>
-
-  <!-- viewer/ → pmx/ (PMX変換ボタン) -->
-  <path d="M350,664 L680,664 L680,260" fill="none" stroke="#C62828" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#arrow)"/>
-  <text x="540" y="659" font-size="10" fill="#C62828">(PMX 変換ボタン, VRM/FBX のみ)</text>
-
-  <!-- 凡例 -->
-  <rect x="740" y="604" width="270" height="130" rx="6" fill="#F5F5F5" stroke="#CCC" stroke-width="1"/>
-  <text x="755" y="624" font-size="12" font-weight="bold" fill="#555">凡例</text>
-  <line x1="755" y1="640" x2="670" y2="640" stroke="#3080D0" stroke-width="2"/>
-  <text x="798" y="644" font-size="11" fill="#444">データフロー (→ IrModel)</text>
-  <line x1="755" y1="660" x2="670" y2="660" stroke="#40A050" stroke-width="2"/>
-  <text x="798" y="664" font-size="11" fill="#444">変換ロジック (IrModel → PMX)</text>
-  <line x1="755" y1="680" x2="670" y2="680" stroke="#C62828" stroke-width="2" stroke-dasharray="6,3"/>
-  <text x="798" y="684" font-size="11" fill="#444">ビューアからの変換 (VRM/FBX)</text>
-  <line x1="755" y1="700" x2="670" y2="700" stroke="#7B1FA2" stroke-width="2"/>
-  <text x="798" y="704" font-size="11" fill="#444">ビューア表示 (全形式)</text>
-  <line x1="755" y1="720" x2="670" y2="720" stroke="#555" stroke-width="2"/>
-  <text x="798" y="724" font-size="11" fill="#444">ファイル入力</text>
+  <!-- ═══ Legend ═══ -->
+  <rect x="720" y="700" width="350" height="210" rx="6" fill="#F5F5F5" stroke="#CCC" stroke-width="1"/>
+  <text x="735" y="722" font-size="12" font-weight="bold" fill="#555">Legend</text>
+  <line x1="735" y1="740" x2="775" y2="740" stroke="#555" stroke-width="2"/>
+  <text x="785" y="744" font-size="11" fill="#444">file input / dispatch</text>
+  <line x1="735" y1="762" x2="775" y2="762" stroke="#F9A825" stroke-width="2" stroke-dasharray="3,3"/>
+  <text x="785" y="766" font-size="11" fill="#444">container extraction (archive / package)</text>
+  <line x1="735" y1="784" x2="775" y2="784" stroke="#3080D0" stroke-width="2"/>
+  <text x="785" y="788" font-size="11" fill="#444">load → IrModel</text>
+  <line x1="735" y1="806" x2="775" y2="806" stroke="#7B1FA2" stroke-width="2"/>
+  <text x="785" y="810" font-size="11" fill="#444">viewer display (all formats)</text>
+  <line x1="735" y1="828" x2="775" y2="828" stroke="#40A050" stroke-width="2"/>
+  <text x="785" y="832" font-size="11" fill="#444">convert / export path</text>
+  <line x1="735" y1="850" x2="775" y2="850" stroke="#C62828" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="785" y="854" font-size="11" fill="#444">viewer-only convert path (not for PMX/PMD)</text>
+  <text x="735" y="878" font-size="10" fill="#666">PMX/PMD: direct input not convertible;</text>
+  <text x="735" y="892" font-size="10" fill="#666">archive-contained → CLI convert only;</text>
+  <text x="735" y="906" font-size="10" fill="#666">viewer-loaded → always view-only</text>
 </svg>

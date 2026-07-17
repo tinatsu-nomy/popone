@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 975" font-family="'Segoe UI','Noto Sans JP',sans-serif" font-size="12">
+  <title>popone module map (v0.5.17)</title>
+  <desc>Module responsibility map: root utilities, container extraction, format input modules (model files produce an IrModel, animation files produce a VrmaAnimation), the intermediate representation, the conversion and export modules, and the viewer feature with its app state, rendering, UI and shading components.</desc>
+
+  <rect width="1100" height="975" fill="#FAFAFA" rx="8"/>
+
+  <text x="550" y="30" text-anchor="middle" font-size="17" font-weight="bold" fill="#333">popone — module map (v0.5.17)</text>
+
+  <!-- ═══ src/ (root) ═══ -->
+  <rect x="30" y="55" width="265" height="215" rx="6" fill="#ECEFF1" stroke="#607D8B" stroke-width="1.5"/>
+  <text x="162" y="77" text-anchor="middle" font-weight="bold" fill="#37474F">src/ (root)</text>
+  <text x="45" y="102" font-size="12" fill="#444">main.rs — entry (CLI / viewer)</text>
+  <text x="45" y="124" font-size="12" fill="#444">lib.rs — library API</text>
+  <text x="45" y="146" font-size="12" fill="#444">error.rs — PoponeError / ResultExt</text>
+  <text x="45" y="168" font-size="12" fill="#444">i18n.rs — ja / en / zh locales</text>
+  <text x="45" y="190" font-size="12" fill="#444">color.rs — sRGB ↔ linear (LUT)</text>
+  <text x="45" y="212" font-size="12" fill="#444">psd.rs — PSD decoder</text>
+
+  <!-- ═══ containers ═══ -->
+  <rect x="310" y="55" width="290" height="215" rx="6" fill="#FFF3E0" stroke="#F9A825" stroke-width="1.5"/>
+  <text x="455" y="77" text-anchor="middle" font-weight="bold" fill="#B26A00">containers / Unity</text>
+  <text x="325" y="102" font-size="12" fill="#444">archive/mod.rs — unified API / nested</text>
+  <text x="325" y="124" font-size="12" fill="#444">archive/zip_extract.rs — ZipCrypto / AES</text>
+  <text x="325" y="146" font-size="12" fill="#444">archive/sevenz.rs — solid-block drain</text>
+  <text x="325" y="168" font-size="12" fill="#444">archive/rar.rs — unrar (via temp file)</text>
+  <text x="325" y="190" font-size="12" fill="#444">unitypackage.rs — GUID chain / model select</text>
+  <text x="325" y="212" font-size="12" fill="#444">unity/animation.rs — .anim muscles</text>
+  <text x="325" y="234" font-size="11" fill="#666">archive passwords: viewer (GUI) only</text>
+
+  <!-- ═══ format input modules ═══ -->
+  <rect x="625" y="55" width="445" height="215" rx="6" fill="#E3F2FD" stroke="#1976D2" stroke-width="1.5"/>
+  <text x="847" y="77" text-anchor="middle" font-weight="bold" fill="#1565C0">format input modules</text>
+  <text x="847" y="94" text-anchor="middle" font-size="11" fill="#1565C0">model files → IrModel &#160;·&#160; animation files → VrmaAnimation</text>
+  <text x="640" y="116" font-size="12" fill="#444">vrm/ — loader · detect · extract · types v0/v1</text>
+  <text x="640" y="138" font-size="12" fill="#444">fbx/ — parser · scene · extract · bone · mesh · skin · texture</text>
+  <text x="660" y="156" font-size="12" fill="#444">· blendshape · humanoid</text>
+  <text x="640" y="178" font-size="12" fill="#444">directx/ — parser (text .x only) · extract</text>
+  <text x="640" y="200" font-size="12" fill="#444">pmx/ — reader · extract · types &#160;&#160; pmd/ — reader · extract · types</text>
+  <text x="640" y="222" font-size="12" fill="#444">obj/ — extract (tobj) &#160;&#160; stl/ — reader · extract (Z-Up → Y-Up)</text>
+  <text x="640" y="242" font-size="11" fill="#666">animation: vrm/animation.rs · fbx/animation.rs → VrmaAnimation;</text>
+  <text x="640" y="257" font-size="11" fill="#666">pmx/ write side is listed under conversion / export</text>
+
+  <!-- ═══ intermediate/ ═══ -->
+  <rect x="30" y="305" width="330" height="140" rx="6" fill="#FFF3E0" stroke="#E65100" stroke-width="1.5"/>
+  <text x="195" y="327" text-anchor="middle" font-weight="bold" fill="#BF360C">intermediate/</text>
+  <text x="45" y="352" font-size="12" fill="#444">types.rs — IrModel / merge (bone matching)</text>
+  <text x="45" y="374" font-size="12" fill="#444">tangent.rs — MikkTSpace (degenerate-safe)</text>
+  <text x="45" y="396" font-size="12" fill="#444">pose.rs — stance conversion A ↔ T</text>
+  <text x="45" y="418" font-size="12" fill="#444">animation.rs — VrmaAnimation / BoneChannel</text>
+
+  <!-- ═══ conversion / export ═══ -->
+  <rect x="390" y="305" width="340" height="140" rx="6" fill="#E8F5E9" stroke="#2E7D32" stroke-width="1.5"/>
+  <text x="560" y="327" text-anchor="middle" font-weight="bold" fill="#1B5E20">conversion / export (IrModel →)</text>
+  <text x="405" y="352" font-size="12" fill="#444">convert/ — coord · bone_map · material · morph</text>
+  <text x="405" y="374" font-size="12" fill="#444">· physics &#160; · texture (original format or PNG)</text>
+  <text x="405" y="396" font-size="12" fill="#444">· uvmap (PSD / PSB) &#160; · mme/ray_mmd (.fx)</text>
+  <text x="405" y="418" font-size="12" fill="#444">pmx/ — build.rs · writer.rs (IrModel → PMX)</text>
+
+  <!-- ═══ note ═══ -->
+  <rect x="760" y="305" width="310" height="140" rx="6" fill="#F5F5F5" stroke="#CCC" stroke-width="1"/>
+  <text x="775" y="327" font-size="12" font-weight="bold" fill="#555">Notes</text>
+  <text x="775" y="352" font-size="12" fill="#444">viewer/ compiles only with</text>
+  <text x="775" y="370" font-size="12" fill="#444">--features viewer; all other modules</text>
+  <text x="775" y="388" font-size="12" fill="#444">are always compiled (CLI).</text>
+  <text x="775" y="414" font-size="12" fill="#444">Data flow between the boxes is</text>
+  <text x="775" y="432" font-size="12" fill="#444">shown in architecture.svg.</text>
+
+  <!-- ═══ viewer/ ═══ -->
+  <rect x="30" y="480" width="1040" height="475" rx="6" fill="#F3E5F5" stroke="#7B1FA2" stroke-width="1.5"/>
+  <text x="550" y="504" text-anchor="middle" font-weight="bold" fill="#6A1B9A">viewer/  (feature = "viewer")</text>
+
+  <!-- app/ sub-box -->
+  <rect x="50" y="520" width="500" height="240" rx="6" fill="#EDE7F6" stroke="#9575CD" stroke-width="1.2"/>
+  <text x="300" y="542" text-anchor="middle" font-weight="bold" fill="#5E35B1">app/ — ViewerApp state (9 modules)</text>
+  <text x="65" y="565" font-size="12" fill="#444">mod.rs — struct / init / eframe::App impl</text>
+  <text x="65" y="586" font-size="12" fill="#444">file_io.rs — load · D&amp;D · reload · background load</text>
+  <text x="65" y="607" font-size="12" fill="#444">pending.rs — deferred tasks / load state machine</text>
+  <text x="65" y="628" font-size="12" fill="#444">texture_mgmt.rs — texture assignment / preview</text>
+  <text x="65" y="649" font-size="12" fill="#444">material_edit.rs — material editor overrides / dirty</text>
+  <text x="65" y="670" font-size="12" fill="#444">material_presets.rs — MToon / lilToon / PMX presets</text>
+  <text x="65" y="691" font-size="12" fill="#444">uv_edit.rs — per-vertex UV / UV morph editing</text>
+  <text x="65" y="712" font-size="12" fill="#444">persistence.rs — popone.toml / popone_history.json</text>
+  <text x="65" y="733" font-size="12" fill="#444">helpers.rs — ReloadableSource / TextureSource etc.</text>
+
+  <!-- top-level files column 1 -->
+  <text x="575" y="542" font-weight="bold" font-size="12" fill="#5E35B1">rendering</text>
+  <text x="575" y="565" font-size="12" fill="#444">gpu.rs — wgpu pipelines / MRT</text>
+  <text x="575" y="586" font-size="12" fill="#444">bloom.rs — Dual Kawase bloom</text>
+  <text x="575" y="607" font-size="12" fill="#444">mesh.rs — IrModel → GPU buffers</text>
+  <text x="575" y="628" font-size="12" fill="#444">texture.rs — upload / linear mips</text>
+  <text x="575" y="649" font-size="12" fill="#444">camera.rs — orbit camera (FOV 30°)</text>
+  <text x="575" y="670" font-size="12" fill="#444">grid.rs — grid floor</text>
+  <text x="575" y="691" font-size="12" fill="#444">theme.rs — appearance presets</text>
+  <text x="575" y="712" font-size="12" fill="#444">animation.rs — playback / retarget</text>
+
+  <!-- top-level files column 2 -->
+  <text x="820" y="542" font-weight="bold" font-size="12" fill="#5E35B1">UI / infra</text>
+  <text x="820" y="565" font-size="12" fill="#444">ui.rs — panels / dialogs / tabs</text>
+  <text x="820" y="586" font-size="12" fill="#444">log_viewer.rs — log window</text>
+  <text x="820" y="607" font-size="12" fill="#444">text_viewer.rs — archive texts</text>
+  <text x="820" y="628" font-size="12" fill="#444">export_filter.rs — visible-only</text>
+  <text x="820" y="649" font-size="12" fill="#444">watchdog.rs — freeze detection</text>
+  <text x="820" y="670" font-size="12" fill="#444">single_instance.rs — IPC (Windows)</text>
+
+  <!-- shader note -->
+  <rect x="50" y="780" width="1000" height="145" rx="6" fill="#EDE7F6" stroke="#9575CD" stroke-width="1.2"/>
+  <text x="550" y="802" text-anchor="middle" font-weight="bold" fill="#5E35B1">shading (WGSL, gpu.rs / bloom.rs)</text>
+  <text x="70" y="825" font-size="12" fill="#444">MToon: 2-tone toon · outline (inverted hull) · rim / MatCap · auxiliary textures · UV animation · emissive · normal map (TBN)</text>
+  <text x="70" y="846" font-size="12" fill="#444">4-phase draw order (OPAQUE → MASK → BlendZWrite → Blend) + camera-distance sort · UTS2 / lilToon / Poiyomi approximation</text>
+  <text x="70" y="867" font-size="12" fill="#444">MMD mode: NdotL toon · edge · sphere map &#160;·&#160; overrides: Lambert / Unlit / GGX preview / normal visualization / wireframe</text>
+  <text x="70" y="888" font-size="12" fill="#444">Bloom: emissive-only MRT separation · Dual Kawase blur &#160;·&#160; MSAA 4x with alpha-to-coverage on MASK materials</text>
+</svg>

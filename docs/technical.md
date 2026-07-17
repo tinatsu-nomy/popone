@@ -1050,7 +1050,7 @@ A pure function that doesn't take `&self`, safe to call from background threads.
 ### `route_load_dispatch` Method
 
 Dispatches on the main thread:
-- **Immediate**: VRMA, GLB/glTF animation, .anim (no model load, no GPU resource ops)
+- **Immediate**: VRMA, GLB/glTF animation, .anim (no model re-load is performed, but a target model must already be loaded; no GPU resource ops)
 - **Interactive UI**: FBX choice dialog (keeps `self.preloaded = dispatch.preloaded` for existing method compatibility)
 - **Background**: VRM / FBX / PMX / PMD / OBJ / STL / DirectX .x / UnityPackage / ZIP / 7z / RAR (all formats)
 
@@ -1079,7 +1079,7 @@ Optimization to avoid PNG encode/decode roundtrip during VRM/GLB load.
 - **`IrTexture::is_raw_rgba()`**: Uses `matches!(self.data, TextureData::RawRgba { .. })`
 - **`IrTexture::raw_dims()`**: Returns `Some((width, height))` for `RawRgba`, `None` for `Encoded`
 - **`upload_textures_from_ir`**: Matches on `TextureData::RawRgba` directly, uploading pixels to GPU without decoding
-- **`write_all_textures_from_ir` (PMX export)**: Matches on `TextureData::RawRgba` to encode to PNG via `image::RgbaImage::save`
+- **`write_all_textures_from_ir` (PMX export)**: Matches on `TextureData::RawRgba` and re-encodes via `image::RgbaImage::save` according to the output filename extension
 
 ### Deferred GPU Build
 
@@ -3343,13 +3343,19 @@ Main Thread (egui event loop) Watchdog Thread
 
 ## Codebase Architecture
 
-![Architecture](architecture.svg)
+Data-flow diagram (input → load → IrModel → viewer / PMX export):
+
+![Data flow](architecture.svg)
+
+Module responsibility map (files and roles per directory):
+
+![Module map](architecture_modules.svg)
 
 ## Source File Structure
 
 ```
 src/
-├── main.rs Entry point (no args or no output specified → viewer / output specified → CLI conversion)
+├── main.rs Entry point (output given → CLI convert / --list-models · --dump → CLI inspection (--dump still requires the output argument) / otherwise → viewer)
 ├── lib.rs Library API
 ├── error.rs Error type definitions (PoponeError enum, thiserror, ResultExt trait)
 ├── i18n.rs UI localization (rust-i18n, ja/en/zh, OS locale detection + POPONE_LOCALE override)
@@ -3412,7 +3418,7 @@ src/
 │ ├── material.rs Material conversion
 │ ├── morph.rs Expression → morph name map
 │ ├── physics.rs SpringBone → rigid body / joint conversion (V0/V1)
-│ ├── texture.rs Texture PNG output
+│ ├── texture.rs Texture export (Encoded keeps original bytes / format; RawRGBA re-encoded per the output filename extension; retained PSD → PNG when decodable, kept as PSD on failure)
 │ ├── uvmap.rs UV map PSD / PSB output (material layers, boundary wrap, group folders, auto PSB switch over 2 GiB)
 │ └── mme/ray_mmd.rs MME (ray-mmd) material .fx output (category inference, Shift-JIS + CR+LF)
 └── viewer/ ← Compiled only when feature = "viewer"
@@ -3499,7 +3505,7 @@ For detailed per-version improvements and internal changes, see the [Changelog](
 
 ## Limitations
 
-- **PMX/PMD is view-only** — PMX conversion (re-export) is not supported. Only viewer display and UV map output
+- **PMX/PMD is view-only** — PMX conversion (re-export) is not supported. Only viewer display and UV map output. Exception: PMX / PMD contained in archives (ZIP / 7z / RAR) can be re-exported via the CLI archive conversion only (`ArchiveModelKind::Pmx/Pmd` → IR → build); when opened in the viewer they remain view-only even via archives
 - **Texture size limit** — Textures exceeding the GPU's `max_texture_dimension_2d` (typically 8192px) are automatically downscaled in `upload_rgba_to_gpu` (using `image::imageops::resize` with Triangle filter). Does not affect PMX conversion output (viewer display only)
 - **Extraction size limit** — Archive (ZIP / 7z / RAR) and `.unitypackage` (tar.gz) extraction is capped at 2GB total (`MAX_TOTAL_BYTES`). `.unitypackage` uses dual protection: header size pre-check + actual bytes post-check
 - **MMD-specialized models** — Models specialized for MMD rendering may not display some surfaces correctly
