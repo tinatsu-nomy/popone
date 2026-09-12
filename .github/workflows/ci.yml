@@ -11,8 +11,16 @@ env:
 
 jobs:
   check:
-    name: Build & Test (Windows)
-    runs-on: windows-latest
+    name: Build & Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+
+    runs-on: (${{ matrix.os }})
+
     steps:
       - uses: actions/checkout@v4
 
